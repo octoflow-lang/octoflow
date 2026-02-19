@@ -462,6 +462,41 @@ footer .links { display: flex; gap: 24px; }
 footer a { color: var(--text-dim); }
 footer a:hover { color: var(--text); }
 
+/* ═══════════════════════════════════════ SHOWCASE ═══════════════════════════════════════ */
+.showcase-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.showcase-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  transition: all 0.3s;
+}
+.showcase-card:hover {
+  border-color: var(--border-hover);
+}
+.showcase-card.wide {
+  grid-column: 1 / -1;
+}
+.showcase-label {
+  padding: 14px 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--teal-light);
+  border-bottom: 1px solid var(--border);
+  background: rgba(26, 154, 154, 0.03);
+}
+.asciinema-container {
+  background: #0d1117;
+  position: relative;
+}
+.asciinema-container .ap-player {
+  font-size: 14px !important;
+}
+
 /* ═══════════════════════════════════════ SCROLL REVEAL ═══════════════════════════════════════ */
 .reveal {
   opacity: 0;
@@ -479,6 +514,7 @@ footer a:hover { color: var(--text); }
   .hero h1 { font-size: 2.5rem; }
   .hero .subtitle { font-size: 1.1rem; }
   .features-grid { grid-template-columns: 1fr; }
+  .showcase-grid { grid-template-columns: 1fr; }
   .stdlib-grid { grid-template-columns: 1fr 1fr; }
   .code-tabs { overflow-x: auto; flex-wrap: nowrap; }
   .download-section { padding: 48px 24px; }
@@ -500,6 +536,7 @@ footer a:hover { color: var(--text); }
     <span>OctoFlow</span>
   </div>
   <div class="links">
+    <a href="#showcase">Demos</a>
     <a href="#code">Examples</a>
     <a href="#features">Features</a>
     <a href="#stdlib">Library</a>
@@ -563,6 +600,29 @@ footer a:hover { color: var(--text); }
     </div>
   </div>
 </div>
+
+<!-- Showcase -->
+<section id="showcase" class="reveal">
+  <div class="centered">
+    <span class="section-label">Showcase</span>
+    <h2>Real demos. Real GPU.</h2>
+    <p class="section-desc">Watch OctoFlow run. Every recording is a real terminal session.</p>
+  </div>
+  <div class="showcase-grid">
+    <div class="showcase-card">
+      <div class="showcase-label">Hello GPU — 1M element add on GPU</div>
+      <div id="demo-gpu" class="asciinema-container"></div>
+    </div>
+    <div class="showcase-card">
+      <div class="showcase-label">Lambdas — filter, map, reduce, sort</div>
+      <div id="demo-lambda" class="asciinema-container"></div>
+    </div>
+    <div class="showcase-card wide">
+      <div class="showcase-label">GPU Prime Sieve — 82,354 primes below 1,000,000</div>
+      <div id="demo-primes" class="asciinema-container"></div>
+    </div>
+  </div>
+</section>
 
 <!-- Code Examples -->
 <section id="code" class="reveal">
@@ -810,7 +870,24 @@ footer a:hover { color: var(--text); }
   </div>
 </footer>
 
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema-player.css">
+<script src="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema-player.min.js"></script>
 <script>
+// ═══════════════════ ASCIINEMA PLAYERS ═══════════════════
+const playerOpts = {
+  theme: 'monokai',
+  fit: 'width',
+  autoPlay: true,
+  loop: true,
+  speed: 1,
+  idleTimeLimit: 3,
+  terminalFontFamily: "'JetBrains Mono', 'SF Mono', 'Consolas', monospace",
+  terminalFontSize: '14px',
+};
+AsciinemaPlayer.create('demos/hello-gpu.cast', document.getElementById('demo-gpu'), {...playerOpts, rows: 14});
+AsciinemaPlayer.create('demos/lambdas.cast', document.getElementById('demo-lambda'), {...playerOpts, rows: 20});
+AsciinemaPlayer.create('demos/gpu-primes.cast', document.getElementById('demo-primes'), {...playerOpts, rows: 16, speed: 1.5});
+
 // ═══════════════════ NAV SCROLL ═══════════════════
 const nav = document.getElementById('nav');
 window.addEventListener('scroll', () => {
