@@ -497,6 +497,68 @@ footer a:hover { color: var(--text); }
   font-size: 14px !important;
 }
 
+/* ═══════════════════════════════════════ NEXT RELEASE ═══════════════════════════════════════ */
+.next-section {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 72px 40px;
+  text-align: center;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg) 100%);
+}
+.next-section::before {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 50%; transform: translateX(-50%);
+  width: 900px; height: 400px;
+  background: radial-gradient(ellipse, rgba(26, 154, 154, 0.06), transparent 70%);
+  pointer-events: none;
+}
+.next-items {
+  display: flex;
+  justify-content: center;
+  gap: 40px;
+  margin-top: 48px;
+  position: relative;
+  flex-wrap: wrap;
+}
+.next-item {
+  flex: 0 1 260px;
+  text-align: center;
+}
+.next-item .next-icon {
+  width: 64px; height: 64px;
+  border-radius: 16px;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 20px;
+  background: var(--teal-subtle);
+  border: 1px solid var(--border);
+}
+.next-item .next-icon svg { width: 28px; height: 28px; color: var(--teal-light); }
+.next-item h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.next-item p {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.next-version {
+  display: inline-block;
+  margin-top: 40px;
+  padding: 6px 16px;
+  border-radius: 100px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--teal-light);
+  background: var(--teal-subtle);
+  border: 1px solid rgba(26, 154, 154, 0.15);
+  position: relative;
+}
+
 /* ═══════════════════════════════════════ SCROLL REVEAL ═══════════════════════════════════════ */
 .reveal {
   opacity: 0;
@@ -807,6 +869,39 @@ footer a:hover { color: var(--text); }
       <h4>System</h4>
       <p>CLI arg parsing, environment variables, platform detection, execution timing</p>
     </div>
+  </div>
+</section>
+
+<!-- Next Release -->
+<section class="reveal">
+  <div class="next-section">
+    <span class="section-label" style="position:relative;">Coming Next</span>
+    <h2 style="position:relative;">The next release.</h2>
+    <p class="section-desc" style="margin-left:auto;margin-right:auto;position:relative;">Three things we're working on right now.</p>
+    <div class="next-items">
+      <div class="next-item">
+        <div class="next-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><circle cx="8" cy="10" r="1" fill="currentColor" stroke="none"/><path d="M14 10h4"/><path d="M14 7h4"/></svg>
+        </div>
+        <h3>GUI</h3>
+        <p>Native windowed interface. Write and run OctoFlow visually. GPU-rendered UI built with the language itself.</p>
+      </div>
+      <div class="next-item">
+        <div class="next-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg>
+        </div>
+        <h3>Fractal Codec</h3>
+        <p>Fractal compression and decompression. GPU-accelerated encoding that captures structure, not pixels.</p>
+      </div>
+      <div class="next-item">
+        <div class="next-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M12 6v6l4 2"/><path d="M8 12a4 4 0 018 0" opacity="0.4"/><path d="M9 16a5 5 0 016 0" opacity="0.3"/></svg>
+        </div>
+        <h3>Homeostasis</h3>
+        <p>Self-regulating runtime. The system monitors, adapts, and balances itself. Stability as a language primitive.</p>
+      </div>
+    </div>
+    <div class="next-version">v0.84 &mdash; in development</div>
   </div>
 </section>
 
