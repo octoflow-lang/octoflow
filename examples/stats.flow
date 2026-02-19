@@ -1,6 +1,18 @@
-stream data = tap("test_data/input_10.csv")
+// Stats Demo — basic statistics on in-memory data
+// Run: octoflow run examples/stats.flow
+
+let data = [23.1, 45.7, 12.3, 67.8, 34.5, 89.2, 56.4, 78.1, 41.0, 15.9]
+
 let total = sum(data)
 let lo = min(data)
 let hi = max(data)
-print("Stats computed")
-emit(data, "test_data/output_stats.csv")
+let avg = mean(data)
+let n = len(data)
+
+print("Stats Demo")
+print("──────────")
+print("  Count: {n}")
+print("  Sum:   {total}")
+print("  Min:   {lo}")
+print("  Max:   {hi}")
+print("  Mean:  {avg}")

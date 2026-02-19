@@ -1,20 +1,20 @@
-# String Demo — Phase 26
-# Demonstrates string literals, concatenation, comparison, len, contains.
+// String Demo
+// Demonstrates string literals, concatenation, comparison, len, contains.
 
 let greeting = "Hello"
 let name = "OctoFlow"
 let message = greeting + ", " + name + "!"
 print("{message}")
 
-# String length
+// String length
 let n = len(message)
 print("Message length: {n}")
 
-# String search
+// String search
 let found = contains(message, "GPU")
 print("Contains GPU: {found}")
 
-# String comparison
+// String comparison
 let a = "alpha"
 let b = "alpha"
 let eq = a == b
@@ -24,14 +24,14 @@ let c = "beta"
 let ne = a != c
 print("alpha != beta: {ne}")
 
-# Strings in loops
+// Strings in loops
 let mut result = "items:"
 for i in range(1, 4)
   result = result + " " + "x"
 end
 print("{result}")
 
-# Strings in functions
+// Strings in functions
 fn make_label(prefix)
   return prefix + "_done"
 end
