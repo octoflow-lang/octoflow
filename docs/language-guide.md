@@ -1,89 +1,54 @@
 # OctoFlow Language Guide
 
-## Contents
+> This document is designed as LLM context. Feed it to your AI assistant (Claude, ChatGPT, Copilot) and it can write, debug, and explain OctoFlow code. Use it as RAG, system prompt, or project context.
 
-1. [Values & Types](#1-values--types)
-2. [Variables](#2-variables)
-3. [Operators](#3-operators)
-4. [Control Flow](#4-control-flow)
-5. [Functions](#5-functions)
-6. [Arrays](#6-arrays)
-7. [HashMaps](#7-hashmaps)
-8. [Strings](#8-strings)
-9. [Structs & Vectors](#9-structs--vectors)
-10. [Modules & Imports](#10-modules--imports)
-11. [Streams & Pipelines](#11-streams--pipelines)
-12. [GPU Operations](#12-gpu-operations)
-13. [File I/O & Security](#13-file-io--security)
-14. [Error Handling](#14-error-handling)
-15. [Lambdas & Higher-Order Functions](#15-lambdas--higher-order-functions)
+## Overview
 
-## 1. Values & Types
+OctoFlow is a GPU-native general-purpose programming language. The GPU is the primary execution target. The CPU handles I/O. Data born on the GPU stays on the GPU.
 
-OctoFlow has three value types:
+- Three types: `float` (f32), `string` (UTF-8), `map` (key-value)
+- Booleans are floats: `1.0` = true, `0.0` = false
+- Arrays hold floats, strings, or both
+- Immutable by default, `let mut` for mutable
+- No semicolons, no braces — blocks end with `end`
+- No string escape sequences — use `ord(c)` / `chr(n)` for special characters
+- No scientific notation — use `6.674 * pow(10.0, -11.0)` instead of `6.674e-11`
 
-| Type | Description | Example |
-|------|-------------|---------|
-| **float** | 32-bit floating point | `42.0`, `3.14`, `-1.0` |
-| **string** | UTF-8 text | `"hello"`, `"OctoFlow"` |
-| **map** | Key-value pairs | `map()` |
-
-Booleans are floats: `1.0` = true, `0.0` = false.
-
-Arrays are ordered collections that can hold floats, strings, or both.
-
-```
-let x = 42.0
-let name = "OctoFlow"
-let items = [1, 2, 3, 4, 5]
-let mut config = map()
-```
-
-## 2. Variables
+## Variables
 
 ```
 let x = 10              // immutable
 let mut y = 20          // mutable
 y = y + 1               // reassignment (mut only)
+let name = "OctoFlow"   // string
+let items = [1, 2, 3]   // array
+let mut m = map()        // empty hashmap
 ```
 
-Immutable by default. Use `let mut` for variables that need reassignment.
-Attempting to reassign an immutable variable is a compile error.
+## Operators
 
-## 3. Operators
-
-### Arithmetic
 ```
+// Arithmetic
 +  -  *  /  %
-```
 
-### Comparison
-```
+// Comparison
 ==  !=  <  >  <=  >=
-```
 
-### Logical
-```
+// Logical
 &&  ||  !
-```
 
-### String Concatenation
-```
+// String concatenation
 let greeting = "Hello, " + name + "!"
+
+// String interpolation (variables only, not expressions)
+print("Hello, {name}!")
+print("x is {x}")
 ```
 
-### String Interpolation
-```
-let name = "GPU"
-print("Hello, {name}!")     // Hello, GPU!
-print("2 + 2 = {2 + 2}")   // variables only, not expressions
-```
-
-## 4. Control Flow
-
-### If / Elif / Else
+## Control Flow
 
 ```
+// If / elif / else
 if x > 10
     print("big")
 elif x > 5
@@ -91,38 +56,26 @@ elif x > 5
 else
     print("small")
 end
-```
 
-### While Loop
-
-```
+// While loop
 let mut i = 0
 while i < 10
     print("{i}")
     i = i + 1
 end
-```
 
-### For Loop (Range)
-
-```
+// For loop (range)
 for i in range(0, 10)
     print("{i}")
 end
-```
 
-### For-Each (Arrays)
-
-```
+// For-each (arrays)
 let items = [10, 20, 30]
 for item in items
     print("{item}")
 end
-```
 
-### Break / Continue
-
-```
+// Break and continue
 for i in range(0, 100)
     if i == 50
         break
@@ -134,7 +87,7 @@ for i in range(0, 100)
 end
 ```
 
-## 5. Functions
+## Functions
 
 ```
 fn add(a, b)
@@ -145,15 +98,19 @@ fn greet(name)
     print("Hello, {name}!")
 end
 
-let result = add(3, 4)    // 7
-greet("World")             // Hello, World!
-```
+let result = add(3, 4)
+greet("World")
 
-Functions can return any type — floats, strings, arrays, or maps.
+// Functions can return floats, strings, arrays, or maps
+fn make_list(n)
+    let mut arr = []
+    for i in range(0, n)
+        push(arr, i)
+    end
+    return arr
+end
 
-### Recursive Functions
-
-```
+// Recursive
 fn fibonacci(n)
     if n <= 1
         return n
@@ -162,70 +119,53 @@ fn fibonacci(n)
 end
 ```
 
-### Array Parameters
+Functions get a snapshot of caller scalars (changes don't propagate back). Arrays propagate back (pass by reference).
 
-Arrays are passed by reference. Functions can read and mutate them:
-
-```
-fn sum_array(arr)
-    let mut total = 0.0
-    for x in arr
-        total = total + x
-    end
-    return total
-end
-```
-
-## 6. Arrays
-
-### Creation
+## Lambdas and Higher-Order Functions
 
 ```
+let double = fn(x) x * 2 end
+let result = double(21)    // 42
+
+let nums = [1, 2, 3, 4, 5]
+let evens = filter(nums, fn(x) x % 2 == 0 end)       // [2, 4]
+let doubled = map_each(nums, fn(x) x * 2 end)         // [2, 4, 6, 8, 10]
+let total = reduce(nums, 0, fn(acc, x) acc + x end)    // 15
+let sorted = sort_by(nums, fn(a, b) a - b end)         // ascending
+```
+
+Lambdas capture outer variables by snapshot (value copy at creation time).
+
+## Arrays
+
+```
+// Creation
 let arr = [1, 2, 3, 4, 5]
 let empty = []
 let mixed = [1.0, "hello", 3.14]
 let generated = range_array(0, 100)
-```
 
-### Access
-
-```
+// Access
 let first = arr[0]
 let last = arr[len(arr) - 1]
 let length = len(arr)
-```
 
-### Mutation
-
-```
+// Mutation (requires let mut)
 let mut items = [10, 20]
 push(items, 30)           // [10, 20, 30]
-let last = pop(items)     // 30, items = [10, 20]
+let popped = pop(items)   // 30
 items[0] = 99             // [99, 20]
-```
 
-### Slicing
-
-```
+// Slicing
 let sub = slice(arr, 1, 3)    // elements at index 1, 2
 ```
 
-### Higher-Order Functions
-
-```
-let nums = [1, 2, 3, 4, 5]
-let evens = filter(nums, fn(x) x % 2 == 0 end)
-let doubled = map_each(nums, fn(x) x * 2 end)
-let total = reduce(nums, 0, fn(acc, x) acc + x end)
-let sorted = sort_by(nums, fn(a, b) b - a end)
-```
-
-## 7. HashMaps
+## HashMaps
 
 ```
 let mut m = map()
 m["name"] = "OctoFlow"
-m["version"] = 0.82
+m["version"] = 0.83
 
 let val = m["name"]
 let has = map_has(m, "name")     // 1.0
@@ -234,7 +174,7 @@ let vals = map_values(m)
 map_remove(m, "version")
 ```
 
-## 8. Strings
+## Strings
 
 ```
 let s = "Hello, World!"
@@ -248,160 +188,294 @@ let has = contains(s, "World")
 let idx = index_of(s, "World")
 let sub = substring(s, 0, 5)       // "Hello"
 let rep = replace(s, "World", "GPU")
-```
 
-### Character Operations
-
-```
+// Character operations
 let code = ord("A")     // 65.0
 let char = chr(65)       // "A"
 ```
 
-## 9. Structs & Vectors
-
-### Structs
+## Structs and Vectors
 
 ```
 struct Point(x, y)
 struct Color(r, g, b)
 
 let p = Point(3.0, 4.0)
-print("{p.x}, {p.y}")     // 3, 4
-```
+print("{p.x}, {p.y}")
 
-### Built-in Vectors
-
-```
-let v2 = vec2(1.0, 2.0)
 let v3 = vec3(1.0, 2.0, 3.0)
-let v4 = vec4(1.0, 2.0, 3.0, 4.0)
-
 print("{v3.x}, {v3.y}, {v3.z}")
 ```
 
-## 10. Modules & Imports
+## Modules and Imports
 
 ```
 use csv
 use timeseries
+use descriptive
 
 let data = read_csv("prices.csv")
-let closes = csv_column(data, "close")
-let sma_20 = sma(closes, 20)
+let avg = mean(data)
 ```
 
-`use` brings all public functions, structs, and constants from a module
-into the current scope. Modules are .flow files in the stdlib/ directory
-or relative to the current file.
-
-### Module Search Path
-
+`use` imports all public functions from a module. Search path:
 1. `stdlib/<name>.flow`
 2. `stdlib/<domain>/<name>.flow`
 3. `./<name>.flow` (relative to current file)
 
-## 11. Streams & Pipelines
-
-Streams are GPU-dispatched data pipelines:
+## Streams and Pipelines
 
 ```
 stream prices = tap("input.csv")
 stream processed = prices |> ema(0.1) |> scale(100) |> clamp(0, 100)
 emit(processed, "output.csv")
-```
 
-### Pipeline Functions
-
-Define reusable pipeline transforms:
-
-```
-fn normalize: scale(0.01) |> clamp(0, 1)
+// Pipeline functions
 fn warm_filter: brightness(20) |> contrast(1.2) |> saturate(1.1)
-
 stream result = tap("photo.jpg") |> warm_filter
 emit(result, "output.png")
 ```
 
-See [Streams Guide](streams.md) for the full list of pipe operations.
+## GPU Operations
 
-## 12. GPU Operations
-
-GPU functions create and operate on GPU-resident arrays:
+All GPU data stays in VRAM between operations. No CPU round-trips until you need the result.
 
 ```
-let a = gpu_fill(1.0, 10000000)     // 10M elements on GPU
-let b = gpu_add(a, a)               // computed on GPU
-let total = gpu_sum(b)              // reduction → CPU scalar
+// Creation
+let a = gpu_fill(1.0, 10000000)     // 10M elements
+let r = gpu_range(0, 1000, 1)       // 0, 1, 2, ..., 999
+
+// Element-wise binary
+let c = gpu_add(a, b)
+let d = gpu_sub(a, b)
+let e = gpu_mul(a, b)
+let f = gpu_div(a, b)
+
+// Element-wise unary
+let g = gpu_scale(a, 2.0)
+let h = gpu_abs(a)
+let i = gpu_sqrt(a)
+let j = gpu_exp(a)
+let k = gpu_log(a)
+let l = gpu_sin(a)
+let m = gpu_cos(a)
+let n = gpu_pow(a, 2.0)
+let o = gpu_clamp(a, 0.0, 1.0)
+
+// Reductions (return CPU scalar)
+let total = gpu_sum(a)
+let maximum = gpu_max(a)
+let minimum = gpu_min(a)
+let average = gpu_mean(a)
+let prefix = gpu_cumsum(a)
+
+// Conditional
+let selected = gpu_where(cond, a, b)   // a where cond!=0, else b
+
+// Matrix multiply
+let result = gpu_matmul(a, b, rows_a, cols_a, cols_b)
 ```
 
-Data stays on the GPU between operations. Only materializes to CPU
-when printed, written to disk, or iterated.
+## File I/O
 
-See [GPU Guide](gpu-guide.md) for the complete GPU reference.
-
-## 13. File I/O & Security
-
-### Permission Flags
-
-Scripts need explicit permission for I/O:
-
-```
-$ octoflow run script.flow --allow-read --allow-write --allow-net
-```
-
-| Flag | Allows |
-|------|--------|
-| `--allow-read` | File read operations |
-| `--allow-write` | File write operations |
-| `--allow-net` | Network access (HTTP, TCP, UDP) |
-| `--allow-exec` | Shell command execution |
-| `--allow-ffi` | Foreign function interface |
-
-### File Operations
+Requires `--allow-read` and/or `--allow-write`.
 
 ```
 let text = read_file("data.txt")
-write_file("output.txt", text)
+let lines = read_lines("log.txt")
+let bytes = read_bytes("image.png")
+write_file("output.txt", "Hello!")
 append_file("log.txt", "entry")
-let lines = read_lines("data.txt")
 let exists = file_exists("data.txt")
+let size = file_size("data.txt")
+let files = list_dir("./")
 ```
 
-### try() for Error Handling
+## CSV and JSON
 
 ```
-let result = try(read_file("maybe.txt"))
-if result.ok == 1.0
-    print(result.value)
-else
-    print("Error: {result.error}")
+// CSV (requires --allow-read/write)
+let data = read_csv("data.csv")
+write_csv("output.csv", data)
+
+// JSON
+let obj = json_parse(text)
+let arr = json_parse_array(text)
+let text = json_stringify(obj)
+```
+
+## HTTP Client
+
+Requires `--allow-net`. Returns `.status`, `.body`, `.ok`, `.error`.
+
+```
+let r = http_get("https://api.example.com/data")
+if r.ok == 1.0
+    let data = json_parse(r.body)
+    print("Status: {r.status}")
 end
 ```
 
-## 14. Error Handling
+Also: `http_post(url, body)`, `http_put(url, body)`, `http_delete(url)`.
 
-The `try()` function catches errors and returns a decomposed result:
+## Shell Execution
 
-```
-let r = try(parse_float("not a number"))
-// r.ok    = 0.0
-// r.value = 0.0
-// r.error = "parse error: ..."
-```
-
-Use it to handle file I/O, network calls, or any operation that might fail.
-
-## 15. Lambdas & Higher-Order Functions
-
-Anonymous functions use `fn(...) expr end` syntax:
+Requires `--allow-exec`. Returns `.status`, `.output`, `.ok`, `.error`.
 
 ```
-let double = fn(x) x * 2 end
-let result = double(21)    // 42
-
-let nums = [3, 1, 4, 1, 5]
-let sorted = sort_by(nums, fn(a, b) a - b end)
-let big = filter(nums, fn(x) x > 2 end)
+let r = exec("git", "status")
+if r.ok == 1.0
+    print(r.output)
+end
 ```
 
-Lambdas capture outer variables by snapshot (value copy at creation time).
+## Error Handling
+
+```
+let r = try(read_file("maybe.txt"))
+if r.ok == 1.0
+    print(r.value)
+else
+    print("Error: {r.error}")
+end
+```
+
+`try()` catches errors and returns `.value`, `.ok` (1.0/0.0), `.error`.
+
+## Security
+
+Sandboxed by default. Scripts need explicit flags:
+
+```
+octoflow run script.flow                          // no I/O
+octoflow run script.flow --allow-read             // file read
+octoflow run script.flow --allow-read --allow-net // file read + network
+```
+
+| Flag | Grants |
+|------|--------|
+| `--allow-read` | File system read |
+| `--allow-write` | File system write |
+| `--allow-net` | Network (HTTP, TCP, UDP) |
+| `--allow-exec` | Subprocess execution |
+| `--allow-ffi` | Foreign function interface |
+
+## Built-in Functions Reference
+
+### Math
+`abs(x)` `sqrt(x)` `pow(x, n)` `exp(x)` `log(x)` `sin(x)` `cos(x)` `floor(x)` `ceil(x)` `round(x)` `min(a, b)` `max(a, b)`
+
+### String
+`len(s)` `trim(s)` `to_upper(s)` `to_lower(s)` `contains(s, sub)` `starts_with(s, pre)` `ends_with(s, suf)` `index_of(s, sub)` `char_at(s, i)` `repeat(s, n)` `substr(s, start, len)` `replace(s, old, new)` `split(s, delim)` `join(arr, delim)` `ord(c)` `chr(n)` `str(val)` `float(val)` `int(val)`
+
+### Array
+`len(arr)` `first(arr)` `last(arr)` `push(arr, val)` `pop(arr)` `find(arr, val)` `reverse(arr)` `slice(arr, start, end)` `sort_array(arr)` `unique(arr)` `range_array(start, end)`
+
+### Higher-Order
+`filter(arr, fn(x) cond end)` `map_each(arr, fn(x) expr end)` `reduce(arr, init, fn(acc, x) expr end)` `sort_by(arr, fn(a, b) expr end)`
+
+### Statistics
+`mean(arr)` `median(arr)` `stddev(arr)` `variance(arr)` `quantile(arr, q)` `correlation(a, b)` `min_val(arr)` `max_val(arr)` `dot(a, b)` `norm(arr)` `normalize(arr)`
+
+### HashMap
+`map()` `map_has(m, key)` `map_get(m, key)` `map_keys(m)` `map_values(m)` `map_remove(m, key)` `len(m)`
+
+### Type
+`type_of(val)` `float(val)` `int(val)` `str(val)`
+
+### Regex
+`regex_match(text, pat)` `is_match(text, pat)` `regex_find(text, pat)` `regex_find_all(text, pat)` `regex_split(text, pat)` `regex_replace(text, pat, rep)` `capture_groups(text, pat)`
+
+### Date/Time
+`now()` `now_ms()` `time()` `timestamp(iso_str)` `format_datetime(ts, fmt)` `add_seconds(ts, n)` `add_minutes(ts, n)` `add_hours(ts, n)` `add_days(ts, n)` `diff_seconds(a, b)` `diff_hours(a, b)` `diff_days(a, b)`
+
+### Encoding
+`base64_encode(s)` `base64_decode(s)` `hex_encode(s)` `hex_decode(s)`
+
+### Bitwise
+`bit_and(a, b)` `bit_or(a, b)` `bit_test(n, bit)` `float_to_bits(f)` `bits_to_float(n)`
+
+### System
+`os_name()` `env(name)` `random()` `read_line()` `gpu_info()`
+
+### File I/O
+`read_file(path)` `read_lines(path)` `read_bytes(path)` `read_csv(path)` `write_file(path, text)` `append_file(path, text)` `write_csv(path, data)` `write_bytes(path, arr)` `file_exists(path)` `file_size(path)` `is_file(path)` `is_dir(path)` `list_dir(path)` `join_path(parts...)` `dirname(path)` `basename(path)` `file_ext(path)`
+
+### JSON
+`json_parse(text)` `json_parse_array(text)` `json_stringify(val)`
+
+### HTTP
+`http_get(url)` `http_post(url, body)` `http_put(url, body)` `http_delete(url)` `http_listen(port)` `http_accept(fd)` `http_respond(fd, status, body)` `http_respond_json(fd, status, json)`
+
+### TCP/UDP
+`tcp_connect(host, port)` `tcp_send(fd, data)` `tcp_recv(fd, max)` `tcp_close(fd)` `tcp_listen(port)` `tcp_accept(fd)` `udp_socket()` `udp_send_to(fd, host, port, data)` `udp_recv_from(fd, max)`
+
+### Shell
+`exec(cmd, ...args)` — returns `.status`, `.output`, `.ok`, `.error`
+
+### Error Handling
+`try(expr)` — returns `.value`, `.ok`, `.error`
+
+### GPU
+`gpu_fill(val, n)` `gpu_range(start, end, step)` `gpu_add(a, b)` `gpu_sub(a, b)` `gpu_mul(a, b)` `gpu_div(a, b)` `gpu_scale(a, s)` `gpu_abs(a)` `gpu_negate(a)` `gpu_sqrt(a)` `gpu_exp(a)` `gpu_log(a)` `gpu_sin(a)` `gpu_cos(a)` `gpu_floor(a)` `gpu_ceil(a)` `gpu_round(a)` `gpu_pow(a, n)` `gpu_clamp(a, lo, hi)` `gpu_reverse(a)` `gpu_sum(a)` `gpu_min(a)` `gpu_max(a)` `gpu_mean(a)` `gpu_cumsum(a)` `gpu_where(cond, a, b)` `gpu_matmul(a, b, m, k, n)` `gpu_compute(spv_path, arr)` `gpu_info()`
+
+## Common Patterns
+
+### Read CSV, analyze, write results
+```
+let data = read_csv("sales.csv")
+let revenue = csv_column(data, "revenue")
+let avg = mean(revenue)
+let std = stddev(revenue)
+print("Revenue: avg={avg}, std={std}")
+write_file("report.txt", "Average revenue: " + str(avg))
+```
+
+### GPU compute pipeline
+```
+let prices = gpu_fill(100.0, 1000000)
+let noise = gpu_scale(gpu_fill(1.0, 1000000), 0.02)
+let adjusted = gpu_add(prices, noise)
+let total = gpu_sum(adjusted)
+print("Total: {total}")
+```
+
+### HTTP API client
+```
+let r = http_get("https://api.example.com/users")
+if r.ok == 1.0
+    let users = json_parse_array(r.body)
+    for user in users
+        print("{user}")
+    end
+end
+```
+
+### Error-safe file processing
+```
+let r = try(read_file("config.txt"))
+if r.ok == 1.0
+    let config = json_parse(r.value)
+    print("Loaded config")
+else
+    print("Using defaults: {r.error}")
+end
+```
+
+## Stdlib Domains
+
+Import with `use <module_name>`:
+
+| Domain | Modules |
+|--------|---------|
+| **collections** | stack, queue, heap, graph, collections |
+| **data** | csv, io, pipeline, transform, validate |
+| **db** | core, query, schema |
+| **ml** | regression, classify, cluster, nn, tree, ensemble, linalg, metrics, preprocess |
+| **science** | calculus, constants, interpolate, matrix, physics, signal |
+| **stats** | descriptive, correlation, distribution, hypothesis, risk, timeseries, math_ext |
+| **string** | string, regex, format |
+| **sys** | args, env, memory, platform, timer |
+| **time** | datetime |
+| **web** | http, json_util, url |
+| **core** | math, sort, array_utils, io |

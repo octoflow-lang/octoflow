@@ -227,7 +227,7 @@ See [examples/](examples/) for all 16 runnable demos.
 - [REPL](docs/repl.md) — interactive mode
 ### LLM / AI-Assisted Development
 
-The [Language Guide](docs/language-guide.md) and [Builtins](docs/builtins.md) are designed to work as RAG context for LLMs. Feed them to your AI assistant and it can write OctoFlow code, debug .flow scripts, and use the full stdlib — no training required.
+The [Language Guide](docs/language-guide.md) is designed as LLM context. Feed it to your AI assistant (Claude, ChatGPT, Copilot) and it can write, debug, and explain OctoFlow code — no training required. Use it as RAG, system prompt, or project context.
 
 ## License
 
