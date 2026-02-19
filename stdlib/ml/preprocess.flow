@@ -1,0 +1,156 @@
+// stdlib/ml/preprocess.flow — ML preprocessing
+
+fn train_test_split(arr, test_ratio)
+  let n = len(arr)
+  let test_n = floor(n * test_ratio)
+  let train_n = n - test_n
+  let mut train = []
+  let mut test = []
+  let mut i = 0.0
+  while i < train_n
+    push(train, arr[i])
+    i = i + 1.0
+  end
+  while i < n
+    push(test, arr[i])
+    i = i + 1.0
+  end
+  let mut result = map()
+  map_set(result, "train_size", str(train_n))
+  map_set(result, "test_size", str(test_n))
+  return result
+end
+
+fn shuffle_array(arr)
+  // Fisher-Yates shuffle (in-place)
+  let n = len(arr)
+  let mut i = n - 1.0
+  while i > 0.0
+    let j = floor(random() * (i + 1.0))
+    let tmp = arr[i]
+    arr[i] = arr[j]
+    arr[j] = tmp
+    i = i - 1.0
+  end
+  return arr
+end
+
+fn minmax_scale(arr)
+  let n = len(arr)
+  let mut mn = arr[0]
+  let mut mx = arr[0]
+  let mut i = 1.0
+  while i < n
+    if arr[i] < mn
+      mn = arr[i]
+    end
+    if arr[i] > mx
+      mx = arr[i]
+    end
+    i = i + 1.0
+  end
+  let range = mx - mn
+  if range == 0.0
+    return arr
+  end
+  let mut result = []
+  for x in arr
+    push(result, (x - mn) / range)
+  end
+  return result
+end
+
+fn zscore_scale(arr)
+  let m = mean(arr)
+  let s = stddev(arr)
+  if s == 0.0
+    return arr
+  end
+  let mut result = []
+  for x in arr
+    push(result, (x - m) / s)
+  end
+  return result
+end
+
+fn feature_scale(arr, method)
+  if method == "minmax"
+    return minmax_scale(arr)
+  elif method == "standard"
+    return zscore_scale(arr)
+  elif method == "robust"
+    // Robust scaling using median and IQR
+    let med = median(arr)
+    let sorted = sort_array(arr)
+    let n = len(sorted)
+    let q1 = sorted[floor(n * 0.25)]
+    let q3 = sorted[floor(n * 0.75)]
+    let iqr_val = q3 - q1
+    if iqr_val == 0.0
+      return arr
+    end
+    let mut result = []
+    for x in arr
+      push(result, (x - med) / iqr_val)
+    end
+    return result
+  end
+  return arr
+end
+
+fn encode_labels(labels)
+  // Map unique labels to integers
+  let mut label_map = map()
+  let mut next_id = 0.0
+  let mut encoded = []
+  for label in labels
+    let key = str(label)
+    if map_has(label_map, key) == 0.0
+      map_set(label_map, key, str(next_id))
+      next_id = next_id + 1.0
+    end
+    push(encoded, float(map_get(label_map, key)))
+  end
+  return encoded
+end
+
+fn impute_missing(arr, strategy, missing_val)
+  if strategy == "mean"
+    let mut sum = 0.0
+    let mut count = 0.0
+    for x in arr
+      if x != missing_val
+        sum = sum + x
+        count = count + 1.0
+      end
+    end
+    let fill = sum / count
+    let mut result = []
+    for x in arr
+      if x == missing_val
+        push(result, fill)
+      else
+        push(result, x)
+      end
+    end
+    return result
+  elif strategy == "median"
+    let mut valid = []
+    for x in arr
+      if x != missing_val
+        push(valid, x)
+      end
+    end
+    let fill = median(valid)
+    let mut result = []
+    for x in arr
+      if x == missing_val
+        push(result, fill)
+      else
+        push(result, x)
+      end
+    end
+    return result
+  end
+  return arr
+end

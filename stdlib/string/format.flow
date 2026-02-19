@@ -1,0 +1,113 @@
+// stdlib/string/format.flow — String formatting utilities
+
+fn pad_left(s, width, ch)
+  let n = len(s)
+  if n >= width
+    return s
+  end
+  let mut result = ""
+  let mut i = n
+  while i < width
+    result = result + ch
+    i = i + 1.0
+  end
+  return result + s
+end
+
+fn pad_right(s, width, ch)
+  let n = len(s)
+  if n >= width
+    return s
+  end
+  let mut result = s
+  let mut i = n
+  while i < width
+    result = result + ch
+    i = i + 1.0
+  end
+  return result
+end
+
+fn format_number(n, decimals)
+  // Format float to N decimal places as string
+  let factor = pow(10.0, decimals)
+  let rounded = round(n * factor) / factor
+  let s = str(rounded)
+  // Find decimal point
+  let dot_idx = index_of(s, ".")
+  if dot_idx < 0.0
+    // No decimal point yet
+    if decimals == 0.0
+      return s
+    end
+    let mut result = s + "."
+    let mut i = 0.0
+    while i < decimals
+      result = result + "0"
+      i = i + 1.0
+    end
+    return result
+  end
+  // Has decimal point — pad or trim
+  let current_dec = len(s) - dot_idx - 1.0
+  if decimals == 0.0
+    return substr(s, 0.0, dot_idx)
+  end
+  if current_dec >= decimals
+    return substr(s, 0.0, dot_idx + 1.0 + decimals)
+  end
+  let mut result = s
+  let mut i = current_dec
+  while i < decimals
+    result = result + "0"
+    i = i + 1.0
+  end
+  return result
+end
+
+fn format_bytes(n)
+  // Human-readable byte size
+  if n < 1024.0
+    return str(round(n)) + " B"
+  end
+  let kb = n / 1024.0
+  if kb < 1024.0
+    return format_number(kb, 1.0) + " KB"
+  end
+  let mb = kb / 1024.0
+  if mb < 1024.0
+    return format_number(mb, 1.0) + " MB"
+  end
+  let gb = mb / 1024.0
+  if gb < 1024.0
+    return format_number(gb, 2.0) + " GB"
+  end
+  let tb = gb / 1024.0
+  return format_number(tb, 2.0) + " TB"
+end
+
+fn format_duration(seconds)
+  // Human-readable duration from seconds
+  if seconds < 60.0
+    return format_number(seconds, 1.0) + "s"
+  end
+  let mut remaining = floor(seconds)
+  let secs = remaining - floor(remaining / 60.0) * 60.0
+  remaining = floor(remaining / 60.0)
+  let mins = remaining - floor(remaining / 60.0) * 60.0
+  remaining = floor(remaining / 60.0)
+  let hours = remaining - floor(remaining / 24.0) * 24.0
+  let days = floor(remaining / 24.0)
+  let mut result = ""
+  if days > 0.0
+    result = str(days) + "d "
+  end
+  if hours > 0.0 || days > 0.0
+    result = result + str(hours) + "h "
+  end
+  if mins > 0.0 || hours > 0.0 || days > 0.0
+    result = result + str(mins) + "m "
+  end
+  result = result + str(secs) + "s"
+  return result
+end

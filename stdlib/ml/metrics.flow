@@ -1,0 +1,136 @@
+// stdlib/ml/metrics.flow — Classification and regression metrics
+
+fn accuracy(y_true, y_pred)
+  let n = len(y_true)
+  let mut correct = 0.0
+  let mut i = 0.0
+  while i < n
+    if y_true[i] == y_pred[i]
+      correct = correct + 1.0
+    end
+    i = i + 1.0
+  end
+  return correct / n
+end
+
+fn precision(y_true, y_pred, positive)
+  let mut tp = 0.0
+  let mut fp = 0.0
+  let n = len(y_true)
+  let mut i = 0.0
+  while i < n
+    if y_pred[i] == positive
+      if y_true[i] == positive
+        tp = tp + 1.0
+      else
+        fp = fp + 1.0
+      end
+    end
+    i = i + 1.0
+  end
+  if tp + fp == 0.0
+    return 0.0
+  end
+  return tp / (tp + fp)
+end
+
+fn recall(y_true, y_pred, positive)
+  let mut tp = 0.0
+  let mut fn_count = 0.0
+  let n = len(y_true)
+  let mut i = 0.0
+  while i < n
+    if y_true[i] == positive
+      if y_pred[i] == positive
+        tp = tp + 1.0
+      else
+        fn_count = fn_count + 1.0
+      end
+    end
+    i = i + 1.0
+  end
+  if tp + fn_count == 0.0
+    return 0.0
+  end
+  return tp / (tp + fn_count)
+end
+
+fn f1_score(y_true, y_pred, positive)
+  let p = precision(y_true, y_pred, positive)
+  let r = recall(y_true, y_pred, positive)
+  if p + r == 0.0
+    return 0.0
+  end
+  return 2.0 * p * r / (p + r)
+end
+
+fn mse(y_true, y_pred)
+  let n = len(y_true)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n
+    let d = y_true[i] - y_pred[i]
+    sum = sum + d * d
+    i = i + 1.0
+  end
+  return sum / n
+end
+
+fn rmse(y_true, y_pred)
+  return sqrt(mse(y_true, y_pred))
+end
+
+fn mae(y_true, y_pred)
+  let n = len(y_true)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n
+    let mut d = y_true[i] - y_pred[i]
+    if d < 0.0
+      d = d * -1.0
+    end
+    sum = sum + d
+    i = i + 1.0
+  end
+  return sum / n
+end
+
+fn confusion_matrix(y_true, y_pred, num_classes)
+  // Returns flat array of size num_classes * num_classes
+  let size = num_classes * num_classes
+  let mut cm = []
+  let mut i = 0.0
+  while i < size
+    push(cm, 0.0)
+    i = i + 1.0
+  end
+  let n = len(y_true)
+  i = 0.0
+  while i < n
+    let actual = floor(y_true[i])
+    let predicted = floor(y_pred[i])
+    let idx = actual * num_classes + predicted
+    cm[idx] = cm[idx] + 1.0
+    i = i + 1.0
+  end
+  return cm
+end
+
+fn mean_absolute_percentage_error(y_true, y_pred)
+  let n = len(y_true)
+  let mut sum = 0.0
+  let mut count = 0.0
+  let mut i = 0.0
+  while i < n
+    if y_true[i] != 0.0
+      let d = abs(y_true[i] - y_pred[i]) / abs(y_true[i])
+      sum = sum + d
+      count = count + 1.0
+    end
+    i = i + 1.0
+  end
+  if count == 0.0
+    return 0.0
+  end
+  return sum / count * 100.0
+end

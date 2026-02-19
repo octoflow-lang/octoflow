@@ -1,0 +1,104 @@
+// stdlib/data/validate.flow — Data validation utilities
+
+fn is_numeric(s)
+  // Check if string represents a valid number (int or float, optional sign)
+  let trimmed = trim(s)
+  let n = len(trimmed)
+  if n == 0.0
+    return 0.0
+  end
+  let mut i = 0.0
+  let mut has_digit = 0.0
+  let mut has_dot = 0.0
+  // Optional leading sign
+  let first = char_at(trimmed, 0.0)
+  if first == "+" || first == "-"
+    i = 1.0
+  end
+  while i < n
+    let c = char_at(trimmed, i)
+    let code = ord(c)
+    if code >= 48.0 && code <= 57.0
+      has_digit = 1.0
+    elif c == "." && has_dot == 0.0
+      has_dot = 1.0
+    else
+      return 0.0
+    end
+    i = i + 1.0
+  end
+  return has_digit
+end
+
+fn is_email(s)
+  // Basic email validation: something@something.something
+  let trimmed = trim(s)
+  let at_idx = index_of(trimmed, "@")
+  if at_idx < 1.0
+    return 0.0
+  end
+  let domain = substr(trimmed, at_idx + 1.0, len(trimmed))
+  if len(domain) < 3.0
+    return 0.0
+  end
+  let dot_idx = index_of(domain, ".")
+  if dot_idx < 1.0
+    return 0.0
+  end
+  // Must have chars after the last dot
+  let tld = substr(domain, dot_idx + 1.0, len(domain))
+  if len(tld) < 2.0
+    return 0.0
+  end
+  // No spaces allowed
+  if contains(trimmed, " ")
+    return 0.0
+  end
+  return 1.0
+end
+
+fn is_url(s)
+  // Basic URL validation: starts with http(s)://, has domain with dot
+  let trimmed = trim(s)
+  let mut valid_scheme = 0.0
+  if starts_with(trimmed, "https://")
+    valid_scheme = 1.0
+  elif starts_with(trimmed, "http://")
+    valid_scheme = 1.0
+  end
+  if valid_scheme == 0.0
+    return 0.0
+  end
+  // Extract after ://
+  let scheme_end = index_of(trimmed, "://")
+  let rest = substr(trimmed, scheme_end + 3.0, len(trimmed))
+  if len(rest) < 3.0
+    return 0.0
+  end
+  // Must contain a dot in the domain part
+  if contains(rest, ".") == 0.0
+    return 0.0
+  end
+  // No spaces
+  if contains(rest, " ")
+    return 0.0
+  end
+  return 1.0
+end
+
+fn in_range(val, low, high)
+  if val >= low && val <= high
+    return 1.0
+  end
+  return 0.0
+end
+
+fn clamp_value(val, low, high)
+  if val < low
+    return low
+  end
+  if val > high
+    return high
+  end
+  return val
+end

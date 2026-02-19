@@ -1,0 +1,6 @@
+stream data = tap("test_data/input_10.csv")
+let total = sum(data)
+let lo = min(data)
+let hi = max(data)
+print("Stats computed")
+emit(data, "test_data/output_stats.csv")

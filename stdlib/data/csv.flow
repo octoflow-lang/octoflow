@@ -1,0 +1,202 @@
+// stdlib/data/csv.flow — CSV file operations
+
+fn csv_read(path)
+  // Read CSV file into array of maps (each row = map of column:value)
+  let lines = read_lines(path)
+  let n = len(lines)
+  if n < 2.0
+    let mut empty = []
+    return empty
+  end
+  let NL = chr(10)
+  // Parse header
+  let header_line = trim(lines[0])
+  let headers = split(header_line, ",")
+  let ncols = len(headers)
+  // Parse data rows
+  let mut rows = []
+  let mut i = 1.0
+  while i < n
+    let line = trim(lines[i])
+    if len(line) > 0.0
+      let vals = split(line, ",")
+      let mut row = map()
+      let mut j = 0.0
+      while j < ncols && j < len(vals)
+        map_set(row, trim(headers[j]), trim(vals[j]))
+        j = j + 1.0
+      end
+      push(rows, row)
+    end
+    i = i + 1.0
+  end
+  return rows
+end
+
+fn csv_write(rows, path, headers)
+  // Write array of maps to CSV
+  let ncols = len(headers)
+  let mut content = join(headers, ",") + chr(10)
+  for row in rows
+    let mut vals = []
+    let mut j = 0.0
+    while j < ncols
+      let key = headers[j]
+      if map_has(row, key)
+        push(vals, map_get(row, key))
+      else
+        push(vals, "")
+      end
+      j = j + 1.0
+    end
+    content = content + join(vals, ",") + chr(10)
+  end
+  write_file(path, content)
+  return len(rows)
+end
+
+fn csv_headers(rows)
+  if len(rows) == 0.0
+    let mut empty = []
+    return empty
+  end
+  return map_keys(rows[0])
+end
+
+fn csv_column(rows, col_name)
+  let mut result = []
+  for row in rows
+    if map_has(row, col_name)
+      let v = map_get(row, col_name)
+      push(result, float(v))
+    else
+      push(result, 0.0)
+    end
+  end
+  return result
+end
+
+fn csv_column_str(rows, col_name)
+  let mut result = []
+  for row in rows
+    if map_has(row, col_name)
+      push(result, map_get(row, col_name))
+    else
+      push(result, "")
+    end
+  end
+  return result
+end
+
+fn csv_filter(rows, col, op, val)
+  let mut result = []
+  for row in rows
+    if map_has(row, col)
+      let v = float(map_get(row, col))
+      let mut pass = 0.0
+      if op == ">" && v > val
+        pass = 1.0
+      elif op == "<" && v < val
+        pass = 1.0
+      elif op == ">=" && v >= val
+        pass = 1.0
+      elif op == "<=" && v <= val
+        pass = 1.0
+      elif op == "==" && v == val
+        pass = 1.0
+      elif op == "!=" && v != val
+        pass = 1.0
+      end
+      if pass == 1.0
+        push(result, row)
+      end
+    end
+  end
+  return result
+end
+
+fn csv_filter_str(rows, col, op, val)
+  let mut result = []
+  for row in rows
+    if map_has(row, col)
+      let v = map_get(row, col)
+      let mut pass = 0.0
+      if op == "==" && v == val
+        pass = 1.0
+      elif op == "!=" && v != val
+        pass = 1.0
+      elif op == "contains" && contains(v, val)
+        pass = 1.0
+      elif op == "starts_with" && starts_with(v, val)
+        pass = 1.0
+      end
+      if pass == 1.0
+        push(result, row)
+      end
+    end
+  end
+  return result
+end
+
+fn csv_select(rows, cols)
+  let mut result = []
+  for row in rows
+    let mut new_row = map()
+    for col in cols
+      if map_has(row, col)
+        map_set(new_row, col, map_get(row, col))
+      end
+    end
+    push(result, new_row)
+  end
+  return result
+end
+
+fn csv_sort(rows, col, ascending)
+  // Simple insertion sort by column value
+  let n = len(rows)
+  let mut vals = []
+  let mut indices = []
+  let mut i = 0.0
+  while i < n
+    if map_has(rows[i], col)
+      push(vals, float(map_get(rows[i], col)))
+    else
+      push(vals, 0.0)
+    end
+    push(indices, i)
+    i = i + 1.0
+  end
+  // Sort indices by vals
+  i = 1.0
+  while i < n
+    let key = vals[i]
+    let key_idx = indices[i]
+    let mut j = i - 1.0
+    while j >= 0.0
+      let mut swap_cond = 0.0
+      if ascending == 1.0 && vals[j] > key
+        swap_cond = 1.0
+      elif ascending == 0.0 && vals[j] < key
+        swap_cond = 1.0
+      end
+      if swap_cond == 1.0
+        vals[j + 1.0] = vals[j]
+        indices[j + 1.0] = indices[j]
+        j = j - 1.0
+      else
+        break
+      end
+    end
+    vals[j + 1.0] = key
+    indices[j + 1.0] = key_idx
+    i = i + 1.0
+  end
+  let mut result = []
+  i = 0.0
+  while i < n
+    push(result, rows[indices[i]])
+    i = i + 1.0
+  end
+  return result
+end

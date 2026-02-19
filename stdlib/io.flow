@@ -1,0 +1,165 @@
+// stdlib/io.flow — File I/O and console output via FFI
+// Phase 73: Pure .flow I/O layer for self-hosting path
+// Requires: --allow-ffi
+//
+// Uses msvcrt.dll (C runtime) for portable file operations.
+// All I/O goes through FFI — no Rust builtins in the call path.
+
+extern "msvcrt" {
+    fn fopen(path: ptr, mode: ptr) -> ptr
+    fn fclose(fp: ptr) -> u32
+    fn fread(buf: ptr, size: u32, count: u32, fp: ptr) -> u32
+    fn fwrite(buf: ptr, size: u32, count: u32, fp: ptr) -> u32
+    fn fseek(fp: ptr, offset: u32, origin: u32) -> u32
+    fn ftell(fp: ptr) -> u32
+    fn puts(str: ptr) -> u32
+    fn remove(path: ptr) -> u32
+}
+
+// Seek origins
+let IO_SEEK_SET = 0.0
+let IO_SEEK_CUR = 1.0
+let IO_SEEK_END = 2.0
+
+// ── File Read ─────────────────────────────────────────────────────────
+
+// Read entire file as string. Returns "" on error.
+fn io_read_file(path)
+    let p = mem_from_str(path)
+    let m = mem_from_str("rb")
+    let fp = fopen(p, m)
+    mem_free(p)
+    mem_free(m)
+    if fp == 0.0
+        return ""
+    end
+    let _s1 = fseek(fp, 0.0, IO_SEEK_END)
+    let size = ftell(fp)
+    let _s2 = fseek(fp, 0.0, IO_SEEK_SET)
+    if size == 0.0
+        let _c = fclose(fp)
+        return ""
+    end
+    let buf = mem_alloc(size + 1.0)
+    let _r = fread(buf, 1.0, size, fp)
+    let _c = fclose(fp)
+    let content = mem_to_str(buf, size)
+    mem_free(buf)
+    return content
+end
+
+// Read file as byte array (for binary files like .spv).
+// Returns array of float values (0-255), empty on error.
+fn io_read_bytes(path)
+    let p = mem_from_str(path)
+    let m = mem_from_str("rb")
+    let fp = fopen(p, m)
+    mem_free(p)
+    mem_free(m)
+    if fp == 0.0
+        return -1.0
+    end
+    let _s1 = fseek(fp, 0.0, IO_SEEK_END)
+    let size = ftell(fp)
+    let _s2 = fseek(fp, 0.0, IO_SEEK_SET)
+    if size == 0.0
+        let _c = fclose(fp)
+        return 0.0
+    end
+    let buf = mem_alloc(size)
+    let _r = fread(buf, 1.0, size, fp)
+    let _c = fclose(fp)
+    // Return handle + size so caller can read bytes
+    // Caller must mem_free the handle when done
+    return buf
+end
+
+// ── File Write ────────────────────────────────────────────────────────
+
+// Write string to file. Returns bytes written (0 on error).
+fn io_write_file(path, content)
+    let p = mem_from_str(path)
+    let m = mem_from_str("wb")
+    let fp = fopen(p, m)
+    mem_free(p)
+    mem_free(m)
+    if fp == 0.0
+        return 0.0
+    end
+    let buf = mem_from_str(content)
+    let slen = len(content)
+    let written = fwrite(buf, 1.0, slen, fp)
+    let _c = fclose(fp)
+    mem_free(buf)
+    return written
+end
+
+// Append string to file. Returns bytes written (0 on error).
+fn io_append_file(path, content)
+    let p = mem_from_str(path)
+    let m = mem_from_str("ab")
+    let fp = fopen(p, m)
+    mem_free(p)
+    mem_free(m)
+    if fp == 0.0
+        return 0.0
+    end
+    let buf = mem_from_str(content)
+    let slen = len(content)
+    let written = fwrite(buf, 1.0, slen, fp)
+    let _c = fclose(fp)
+    mem_free(buf)
+    return written
+end
+
+// Write byte array (mem handle) to file.
+// buf_handle: mem_alloc handle, size: number of bytes to write.
+fn io_write_bytes(path, buf_handle, size)
+    let p = mem_from_str(path)
+    let m = mem_from_str("wb")
+    let fp = fopen(p, m)
+    mem_free(p)
+    mem_free(m)
+    if fp == 0.0
+        return 0.0
+    end
+    let written = fwrite(buf_handle, 1.0, size, fp)
+    let _c = fclose(fp)
+    return written
+end
+
+// ── Console Output ────────────────────────────────────────────────────
+
+// Print string to stdout with newline (like puts).
+fn io_puts(text)
+    let s = mem_from_str(text)
+    let _r = puts(s)
+    mem_free(s)
+    return 0.0
+end
+
+// ── File Management ───────────────────────────────────────────────────
+
+// Delete a file. Returns 0 on success, non-zero on error.
+fn io_remove(path)
+    let p = mem_from_str(path)
+    let r = remove(p)
+    mem_free(p)
+    return r
+end
+
+// Get file size in bytes. Returns -1 on error.
+fn io_file_size(path)
+    let p = mem_from_str(path)
+    let m = mem_from_str("rb")
+    let fp = fopen(p, m)
+    mem_free(p)
+    mem_free(m)
+    if fp == 0.0
+        return 0.0 - 1.0
+    end
+    let _s = fseek(fp, 0.0, IO_SEEK_END)
+    let size = ftell(fp)
+    let _c = fclose(fp)
+    return size
+end

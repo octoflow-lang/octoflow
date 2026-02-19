@@ -1,0 +1,64 @@
+// Phase 28: For-Each Loop Demo
+// Iterates over array elements with `for x in arr ... end`
+
+let scores = [85.0, 92.0, 78.0, 95.0, 88.0]
+
+// Sum all scores
+let mut total = 0.0
+for s in scores
+  total = total + s
+end
+print("Total: {total}")
+
+// Count scores above 90
+let mut high = 0.0
+for s in scores
+  if s > 90.0
+    high = high + 1.0
+  end
+end
+print("Scores above 90: {high}")
+
+// Find max using for-each + if
+let mut best = 0.0
+for s in scores
+  if s > best
+    best = s
+  end
+end
+print("Best score: {best}")
+
+// Nested: for-each inside for-range
+let weights = [1.0, 2.0, 3.0]
+let mut weighted = 0.0
+for i in range(0, 3)
+  for w in weights
+    weighted = weighted + w * i
+  end
+end
+print("Weighted sum: {weighted}")
+
+// Break out early
+let data = [10.0, 20.0, 30.0, 40.0, 50.0]
+let mut partial = 0.0
+for d in data
+  if d > 25.0
+    break
+  end
+  partial = partial + d
+end
+print("Partial sum (before 25): {partial}")
+
+// Continue to skip elements
+let mut odd_sum = 0.0
+let nums = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+for n in nums
+  // Skip even numbers (where n/2 has no remainder)
+  let half = n / 2.0
+  let doubled = half * 2.0
+  if doubled == n
+    continue
+  end
+  odd_sum = odd_sum + n
+end
+print("Odd sum: {odd_sum}")

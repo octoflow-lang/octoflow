@@ -1,0 +1,159 @@
+// stdlib/ml/nn.flow — Simple neural network primitives
+
+fn dense_forward(input, weights, bias, n_in, n_out)
+  // Dense layer: output = input * weights + bias
+  // input: array of n_in values
+  // weights: flat array n_in * n_out (row-major)
+  // bias: array of n_out values
+  let mut output = []
+  let mut j = 0.0
+  while j < n_out
+    let mut sum = bias[j]
+    let mut i = 0.0
+    while i < n_in
+      sum = sum + input[i] * weights[i * n_out + j]
+      i = i + 1.0
+    end
+    push(output, sum)
+    j = j + 1.0
+  end
+  return output
+end
+
+fn relu_forward(arr)
+  let mut result = []
+  for x in arr
+    if x > 0.0
+      push(result, x)
+    else
+      push(result, 0.0)
+    end
+  end
+  return result
+end
+
+fn sigmoid_forward(arr)
+  let mut result = []
+  for x in arr
+    push(result, 1.0 / (1.0 + exp(-1.0 * x)))
+  end
+  return result
+end
+
+fn tanh_forward(arr)
+  let mut result = []
+  for x in arr
+    let e2x = exp(2.0 * x)
+    push(result, (e2x - 1.0) / (e2x + 1.0))
+  end
+  return result
+end
+
+fn softmax(arr)
+  let n = len(arr)
+  // Find max for numerical stability
+  let mut mx = arr[0]
+  for x in arr
+    if x > mx
+      mx = x
+    end
+  end
+  let mut exp_sum = 0.0
+  let mut exps = []
+  for x in arr
+    let e = exp(x - mx)
+    push(exps, e)
+    exp_sum = exp_sum + e
+  end
+  let mut result = []
+  for e in exps
+    push(result, e / exp_sum)
+  end
+  return result
+end
+
+fn cross_entropy_loss(predicted, target)
+  let n = len(predicted)
+  let mut loss = 0.0
+  let mut i = 0.0
+  while i < n
+    if target[i] == 1.0 && predicted[i] > 0.0001
+      loss = loss - log(predicted[i])
+    end
+    i = i + 1.0
+  end
+  return loss / n
+end
+
+fn mse_loss(predicted, target)
+  let n = len(predicted)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n
+    let d = predicted[i] - target[i]
+    sum = sum + d * d
+    i = i + 1.0
+  end
+  return sum / n
+end
+
+fn init_weights(n_in, n_out)
+  // Xavier initialization
+  let scale = sqrt(2.0 / (n_in + n_out))
+  let total = n_in * n_out
+  let mut weights = []
+  let mut i = 0.0
+  while i < total
+    let u1 = random()
+    let u2 = random()
+    let PI = 3.14159265358979
+    let z = sqrt(-2.0 * log(u1)) * cos(2.0 * PI * u2)
+    push(weights, z * scale)
+    i = i + 1.0
+  end
+  return weights
+end
+
+fn init_bias(n)
+  let mut bias = []
+  let mut i = 0.0
+  while i < n
+    push(bias, 0.0)
+    i = i + 1.0
+  end
+  return bias
+end
+
+fn sgd_update(params, grads, lr)
+  let n = len(params)
+  let mut i = 0.0
+  while i < n
+    params[i] = params[i] - lr * grads[i]
+    i = i + 1.0
+  end
+  return params
+end
+
+fn dropout(arr, rate)
+  let mut result = []
+  let scale = 1.0 / (1.0 - rate)
+  for x in arr
+    if random() > rate
+      push(result, x * scale)
+    else
+      push(result, 0.0)
+    end
+  end
+  return result
+end
+
+fn batch_norm(arr)
+  let m = mean(arr)
+  let sd = stddev(arr)
+  let eps = 0.00001
+  let mut result = []
+  for x in arr
+    push(result, (x - m) / (sd + eps))
+  end
+  return result
+end

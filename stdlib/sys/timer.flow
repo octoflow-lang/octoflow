@@ -1,0 +1,52 @@
+// stdlib/sys/timer.flow — Timing and benchmarking utilities
+
+fn stopwatch()
+  return now_ms()
+end
+
+fn elapsed(start)
+  return now_ms() - start
+end
+
+fn elapsed_secs(start)
+  return (now_ms() - start) / 1000.0
+end
+
+fn benchmark(label, iterations)
+  // Returns avg ms per iteration
+  // Usage: must be used with inline code between start/end calls
+  let t0 = now_ms()
+  return t0
+end
+
+fn benchmark_end(t0, label, iterations)
+  let dt = now_ms() - t0
+  let avg = dt / iterations
+  print("{label}: {dt}ms total, {avg}ms/iter ({iterations} iterations)")
+  return dt
+end
+
+fn sleep_busy(ms)
+  // Busy-wait sleep (no OS sleep builtin yet)
+  let t0 = now_ms()
+  while now_ms() - t0 < ms
+  end
+  return 0.0
+end
+
+fn format_duration(ms)
+  if ms < 1.0
+    let us = ms * 1000.0
+    return str(round(us)) + "us"
+  end
+  if ms < 1000.0
+    return str(round(ms * 100.0) / 100.0) + "ms"
+  end
+  let s = ms / 1000.0
+  if s < 60.0
+    return str(round(s * 100.0) / 100.0) + "s"
+  end
+  let m = floor(s / 60.0)
+  let rem = s - m * 60.0
+  return str(m) + "m " + str(round(rem)) + "s"
+end

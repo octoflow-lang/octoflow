@@ -1,0 +1,43 @@
+// stdlib/collections/stack.flow — Stack (LIFO) data structure
+
+fn stack_create()
+  let mut s = []
+  return s
+end
+
+fn stack_push(s, val)
+  push(s, val)
+  return 0.0
+end
+
+fn stack_pop(s)
+  if len(s) == 0.0
+    return 0.0
+  end
+  return pop(s)
+end
+
+fn stack_peek(s)
+  if len(s) == 0.0
+    return 0.0
+  end
+  return s[len(s) - 1.0]
+end
+
+fn stack_size(s)
+  return len(s)
+end
+
+fn stack_is_empty(s)
+  if len(s) == 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn stack_clear(s)
+  while len(s) > 0.0
+    pop(s)
+  end
+  return 0.0
+end

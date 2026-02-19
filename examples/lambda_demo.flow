@@ -1,0 +1,80 @@
+// Phase 38: Closures/Lambdas + HashMap Bracket Access Demo
+// Run with: flowgpu-cli run examples/lambda_demo.flow
+
+// ── filter: keep elements matching condition ──────────────────
+let scores = [85.0, 42.0, 91.0, 67.0, 73.0, 55.0, 98.0]
+let passing = filter(scores, fn(s) s >= 70.0 end)
+print("Passing scores: {passing}")
+
+// ── map_each: transform each element ──────────────────────────
+let names = ["alice", "bob", "charlie"]
+let lengths = map_each(names, fn(n) len(n) end)
+print("Name lengths: {lengths}")
+
+let nums = [1.0, 2.0, 3.0, 4.0, 5.0]
+let doubled = map_each(nums, fn(x) x * 2.0 end)
+print("Doubled: {doubled}")
+
+// ── sort_by: sort using key function ──────────────────────────
+let words = ["banana", "fig", "apple", "kiwi"]
+let by_len = sort_by(words, fn(w) len(w) end)
+print("By length: {by_len}")
+
+let values = [3.0, -1.0, -5.0, 2.0, -4.0]
+let by_abs = sort_by(values, fn(x) abs(x) end)
+print("By absolute value: {by_abs}")
+
+// ── reduce: fold array to single value ────────────────────────
+let total = reduce(nums, 0.0, fn(acc, x) acc + x end)
+print("Sum: {total}")
+
+let product = reduce(nums, 1.0, fn(acc, x) acc * x end)
+print("Product: {product}")
+
+let greeting = reduce(names, "", fn(acc, n) acc + n + " " end)
+print("All names: {greeting}")
+
+// ── HashMap bracket access ────────────────────────────────────
+let mut person = map()
+map_set(person, "name", "Alice")
+map_set(person, "age", 30.0)
+map_set(person, "city", "NYC")
+
+let name = person["name"]
+let age = person["age"]
+print("Person: {name}, age {age}")
+
+// Variable key
+let field = "city"
+let city = person[field]
+print("City: {city}")
+
+// ── Snapshot capture: lambdas see outer variables ─────────────
+let threshold = 70.0
+let above = filter(scores, fn(s) s >= threshold end)
+print("Above {threshold}: {above}")
+
+// ── Chaining: filter then reduce ──────────────────────────────
+let high = filter(scores, fn(s) s >= 90.0 end)
+let high_avg = reduce(high, 0.0, fn(acc, s) acc + s end)
+let count = len(high)
+let avg = high_avg / count
+print("Average of 90+ scores: {avg}")
+
+// ── Lambda with user function ─────────────────────────────────
+fn grade(score)
+    if score >= 90.0
+        return "A"
+    elif score >= 80.0
+        return "B"
+    elif score >= 70.0
+        return "C"
+    else
+        return "F"
+    end
+end
+
+let grades = map_each(scores, fn(s) grade(s) end)
+print("Grades: {grades}")
+
+print("Lambda demo complete")

@@ -1,0 +1,16 @@
+let weights = [0.2, 0.3, 0.5]
+let labels = [10.0, 20.0, 30.0]
+
+let n = len(weights)
+print("Array length: {n}")
+
+let first = weights[0.0]
+let last = weights[2.0]
+print("First weight: {first}, Last weight: {last}")
+
+let weighted_sum = labels[0.0] * weights[0.0] + labels[1.0] * weights[1.0] + labels[2.0] * weights[2.0]
+print("Weighted sum: {weighted_sum}")
+
+let thresholds = [0.0, 0.25, 0.5, 0.75, 1.0]
+let num_thresholds = len(thresholds)
+print("Thresholds: {num_thresholds} levels")

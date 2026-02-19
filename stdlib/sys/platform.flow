@@ -1,0 +1,57 @@
+// stdlib/sys/platform.flow — Platform detection and system info
+
+fn get_os()
+  return os_name()
+end
+
+fn is_windows()
+  if os_name() == "windows"
+    return 1.0
+  end
+  return 0.0
+end
+
+fn is_linux()
+  if os_name() == "linux"
+    return 1.0
+  end
+  return 0.0
+end
+
+fn is_mac()
+  if os_name() == "macos"
+    return 1.0
+  end
+  return 0.0
+end
+
+fn home_dir()
+  let os = os_name()
+  if os == "windows"
+    return env("USERPROFILE")
+  end
+  return env("HOME")
+end
+
+fn temp_dir()
+  let os = os_name()
+  if os == "windows"
+    return env("TEMP")
+  end
+  return "/tmp"
+end
+
+fn user_name()
+  let os = os_name()
+  if os == "windows"
+    return env("USERNAME")
+  end
+  return env("USER")
+end
+
+fn path_separator()
+  if os_name() == "windows"
+    return "\"
+  end
+  return "/"
+end

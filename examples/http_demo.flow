@@ -1,0 +1,28 @@
+// Phase 35: HTTP Client Demo
+// Run with: flowgpu-cli run examples/http_demo.flow --allow-net
+
+// GET request — fetch data from a public API
+let r = http_get("https://httpbin.org/get")
+if r.ok
+  print("GET success!")
+  print("Status: {r.status}")
+  print("Body length: {len(r.body)}")
+else
+  print("GET failed: {r.error}")
+end
+
+// POST request — send data
+let p = http_post("https://httpbin.org/post", "hello from OctoFlow")
+if p.ok
+  print("POST success! Status: {p.status}")
+else
+  print("POST failed: {p.error}")
+end
+
+// Error handling — invalid URL produces graceful failure
+let bad = http_get("http://this.will.not.resolve.invalid")
+if bad.ok == 0.0
+  print("Expected failure: {bad.error}")
+end
+
+print("HTTP demo complete")

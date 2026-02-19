@@ -1,0 +1,199 @@
+// stdlib/string/string.flow — String utilities (Python str equivalents)
+
+fn str_center(s, width, fill)
+  let n = len(s)
+  if n >= width
+    return s
+  end
+  let pad = width - n
+  let left = floor(pad / 2.0)
+  let right = pad - left
+  let mut result = ""
+  let mut i = 0.0
+  while i < left
+    result = result + fill
+    i = i + 1.0
+  end
+  result = result + s
+  i = 0.0
+  while i < right
+    result = result + fill
+    i = i + 1.0
+  end
+  return result
+end
+
+fn str_ljust(s, width, fill)
+  let n = len(s)
+  if n >= width
+    return s
+  end
+  let mut result = s
+  let mut i = n
+  while i < width
+    result = result + fill
+    i = i + 1.0
+  end
+  return result
+end
+
+fn str_rjust(s, width, fill)
+  let n = len(s)
+  if n >= width
+    return s
+  end
+  let mut result = ""
+  let mut i = n
+  while i < width
+    result = result + fill
+    i = i + 1.0
+  end
+  return result + s
+end
+
+fn str_count(s, sub)
+  let mut count = 0.0
+  let slen = len(s)
+  let sublen = len(sub)
+  if sublen == 0.0
+    return 0.0
+  end
+  let mut i = 0.0
+  while i <= slen - sublen
+    let chunk = substr(s, i, i + sublen)
+    if chunk == sub
+      count = count + 1.0
+      i = i + sublen
+    else
+      i = i + 1.0
+    end
+  end
+  return count
+end
+
+fn str_repeat(s, n)
+  return repeat(s, n)
+end
+
+fn str_reverse(s)
+  let n = len(s)
+  let mut result = ""
+  let mut i = n - 1.0
+  while i >= 0.0
+    result = result + char_at(s, i)
+    i = i - 1.0
+  end
+  return result
+end
+
+fn str_is_digit(s)
+  let n = len(s)
+  if n == 0.0
+    return 0.0
+  end
+  let mut i = 0.0
+  while i < n
+    let c = ord(char_at(s, i))
+    if c < 48.0 || c > 57.0
+      return 0.0
+    end
+    i = i + 1.0
+  end
+  return 1.0
+end
+
+fn str_is_alpha(s)
+  let n = len(s)
+  if n == 0.0
+    return 0.0
+  end
+  let mut i = 0.0
+  while i < n
+    let c = ord(char_at(s, i))
+    let is_upper = c >= 65.0 && c <= 90.0
+    let is_lower = c >= 97.0 && c <= 122.0
+    if is_upper == 0.0 && is_lower == 0.0
+      return 0.0
+    end
+    i = i + 1.0
+  end
+  return 1.0
+end
+
+fn str_is_empty(s)
+  if len(trim(s)) == 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn str_lstrip(s)
+  let n = len(s)
+  let mut i = 0.0
+  while i < n
+    let c = char_at(s, i)
+    if c == " " || ord(c) == 9.0 || ord(c) == 10.0 || ord(c) == 13.0
+      i = i + 1.0
+    else
+      break
+    end
+  end
+  return substr(s, i, n)
+end
+
+fn str_rstrip(s)
+  let n = len(s)
+  let mut i = n - 1.0
+  while i >= 0.0
+    let c = char_at(s, i)
+    if c == " " || ord(c) == 9.0 || ord(c) == 10.0 || ord(c) == 13.0
+      i = i - 1.0
+    else
+      break
+    end
+  end
+  return substr(s, 0.0, i + 1.0)
+end
+
+fn str_title(s)
+  let n = len(s)
+  let mut result = ""
+  let mut capitalize_next = 1.0
+  let mut i = 0.0
+  while i < n
+    let c = char_at(s, i)
+    if c == " " || ord(c) == 9.0
+      result = result + c
+      capitalize_next = 1.0
+    elif capitalize_next == 1.0
+      result = result + to_upper(c)
+      capitalize_next = 0.0
+    else
+      result = result + to_lower(c)
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn str_zfill(s, width)
+  let n = len(s)
+  if n >= width
+    return s
+  end
+  let mut result = ""
+  let mut i = n
+  while i < width
+    result = result + "0"
+    i = i + 1.0
+  end
+  return result + s
+end
+
+fn str_join(arr, sep)
+  return join(arr, sep)
+end
+
+fn str_split(s, sep)
+  return split(s, sep)
+end

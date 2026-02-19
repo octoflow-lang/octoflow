@@ -1,0 +1,106 @@
+// stdlib/ml/ensemble.flow — Ensemble learning utilities
+
+fn bagging_predict(predictions)
+  // Majority vote across multiple predictor outputs
+  // predictions: array of predicted labels (each is a class id)
+  // Returns the most common prediction
+  let mut votes = map()
+  let mut best_label = predictions[0]
+  let mut best_count = 0.0
+  for pred in predictions
+    let key = str(pred)
+    let mut count = 1.0
+    if map_has(votes, key)
+      count = float(map_get(votes, key)) + 1.0
+    end
+    map_set(votes, key, str(count))
+    if count > best_count
+      best_count = count
+      best_label = pred
+    end
+  end
+  return best_label
+end
+
+fn weighted_vote(predictions, weights)
+  // Weighted ensemble voting
+  // predictions: array of predicted labels
+  // weights: array of weights for each predictor
+  // Returns label with highest total weight
+  let n = len(predictions)
+  let mut vote_weights = map()
+  let mut best_label = predictions[0]
+  let mut best_weight = 0.0
+  let mut i = 0.0
+  while i < n
+    let key = str(predictions[i])
+    let mut w = weights[i]
+    if map_has(vote_weights, key)
+      w = w + float(map_get(vote_weights, key))
+    end
+    map_set(vote_weights, key, str(w))
+    if w > best_weight
+      best_weight = w
+      best_label = predictions[i]
+    end
+    i = i + 1.0
+  end
+  return best_label
+end
+
+fn bootstrap_sample(arr)
+  // Random sample with replacement (same size as input)
+  let n = len(arr)
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    let idx = floor(random() * n)
+    push(result, arr[idx])
+    i = i + 1.0
+  end
+  return result
+end
+
+fn bagging_predict_array(all_predictions, n_predictors, n_samples)
+  // Majority vote for multiple samples across predictors
+  // all_predictions: flat array [pred1_sample1, pred1_sample2, ..., pred2_sample1, ...]
+  // Returns array of final predictions for each sample
+  let mut results = []
+  let mut s = 0.0
+  while s < n_samples
+    let mut votes = map()
+    let mut best_label = 0.0
+    let mut best_count = 0.0
+    let mut p = 0.0
+    while p < n_predictors
+      let idx = p * n_samples + s
+      let pred = all_predictions[idx]
+      let key = str(pred)
+      let mut count = 1.0
+      if map_has(votes, key)
+        count = float(map_get(votes, key)) + 1.0
+      end
+      map_set(votes, key, str(count))
+      if count > best_count
+        best_count = count
+        best_label = pred
+      end
+      p = p + 1.0
+    end
+    push(results, best_label)
+    s = s + 1.0
+  end
+  return results
+end
+
+fn bootstrap_indices(n)
+  // Generate bootstrap index array (for selecting rows)
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    let idx = floor(random() * n)
+    push(result, idx)
+    i = i + 1.0
+  end
+  return result
+end

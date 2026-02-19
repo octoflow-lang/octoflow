@@ -1,0 +1,13 @@
+// OctoMedia filter library — vanilla op compositions
+
+fn brightness(amount): add(amount) |> clamp(0.0, 255.0)
+
+fn contrast(factor): subtract(128.0) |> multiply(factor) |> add(128.0) |> clamp(0.0, 255.0)
+
+fn gamma(g): divide(255.0) |> pow(g) |> multiply(255.0)
+
+fn invert(): negate() |> add(255.0)
+
+fn warm_tone(amount): warm(amount) |> clamp(0.0, 255.0)
+
+fn cool_tone(amount): cool(amount) |> clamp(0.0, 255.0)

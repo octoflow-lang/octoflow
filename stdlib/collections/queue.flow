@@ -1,0 +1,66 @@
+// stdlib/collections/queue.flow — Queue (FIFO) data structure
+// Uses map-based O(1) dequeue (same pattern as collections.flow)
+
+fn queue_create()
+  let mut q = map()
+  map_set(q, "head", "0")
+  map_set(q, "tail", "0")
+  return q
+end
+
+fn queue_enqueue(q, val)
+  let tail = float(map_get(q, "tail"))
+  let key = "v_" + str(tail)
+  map_set(q, key, str(val))
+  map_set(q, "tail", str(tail + 1.0))
+  return 0.0
+end
+
+fn queue_dequeue(q)
+  let head = float(map_get(q, "head"))
+  let tail = float(map_get(q, "tail"))
+  if head >= tail
+    return ""
+  end
+  let key = "v_" + str(head)
+  let val = map_get(q, key)
+  map_remove(q, key)
+  map_set(q, "head", str(head + 1.0))
+  return val
+end
+
+fn queue_peek(q)
+  let head = float(map_get(q, "head"))
+  let tail = float(map_get(q, "tail"))
+  if head >= tail
+    return ""
+  end
+  let key = "v_" + str(head)
+  return map_get(q, key)
+end
+
+fn queue_size(q)
+  let head = float(map_get(q, "head"))
+  let tail = float(map_get(q, "tail"))
+  return tail - head
+end
+
+fn queue_is_empty(q)
+  if queue_size(q) == 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn queue_clear(q)
+  let mut head = float(map_get(q, "head"))
+  let tail = float(map_get(q, "tail"))
+  while head < tail
+    let key = "v_" + str(head)
+    map_remove(q, key)
+    head = head + 1.0
+  end
+  map_set(q, "head", "0")
+  map_set(q, "tail", "0")
+  return 0.0
+end

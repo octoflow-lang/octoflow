@@ -1,0 +1,180 @@
+// stdlib/science/signal.flow — Signal processing
+
+fn convolve(signal, kernel)
+  let sn = len(signal)
+  let kn = len(kernel)
+  let mut result = []
+  let mut i = 0.0
+  while i < sn
+    let mut sum = 0.0
+    let mut j = 0.0
+    while j < kn
+      let si = i - floor(kn / 2.0) + j
+      if si >= 0.0 && si < sn
+        sum = sum + signal[si] * kernel[j]
+      end
+      j = j + 1.0
+    end
+    push(result, sum)
+    i = i + 1.0
+  end
+  return result
+end
+
+fn moving_avg_filter(signal, window)
+  let n = len(signal)
+  let mut kernel = []
+  let val = 1.0 / window
+  let mut i = 0.0
+  while i < window
+    push(kernel, val)
+    i = i + 1.0
+  end
+  return convolve(signal, kernel)
+end
+
+fn gaussian_kernel(size, sigma)
+  let mut kernel = []
+  let center = floor(size / 2.0)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < size
+    let x = i - center
+    let val = exp(-0.5 * x * x / (sigma * sigma))
+    push(kernel, val)
+    sum = sum + val
+    i = i + 1.0
+  end
+  // Normalize
+  i = 0.0
+  while i < size
+    kernel[i] = kernel[i] / sum
+    i = i + 1.0
+  end
+  return kernel
+end
+
+fn hamming_window(n)
+  let PI = 3.14159265358979
+  let mut w = []
+  let mut i = 0.0
+  while i < n
+    push(w, 0.54 - 0.46 * cos(2.0 * PI * i / (n - 1.0)))
+    i = i + 1.0
+  end
+  return w
+end
+
+fn hanning_window(n)
+  let PI = 3.14159265358979
+  let mut w = []
+  let mut i = 0.0
+  while i < n
+    push(w, 0.5 * (1.0 - cos(2.0 * PI * i / (n - 1.0))))
+    i = i + 1.0
+  end
+  return w
+end
+
+fn blackman_window(n)
+  let PI = 3.14159265358979
+  let mut w = []
+  let mut i = 0.0
+  while i < n
+    let val = 0.42 - 0.5 * cos(2.0 * PI * i / (n - 1.0)) + 0.08 * cos(4.0 * PI * i / (n - 1.0))
+    push(w, val)
+    i = i + 1.0
+  end
+  return w
+end
+
+fn cross_correlate(a, b)
+  let n = len(a)
+  let m = len(b)
+  let mut result = []
+  let mut lag = -1.0 * (m - 1.0)
+  while lag < n
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i < m
+      let ai = i + lag
+      if ai >= 0.0 && ai < n
+        sum = sum + a[ai] * b[i]
+      end
+      i = i + 1.0
+    end
+    push(result, sum)
+    lag = lag + 1.0
+  end
+  return result
+end
+
+fn bandpass(signal, low_freq, high_freq, sample_rate)
+  // Simple FIR bandpass via windowed sinc
+  let n_taps = 31.0
+  let PI = 3.14159265358979
+  let mut kernel = []
+  let center = floor(n_taps / 2.0)
+  let fl = low_freq / sample_rate
+  let fh = high_freq / sample_rate
+  let mut i = 0.0
+  while i < n_taps
+    let x = i - center
+    if x == 0.0
+      push(kernel, 2.0 * (fh - fl))
+    else
+      let hp = sin(2.0 * PI * fh * x) / (PI * x)
+      let lp = sin(2.0 * PI * fl * x) / (PI * x)
+      push(kernel, hp - lp)
+    end
+    i = i + 1.0
+  end
+  // Apply Hamming window
+  let win = hamming_window(n_taps)
+  i = 0.0
+  while i < n_taps
+    kernel[i] = kernel[i] * win[i]
+    i = i + 1.0
+  end
+  return convolve(signal, kernel)
+end
+
+fn envelope(signal)
+  // Simple amplitude envelope
+  let n = len(signal)
+  let mut result = []
+  for x in signal
+    if x < 0.0
+      push(result, -1.0 * x)
+    else
+      push(result, x)
+    end
+  end
+  return moving_avg_filter(result, 5.0)
+end
+
+fn zero_crossings(signal)
+  let n = len(signal)
+  let mut count = 0.0
+  let mut i = 1.0
+  while i < n
+    if (signal[i - 1.0] >= 0.0 && signal[i] < 0.0) || (signal[i - 1.0] < 0.0 && signal[i] >= 0.0)
+      count = count + 1.0
+    end
+    i = i + 1.0
+  end
+  return count
+end
+
+fn peak_detect(signal, threshold)
+  let n = len(signal)
+  let mut peaks = []
+  let mut i = 1.0
+  while i < n - 1.0
+    if signal[i] > signal[i - 1.0] && signal[i] > signal[i + 1.0] && signal[i] > threshold
+      push(peaks, i)
+    end
+    i = i + 1.0
+  end
+  return peaks
+end

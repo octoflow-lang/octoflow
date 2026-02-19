@@ -1,0 +1,83 @@
+// stdlib/sys/args.flow — CLI argument parsing
+//
+// Usage:
+//   let args = parse_args()
+//   let verbose = arg_flag(args, "--verbose")
+//   let output = arg_value(args, "--output", "default.csv")
+
+fn parse_args()
+  // Returns map of parsed arguments
+  // Flags: --flag → "1"
+  // Values: --key value → key: value
+  // Positional: stored as "0", "1", etc.
+  let mut m = map()
+  let raw = env("FLOW_ARGS")
+  if len(raw) == 0.0
+    return m
+  end
+  let parts = split(raw, " ")
+  let n = len(parts)
+  let mut i = 0.0
+  let mut pos = 0.0
+  while i < n
+    let arg = parts[i]
+    if starts_with(arg, "--")
+      let key = substr(arg, 2.0, len(arg))
+      // Check if next arg is a value (not a flag)
+      let ni = i + 1.0
+      if ni < n
+        let next = parts[ni]
+        if starts_with(next, "--") == 0.0
+          map_set(m, key, next)
+          i = i + 2.0
+          continue
+        end
+      end
+      map_set(m, key, "1")
+      i = i + 1.0
+    elif starts_with(arg, "-")
+      let key = substr(arg, 1.0, len(arg))
+      map_set(m, key, "1")
+      i = i + 1.0
+    else
+      map_set(m, str(pos), arg)
+      pos = pos + 1.0
+      i = i + 1.0
+    end
+  end
+  return m
+end
+
+fn arg_flag(args, name)
+  let mut key = name
+  if starts_with(name, "--")
+    key = substr(name, 2.0, len(name))
+  end
+  if map_has(args, key)
+    return 1.0
+  end
+  return 0.0
+end
+
+fn arg_value(args, name, default)
+  let mut key = name
+  if starts_with(name, "--")
+    key = substr(name, 2.0, len(name))
+  end
+  if map_has(args, key)
+    return map_get(args, key)
+  end
+  return default
+end
+
+fn arg_required(args, name)
+  let mut key = name
+  if starts_with(name, "--")
+    key = substr(name, 2.0, len(name))
+  end
+  if map_has(args, key)
+    return map_get(args, key)
+  end
+  print("ERROR: required argument missing: {name}")
+  return ""
+end

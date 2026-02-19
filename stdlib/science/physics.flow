@@ -1,0 +1,104 @@
+// stdlib/science/physics.flow — Physics simulation
+
+fn integrate_euler(state, dt, accel_fn_name)
+  // Euler integration for 1D: x, v → x', v'
+  // state: [x, v], returns [x', v']
+  // User must compute acceleration externally
+  let x = state[0]
+  let v = state[1]
+  // Default: free fall
+  let a = -9.80665
+  let new_v = v + a * dt
+  let new_x = x + v * dt
+  let mut result = []
+  push(result, new_x)
+  push(result, new_v)
+  return result
+end
+
+fn integrate_rk4(x, v, a, dt)
+  // Classic RK4 for x'' = a (constant acceleration)
+  let k1v = a * dt
+  let k1x = v * dt
+  let k2v = a * dt
+  let k2x = (v + k1v * 0.5) * dt
+  let k3v = a * dt
+  let k3x = (v + k2v * 0.5) * dt
+  let k4v = a * dt
+  let k4x = (v + k3v) * dt
+  let new_x = x + (k1x + 2.0 * k2x + 2.0 * k3x + k4x) / 6.0
+  let new_v = v + (k1v + 2.0 * k2v + 2.0 * k3v + k4v) / 6.0
+  let mut result = []
+  push(result, new_x)
+  push(result, new_v)
+  return result
+end
+
+fn spring_damper(x, v, k, c, m, dt)
+  // Spring-damper system: ma = -kx - cv
+  let a = (-1.0 * k * x - c * v) / m
+  return integrate_rk4(x, v, a, dt)
+end
+
+fn projectile(x, y, vx, vy, dt)
+  // 2D projectile motion (no drag)
+  let g = 9.80665
+  let new_x = x + vx * dt
+  let new_y = y + vy * dt
+  let new_vy = vy - g * dt
+  let mut result = []
+  push(result, new_x)
+  push(result, new_y)
+  push(result, vx)
+  push(result, new_vy)
+  return result
+end
+
+fn kinetic_energy(m, v)
+  return 0.5 * m * v * v
+end
+
+fn potential_energy(m, h)
+  return m * 9.80665 * h
+end
+
+fn gravitational_force(m1, m2, r)
+  let G = 6.674 * pow(10.0, -11.0)
+  return G * m1 * m2 / (r * r)
+end
+
+fn wave_equation_1d(u, c, dx, dt, steps)
+  // 1D wave equation: u_tt = c^2 * u_xx
+  let n = len(u)
+  let mut prev = []
+  let mut curr = []
+  let mut i = 0.0
+  while i < n
+    push(prev, u[i])
+    push(curr, u[i])
+    i = i + 1.0
+  end
+  let r = c * dt / dx
+  let r2 = r * r
+  let mut step = 0.0
+  while step < steps
+    let mut next = []
+    push(next, 0.0)
+    i = 1.0
+    while i < n - 1.0
+      let val = 2.0 * curr[i] - prev[i] + r2 * (curr[i + 1.0] - 2.0 * curr[i] + curr[i - 1.0])
+      push(next, val)
+      i = i + 1.0
+    end
+    push(next, 0.0)
+    // Shift
+    i = 0.0
+    while i < n
+      prev[i] = curr[i]
+      curr[i] = next[i]
+      i = i + 1.0
+    end
+    step = step + 1.0
+  end
+  return curr
+end

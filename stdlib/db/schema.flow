@@ -1,0 +1,62 @@
+// stdlib/db/schema.flow — Database schema inspection and modification
+
+fn db_columns(table)
+  // Return column names as an array of strings
+  let cols_str = map_get(table, "__columns")
+  if len(cols_str) == 0.0
+    let mut empty = []
+    return empty
+  end
+  return split(cols_str, ",")
+end
+
+fn db_describe(table)
+  // Return a map with column names and row count
+  let mut info = map()
+  let cols_str = map_get(table, "__columns")
+  map_set(info, "columns", cols_str)
+  let count = map_get(table, "__count")
+  map_set(info, "row_count", count)
+  // Count columns
+  if len(cols_str) == 0.0
+    map_set(info, "col_count", "0")
+  else
+    let mut cols = split(cols_str, ",")
+    map_set(info, "col_count", str(len(cols)))
+  end
+  return info
+end
+
+fn db_rename_column(table, old_name, new_name)
+  // Rename a column in the table (modifies table in-place)
+  let cols_str = map_get(table, "__columns")
+  let mut cols = split(cols_str, ",")
+  let count = float(map_get(table, "__count"))
+  // Update column list
+  let mut new_cols = ""
+  for c in cols
+    let mut col_name = c
+    if c == old_name
+      col_name = new_name
+    end
+    if len(new_cols) > 0.0
+      new_cols = new_cols + "," + col_name
+    else
+      new_cols = col_name
+    end
+  end
+  map_set(table, "__columns", new_cols)
+  // Move data from old column keys to new column keys
+  let mut i = 0.0
+  while i < count
+    let old_key = "__col_" + old_name + "_" + str(i)
+    let new_key = "__col_" + new_name + "_" + str(i)
+    if map_has(table, old_key)
+      let val = map_get(table, old_key)
+      map_set(table, new_key, val)
+      map_remove(table, old_key)
+    end
+    i = i + 1.0
+  end
+  return table
+end

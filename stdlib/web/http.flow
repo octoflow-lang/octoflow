@@ -1,0 +1,36 @@
+// stdlib/web/http.flow — HTTP client utilities
+
+fn http_get_json(url)
+  let r = http_get(url)
+  if r.ok == 1.0
+    return json_parse(r.body)
+  end
+  let mut err = map()
+  map_set(err, "error", r.error)
+  map_set(err, "status", str(r.status))
+  return err
+end
+
+fn http_post_json(url, data)
+  let body = json_stringify(data)
+  let r = http_post(url, body)
+  if r.ok == 1.0
+    return json_parse(r.body)
+  end
+  let mut err = map()
+  map_set(err, "error", r.error)
+  return err
+end
+
+fn api_call(method, url, headers_map, body)
+  // Generic API call
+  // headers_map: map of header_name -> header_value
+  if method == "GET"
+    return http_get(url)
+  elif method == "POST"
+    return http_post(url, body)
+  end
+  let mut err = map()
+  map_set(err, "error", "unsupported method: " + method)
+  return err
+end

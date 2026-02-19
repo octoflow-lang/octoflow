@@ -1,0 +1,203 @@
+// stdlib/db/query.flow — Database query operations
+// Tables use the db/core.flow map-based columnar format:
+//   __columns = "col1,col2,..."
+//   __count = "N"
+//   __col_colname_idx = value
+
+fn db_join(t1, t2, col, n1, n2)
+  // Inner join two tables on a shared column
+  // n1, n2: row counts of t1 and t2
+  let cols1_str = map_get(t1, "__columns")
+  let cols2_str = map_get(t2, "__columns")
+  let mut cols1 = split(cols1_str, ",")
+  let mut cols2 = split(cols2_str, ",")
+  // Build result table with all columns from both
+  let mut result = map()
+  let mut all_cols = ""
+  for c in cols1
+    if len(all_cols) > 0.0
+      all_cols = all_cols + "," + c
+    else
+      all_cols = c
+    end
+  end
+  for c in cols2
+    if c != col
+      let prefixed = "t2_" + c
+      all_cols = all_cols + "," + prefixed
+    end
+  end
+  map_set(result, "__columns", all_cols)
+  let mut out_count = 0.0
+  // For each row in t1, find matching rows in t2
+  let mut i = 0.0
+  while i < n1
+    let key1 = "__col_" + col + "_" + str(i)
+    if map_has(t1, key1)
+      let val1 = map_get(t1, key1)
+      let mut j = 0.0
+      while j < n2
+        let key2 = "__col_" + col + "_" + str(j)
+        if map_has(t2, key2)
+          let val2 = map_get(t2, key2)
+          if val1 == val2
+            // Write joined row
+            for c in cols1
+              let src = "__col_" + c + "_" + str(i)
+              let dst = "__col_" + c + "_" + str(out_count)
+              if map_has(t1, src)
+                map_set(result, dst, map_get(t1, src))
+              end
+            end
+            for c in cols2
+              if c != col
+                let src = "__col_" + c + "_" + str(j)
+                let dst = "__col_t2_" + c + "_" + str(out_count)
+                if map_has(t2, src)
+                  map_set(result, dst, map_get(t2, src))
+                end
+              end
+            end
+            out_count = out_count + 1.0
+          end
+        end
+        j = j + 1.0
+      end
+    end
+    i = i + 1.0
+  end
+  map_set(result, "__count", str(out_count))
+  return result
+end
+
+fn db_group_by(table, col, agg_col, n, op)
+  // Group by col, aggregate agg_col with op ("sum", "count", "mean", "min", "max")
+  let mut groups = map()
+  let mut group_keys = ""
+  let mut i = 0.0
+  while i < n
+    let gkey = "__col_" + col + "_" + str(i)
+    let vkey = "__col_" + agg_col + "_" + str(i)
+    if map_has(table, gkey) && map_has(table, vkey)
+      let group = map_get(table, gkey)
+      let val = float(map_get(table, vkey))
+      let sum_k = "s_" + group
+      let cnt_k = "c_" + group
+      let min_k = "min_" + group
+      let max_k = "max_" + group
+      if map_has(groups, sum_k)
+        let cur_sum = float(map_get(groups, sum_k))
+        let cur_cnt = float(map_get(groups, cnt_k))
+        map_set(groups, sum_k, str(cur_sum + val))
+        map_set(groups, cnt_k, str(cur_cnt + 1.0))
+        let cur_min = float(map_get(groups, min_k))
+        let cur_max = float(map_get(groups, max_k))
+        if val < cur_min
+          map_set(groups, min_k, str(val))
+        end
+        if val > cur_max
+          map_set(groups, max_k, str(val))
+        end
+      else
+        map_set(groups, sum_k, str(val))
+        map_set(groups, cnt_k, "1")
+        map_set(groups, min_k, str(val))
+        map_set(groups, max_k, str(val))
+        if len(group_keys) > 0.0
+          group_keys = group_keys + "," + group
+        else
+          group_keys = group
+        end
+      end
+    end
+    i = i + 1.0
+  end
+  // Build result table
+  let mut result = map()
+  map_set(result, "__columns", col + "," + agg_col)
+  let mut gk_arr = split(group_keys, ",")
+  let mut out_idx = 0.0
+  for gk in gk_arr
+    map_set(result, "__col_" + col + "_" + str(out_idx), gk)
+    let s = float(map_get(groups, "s_" + gk))
+    let c = float(map_get(groups, "c_" + gk))
+    let mut agg_val = 0.0
+    if op == "sum"
+      agg_val = s
+    elif op == "count"
+      agg_val = c
+    elif op == "mean"
+      agg_val = s / c
+    elif op == "min"
+      agg_val = float(map_get(groups, "min_" + gk))
+    elif op == "max"
+      agg_val = float(map_get(groups, "max_" + gk))
+    end
+    map_set(result, "__col_" + agg_col + "_" + str(out_idx), str(agg_val))
+    out_idx = out_idx + 1.0
+  end
+  map_set(result, "__count", str(out_idx))
+  return result
+end
+
+fn db_order_by(table, col, n, ascending)
+  // Sort table rows by column value (returns new table)
+  // ascending: 1.0 for ascending, 0.0 for descending
+  let cols_str = map_get(table, "__columns")
+  let mut cols = split(cols_str, ",")
+  // Extract sort column values with indices
+  let mut vals = []
+  let mut indices = []
+  let mut i = 0.0
+  while i < n
+    let key = "__col_" + col + "_" + str(i)
+    if map_has(table, key)
+      push(vals, float(map_get(table, key)))
+    else
+      push(vals, 0.0)
+    end
+    push(indices, i)
+    i = i + 1.0
+  end
+  // Insertion sort on indices by vals
+  let mut k = 1.0
+  while k < n
+    let tmp_val = vals[k]
+    let tmp_idx = indices[k]
+    let mut j = k - 1.0
+    let mut should_shift = 1.0
+    while j >= 0.0 && should_shift == 1.0
+      let mut cond = vals[j] > tmp_val
+      if ascending == 0.0
+        cond = vals[j] < tmp_val
+      end
+      if cond == 1.0
+        vals[j + 1.0] = vals[j]
+        indices[j + 1.0] = indices[j]
+        j = j - 1.0
+      else
+        should_shift = 0.0
+      end
+    end
+    vals[j + 1.0] = tmp_val
+    indices[j + 1.0] = tmp_idx
+    k = k + 1.0
+  end
+  // Build sorted result table
+  let mut result = map()
+  map_set(result, "__columns", cols_str)
+  map_set(result, "__count", str(n))
+  let mut ri = 0.0
+  while ri < n
+    let src_idx = indices[ri]
+    for c in cols
+      let src = "__col_" + c + "_" + str(src_idx)
+      let dst = "__col_" + c + "_" + str(ri)
+      if map_has(table, src)
+        map_set(result, dst, map_get(table, src))
+      end
+    end
+    ri = ri + 1.0
+  end
+  return result
+end

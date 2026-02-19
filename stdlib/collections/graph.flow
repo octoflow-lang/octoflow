@@ -1,0 +1,127 @@
+// stdlib/collections/graph.flow — Graph data structure (adjacency list via map)
+// Nodes are string keys. Edges stored as "node:neighbor_list" in map.
+// Weights stored as "w_from_to" keys.
+
+fn graph_create()
+  let mut g = map()
+  map_set(g, "__nodes", "")
+  return g
+end
+
+fn graph_add_node(g, node)
+  let key = "adj_" + node
+  if map_has(g, key) == 0.0
+    map_set(g, key, "")
+    let nodes = map_get(g, "__nodes")
+    if len(nodes) > 0.0
+      map_set(g, "__nodes", nodes + "," + node)
+    else
+      map_set(g, "__nodes", node)
+    end
+  end
+  return 0.0
+end
+
+fn graph_add_edge(g, from, to, weight)
+  // Add directed weighted edge from -> to
+  graph_add_node(g, from)
+  graph_add_node(g, to)
+  // Append to adjacency list
+  let key = "adj_" + from
+  let existing = map_get(g, key)
+  if len(existing) > 0.0
+    // Check if already present
+    if contains(existing, to) == 0.0
+      map_set(g, key, existing + "," + to)
+    end
+  else
+    map_set(g, key, to)
+  end
+  // Store weight
+  let wkey = "w_" + from + "_" + to
+  map_set(g, wkey, str(weight))
+  return 0.0
+end
+
+fn graph_neighbors(g, node)
+  // Get neighbor list as array of strings
+  let key = "adj_" + node
+  if map_has(g, key) == 0.0
+    let mut empty = []
+    return empty
+  end
+  let adj = map_get(g, key)
+  if len(adj) == 0.0
+    let mut empty = []
+    return empty
+  end
+  return split(adj, ",")
+end
+
+fn graph_weight(g, from, to)
+  let wkey = "w_" + from + "_" + to
+  if map_has(g, wkey)
+    return float(map_get(g, wkey))
+  end
+  return 0.0
+end
+
+fn graph_nodes(g)
+  let nodes_str = map_get(g, "__nodes")
+  if len(nodes_str) == 0.0
+    let mut empty = []
+    return empty
+  end
+  return split(nodes_str, ",")
+end
+
+fn graph_bfs(g, start)
+  // Breadth-first search returning visit order as comma-separated string
+  let mut visited = map()
+  // Use map-based queue (matching collections.flow pattern)
+  let mut q = map()
+  map_set(q, "head", "0")
+  map_set(q, "tail", "0")
+  // Enqueue start
+  map_set(q, "v_0", start)
+  map_set(q, "tail", "1")
+  map_set(visited, start, "1")
+  let mut order = ""
+  while float(map_get(q, "head")) < float(map_get(q, "tail"))
+    // Dequeue
+    let head = float(map_get(q, "head"))
+    let qkey = "v_" + str(head)
+    let current = map_get(q, qkey)
+    map_remove(q, qkey)
+    map_set(q, "head", str(head + 1.0))
+    // Add to visit order
+    if len(order) > 0.0
+      order = order + "," + current
+    else
+      order = current
+    end
+    // Visit neighbors
+    let mut neighbors = graph_neighbors(g, current)
+    for nb in neighbors
+      if map_has(visited, nb) == 0.0
+        map_set(visited, nb, "1")
+        let tail = float(map_get(q, "tail"))
+        map_set(q, "v_" + str(tail), nb)
+        map_set(q, "tail", str(tail + 1.0))
+      end
+    end
+  end
+  return order
+end
+
+fn graph_has_edge(g, from, to)
+  let key = "adj_" + from
+  if map_has(g, key) == 0.0
+    return 0.0
+  end
+  let adj = map_get(g, key)
+  if contains(adj, to)
+    return 1.0
+  end
+  return 0.0
+end

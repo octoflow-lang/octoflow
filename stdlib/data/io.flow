@@ -1,0 +1,47 @@
+// stdlib/data/io.flow — Data I/O utilities
+
+fn load_json(path)
+  let content = read_file(path)
+  return json_parse(content)
+end
+
+fn save_json(data, path)
+  let content = json_stringify(data)
+  write_file(path, content)
+  return 1.0
+end
+
+fn load_text(path)
+  return read_file(path)
+end
+
+fn save_text(content, path)
+  write_file(path, content)
+  return 1.0
+end
+
+fn load_lines(path)
+  return read_lines(path)
+end
+
+fn save_lines(lines, path)
+  let content = join(lines, chr(10))
+  write_file(path, content)
+  return len(lines)
+end
+
+fn file_size_str(path)
+  // Human-readable file size
+  // Note: uses read_file length as approximation
+  let content = read_file(path)
+  let n = len(content)
+  if n < 1024.0
+    return str(n) + " B"
+  end
+  let kb = n / 1024.0
+  if kb < 1024.0
+    return str(round(kb * 10.0) / 10.0) + " KB"
+  end
+  let mb = kb / 1024.0
+  return str(round(mb * 10.0) / 10.0) + " MB"
+end
