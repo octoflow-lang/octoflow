@@ -12,7 +12,7 @@ Unzip. Run. No installer, no dependencies, no SDK.
 
 ```
 $ octoflow --version
-OctoFlow 0.82.0
+OctoFlow 0.83.1
 ```
 
 ## Hello World
@@ -62,7 +62,7 @@ ok 12ms
 
 ```
 $ octoflow repl
-OctoFlow v0.82.0 — GPU-native language
+OctoFlow v0.83.1 — GPU-native language
 GPU: NVIDIA GeForce GTX 1660 SUPER
 143 stdlib modules | :help | :time
 

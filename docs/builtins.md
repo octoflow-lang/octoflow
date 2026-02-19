@@ -257,6 +257,9 @@ let nums = regex_find_all("a1b2c3", "[0-9]") // ["1", "2", "3"]
 | `bit_and(a, b)` | Bitwise AND |
 | `bit_or(a, b)` | Bitwise OR |
 | `bit_test(n, bit)` | Test if bit is set |
+| `bit_shl(a, n)` | Shift left by n bits |
+| `bit_shr(a, n)` | Shift right by n bits |
+| `bit_xor(a, b)` | Bitwise XOR |
 | `float_to_bits(f)` | Float as 32-bit integer representation |
 | `bits_to_float(n)` | Integer back to float |
 

@@ -66,7 +66,7 @@ $ octoflow run hello_gpu.flow
 
 ```
 $ octoflow repl
-OctoFlow 0.83.0 — GPU-native language
+OctoFlow 0.83.1 — GPU-native language
 GPU: NVIDIA GeForce GTX 1660 SUPER
 >>> 2 + 2
 4
