@@ -4,412 +4,889 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OctoFlow — GPU-Native Programming Language</title>
-<meta name="description" content="A GPU-native general-purpose programming language. 2.2 MB binary. Zero dependencies. Any GPU vendor.">
+<meta name="description" content="A GPU-native general-purpose programming language. 2.2 MB binary. Zero dependencies. Any GPU vendor. One file download.">
+<meta property="og:title" content="OctoFlow — GPU-Native Programming Language">
+<meta property="og:description" content="Designed for the GPU from scratch. Compiled by itself. Run on any GPU.">
+<meta property="og:image" content="https://octoflow-lang.github.io/octoflow/assets/logo.png">
+<meta name="theme-color" content="#1a8a8a">
+<link rel="icon" type="image/png" href="assets/logo.png">
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
 :root {
-  --teal: #1a8a8a;
-  --teal-dark: #0f6b6b;
-  --teal-light: #2cb5b5;
-  --bg: #0c1117;
-  --bg-card: #151b23;
-  --text: #e6edf3;
-  --text-dim: #8b949e;
-  --border: #21262d;
-  --code-bg: #1c2129;
+  --teal: #1a9a9a;
+  --teal-dark: #0f7a7a;
+  --teal-glow: rgba(26, 154, 154, 0.4);
+  --teal-light: #3dd8d8;
+  --teal-subtle: rgba(26, 154, 154, 0.08);
+  --bg: #08090c;
+  --bg-elevated: #0d1117;
+  --bg-card: #131920;
+  --bg-card-hover: #171e27;
+  --text: #ecf0f5;
+  --text-secondary: #9aa5b4;
+  --text-dim: #6b7685;
+  --border: #1c2431;
+  --border-hover: #2a3545;
+  --code-bg: #0d1117;
+  --gradient-start: #1a9a9a;
+  --gradient-end: #1a6b9a;
 }
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: var(--bg);
   color: var(--text);
   line-height: 1.6;
+  overflow-x: hidden;
 }
-a { color: var(--teal-light); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a { color: var(--teal-light); text-decoration: none; transition: color 0.2s; }
+a:hover { color: #fff; }
 
-/* Hero */
+/* ═══════════════════════════════════════ NAV ═══════════════════════════════════════ */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  padding: 16px 32px;
+  display: flex; align-items: center; justify-content: space-between;
+  background: rgba(8, 9, 12, 0.8);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.3s;
+}
+nav.scrolled { border-bottom-color: var(--border); }
+nav .logo {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 700; font-size: 1.1rem; color: var(--text);
+}
+nav .logo img { width: 32px; height: 32px; }
+nav .links { display: flex; align-items: center; gap: 24px; }
+nav .links a { color: var(--text-secondary); font-size: 0.9rem; font-weight: 500; }
+nav .links a:hover { color: var(--text); }
+nav .links .btn-nav {
+  background: var(--teal);
+  color: #fff;
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+nav .links .btn-nav:hover { background: var(--teal-light); color: #000; }
+
+/* ═══════════════════════════════════════ HERO ═══════════════════════════════════════ */
+.hero-wrap {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.hero-bg {
+  position: absolute; inset: 0; z-index: 0;
+}
+.hero-bg .grid-svg {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0.04;
+}
+.hero-bg .glow {
+  position: absolute;
+  width: 800px; height: 800px;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.15;
+}
+.hero-bg .glow-1 { background: var(--teal); top: -200px; left: 50%; transform: translateX(-50%); }
+.hero-bg .glow-2 { background: #1a6b9a; bottom: -300px; right: -200px; opacity: 0.08; }
+
 .hero {
+  position: relative; z-index: 1;
   text-align: center;
-  padding: 80px 20px 60px;
-  max-width: 800px;
+  padding: 140px 24px 80px;
+  max-width: 900px;
   margin: 0 auto;
 }
-.hero img {
-  width: 180px;
-  height: 180px;
-  margin-bottom: 24px;
-  filter: drop-shadow(0 0 40px rgba(26, 138, 138, 0.3));
+.hero .mascot {
+  width: 160px; height: 160px;
+  margin-bottom: 32px;
+  animation: float 6s ease-in-out infinite;
+  filter: drop-shadow(0 20px 60px var(--teal-glow));
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
 }
 .hero h1 {
-  font-size: 3rem;
-  font-weight: 700;
-  margin-bottom: 8px;
-  letter-spacing: -0.02em;
+  font-size: 4rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin-bottom: 16px;
 }
-.hero h1 span { color: var(--teal-light); }
-.hero .tagline {
-  font-size: 1.25rem;
-  color: var(--text-dim);
-  margin-bottom: 32px;
-  max-width: 600px;
-  margin-left: auto;
-  margin-right: auto;
+.hero h1 .accent {
+  background: linear-gradient(135deg, var(--teal-light), #1ac5c5, #1a9aba);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
-.hero .facts {
+.hero .subtitle {
+  font-size: 1.3rem;
+  color: var(--text-secondary);
+  max-width: 560px;
+  margin: 0 auto 40px;
+  font-weight: 400;
+}
+.hero .badges {
   display: flex;
   justify-content: center;
-  gap: 32px;
+  gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 40px;
+  margin-bottom: 48px;
 }
-.hero .fact {
-  font-size: 0.95rem;
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 16px;
+.badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 18px;
   background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 500;
 }
-.hero .fact strong { color: var(--text); }
-.cta-row {
+.badge svg { width: 16px; height: 16px; opacity: 0.7; }
+.badge strong { color: var(--text); }
+.hero .cta {
   display: flex;
   justify-content: center;
   gap: 16px;
   flex-wrap: wrap;
+  margin-bottom: 48px;
 }
-.btn {
-  display: inline-block;
-  padding: 12px 28px;
-  border-radius: 8px;
+.btn-hero {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 14px 32px;
+  border-radius: 12px;
   font-size: 1rem;
   font-weight: 600;
-  transition: all 0.2s;
+  transition: all 0.25s;
+  cursor: pointer;
 }
-.btn-primary {
-  background: var(--teal);
+.btn-hero.primary {
+  background: linear-gradient(135deg, var(--teal), var(--teal-dark));
   color: #fff;
+  box-shadow: 0 4px 24px var(--teal-glow), inset 0 1px 0 rgba(255,255,255,0.1);
 }
-.btn-primary:hover { background: var(--teal-light); text-decoration: none; }
-.btn-secondary {
-  border: 1px solid var(--border);
+.btn-hero.primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px var(--teal-glow);
+}
+.btn-hero.primary svg { width: 18px; height: 18px; }
+.btn-hero.secondary {
+  background: var(--bg-card);
   color: var(--text);
-  background: var(--bg-card);
+  border: 1px solid var(--border);
 }
-.btn-secondary:hover { border-color: var(--teal); text-decoration: none; }
+.btn-hero.secondary:hover {
+  border-color: var(--teal);
+  transform: translateY(-2px);
+}
+.btn-hero.secondary svg { width: 18px; height: 18px; opacity: 0.7; }
 
-/* Sections */
-section {
-  max-width: 960px;
+/* ═══════════════════════════════════════ TERMINAL ═══════════════════════════════════════ */
+.terminal-wrap {
+  max-width: 680px;
   margin: 0 auto;
-  padding: 60px 20px;
 }
-section h2 {
-  font-size: 1.75rem;
-  margin-bottom: 32px;
-  text-align: center;
-  letter-spacing: -0.01em;
-}
-section h2 span { color: var(--teal-light); }
-
-/* Code blocks */
-.code-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-}
-@media (max-width: 700px) {
-  .code-grid { grid-template-columns: 1fr; }
-  .hero h1 { font-size: 2.2rem; }
-}
-.code-card {
-  background: var(--bg-card);
+.terminal {
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.4);
 }
-.code-card .label {
+.terminal-bar {
+  display: flex; align-items: center; gap: 8px;
   padding: 12px 16px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--teal-light);
+  background: var(--bg-card);
   border-bottom: 1px solid var(--border);
 }
-.code-card pre {
-  padding: 16px;
-  overflow-x: auto;
-  font-size: 0.875rem;
-  line-height: 1.5;
+.terminal-dot { width: 12px; height: 12px; border-radius: 50%; }
+.terminal-dot.r { background: #ff5f57; }
+.terminal-dot.y { background: #ffbd2e; }
+.terminal-dot.g { background: #28c840; }
+.terminal-title {
+  flex: 1; text-align: center;
+  font-size: 0.8rem; color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
 }
-.code-card code {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  color: var(--text);
+.terminal-body {
+  padding: 20px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  line-height: 1.7;
+  min-height: 180px;
 }
-.c-kw { color: #ff7b72; }
-.c-fn { color: #d2a8ff; }
-.c-str { color: #a5d6ff; }
-.c-num { color: #79c0ff; }
-.c-cm { color: #8b949e; }
-.c-op { color: #ff7b72; }
+.terminal-body .prompt { color: var(--teal-light); }
+.terminal-body .cmd { color: var(--text); }
+.terminal-body .output { color: var(--text-secondary); }
+.terminal-body .highlight { color: var(--teal-light); }
 
-/* Features */
-.features {
+/* ═══════════════════════════════════════ SECTIONS ═══════════════════════════════════════ */
+section {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 100px 24px;
+}
+.section-label {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--teal);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+section h2 {
+  font-size: 2.5rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 16px;
+}
+section .section-desc {
+  font-size: 1.1rem;
+  color: var(--text-secondary);
+  max-width: 600px;
+  margin-bottom: 48px;
+}
+.centered { text-align: center; }
+.centered .section-desc { margin-left: auto; margin-right: auto; }
+
+/* ═══════════════════════════════════════ CODE SHOWCASE ═══════════════════════════════════════ */
+.code-tabs {
+  display: flex; gap: 4px;
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 1;
+}
+.code-tab {
+  padding: 10px 20px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: 'Inter', sans-serif;
+}
+.code-tab:hover { color: var(--text-secondary); }
+.code-tab.active {
+  color: var(--teal-light);
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+.code-panel {
+  display: none;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0 12px 12px 12px;
+  overflow: hidden;
+}
+.code-panel.active { display: block; }
+.code-panel pre {
+  padding: 24px;
+  overflow-x: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+.k { color: #ff7b72; }
+.f { color: #d2a8ff; }
+.s { color: #a5d6ff; }
+.n { color: #79c0ff; }
+.c { color: #6b7685; font-style: italic; }
+.o { color: #ff7b72; }
+.p { color: #8b949e; }
+
+/* ═══════════════════════════════════════ FEATURES ═══════════════════════════════════════ */
+.features-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
+  gap: 20px;
 }
-@media (max-width: 700px) {
-  .features { grid-template-columns: 1fr; }
-}
-.feature {
+.feature-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 24px;
+  border-radius: 16px;
+  padding: 28px;
+  transition: all 0.3s;
 }
-.feature .icon { font-size: 1.5rem; margin-bottom: 12px; }
-.feature h3 { font-size: 1.05rem; margin-bottom: 8px; }
-.feature p { font-size: 0.9rem; color: var(--text-dim); }
+.feature-card:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+  transform: translateY(-2px);
+}
+.feature-card .icon-wrap {
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 16px;
+  background: var(--teal-subtle);
+}
+.feature-card .icon-wrap svg { width: 22px; height: 22px; color: var(--teal-light); }
+.feature-card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 8px; }
+.feature-card p { font-size: 0.88rem; color: var(--text-secondary); line-height: 1.5; }
 
-/* Install */
-.install-box {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 32px;
-  text-align: center;
-  max-width: 600px;
-  margin: 0 auto;
-}
-.install-box .platforms {
-  display: flex;
-  justify-content: center;
-  gap: 16px;
-  margin-top: 20px;
-  flex-wrap: wrap;
-}
-.install-box .platform-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--code-bg);
-  color: var(--text);
-  font-size: 0.95rem;
-  transition: all 0.2s;
-}
-.install-box .platform-btn:hover { border-color: var(--teal); text-decoration: none; }
-.install-box p { color: var(--text-dim); font-size: 0.95rem; margin-top: 16px; }
-
-/* Stdlib */
+/* ═══════════════════════════════════════ STDLIB ═══════════════════════════════════════ */
 .stdlib-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
 }
-@media (max-width: 700px) {
-  .stdlib-grid { grid-template-columns: 1fr 1fr; }
-}
-.stdlib-item {
+.stdlib-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 20px;
+  transition: all 0.3s;
 }
-.stdlib-item h4 {
+.stdlib-card:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+}
+.stdlib-card h4 {
   font-size: 0.95rem;
-  margin-bottom: 4px;
+  font-weight: 600;
   color: var(--teal-light);
+  margin-bottom: 6px;
 }
-.stdlib-item p { font-size: 0.8rem; color: var(--text-dim); }
+.stdlib-card p { font-size: 0.82rem; color: var(--text-dim); line-height: 1.4; }
 
-/* Footer */
-footer {
+/* ═══════════════════════════════════════ DOWNLOAD ═══════════════════════════════════════ */
+.download-section {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 64px 40px;
   text-align: center;
-  padding: 40px 20px;
-  color: var(--text-dim);
+  position: relative;
+  overflow: hidden;
+}
+.download-section::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 50%; transform: translateX(-50%);
+  width: 600px; height: 300px;
+  background: radial-gradient(ellipse, var(--teal-glow), transparent 70%);
+  opacity: 0.3;
+  pointer-events: none;
+}
+.download-section h2 { position: relative; }
+.download-section .section-desc { position: relative; }
+.download-platforms {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  margin-top: 36px;
+  position: relative;
+  flex-wrap: wrap;
+}
+.dl-card {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 40px;
+  transition: all 0.3s;
+  min-width: 200px;
+}
+.dl-card:hover {
+  border-color: var(--teal);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 32px rgba(26, 154, 154, 0.15);
+}
+.dl-card svg { width: 36px; height: 36px; color: var(--text-secondary); }
+.dl-card .dl-label { font-weight: 600; font-size: 1rem; color: var(--text); }
+.dl-card .dl-size { font-size: 0.8rem; color: var(--text-dim); }
+.download-note {
+  position: relative;
+  margin-top: 28px;
   font-size: 0.85rem;
-  border-top: 1px solid var(--border);
-  max-width: 960px;
+  color: var(--text-dim);
+}
+.download-cmd {
+  display: inline-block;
+  margin-top: 20px;
+  padding: 10px 20px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  position: relative;
+}
+
+/* ═══════════════════════════════════════ FOOTER ═══════════════════════════════════════ */
+footer {
+  max-width: 1100px;
   margin: 0 auto;
+  padding: 40px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  flex-wrap: wrap;
+  gap: 16px;
+}
+footer .links { display: flex; gap: 24px; }
+footer a { color: var(--text-dim); }
+footer a:hover { color: var(--text); }
+
+/* ═══════════════════════════════════════ SCROLL REVEAL ═══════════════════════════════════════ */
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ═══════════════════════════════════════ RESPONSIVE ═══════════════════════════════════════ */
+@media (max-width: 768px) {
+  nav .links a:not(.btn-nav) { display: none; }
+  .hero h1 { font-size: 2.5rem; }
+  .hero .subtitle { font-size: 1.1rem; }
+  .features-grid { grid-template-columns: 1fr; }
+  .stdlib-grid { grid-template-columns: 1fr 1fr; }
+  .code-tabs { overflow-x: auto; flex-wrap: nowrap; }
+  .download-section { padding: 48px 24px; }
+  section h2 { font-size: 2rem; }
+}
+@media (max-width: 480px) {
+  .hero h1 { font-size: 2rem; }
+  .badges { gap: 8px; }
+  .stdlib-grid { grid-template-columns: 1fr; }
 }
 </style>
 </head>
 <body>
 
-<!-- Hero -->
-<div class="hero">
-  <img src="assets/logo.png" alt="OctoFlow">
-  <h1><span>Octo</span>Flow</h1>
-  <p class="tagline">A GPU-native general-purpose programming language.<br>Designed for the GPU from scratch. Compiled by itself. Run on any GPU.</p>
-  <div class="facts">
-    <div class="fact"><strong>2.2 MB</strong> binary</div>
-    <div class="fact"><strong>Zero</strong> dependencies</div>
-    <div class="fact"><strong>Any GPU</strong> vendor</div>
-    <div class="fact"><strong>One file</strong> download</div>
+<!-- Nav -->
+<nav id="nav">
+  <div class="logo">
+    <img src="assets/logo.png" alt="OctoFlow">
+    <span>OctoFlow</span>
   </div>
-  <div class="cta-row">
-    <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn btn-primary">Download</a>
-    <a href="https://github.com/octoflow-lang/octoflow" class="btn btn-secondary">GitHub</a>
+  <div class="links">
+    <a href="#code">Examples</a>
+    <a href="#features">Features</a>
+    <a href="#stdlib">Library</a>
+    <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/language-guide.md">Docs</a>
+    <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn-nav">Download</a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<div class="hero-wrap">
+  <div class="hero-bg">
+    <svg class="grid-svg" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+          <path d="M 60 0 L 0 0 0 60" fill="none" stroke="#fff" stroke-width="0.5"/>
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#grid)"/>
+    </svg>
+    <div class="glow glow-1"></div>
+    <div class="glow glow-2"></div>
+  </div>
+  <div class="hero">
+    <img class="mascot" src="assets/logo.png" alt="OctoFlow mascot">
+    <h1>GPU-native.<br><span class="accent">General-purpose.</span></h1>
+    <p class="subtitle">A programming language where the GPU is the primary execution target. Designed from scratch. Compiled by itself.</p>
+    <div class="badges">
+      <div class="badge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M13 2v7h7"/></svg>
+        <strong>2.2 MB</strong> binary
+      </div>
+      <div class="badge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 12l2 2 4-4"/></svg>
+        <strong>Zero</strong> dependencies
+      </div>
+      <div class="badge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <strong>Any</strong> GPU vendor
+      </div>
+    </div>
+    <div class="cta">
+      <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn-hero primary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download v0.83
+      </a>
+      <a href="https://github.com/octoflow-lang/octoflow" class="btn-hero secondary">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        GitHub
+      </a>
+    </div>
+    <div class="terminal-wrap">
+      <div class="terminal">
+        <div class="terminal-bar">
+          <span class="terminal-dot r"></span>
+          <span class="terminal-dot y"></span>
+          <span class="terminal-dot g"></span>
+          <span class="terminal-title">octoflow repl</span>
+        </div>
+        <div class="terminal-body" id="term"></div>
+      </div>
+    </div>
   </div>
 </div>
 
-<!-- Code examples -->
-<section>
-  <h2>See it <span>in action</span></h2>
-  <div class="code-grid">
-    <div class="code-card">
-      <div class="label">Hello GPU</div>
-      <pre><code><span class="c-kw">let</span> a = <span class="c-fn">gpu_fill</span>(<span class="c-num">1.0</span>, <span class="c-num">1000000</span>)
-<span class="c-kw">let</span> b = <span class="c-fn">gpu_fill</span>(<span class="c-num">2.0</span>, <span class="c-num">1000000</span>)
-<span class="c-kw">let</span> c = <span class="c-fn">gpu_add</span>(a, b)
-<span class="c-kw">let</span> total = <span class="c-fn">gpu_sum</span>(c)
-<span class="c-fn">print</span>(<span class="c-str">"1M elements: {total}"</span>)</code></pre>
-    </div>
-    <div class="code-card">
-      <div class="label">Functions & Lambdas</div>
-      <pre><code><span class="c-kw">let</span> nums = [<span class="c-num">1</span>, <span class="c-num">2</span>, <span class="c-num">3</span>, <span class="c-num">4</span>, <span class="c-num">5</span>]
-<span class="c-kw">let</span> evens = <span class="c-fn">filter</span>(nums, <span class="c-kw">fn</span>(x) x % <span class="c-num">2</span> == <span class="c-num">0</span> <span class="c-kw">end</span>)
-<span class="c-kw">let</span> squared = <span class="c-fn">map_each</span>(evens, <span class="c-kw">fn</span>(x) x * x <span class="c-kw">end</span>)
-<span class="c-kw">let</span> total = <span class="c-fn">reduce</span>(squared, <span class="c-num">0</span>, <span class="c-kw">fn</span>(a, x) a + x <span class="c-kw">end</span>)
-<span class="c-fn">print</span>(<span class="c-str">"Sum of squares: {total}"</span>)</code></pre>
-    </div>
-    <div class="code-card">
-      <div class="label">Data Analysis</div>
-      <pre><code><span class="c-kw">let</span> data = <span class="c-fn">read_csv</span>(<span class="c-str">"sales.csv"</span>)
-<span class="c-kw">let</span> revenue = <span class="c-fn">csv_column</span>(data, <span class="c-str">"revenue"</span>)
-<span class="c-kw">let</span> avg = <span class="c-fn">mean</span>(revenue)
-<span class="c-kw">let</span> std = <span class="c-fn">stddev</span>(revenue)
-<span class="c-fn">print</span>(<span class="c-str">"avg={avg}, std={std}"</span>)</code></pre>
-    </div>
-    <div class="code-card">
-      <div class="label">Stream Pipelines</div>
-      <pre><code><span class="c-kw">stream</span> photo = <span class="c-fn">tap</span>(<span class="c-str">"input.jpg"</span>)
-<span class="c-kw">stream</span> warm = photo
-    |> <span class="c-fn">brightness</span>(<span class="c-num">20</span>)
-    |> <span class="c-fn">contrast</span>(<span class="c-num">1.2</span>)
-    |> <span class="c-fn">saturate</span>(<span class="c-num">1.1</span>)
-<span class="c-fn">emit</span>(warm, <span class="c-str">"output.png"</span>)</code></pre>
-    </div>
+<!-- Code Examples -->
+<section id="code" class="reveal">
+  <div class="centered">
+    <span class="section-label">Examples</span>
+    <h2>Clean syntax. Real power.</h2>
+    <p class="section-desc">Five lines to crunch a million elements on the GPU. No boilerplate, no shaders, no compilation step.</p>
+  </div>
+  <div class="code-tabs" id="tabs">
+    <button class="code-tab active" data-tab="0">GPU Compute</button>
+    <button class="code-tab" data-tab="1">Lambdas</button>
+    <button class="code-tab" data-tab="2">Data Analysis</button>
+    <button class="code-tab" data-tab="3">Pipelines</button>
+    <button class="code-tab" data-tab="4">ML</button>
+  </div>
+  <div class="code-panel active" data-panel="0">
+    <pre><span class="c">// 1 million elements — GPU parallel — one command</span>
+<span class="k">let</span> a = <span class="f">gpu_fill</span>(<span class="n">1.0</span>, <span class="n">1000000</span>)
+<span class="k">let</span> b = <span class="f">gpu_fill</span>(<span class="n">2.0</span>, <span class="n">1000000</span>)
+<span class="k">let</span> c = <span class="f">gpu_add</span>(a, b)
+<span class="k">let</span> d = <span class="f">gpu_scale</span>(c, <span class="n">0.5</span>)
+<span class="k">let</span> total = <span class="f">gpu_sum</span>(d)
+<span class="f">print</span>(<span class="s">"Total: {total}"</span>)        <span class="c">// 1500000</span>
+
+<span class="c">// Matrix multiply</span>
+<span class="k">let</span> result = <span class="f">gpu_matmul</span>(mat_a, mat_b, rows, cols_a, cols_b)</pre>
+  </div>
+  <div class="code-panel" data-panel="1">
+    <pre><span class="c">// First-class functions and closures</span>
+<span class="k">let</span> double = <span class="k">fn</span>(x) x * <span class="n">2</span> <span class="k">end</span>
+<span class="f">print</span>(<span class="f">double</span>(<span class="n">21</span>))              <span class="c">// 42</span>
+
+<span class="k">let</span> nums = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>, <span class="n">5</span>, <span class="n">6</span>, <span class="n">7</span>, <span class="n">8</span>]
+<span class="k">let</span> evens = <span class="f">filter</span>(nums, <span class="k">fn</span>(x) x % <span class="n">2</span> == <span class="n">0</span> <span class="k">end</span>)
+<span class="k">let</span> squared = <span class="f">map_each</span>(evens, <span class="k">fn</span>(x) x * x <span class="k">end</span>)
+<span class="k">let</span> total = <span class="f">reduce</span>(squared, <span class="n">0</span>, <span class="k">fn</span>(acc, x) acc + x <span class="k">end</span>)
+<span class="f">print</span>(<span class="s">"Sum of even squares: {total}"</span>)  <span class="c">// 120</span>
+
+<span class="k">let</span> sorted = <span class="f">sort_by</span>(nums, <span class="k">fn</span>(a, b) b - a <span class="k">end</span>)  <span class="c">// descending</span></pre>
+  </div>
+  <div class="code-panel" data-panel="2">
+    <pre><span class="k">use</span> csv
+<span class="k">use</span> descriptive
+
+<span class="k">let</span> data = <span class="f">read_csv</span>(<span class="s">"sales.csv"</span>)
+<span class="k">let</span> revenue = <span class="f">csv_column</span>(data, <span class="s">"revenue"</span>)
+
+<span class="f">print</span>(<span class="s">"Mean:    {<span class="f">mean</span>(revenue)}"</span>)
+<span class="f">print</span>(<span class="s">"Median:  {<span class="f">median</span>(revenue)}"</span>)
+<span class="f">print</span>(<span class="s">"Std Dev: {<span class="f">stddev</span>(revenue)}"</span>)
+<span class="f">print</span>(<span class="s">"P95:     {<span class="f">quantile</span>(revenue, <span class="n">0.95</span>)}"</span>)
+
+<span class="k">let</span> r = <span class="f">correlation</span>(revenue, costs)   <span class="c">// Pearson r</span></pre>
+  </div>
+  <div class="code-panel" data-panel="3">
+    <pre><span class="c">// Stream pipelines — data flows through operations</span>
+<span class="k">stream</span> photo = <span class="f">tap</span>(<span class="s">"input.jpg"</span>)
+<span class="k">stream</span> enhanced = photo
+    |> <span class="f">brightness</span>(<span class="n">20</span>)
+    |> <span class="f">contrast</span>(<span class="n">1.2</span>)
+    |> <span class="f">saturate</span>(<span class="n">1.1</span>)
+<span class="f">emit</span>(enhanced, <span class="s">"output.png"</span>)
+
+<span class="c">// Reusable pipeline functions</span>
+<span class="k">fn</span> warm_filter: <span class="f">brightness</span>(<span class="n">15</span>) |> <span class="f">contrast</span>(<span class="n">1.1</span>) |> <span class="f">saturate</span>(<span class="n">1.3</span>)
+<span class="k">stream</span> result = <span class="f">tap</span>(<span class="s">"photo.jpg"</span>) |> warm_filter
+<span class="f">emit</span>(result, <span class="s">"warm.png"</span>)</pre>
+  </div>
+  <div class="code-panel" data-panel="4">
+    <pre><span class="k">use</span> regression
+<span class="k">use</span> preprocess
+<span class="k">use</span> metrics
+
+<span class="c">// Train/test split with scaling</span>
+<span class="k">let</span> split = <span class="f">train_test_split</span>(features, labels, <span class="n">0.8</span>)
+<span class="k">let</span> scaled = <span class="f">standard_scale</span>(split.train_x)
+
+<span class="c">// Linear regression</span>
+<span class="k">let</span> model = <span class="f">linear_fit</span>(scaled, split.train_y)
+<span class="k">let</span> predictions = <span class="f">linear_predict</span>(model, split.test_x)
+
+<span class="c">// Evaluate</span>
+<span class="k">let</span> acc = <span class="f">r_squared</span>(split.test_y, predictions)
+<span class="f">print</span>(<span class="s">"R-squared: {acc}"</span>)</pre>
   </div>
 </section>
 
 <!-- Features -->
-<section>
-  <h2>Why <span>OctoFlow</span></h2>
-  <div class="features">
-    <div class="feature">
-      <div class="icon">&#x26A1;</div>
-      <h3>GPU-First</h3>
-      <p>The GPU is the primary execution target. Data born on the GPU stays on the GPU. CPU handles I/O.</p>
-    </div>
-    <div class="feature">
-      <div class="icon">&#x1F4E6;</div>
-      <h3>Zero Dependencies</h3>
-      <p>One 2.2 MB binary. No SDK, no runtime, no package manager. Download, unzip, run.</p>
-    </div>
-    <div class="feature">
-      <div class="icon">&#x1F310;</div>
-      <h3>Any GPU Vendor</h3>
-      <p>NVIDIA, AMD, Intel. Runs on any GPU with a Vulkan driver. No vendor lock-in.</p>
-    </div>
-    <div class="feature">
-      <div class="icon">&#x1F512;</div>
-      <h3>Sandboxed by Default</h3>
-      <p>No file access, no network, no subprocesses unless you explicitly allow them with flags.</p>
-    </div>
-    <div class="feature">
-      <div class="icon">&#x1F9E0;</div>
-      <h3>AI-Friendly</h3>
-      <p>Language guide designed as LLM context. Feed it to your AI assistant and it can write OctoFlow code.</p>
-    </div>
-    <div class="feature">
-      <div class="icon">&#x1F3D7;&#xFE0F;</div>
-      <h3>Self-Hosted</h3>
-      <p>48% of the compiler is written in OctoFlow itself. The language compiles itself.</p>
-    </div>
+<section id="features" class="reveal">
+  <div class="centered">
+    <span class="section-label">Features</span>
+    <h2>Built different.</h2>
+    <p class="section-desc">Not a wrapper around CUDA. Not a shader language. A complete programming language that happens to run on GPUs.</p>
   </div>
-</section>
-
-<!-- Install -->
-<section>
-  <h2>Get <span>started</span></h2>
-  <div class="install-box">
-    <div class="platforms">
-      <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="platform-btn">
-        &#x1F5A5;&#xFE0F; Windows x64
-      </a>
-      <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="platform-btn">
-        &#x1F427; Linux x64
-      </a>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </div>
+      <h3>GPU-First Architecture</h3>
+      <p>Data born on the GPU stays in VRAM. No round-trips until you need results on the CPU. Chain operations without memory transfers.</p>
     </div>
-    <p>Unzip. Run. That's it.</p>
-    <p style="margin-top: 24px; font-size: 0.9rem;">
-      <code style="background: var(--code-bg); padding: 6px 12px; border-radius: 6px; font-family: 'SF Mono', 'Consolas', monospace;">
-        octoflow run hello.flow
-      </code>
-    </p>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+      </div>
+      <h3>2.2 MB. Zero Deps.</h3>
+      <p>The entire compiler, runtime, GPU dispatch, and standard library in one binary. No SDK, no package manager, no runtime to install.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+      </div>
+      <h3>Any GPU Vendor</h3>
+      <p>NVIDIA, AMD, Intel — any GPU with Vulkan support. No vendor lock-in, no proprietary toolchains, no compatibility headaches.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+      </div>
+      <h3>Sandboxed by Default</h3>
+      <p>No file access, no network, no subprocesses unless explicitly granted with flags. Run untrusted code safely.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+      <h3>Self-Hosted Compiler</h3>
+      <p>48% of the compiler is written in OctoFlow. The lexer, parser, preflight, evaluator, and SPIR-V codegen are all .flow files.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      </div>
+      <h3>AI-Friendly</h3>
+      <p>Language guide designed as LLM context. Feed it to Claude, ChatGPT, or Copilot and it writes OctoFlow code — no training needed.</p>
+    </div>
   </div>
 </section>
 
 <!-- Standard Library -->
-<section>
-  <h2>Standard <span>Library</span></h2>
+<section id="stdlib" class="reveal">
+  <div class="centered">
+    <span class="section-label">Batteries Included</span>
+    <h2>Standard library.</h2>
+    <p class="section-desc">ML, stats, science, data, collections, web, and more. All written in OctoFlow itself.</p>
+  </div>
   <div class="stdlib-grid">
-    <div class="stdlib-item">
+    <div class="stdlib-card">
       <h4>Machine Learning</h4>
-      <p>Regression, KNN, k-means, neural nets, decision trees, ensembles</p>
+      <p>Linear &amp; ridge regression, KNN, k-means, neural nets, decision trees, bagging ensembles, metrics</p>
     </div>
-    <div class="stdlib-item">
+    <div class="stdlib-card">
       <h4>Statistics</h4>
-      <p>Descriptive stats, correlation, distributions, hypothesis tests, time series</p>
+      <p>Mean, median, stddev, skewness, kurtosis, Pearson/Spearman, t-test, chi-squared, ANOVA, Sharpe, VaR</p>
     </div>
-    <div class="stdlib-item">
+    <div class="stdlib-card">
       <h4>Scientific Computing</h4>
-      <p>Calculus, physics, signal processing, interpolation, matrices</p>
+      <p>Calculus, physics (RK4, spring-damper), signal processing (FIR, convolution), interpolation, matrices</p>
     </div>
-    <div class="stdlib-item">
+    <div class="stdlib-card">
       <h4>Data Processing</h4>
-      <p>CSV, JSON, data pipelines, validation, column transforms</p>
+      <p>CSV read/write, data pipelines, column transforms (scale, normalize, encode), validation rules</p>
     </div>
-    <div class="stdlib-item">
+    <div class="stdlib-card">
       <h4>Collections</h4>
-      <p>Stack, queue, heap, graph with Dijkstra shortest path</p>
+      <p>Stack, queue, min/max heap, weighted directed graph with Dijkstra shortest path</p>
     </div>
-    <div class="stdlib-item">
-      <h4>Database</h4>
-      <p>In-memory columnar DB with SELECT, WHERE, JOIN, GROUP BY</p>
+    <div class="stdlib-card">
+      <h4>In-Memory Database</h4>
+      <p>Columnar DB with SQL-like SELECT, WHERE, JOIN, GROUP BY, ORDER BY. Import from CSV.</p>
     </div>
-    <div class="stdlib-item">
-      <h4>Web & Network</h4>
-      <p>HTTP client, JSON utilities, URL parsing, TCP/UDP sockets</p>
+    <div class="stdlib-card">
+      <h4>Web &amp; Network</h4>
+      <p>HTTP GET/POST, JSON parse/stringify, URL encoding, TCP/UDP sockets</p>
     </div>
-    <div class="stdlib-item">
-      <h4>String & Regex</h4>
-      <p>Text manipulation, regex matching, formatting utilities</p>
+    <div class="stdlib-card">
+      <h4>String &amp; Regex</h4>
+      <p>Full regex support, capture groups, split, replace, format utilities</p>
     </div>
-    <div class="stdlib-item">
+    <div class="stdlib-card">
       <h4>System</h4>
-      <p>CLI args, environment, platform detection, timing, memory</p>
+      <p>CLI arg parsing, environment variables, platform detection, execution timing</p>
+    </div>
+  </div>
+</section>
+
+<!-- LLM / AI -->
+<section class="reveal">
+  <div class="download-section" style="margin-bottom: 0;">
+    <span class="section-label">AI-Native Development</span>
+    <h2>Your AI assistant already knows OctoFlow.</h2>
+    <p class="section-desc" style="margin-left:auto;margin-right:auto;">Our language guide is designed as LLM context. Feed it to Claude, ChatGPT, or Copilot as RAG, system prompt, or project context — and it writes, debugs, and explains OctoFlow code. No training required.</p>
+    <div class="download-platforms">
+      <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/language-guide.md" class="dl-card" style="flex-direction:row; padding: 20px 28px; min-width: auto;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:24px;height:24px;flex-shrink:0;"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+        <div style="text-align:left;">
+          <span class="dl-label" style="font-size:0.9rem;">Language Guide</span>
+          <span class="dl-size" style="display:block;">Full syntax + all builtins in one file</span>
+        </div>
+      </a>
+    </div>
+    <div class="download-cmd" style="margin-top:24px; text-align:left; max-width:460px; margin-left:auto; margin-right:auto;">
+      <span class="c" style="font-style:normal;">Paste into your AI assistant:</span><br>
+      <span style="color:var(--text-secondary);">"Use this as context for OctoFlow code"</span><br>
+      <span style="color:var(--text-secondary);">+ language-guide.md</span>
+    </div>
+  </div>
+</section>
+
+<!-- Download -->
+<section class="reveal">
+  <div class="download-section">
+    <span class="section-label">Get Started</span>
+    <h2>Download OctoFlow</h2>
+    <p class="section-desc" style="margin-left:auto;margin-right:auto;">Unzip. Run. That's it. No installer, no SDK, no account.</p>
+    <div class="download-platforms">
+      <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="dl-card">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+        <span class="dl-label">Windows x64</span>
+        <span class="dl-size">2.2 MB &middot; .zip</span>
+      </a>
+      <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="dl-card">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.504 0c-.155 0-.311.015-.466.046C8.756.684 6.26 3.576 5.552 5.263c-.354.84-.515 1.77-.422 2.662.052.472.18.9.38 1.285-.236.076-.474.166-.71.267C3.547 10.042 2.8 11.034 2.8 12.303c0 .782.287 1.508.77 2.073.325.38.736.689 1.2.91-.014.124-.02.25-.02.376 0 1.016.413 1.93 1.08 2.598.492.492 1.12.852 1.822 1.03.106.028.214.05.324.066-.028.184-.042.372-.042.563 0 .855.29 1.641.783 2.269.608.773 1.563 1.245 2.614 1.363.216.024.435.036.655.036 1.468 0 2.823-.607 3.783-1.594.85-.875 1.393-2.003 1.487-3.25.017-.221.017-.443.001-.664.463-.142.874-.377 1.21-.677.534-.476.87-1.136.94-1.845.033-.33.018-.663-.044-.99.34-.282.62-.633.82-1.033.304-.61.406-1.305.298-1.98-.044-.27-.122-.53-.232-.778.372-.378.655-.844.82-1.375.22-.705.19-1.466-.083-2.14-.147-.362-.367-.69-.647-.968-.124-.124-.26-.237-.406-.34.044-.334.045-.672.003-1.01C18.395 3.242 15.87.24 13.066.013 12.88 0 12.692 0 12.504 0z"/></svg>
+        <span class="dl-label">Linux x64</span>
+        <span class="dl-size">2.2 MB &middot; .tar.gz</span>
+      </a>
+    </div>
+    <p class="download-note">Requires any GPU with Vulkan driver (NVIDIA, AMD, Intel)</p>
+    <div class="download-cmd">
+      <span style="color:var(--teal-light)">$</span> octoflow run hello.flow
     </div>
   </div>
 </section>
 
 <!-- Footer -->
 <footer>
-  <p>
-    Stdlib &amp; docs: <a href="https://github.com/octoflow-lang/octoflow/blob/main/LICENSE-STDLIB">Apache 2.0</a> &middot;
-    Binary: Free for any purpose &middot;
-    Your .flow programs: Yours entirely
-  </p>
-  <p style="margin-top: 12px;">
-    <a href="https://github.com/octoflow-lang/octoflow">GitHub</a> &middot;
-    <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/language-guide.md">Language Guide</a> &middot;
-    <a href="https://github.com/octoflow-lang/octoflow/releases/latest">Releases</a>
-  </p>
+  <div>
+    Stdlib &amp; docs: Apache 2.0 &middot; Binary: Free for any purpose &middot; Your .flow programs: Yours entirely
+  </div>
+  <div class="links">
+    <a href="https://github.com/octoflow-lang/octoflow">GitHub</a>
+    <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/language-guide.md">Language Guide</a>
+    <a href="https://github.com/octoflow-lang/octoflow/releases">Releases</a>
+  </div>
 </footer>
+
+<script>
+// ═══════════════════ NAV SCROLL ═══════════════════
+const nav = document.getElementById('nav');
+window.addEventListener('scroll', () => {
+  nav.classList.toggle('scrolled', window.scrollY > 40);
+});
+
+// ═══════════════════ CODE TABS ═══════════════════
+document.querySelectorAll('.code-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.code-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.code-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelector(`.code-panel[data-panel="${tab.dataset.tab}"]`).classList.add('active');
+  });
+});
+
+// ═══════════════════ SCROLL REVEAL ═══════════════════
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+}, { threshold: 0.1 });
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+// ═══════════════════ TERMINAL TYPEWRITER ═══════════════════
+const lines = [
+  { type: 'prompt', text: '$ ', delay: 400 },
+  { type: 'cmd', text: 'octoflow repl', delay: 60 },
+  { type: 'output', text: '\nOctoFlow v0.83 \u2014 GPU-native language', delay: 0 },
+  { type: 'output', text: '\nGPU: NVIDIA GeForce GTX 1660 SUPER\n', delay: 0 },
+  { type: 'prompt', text: '\n>>> ', delay: 600 },
+  { type: 'cmd', text: 'let a = gpu_fill(1.0, 10000000)', delay: 40 },
+  { type: 'prompt', text: '\n>>> ', delay: 400 },
+  { type: 'cmd', text: 'gpu_sum(a)', delay: 50 },
+  { type: 'highlight', text: '\n10000000', delay: 0 },
+  { type: 'prompt', text: '\n>>> ', delay: 500 },
+  { type: 'cmd', text: 'let b = gpu_scale(a, 3.14)', delay: 40 },
+  { type: 'prompt', text: '\n>>> ', delay: 400 },
+  { type: 'cmd', text: 'gpu_mean(b)', delay: 50 },
+  { type: 'highlight', text: '\n3.14', delay: 0 },
+];
+
+const term = document.getElementById('term');
+let lineIdx = 0, charIdx = 0;
+
+function typeNext() {
+  if (lineIdx >= lines.length) {
+    // Add blinking cursor at end
+    const cursor = document.createElement('span');
+    cursor.style.cssText = 'display:inline-block;width:8px;height:16px;background:var(--teal-light);animation:blink 1s step-end infinite;vertical-align:text-bottom;margin-left:2px;';
+    term.appendChild(cursor);
+    const style = document.createElement('style');
+    style.textContent = '@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}';
+    document.head.appendChild(style);
+    return;
+  }
+  const line = lines[lineIdx];
+  if (line.type === 'cmd') {
+    // Type character by character
+    if (charIdx === 0) {
+      // Create span for this line
+      const span = document.createElement('span');
+      span.className = line.type;
+      span.dataset.lineIdx = lineIdx;
+      term.appendChild(span);
+    }
+    const span = term.querySelector(`[data-line-idx="${lineIdx}"]`);
+    if (charIdx < line.text.length) {
+      span.textContent += line.text[charIdx];
+      charIdx++;
+      setTimeout(typeNext, line.delay + Math.random() * 30);
+    } else {
+      charIdx = 0;
+      lineIdx++;
+      setTimeout(typeNext, 200);
+    }
+  } else {
+    // Instant output
+    const span = document.createElement('span');
+    span.className = line.type;
+    span.textContent = line.text;
+    term.appendChild(span);
+    charIdx = 0;
+    lineIdx++;
+    setTimeout(typeNext, line.delay || 200);
+  }
+}
+
+// Start typing when hero is visible
+setTimeout(typeNext, 800);
+</script>
 
 </body>
 </html>
