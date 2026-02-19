@@ -9,6 +9,20 @@ Designed for the GPU from scratch. Compiled by itself. Run on any GPU.
 
 ## Install
 
+**Terminal (recommended):**
+
+```powershell
+# Windows (PowerShell)
+irm https://octoflow-lang.github.io/octoflow/install.ps1 | iex
+```
+
+```bash
+# Linux
+curl -fsSL https://octoflow-lang.github.io/octoflow/install.sh | sh
+```
+
+**Manual download:**
+
 Download from [Releases](https://github.com/octoflow-lang/octoflow/releases/latest).
 
 | Platform | File |
