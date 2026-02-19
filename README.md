@@ -5,8 +5,7 @@ Designed for the GPU from scratch. Compiled by itself. Run on any GPU.
 
 **CPU on demand, not GPU on demand.**
 
-2.2 MB binary. 51 stdlib modules. Zero dependencies.
-Any GPU vendor. One file download. No CUDA. No Python. No pip.
+2.2 MB binary. Zero dependencies. Any GPU vendor. One file download.
 
 ## Install
 
@@ -227,6 +226,10 @@ See [examples/](examples/) for all 16 runnable demos.
 - [GPU Guide](docs/gpu-guide.md) — GPU computing
 - [REPL](docs/repl.md) — interactive mode
 - [Coding Guide](docs/CODING-GUIDE.md) — complete language reference
+
+### LLM / AI-Assisted Development
+
+The [Coding Guide](docs/CODING-GUIDE.md) and [Language Guide](docs/language-guide.md) are designed to work as RAG context for LLMs. Feed them to your AI assistant and it can write OctoFlow code, debug .flow scripts, and use the full stdlib — no training required.
 
 ## License
 
