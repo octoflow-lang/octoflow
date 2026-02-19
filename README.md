@@ -230,7 +230,7 @@ octoflow run examples/csv_demo.flow --allow-read
 octoflow run examples/http_demo.flow --allow-net
 ```
 
-See [examples/](examples/) for all 16 runnable demos.
+See [examples/](examples/) for all 19 runnable demos.
 
 ## Documentation
 

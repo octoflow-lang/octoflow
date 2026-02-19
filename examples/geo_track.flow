@@ -1,0 +1,39 @@
+// Geo Track Renderer — coordinates to SVG
+// Generates a route and renders it as an SVG path
+// Run: octoflow run examples/geo_track.flow --allow-write
+
+let N = 300
+
+// Vienna (48.21, 16.37) → Salzburg (47.80, 13.04)
+let mut svg_path = ""
+
+for i in range(0, N)
+  let t = i / N
+  let lat = 48.21 - t * 0.41
+  let lon = 16.37 - t * 3.33
+
+  // Map to SVG viewport (800 x 400)
+  let x = (lon - 12.5) * 200.0
+  let y = (49.5 - lat) * 280.0
+  let sx = str(int(x))
+  let sy = str(int(y))
+
+  if i == 0.0
+    svg_path = "M " + sx + " " + sy
+  end
+  if i > 0.0
+    svg_path = svg_path + " L " + sx + " " + sy
+  end
+end
+
+let hd = "<svg xmlns='http://www.w3.org/2000/svg' width='800' height='400' style='background:#0a0a12'>"
+let pt = "<path d='" + svg_path + "' fill='none' stroke='#00c8b4' stroke-width='2.5' stroke-linecap='round'/>"
+let ci = "<circle cx='770' cy='46' r='5' fill='#ff6644'/><text x='756' y='42' fill='#888' font-size='11'>Vienna</text>"
+let co = "<circle cx='100' cy='150' r='5' fill='#4488ff'/><text x='62' y='146' fill='#888' font-size='11'>Salzburg</text>"
+let ft = "</svg>"
+let svg = hd + pt + ci + co + ft
+
+write_file("track.svg", svg)
+let sn = str(int(N))
+print("Rendered {sn}-point track to track.svg")
+print("Vienna → Salzburg")

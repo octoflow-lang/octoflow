@@ -1,0 +1,50 @@
+// GPU Population Generator
+// Synthetic demographic data — 1M residents on GPU
+// Run: octoflow run examples/population_gpu.flow
+
+let N = 1000000
+
+// Age: triangular distribution (sum of two uniforms)
+let a1 = gpu_random(N, 0.0, 50.0)
+let a2 = gpu_random(N, 0.0, 50.0)
+let age_raw = gpu_add(a1, a2)
+let age_cl = gpu_clamp(age_raw, 0.0, 99.0)
+let age = gpu_floor(age_cl)
+
+// Geographic: Austria bounding box
+let lat = gpu_random(N, 46.37, 49.02)
+let lon = gpu_random(N, 9.53, 17.16)
+
+// Household size (1-6)
+let hh_raw = gpu_random(N, 1.0, 7.0)
+let hh = gpu_floor(hh_raw)
+
+// Income: log-normal via exp(mu + sigma * z)
+let r1 = gpu_random(N, 0.0, 1.0)
+let r2 = gpu_random(N, 0.0, 1.0)
+let r_sum = gpu_add(r1, r2)
+let ones = gpu_fill(1.0, N)
+let z = gpu_sub(r_sum, ones)
+let z_sc = gpu_scale(z, 0.6)
+let mu = gpu_fill(10.3, N)
+let log_inc = gpu_add(z_sc, mu)
+let income = gpu_exp(log_inc)
+
+// Stats — all computed on GPU
+let avg_age = gpu_sum(age) / N
+let avg_inc = gpu_sum(income) / N
+let min_age = gpu_min(age)
+let max_age = gpu_max(age)
+let avg_hh = gpu_sum(hh) / N
+
+let sn = str(int(N / 1000.0))
+let sa = str(int(avg_age))
+let si = str(int(avg_inc))
+
+print("GPU Population Generator")
+print("========================")
+print("  {sn}K synthetic residents")
+print("  Age range:    {min_age} - {max_age}")
+print("  Avg age:      {sa}")
+print("  Avg household: {avg_hh}")
+print("  Avg income:   EUR {si}")
