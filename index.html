@@ -226,12 +226,25 @@ nav .links .btn-nav:hover { background: var(--teal-light); color: #000; }
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.85rem;
   line-height: 1.7;
-  min-height: 180px;
+  min-height: 200px;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 .terminal-body .prompt { color: var(--teal-light); }
 .terminal-body .cmd { color: var(--text); }
 .terminal-body .output { color: var(--text-secondary); }
-.terminal-body .highlight { color: var(--teal-light); }
+.terminal-body .highlight { color: var(--teal-light); font-weight: 500; }
+.terminal-body .cursor {
+  display: inline-block;
+  width: 8px;
+  height: 15px;
+  background: var(--teal-light);
+  vertical-align: text-bottom;
+  margin-left: 1px;
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
 
 /* ═══════════════════════════════════════ SECTIONS ═══════════════════════════════════════ */
 section {
@@ -821,71 +834,117 @@ const observer = new IntersectionObserver((entries) => {
 document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
 
 // ═══════════════════ TERMINAL TYPEWRITER ═══════════════════
-const lines = [
-  { type: 'prompt', text: '$ ', delay: 400 },
-  { type: 'cmd', text: 'octoflow repl', delay: 60 },
-  { type: 'output', text: '\nOctoFlow v0.83 \u2014 GPU-native language', delay: 0 },
-  { type: 'output', text: '\nGPU: NVIDIA GeForce RTX 4090\n', delay: 0 },
-  { type: 'prompt', text: '\n>>> ', delay: 600 },
-  { type: 'cmd', text: 'let a = gpu_fill(1.0, 10000000)', delay: 40 },
-  { type: 'prompt', text: '\n>>> ', delay: 400 },
-  { type: 'cmd', text: 'gpu_sum(a)', delay: 50 },
-  { type: 'highlight', text: '\n10000000', delay: 0 },
-  { type: 'prompt', text: '\n>>> ', delay: 500 },
-  { type: 'cmd', text: 'let b = gpu_scale(a, 3.14)', delay: 40 },
-  { type: 'prompt', text: '\n>>> ', delay: 400 },
-  { type: 'cmd', text: 'gpu_mean(b)', delay: 50 },
-  { type: 'highlight', text: '\n3.14', delay: 0 },
+const term = document.getElementById('term');
+const cursor = document.createElement('span');
+cursor.className = 'cursor';
+term.appendChild(cursor);
+
+// Natural typing speed — varies per character like a real human
+function charDelay(ch, baseSpeed) {
+  // Spaces and operators: brief pause (finger moving)
+  if (ch === ' ') return baseSpeed + Math.random() * 40 + 20;
+  if ('(),.=_"'.includes(ch)) return baseSpeed + Math.random() * 30 + 10;
+  // Numbers: slightly faster (same hand position)
+  if (ch >= '0' && ch <= '9') return baseSpeed * 0.7 + Math.random() * 20;
+  // Normal keys: natural variance
+  return baseSpeed + (Math.random() * 50 - 20);
+}
+
+// Sequence of terminal events
+const seq = [
+  // Initial shell command
+  { act: 'wait', ms: 600 },
+  { act: 'prompt', text: '$ ' },
+  { act: 'type', text: 'octoflow repl', speed: 55 },
+  { act: 'wait', ms: 300 },
+  { act: 'print', text: '\n', cls: 'output' },
+  { act: 'wait', ms: 180 },
+  { act: 'print', text: 'OctoFlow v0.83 \u2014 GPU-native language\n', cls: 'output' },
+  { act: 'wait', ms: 80 },
+  { act: 'print', text: 'GPU: NVIDIA GeForce RTX 4090\n', cls: 'output' },
+  { act: 'wait', ms: 500 },
+
+  // First command
+  { act: 'prompt', text: '>>> ' },
+  { act: 'type', text: 'let a = gpu_fill(1.0, 10000000)', speed: 38 },
+  { act: 'wait', ms: 150 },
+  { act: 'print', text: '\n', cls: 'output' },
+  { act: 'wait', ms: 350 },
+
+  // Second command
+  { act: 'prompt', text: '>>> ' },
+  { act: 'type', text: 'gpu_sum(a)', speed: 45 },
+  { act: 'wait', ms: 120 },
+  { act: 'print', text: '\n', cls: 'output' },
+  { act: 'wait', ms: 200 },
+  { act: 'print', text: '10000000\n', cls: 'highlight' },
+  { act: 'wait', ms: 600 },
+
+  // Third command
+  { act: 'prompt', text: '>>> ' },
+  { act: 'type', text: 'let b = gpu_scale(a, 3.14)', speed: 40 },
+  { act: 'wait', ms: 150 },
+  { act: 'print', text: '\n', cls: 'output' },
+  { act: 'wait', ms: 350 },
+
+  // Fourth command
+  { act: 'prompt', text: '>>> ' },
+  { act: 'type', text: 'gpu_mean(b)', speed: 45 },
+  { act: 'wait', ms: 120 },
+  { act: 'print', text: '\n', cls: 'output' },
+  { act: 'wait', ms: 200 },
+  { act: 'print', text: '3.14\n', cls: 'highlight' },
+  { act: 'wait', ms: 500 },
+
+  // Idle prompt
+  { act: 'prompt', text: '>>> ' },
 ];
 
-const term = document.getElementById('term');
-let lineIdx = 0, charIdx = 0;
+let si = 0; // sequence index
 
-function typeNext() {
-  if (lineIdx >= lines.length) {
-    // Add blinking cursor at end
-    const cursor = document.createElement('span');
-    cursor.style.cssText = 'display:inline-block;width:8px;height:16px;background:var(--teal-light);animation:blink 1s step-end infinite;vertical-align:text-bottom;margin-left:2px;';
-    term.appendChild(cursor);
-    const style = document.createElement('style');
-    style.textContent = '@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}';
-    document.head.appendChild(style);
-    return;
+function runSeq() {
+  if (si >= seq.length) return; // cursor keeps blinking at end
+  const s = seq[si++];
+
+  if (s.act === 'wait') {
+    setTimeout(runSeq, s.ms);
   }
-  const line = lines[lineIdx];
-  if (line.type === 'cmd') {
-    // Type character by character
-    if (charIdx === 0) {
-      // Create span for this line
-      const span = document.createElement('span');
-      span.className = line.type;
-      span.dataset.lineIdx = lineIdx;
-      term.appendChild(span);
-    }
-    const span = term.querySelector(`[data-line-idx="${lineIdx}"]`);
-    if (charIdx < line.text.length) {
-      span.textContent += line.text[charIdx];
-      charIdx++;
-      setTimeout(typeNext, line.delay + Math.random() * 30);
-    } else {
-      charIdx = 0;
-      lineIdx++;
-      setTimeout(typeNext, 200);
-    }
-  } else {
-    // Instant output
+  else if (s.act === 'prompt') {
     const span = document.createElement('span');
-    span.className = line.type;
-    span.textContent = line.text;
-    term.appendChild(span);
-    charIdx = 0;
-    lineIdx++;
-    setTimeout(typeNext, line.delay || 200);
+    span.className = 'prompt';
+    span.textContent = s.text;
+    term.insertBefore(span, cursor);
+    setTimeout(runSeq, 0);
+  }
+  else if (s.act === 'print') {
+    const span = document.createElement('span');
+    span.className = s.cls;
+    span.textContent = s.text;
+    term.insertBefore(span, cursor);
+    setTimeout(runSeq, 0);
+  }
+  else if (s.act === 'type') {
+    // Type characters one at a time with natural rhythm
+    const span = document.createElement('span');
+    span.className = 'cmd';
+    term.insertBefore(span, cursor);
+    let ci = 0;
+    function typeChar() {
+      if (ci >= s.text.length) {
+        setTimeout(runSeq, 80);
+        return;
+      }
+      span.textContent += s.text[ci];
+      const delay = charDelay(s.text[ci], s.speed);
+      ci++;
+      setTimeout(typeChar, delay);
+    }
+    typeChar();
   }
 }
 
-// Start typing when hero is visible
-setTimeout(typeNext, 800);
+// Start after page settles
+setTimeout(runSeq, 900);
 </script>
 
 </body>
