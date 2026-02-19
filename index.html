@@ -444,6 +444,56 @@ section .section-desc {
   position: relative;
 }
 
+/* ═══════════════════════════════════════ INSTALL CMDS ═══════════════════════════════════════ */
+.install-cmds {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 580px;
+  margin: 0 auto;
+  text-align: left;
+}
+.install-cmd {}
+.install-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.install-code {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.install-code:hover { border-color: var(--teal); }
+.install-code code {
+  flex: 1;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow-x: auto;
+}
+.install-code .copy-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  transition: color 0.2s;
+}
+.install-code:hover .copy-icon { color: var(--teal-light); }
+.install-code.copied { border-color: #28c840; }
+.install-code.copied .copy-icon { color: #28c840; }
+
 /* ═══════════════════════════════════════ FOOTER ═══════════════════════════════════════ */
 footer {
   max-width: 1100px;
@@ -947,8 +997,24 @@ footer a:hover { color: var(--text); }
       </a>
     </div>
     <p class="download-note">Requires any GPU with Vulkan driver (NVIDIA, AMD, Intel)</p>
-    <div class="download-cmd">
-      <span style="color:var(--teal-light)">$</span> octoflow run hello.flow
+    <div style="margin-top:36px; position:relative;">
+      <p style="font-size:0.9rem; color:var(--text-secondary); margin-bottom:16px; font-weight:500;">Or install from terminal:</p>
+      <div class="install-cmds">
+        <div class="install-cmd">
+          <span class="install-label">Windows (PowerShell)</span>
+          <div class="install-code" onclick="copyCmd(this)" title="Click to copy">
+            <code>irm https://octoflow-lang.github.io/octoflow/install.ps1 | iex</code>
+            <svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          </div>
+        </div>
+        <div class="install-cmd">
+          <span class="install-label">Linux</span>
+          <div class="install-code" onclick="copyCmd(this)" title="Click to copy">
+            <code>curl -fsSL https://octoflow-lang.github.io/octoflow/install.sh | sh</code>
+            <svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -1117,6 +1183,15 @@ function runSeq() {
 
 // Start after page settles
 setTimeout(runSeq, 900);
+
+// ═══════════════════ COPY INSTALL CMD ═══════════════════
+function copyCmd(el) {
+  const code = el.querySelector('code').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    el.classList.add('copied');
+    setTimeout(() => el.classList.remove('copied'), 1500);
+  });
+}
 </script>
 
 </body>
