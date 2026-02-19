@@ -225,11 +225,9 @@ See [examples/](examples/) for all 16 runnable demos.
 - [Builtins](docs/builtins.md) — all built-in functions
 - [GPU Guide](docs/gpu-guide.md) — GPU computing
 - [REPL](docs/repl.md) — interactive mode
-- [Coding Guide](docs/CODING-GUIDE.md) — complete language reference
-
 ### LLM / AI-Assisted Development
 
-The [Coding Guide](docs/CODING-GUIDE.md) and [Language Guide](docs/language-guide.md) are designed to work as RAG context for LLMs. Feed them to your AI assistant and it can write OctoFlow code, debug .flow scripts, and use the full stdlib — no training required.
+The [Language Guide](docs/language-guide.md) and [Builtins](docs/builtins.md) are designed to work as RAG context for LLMs. Feed them to your AI assistant and it can write OctoFlow code, debug .flow scripts, and use the full stdlib — no training required.
 
 ## License
 
