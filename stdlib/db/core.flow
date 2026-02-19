@@ -1,0 +1,155 @@
+// stdlib/db/core.flow — In-memory columnar database
+//
+// Tables stored as map of column_name → array
+// Database stored as map of table_name → table
+
+fn db_create()
+  let mut db = map()
+  map_set(db, "__tables", "")
+  return db
+end
+
+fn db_table(db, name, columns)
+  // Create table with named columns
+  let mut table = map()
+  for col in columns
+    map_set(table, "__col_" + col, "__empty")
+  end
+  map_set(table, "__columns", join(columns, ","))
+  map_set(table, "__count", "0")
+  map_set(db, "__tbl_" + name, "1")
+  // Track table list
+  let existing = map_get(db, "__tables")
+  if len(existing) > 0.0
+    map_set(db, "__tables", existing + "," + name)
+  else
+    map_set(db, "__tables", name)
+  end
+  return table
+end
+
+fn db_tables(db)
+  let list = map_get(db, "__tables")
+  if len(list) == 0.0
+    let mut empty = []
+    return empty
+  end
+  return split(list, ",")
+end
+
+fn db_insert(table, row)
+  // row: map of column_name → value
+  let count = float(map_get(table, "__count"))
+  let cols_str = map_get(table, "__columns")
+  let cols = split(cols_str, ",")
+  for col in cols
+    let key = "__col_" + col + "_" + str(count)
+    if map_has(row, col)
+      map_set(table, key, map_get(row, col))
+    else
+      map_set(table, key, "")
+    end
+  end
+  map_set(table, "__count", str(count + 1.0))
+  return count + 1.0
+end
+
+fn db_count(table)
+  return float(map_get(table, "__count"))
+end
+
+fn db_select_column(table, col, n)
+  // Get all values in a column
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    let key = "__col_" + col + "_" + str(i)
+    if map_has(table, key)
+      push(result, map_get(table, key))
+    else
+      push(result, "")
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn db_select_row(table, idx)
+  let cols_str = map_get(table, "__columns")
+  let cols = split(cols_str, ",")
+  let mut row = map()
+  for col in cols
+    let key = "__col_" + col + "_" + str(idx)
+    if map_has(table, key)
+      map_set(row, col, map_get(table, key))
+    end
+  end
+  return row
+end
+
+fn db_where(table, col, op, val)
+  // Filter rows matching condition, return indices
+  let count = float(map_get(table, "__count"))
+  let mut indices = []
+  let mut i = 0.0
+  while i < count
+    let key = "__col_" + col + "_" + str(i)
+    if map_has(table, key)
+      let v = map_get(table, key)
+      let mut match = 0.0
+      if op == "=="
+        if v == val
+          match = 1.0
+        end
+      elif op == "!="
+        if v != val
+          match = 1.0
+        end
+      elif op == ">"
+        if float(v) > float(val)
+          match = 1.0
+        end
+      elif op == "<"
+        if float(v) < float(val)
+          match = 1.0
+        end
+      elif op == "contains"
+        if contains(v, val)
+          match = 1.0
+        end
+      end
+      if match == 1.0
+        push(indices, i)
+      end
+    end
+    i = i + 1.0
+  end
+  return indices
+end
+
+fn db_import_csv(table, path)
+  let lines = read_lines(path)
+  let n = len(lines)
+  if n < 2.0
+    return 0.0
+  end
+  let headers = split(trim(lines[0]), ",")
+  let mut count = 0.0
+  let mut i = 1.0
+  while i < n
+    let line = trim(lines[i])
+    if len(line) > 0.0
+      let vals = split(line, ",")
+      let mut row = map()
+      let mut j = 0.0
+      while j < len(headers) && j < len(vals)
+        map_set(row, trim(headers[j]), trim(vals[j]))
+        j = j + 1.0
+      end
+      db_insert(table, row)
+      count = count + 1.0
+    end
+    i = i + 1.0
+  end
+  return count
+end

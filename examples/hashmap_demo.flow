@@ -1,0 +1,43 @@
+// Phase 30b: HashMap Demonstration
+// Shows map(), map_set(), map_get(), map_has(), map_remove(), map_keys(), len()
+
+// ── Basic creation and insert ─────────────────────────────
+let mut prices = map()
+map_set(prices, "XAUUSD", 2651.30)
+map_set(prices, "EURUSD", 1.0845)
+map_set(prices, "GBPUSD", 1.2620)
+
+let n = len(prices)
+print("Symbols tracked: {n}")
+
+// ── Lookup ─────────────────────────────────────────────────
+let gold = map_get(prices, "XAUUSD")
+print("Gold price: {gold}")
+
+// ── Existence check ────────────────────────────────────────
+let has_eur = map_has(prices, "EURUSD")
+let has_jpy = map_has(prices, "USDJPY")
+print("Has EURUSD: {has_eur}")
+print("Has USDJPY: {has_jpy}")
+
+// ── Get all keys ───────────────────────────────────────────
+let k = map_keys(prices)
+print("Keys: {k}")
+
+// ── Remove ─────────────────────────────────────────────────
+let removed = map_remove(prices, "GBPUSD")
+print("Removed GBPUSD: {removed}")
+let n2 = len(prices)
+print("Symbols after remove: {n2}")
+
+// ── Overwrite existing key ─────────────────────────────────
+map_set(prices, "XAUUSD", 2660.00)
+let updated = map_get(prices, "XAUUSD")
+print("Updated gold price: {updated}")
+
+// ── String values ──────────────────────────────────────────
+let mut meta = map()
+map_set(meta, "broker", "PuPrime")
+map_set(meta, "account", "demo")
+let broker = map_get(meta, "broker")
+print("Broker: {broker}")

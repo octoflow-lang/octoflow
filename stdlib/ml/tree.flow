@@ -1,0 +1,160 @@
+// stdlib/ml/tree.flow — Decision tree primitives
+
+fn gini_impurity(labels, n_classes)
+  // Compute Gini impurity: 1 - sum(p_i^2)
+  let n = len(labels)
+  if n == 0.0
+    return 0.0
+  end
+  let mut counts = []
+  let mut c = 0.0
+  while c < n_classes
+    push(counts, 0.0)
+    c = c + 1.0
+  end
+  for label in labels
+    let idx = floor(label)
+    if idx >= 0.0 && idx < n_classes
+      counts[idx] = counts[idx] + 1.0
+    end
+  end
+  let mut sum_sq = 0.0
+  c = 0.0
+  while c < n_classes
+    let p = counts[c] / n
+    sum_sq = sum_sq + p * p
+    c = c + 1.0
+  end
+  return 1.0 - sum_sq
+end
+
+fn decision_stump(x, y, thresholds)
+  // Single-split binary classifier
+  // x: feature array, y: label array (0/1), thresholds: array of split points
+  // Returns map with "threshold", "direction", "predictions"
+  let n = len(x)
+  let n_classes = 2.0
+  let mut best_threshold = thresholds[0]
+  let mut best_error = n + 1.0
+  let mut best_direction = 1.0
+  for thr in thresholds
+    // Try direction 1: predict 1 if x >= threshold
+    let mut err1 = 0.0
+    let mut err2 = 0.0
+    let mut i = 0.0
+    while i < n
+      let pred1 = 0.0
+      let pred2 = 0.0
+      if x[i] >= thr
+        // direction 1: predict 1
+        if y[i] != 1.0
+          err1 = err1 + 1.0
+        end
+        // direction -1: predict 0
+        if y[i] != 0.0
+          err2 = err2 + 1.0
+        end
+      else
+        // direction 1: predict 0
+        if y[i] != 0.0
+          err1 = err1 + 1.0
+        end
+        // direction -1: predict 1
+        if y[i] != 1.0
+          err2 = err2 + 1.0
+        end
+      end
+      i = i + 1.0
+    end
+    if err1 < best_error
+      best_error = err1
+      best_threshold = thr
+      best_direction = 1.0
+    end
+    if err2 < best_error
+      best_error = err2
+      best_threshold = thr
+      best_direction = -1.0
+    end
+  end
+  // Generate predictions with best stump
+  let mut preds = []
+  let mut i = 0.0
+  while i < n
+    if best_direction == 1.0
+      if x[i] >= best_threshold
+        push(preds, 1.0)
+      else
+        push(preds, 0.0)
+      end
+    else
+      if x[i] >= best_threshold
+        push(preds, 0.0)
+      else
+        push(preds, 1.0)
+      end
+    end
+    i = i + 1.0
+  end
+  let mut result = map()
+  map_set(result, "threshold", str(best_threshold))
+  map_set(result, "direction", str(best_direction))
+  map_set(result, "error", str(best_error))
+  map_set(result, "error_rate", str(best_error / n))
+  return result
+end
+
+fn find_best_split(x, y, n_thresholds)
+  // Find optimal threshold from evenly-spaced candidates
+  // Returns map with "threshold", "gini", "direction"
+  let n = len(x)
+  // Find min/max of x
+  let mut x_min = x[0]
+  let mut x_max = x[0]
+  let mut i = 1.0
+  while i < n
+    if x[i] < x_min
+      x_min = x[i]
+    end
+    if x[i] > x_max
+      x_max = x[i]
+    end
+    i = i + 1.0
+  end
+  let step = (x_max - x_min) / (n_thresholds + 1.0)
+  let mut best_thr = x_min
+  let mut best_gini = 2.0
+  let mut t = 1.0
+  while t <= n_thresholds
+    let thr = x_min + step * t
+    // Split labels into left (<thr) and right (>=thr)
+    let mut left = []
+    let mut right = []
+    i = 0.0
+    while i < n
+      if x[i] < thr
+        push(left, y[i])
+      else
+        push(right, y[i])
+      end
+      i = i + 1.0
+    end
+    // Weighted Gini
+    let nl = len(left)
+    let nr = len(right)
+    if nl > 0.0 && nr > 0.0
+      let gl = gini_impurity(left, 2.0)
+      let gr = gini_impurity(right, 2.0)
+      let weighted = (nl * gl + nr * gr) / n
+      if weighted < best_gini
+        best_gini = weighted
+        best_thr = thr
+      end
+    end
+    t = t + 1.0
+  end
+  let mut result = map()
+  map_set(result, "threshold", str(best_thr))
+  map_set(result, "gini", str(best_gini))
+  return result
+end

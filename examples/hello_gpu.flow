@@ -1,0 +1,9 @@
+// Hello World on the GPU — 1 million elements computed in parallel
+
+let a = gpu_fill(1.0, 1000000.0)
+let b = gpu_fill(2.0, 1000000.0)
+let c = gpu_add(a, b)
+let total = gpu_sum(c)
+
+print("Hello from the GPU!")
+print("1,000,000 elements: 1.0 + 2.0 = {total}")

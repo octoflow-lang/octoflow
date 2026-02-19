@@ -1,0 +1,41 @@
+// FlowGPU Standard Library: Sorting Algorithms
+// In-place sorting on mutable arrays.
+
+fn insertion_sort(arr)
+  let n = len(arr)
+  for i in range(1, n)
+    let key = arr[i]
+    let mut j = i - 1.0
+    while j >= 0.0
+      if arr[j] > key
+        arr[j + 1.0] = arr[j]
+        j = j - 1.0
+      end
+      if arr[j] <= key
+        break
+      end
+    end
+    arr[j + 1.0] = key
+  end
+  return 0.0
+end
+
+fn bubble_sort(arr)
+  let n = len(arr)
+  for i in range(0, n)
+    let mut swapped = 0.0
+    let limit = n - 1.0 - i
+    for j in range(0, limit)
+      if arr[j] > arr[j + 1.0]
+        let tmp = arr[j]
+        arr[j] = arr[j + 1.0]
+        arr[j + 1.0] = tmp
+        swapped = 1.0
+      end
+    end
+    if swapped == 0.0
+      break
+    end
+  end
+  return 0.0
+end

@@ -1,0 +1,109 @@
+// stdlib/data/pipeline.flow — Data pipeline utilities
+
+fn chain_apply(arr, fn_names)
+  // Apply a sequence of transforms to each element
+  // fn_names: array of transform names ("abs", "floor", "ceil", "round", "sqrt", "exp", "log")
+  let mut result = []
+  let n = len(arr)
+  let mut i = 0.0
+  while i < n
+    let mut val = arr[i]
+    for fname in fn_names
+      if fname == "abs"
+        val = abs(val)
+      elif fname == "floor"
+        val = floor(val)
+      elif fname == "ceil"
+        val = ceil(val)
+      elif fname == "round"
+        val = round(val)
+      elif fname == "sqrt"
+        val = sqrt(abs(val))
+      elif fname == "exp"
+        val = exp(val)
+      elif fname == "log"
+        val = log(abs(val) + 0.000001)
+      elif fname == "negate"
+        val = val * -1.0
+      elif fname == "double"
+        val = val * 2.0
+      elif fname == "halve"
+        val = val / 2.0
+      end
+    end
+    push(result, val)
+    i = i + 1.0
+  end
+  return result
+end
+
+fn batch_process(arr, batch_size, fn_name)
+  // Process array in batches, applying aggregate fn to each batch
+  // fn_name: "sum", "mean", "min", "max", "count"
+  let n = len(arr)
+  let mut results = []
+  let mut start = 0.0
+  while start < n
+    let mut batch_end = start + batch_size
+    if batch_end > n
+      batch_end = n
+    end
+    let mut batch = []
+    let mut i = start
+    while i < batch_end
+      push(batch, arr[i])
+      i = i + 1.0
+    end
+    if fn_name == "sum"
+      let mut s = 0.0
+      for v in batch
+        s = s + v
+      end
+      push(results, s)
+    elif fn_name == "mean"
+      push(results, mean(batch))
+    elif fn_name == "min"
+      let mut m = batch[0]
+      for v in batch
+        if v < m
+          m = v
+        end
+      end
+      push(results, m)
+    elif fn_name == "max"
+      let mut m = batch[0]
+      for v in batch
+        if v > m
+          m = v
+        end
+      end
+      push(results, m)
+    elif fn_name == "count"
+      push(results, len(batch))
+    end
+    start = start + batch_size
+  end
+  return results
+end
+
+fn parallel_merge(arr1, arr2)
+  // Interleave two arrays: [a1, b1, a2, b2, ...]
+  let n1 = len(arr1)
+  let n2 = len(arr2)
+  let mut result = []
+  let mut mx = n1
+  if n2 > mx
+    mx = n2
+  end
+  let mut i = 0.0
+  while i < mx
+    if i < n1
+      push(result, arr1[i])
+    end
+    if i < n2
+      push(result, arr2[i])
+    end
+    i = i + 1.0
+  end
+  return result
+end

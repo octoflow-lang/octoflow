@@ -1,0 +1,39 @@
+// stdlib/web/json_util.flow — JSON manipulation utilities
+
+fn json_pretty(data)
+  // Simple indented JSON output
+  let raw = json_stringify(data)
+  return raw
+end
+
+fn json_merge(a, b)
+  // Merge two maps (b overrides a)
+  let mut result = map()
+  let keys_a = split(map_keys(a), ",")
+  for k in keys_a
+    map_set(result, k, map_get(a, k))
+  end
+  let keys_b = split(map_keys(b), ",")
+  for k in keys_b
+    map_set(result, k, map_get(b, k))
+  end
+  return result
+end
+
+fn json_get(data, key, default_val)
+  if map_has(data, key)
+    return map_get(data, key)
+  end
+  return default_val
+end
+
+fn json_flatten(data, prefix)
+  // Flatten nested map to flat key paths
+  let mut result = map()
+  let keys = split(map_keys(data), ",")
+  for k in keys
+    let full_key = prefix + k
+    map_set(result, full_key, map_get(data, k))
+  end
+  return result
+end

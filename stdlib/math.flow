@@ -1,0 +1,53 @@
+// FlowGPU Standard Library: Math Utilities
+// Pure scalar functions — no array parameters needed.
+
+fn min_of(a, b)
+  if a < b
+    return a
+  end
+  return b
+end
+
+fn max_of(a, b)
+  if a > b
+    return a
+  end
+  return b
+end
+
+fn clamp_val(val, lo, hi)
+  if val < lo
+    return lo
+  end
+  if val > hi
+    return hi
+  end
+  return val
+end
+
+fn lerp(a, b, t)
+  return a + (b - a) * t
+end
+
+fn map_range(val, in_lo, in_hi, out_lo, out_hi)
+  let t = (val - in_lo) / (in_hi - in_lo)
+  return out_lo + (out_hi - out_lo) * t
+end
+
+fn sign(x)
+  if x > 0.0
+    return 1.0
+  end
+  if x < 0.0
+    return -1.0
+  end
+  return 0.0
+end
+
+fn deg_to_rad(deg)
+  return deg * 3.14159265 / 180.0
+end
+
+fn rad_to_deg(rad)
+  return rad * 180.0 / 3.14159265
+end

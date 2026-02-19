@@ -1,0 +1,196 @@
+// stdlib/stats/risk.flow — Risk metrics for trading and portfolio analysis
+
+fn covariance_xy(x, y)
+  let n = len(x)
+  let mx = mean(x)
+  let my = mean(y)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n
+    sum = sum + (x[i] - mx) * (y[i] - my)
+    i = i + 1.0
+  end
+  return sum / (n - 1.0)
+end
+
+fn sharpe_ratio(returns_arr, risk_free_rate)
+  let n = len(returns_arr)
+  let m = mean(returns_arr)
+  let sd = stddev(returns_arr)
+  if sd == 0.0
+    return 0.0
+  end
+  let excess = m - risk_free_rate / 252.0
+  return excess / sd * sqrt(252.0)
+end
+
+fn sortino_ratio(returns_arr, risk_free_rate)
+  let n = len(returns_arr)
+  let m = mean(returns_arr)
+  let rf_daily = risk_free_rate / 252.0
+  let mut down_sum = 0.0
+  let mut down_count = 0.0
+  for r in returns_arr
+    let excess = r - rf_daily
+    if excess < 0.0
+      down_sum = down_sum + excess * excess
+      down_count = down_count + 1.0
+    end
+  end
+  if down_count == 0.0
+    return 0.0
+  end
+  let downside_dev = sqrt(down_sum / n)
+  if downside_dev == 0.0
+    return 0.0
+  end
+  return (m - rf_daily) / downside_dev * sqrt(252.0)
+end
+
+fn max_drawdown(equity)
+  let n = len(equity)
+  let mut peak = equity[0]
+  let mut max_dd = 0.0
+  let mut i = 0.0
+  while i < n
+    if equity[i] > peak
+      peak = equity[i]
+    end
+    let dd = (peak - equity[i]) / peak
+    if dd > max_dd
+      max_dd = dd
+    end
+    i = i + 1.0
+  end
+  return max_dd
+end
+
+fn calmar_ratio(returns_arr, equity)
+  let ann_return = mean(returns_arr) * 252.0
+  let mdd = max_drawdown(equity)
+  if mdd == 0.0
+    return 0.0
+  end
+  return ann_return / mdd
+end
+
+fn value_at_risk(returns_arr, confidence)
+  // Historical VaR
+  let sorted = sort_array(returns_arr)
+  let n = len(sorted)
+  let mut idx = floor(n * (1.0 - confidence))
+  if idx < 0.0
+    idx = 0.0
+  end
+  return sorted[idx] * -1.0
+end
+
+fn expected_shortfall(returns_arr, confidence)
+  // Conditional VaR (CVaR) — average loss beyond VaR
+  let sorted = sort_array(returns_arr)
+  let n = len(sorted)
+  let cutoff = floor(n * (1.0 - confidence))
+  if cutoff <= 0.0
+    return sorted[0] * -1.0
+  end
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < cutoff
+    sum = sum + sorted[i]
+    i = i + 1.0
+  end
+  return (sum / cutoff) * -1.0
+end
+
+fn volatility(returns_arr, annual)
+  let sd = stddev(returns_arr)
+  if annual == 1.0
+    return sd * sqrt(252.0)
+  end
+  return sd
+end
+
+fn beta(returns_arr, benchmark_returns)
+  let cov = covariance_xy(returns_arr, benchmark_returns)
+  let var_b = variance(benchmark_returns)
+  if var_b == 0.0
+    return 0.0
+  end
+  return cov / var_b
+end
+
+fn alpha(returns_arr, benchmark_returns, risk_free_rate)
+  let b = beta(returns_arr, benchmark_returns)
+  let r_port = mean(returns_arr) * 252.0
+  let r_bench = mean(benchmark_returns) * 252.0
+  return r_port - (risk_free_rate + b * (r_bench - risk_free_rate))
+end
+
+fn information_ratio(returns_arr, benchmark_returns)
+  let n = len(returns_arr)
+  let mut excess = []
+  let mut i = 0.0
+  while i < n
+    push(excess, returns_arr[i] - benchmark_returns[i])
+    i = i + 1.0
+  end
+  let te = stddev(excess)
+  if te == 0.0
+    return 0.0
+  end
+  return mean(excess) / te * sqrt(252.0)
+end
+
+fn win_rate(pnl_arr)
+  let n = len(pnl_arr)
+  let mut wins = 0.0
+  for p in pnl_arr
+    if p > 0.0
+      wins = wins + 1.0
+    end
+  end
+  return wins / n
+end
+
+fn profit_factor(pnl_arr)
+  let mut gross_profit = 0.0
+  let mut gross_loss = 0.0
+  for p in pnl_arr
+    if p > 0.0
+      gross_profit = gross_profit + p
+    elif p < 0.0
+      gross_loss = gross_loss - p
+    end
+  end
+  if gross_loss == 0.0
+    return 0.0
+  end
+  return gross_profit / gross_loss
+end
+
+fn expectancy(pnl_arr)
+  let wr = win_rate(pnl_arr)
+  let n = len(pnl_arr)
+  let mut sum_win = 0.0
+  let mut sum_loss = 0.0
+  let mut win_count = 0.0
+  let mut loss_count = 0.0
+  for p in pnl_arr
+    if p > 0.0
+      sum_win = sum_win + p
+      win_count = win_count + 1.0
+    elif p < 0.0
+      sum_loss = sum_loss - p
+      loss_count = loss_count + 1.0
+    end
+  end
+  let mut avg_win = 0.0
+  if win_count > 0.0
+    avg_win = sum_win / win_count
+  end
+  let mut avg_loss = 0.0
+  if loss_count > 0.0
+    avg_loss = sum_loss / loss_count
+  end
+  return wr * avg_win - (1.0 - wr) * avg_loss
+end

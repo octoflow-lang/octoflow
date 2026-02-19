@@ -1,0 +1,106 @@
+// FlowGPU Standard Library: Array Utilities
+// Functions that operate on arrays passed as parameters.
+
+fn arr_contains(arr, val)
+  for x in arr
+    if x == val
+      return 1.0
+    end
+  end
+  return 0.0
+end
+
+fn index_of(arr, val)
+  let mut i = 0.0
+  for x in arr
+    if x == val
+      return i
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+fn arr_sum(arr)
+  let mut total = 0.0
+  for x in arr
+    total = total + x
+  end
+  return total
+end
+
+fn arr_avg(arr)
+  let mut total = 0.0
+  for x in arr
+    total = total + x
+  end
+  return total / len(arr)
+end
+
+fn arr_min(arr)
+  let mut result = arr[0]
+  for x in arr
+    if x < result
+      result = x
+    end
+  end
+  return result
+end
+
+fn arr_max(arr)
+  let mut result = arr[0]
+  for x in arr
+    if x > result
+      result = x
+    end
+  end
+  return result
+end
+
+fn swap(arr, i, j)
+  let tmp = arr[i]
+  arr[i] = arr[j]
+  arr[j] = tmp
+  return 0.0
+end
+
+fn reverse(arr)
+  let n = len(arr)
+  let half = floor(n / 2.0)
+  for i in range(0, half)
+    let j = n - 1.0 - i
+    let tmp = arr[i]
+    arr[i] = arr[j]
+    arr[j] = tmp
+  end
+  return 0.0
+end
+
+fn fill(arr, val)
+  let n = len(arr)
+  for i in range(0, n)
+    arr[i] = val
+  end
+  return 0.0
+end
+
+fn binary_search(arr, target)
+  let mut lo = 0.0
+  let mut hi = len(arr) - 1.0
+  for i in range(0, 30)
+    if lo > hi
+      return -1.0
+    end
+    let mid = floor((lo + hi) / 2.0)
+    if arr[mid] == target
+      return mid
+    end
+    if arr[mid] < target
+      lo = mid + 1.0
+    end
+    if arr[mid] > target
+      hi = mid - 1.0
+    end
+  end
+  return -1.0
+end

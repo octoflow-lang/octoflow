@@ -1,0 +1,101 @@
+// stdlib/stats/hypothesis.flow — Hypothesis tests
+
+fn t_test_one_sample(arr, mu0)
+  // One-sample t-test: H0: mean = mu0
+  let n = len(arr)
+  let m = mean(arr)
+  let sd = stddev(arr)
+  let se = sd / sqrt(n)
+  let t = (m - mu0) / se
+  // Approximate p-value using normal distribution for large n
+  let p = 2.0 * (1.0 - normal_cdf(abs(t), 0.0, 1.0))
+  let mut result = map()
+  map_set(result, "t_statistic", str(t))
+  map_set(result, "p_value", str(p))
+  map_set(result, "mean", str(m))
+  map_set(result, "std_error", str(se))
+  map_set(result, "significant", str(p < 0.05))
+  return result
+end
+
+fn t_test_two_sample(arr1, arr2)
+  // Two-sample t-test (Welch's)
+  let n1 = len(arr1)
+  let n2 = len(arr2)
+  let m1 = mean(arr1)
+  let m2 = mean(arr2)
+  let v1 = variance(arr1)
+  let v2 = variance(arr2)
+  let se = sqrt(v1 / n1 + v2 / n2)
+  let t = (m1 - m2) / se
+  let p = 2.0 * (1.0 - normal_cdf(abs(t), 0.0, 1.0))
+  let mut result = map()
+  map_set(result, "t_statistic", str(t))
+  map_set(result, "p_value", str(p))
+  map_set(result, "mean_diff", str(m1 - m2))
+  map_set(result, "significant", str(p < 0.05))
+  return result
+end
+
+fn paired_t_test(arr1, arr2)
+  let n = len(arr1)
+  let mut diffs = []
+  let mut i = 0.0
+  while i < n
+    push(diffs, arr1[i] - arr2[i])
+    i = i + 1.0
+  end
+  return t_test_one_sample(diffs, 0.0)
+end
+
+fn chi_squared(observed, expected)
+  // Chi-squared goodness of fit
+  let n = len(observed)
+  let mut chi2 = 0.0
+  let mut i = 0.0
+  while i < n
+    if expected[i] > 0.0
+      let d = observed[i] - expected[i]
+      chi2 = chi2 + d * d / expected[i]
+    end
+    i = i + 1.0
+  end
+  let df = n - 1.0
+  // Approximate p-value (rough approximation for large df)
+  let z = pow(chi2 / df, 1.0 / 3.0) - (1.0 - 2.0 / (9.0 * df))
+  let z_norm = z / sqrt(2.0 / (9.0 * df))
+  let p = 1.0 - normal_cdf(z_norm, 0.0, 1.0)
+  let mut result = map()
+  map_set(result, "chi2", str(chi2))
+  map_set(result, "df", str(df))
+  map_set(result, "p_value", str(p))
+  map_set(result, "significant", str(p < 0.05))
+  return result
+end
+
+fn z_test(arr, mu0, sigma)
+  let n = len(arr)
+  let m = mean(arr)
+  let z = (m - mu0) / (sigma / sqrt(n))
+  let p = 2.0 * (1.0 - normal_cdf(abs(z), 0.0, 1.0))
+  let mut result = map()
+  map_set(result, "z_statistic", str(z))
+  map_set(result, "p_value", str(p))
+  map_set(result, "significant", str(p < 0.05))
+  return result
+end
+
+fn normal_cdf(x, mu, sigma)
+  let z = (x - mu) / (sigma * sqrt(2.0))
+  let t = 1.0 / (1.0 + 0.3275911 * abs(z))
+  let a1 = 0.254829592
+  let a2 = -0.284496736
+  let a3 = 1.421413741
+  let a4 = -1.453152027
+  let a5 = 1.061405429
+  let mut erf = 1.0 - (a1 * t + a2 * t * t + a3 * t * t * t + a4 * t * t * t * t + a5 * t * t * t * t * t) * exp(-1.0 * z * z)
+  if z < 0.0
+    erf = -1.0 * erf
+  end
+  return 0.5 * (1.0 + erf)
+end

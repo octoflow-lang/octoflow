@@ -1,0 +1,47 @@
+// Phase 36: JSON I/O Demo
+// Run with: flowgpu-cli run examples/json_demo.flow
+
+// Build a hashmap and serialize to JSON
+let mut user = map()
+map_set(user, "name", "Alice")
+map_set(user, "age", 30.0)
+map_set(user, "active", 1.0)
+
+let json = json_stringify(user)
+print("Serialized: {json}")
+
+// Parse it back
+let mut parsed = json_parse(json)
+let name = map_get(parsed, "name")
+let age = map_get(parsed, "age")
+print("Name: {name}, Age: {age}")
+
+// Nested objects via dot-notation
+let mut config = map()
+map_set(config, "db.host", "localhost")
+map_set(config, "db.port", 5432.0)
+map_set(config, "app.debug", 1.0)
+
+let config_json = json_stringify(config)
+print("Config JSON: {config_json}")
+
+// Parse arrays
+let arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+let arr_json = json_stringify(arr)
+print("Array JSON: {arr_json}")
+
+let items = json_parse_array(arr_json)
+let count = len(items)
+print("Parsed {count} items back")
+
+// Roundtrip: map -> JSON -> map
+let mut original = map()
+map_set(original, "x", 10.0)
+map_set(original, "y", 20.0)
+let wire = json_stringify(original)
+let mut restored = json_parse(wire)
+let rx = map_get(restored, "x")
+let ry = map_get(restored, "y")
+print("Roundtrip: x={rx}, y={ry}")
+
+print("JSON demo complete")

@@ -1,0 +1,116 @@
+// stdlib/collections/heap.flow — Binary min-heap (array-backed)
+// Index math: parent(i) = floor((i-1)/2), left(i) = 2i+1, right(i) = 2i+2
+
+fn heap_create()
+  let mut h = []
+  return h
+end
+
+fn heap_push(heap, val)
+  push(heap, val)
+  // Sift up
+  let mut i = len(heap) - 1.0
+  while i > 0.0
+    let parent = floor((i - 1.0) / 2.0)
+    if heap[i] < heap[parent]
+      let tmp = heap[i]
+      heap[i] = heap[parent]
+      heap[parent] = tmp
+      i = parent
+    else
+      break
+    end
+  end
+  return 0.0
+end
+
+fn heap_pop(heap)
+  // Remove and return minimum element
+  let n = len(heap)
+  if n == 0.0
+    return 0.0
+  end
+  let result = heap[0]
+  if n == 1.0
+    pop(heap)
+    return result
+  end
+  // Move last element to root
+  heap[0] = heap[n - 1.0]
+  pop(heap)
+  // Sift down
+  let mut size = len(heap)
+  let mut i = 0.0
+  let mut done = 0.0
+  while done == 0.0
+    let left = 2.0 * i + 1.0
+    let right = 2.0 * i + 2.0
+    let mut smallest = i
+    if left < size && heap[left] < heap[smallest]
+      smallest = left
+    end
+    if right < size && heap[right] < heap[smallest]
+      smallest = right
+    end
+    if smallest != i
+      let tmp = heap[i]
+      heap[i] = heap[smallest]
+      heap[smallest] = tmp
+      i = smallest
+    else
+      done = 1.0
+    end
+  end
+  return result
+end
+
+fn heap_peek(heap)
+  // Return minimum without removing
+  if len(heap) == 0.0
+    return 0.0
+  end
+  return heap[0]
+end
+
+fn heap_size(heap)
+  return len(heap)
+end
+
+fn heap_is_empty(heap)
+  if len(heap) == 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn heapify(arr)
+  // Build a min-heap from an array in-place
+  let n = len(arr)
+  let mut start = floor(n / 2.0) - 1.0
+  while start >= 0.0
+    // Sift down from start
+    let mut i = start
+    let mut done = 0.0
+    while done == 0.0
+      let left = 2.0 * i + 1.0
+      let right = 2.0 * i + 2.0
+      let mut smallest = i
+      if left < n && arr[left] < arr[smallest]
+        smallest = left
+      end
+      if right < n && arr[right] < arr[smallest]
+        smallest = right
+      end
+      if smallest != i
+        let tmp = arr[i]
+        arr[i] = arr[smallest]
+        arr[smallest] = tmp
+        i = smallest
+      else
+        done = 1.0
+      end
+    end
+    start = start - 1.0
+  end
+  return arr
+end

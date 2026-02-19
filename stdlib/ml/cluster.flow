@@ -1,0 +1,154 @@
+// stdlib/ml/cluster.flow — Clustering algorithms
+
+fn kmeans(data, k, max_iter)
+  // K-means clustering on flat array (n_samples * n_features)
+  // data: flat array, features_per_sample implied by len(data)/n_samples
+  // Returns: labels array (cluster assignment per sample)
+  let n = len(data)
+  // Assume 1D data for simplicity
+  let n_samples = n
+  let n_features = 1.0
+  // Initialize centroids randomly
+  let mut centroids = []
+  let mut i = 0.0
+  while i < k
+    let idx = floor(random() * n_samples)
+    push(centroids, data[idx])
+    i = i + 1.0
+  end
+  let mut labels = []
+  i = 0.0
+  while i < n_samples
+    push(labels, 0.0)
+    i = i + 1.0
+  end
+  let mut iter = 0.0
+  while iter < max_iter
+    // Assign clusters
+    let mut changed = 0.0
+    i = 0.0
+    while i < n_samples
+      let mut best_c = 0.0
+      let mut best_dist = abs(data[i] - centroids[0])
+      let mut c = 1.0
+      while c < k
+        let dist = abs(data[i] - centroids[c])
+        if dist < best_dist
+          best_dist = dist
+          best_c = c
+        end
+        c = c + 1.0
+      end
+      if labels[i] != best_c
+        labels[i] = best_c
+        changed = changed + 1.0
+      end
+      i = i + 1.0
+    end
+    if changed == 0.0
+      break
+    end
+    // Update centroids
+    let mut c = 0.0
+    while c < k
+      let mut sum = 0.0
+      let mut count = 0.0
+      i = 0.0
+      while i < n_samples
+        if labels[i] == c
+          sum = sum + data[i]
+          count = count + 1.0
+        end
+        i = i + 1.0
+      end
+      if count > 0.0
+        centroids[c] = sum / count
+      end
+      c = c + 1.0
+    end
+    iter = iter + 1.0
+  end
+  return labels
+end
+
+fn euclidean_distance(a, b)
+  let n = len(a)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n
+    let d = a[i] - b[i]
+    sum = sum + d * d
+    i = i + 1.0
+  end
+  return sqrt(sum)
+end
+
+fn manhattan_distance(a, b)
+  let n = len(a)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n
+    let mut d = a[i] - b[i]
+    if d < 0.0
+      d = d * -1.0
+    end
+    sum = sum + d
+    i = i + 1.0
+  end
+  return sum
+end
+
+fn silhouette_score(data, labels, k)
+  // Simplified silhouette score (1D data)
+  let n = len(data)
+  let mut total = 0.0
+  let mut i = 0.0
+  while i < n
+    let ci = labels[i]
+    // a(i) = mean distance to same cluster
+    let mut a_sum = 0.0
+    let mut a_count = 0.0
+    let mut j = 0.0
+    while j < n
+      if j != i && labels[j] == ci
+        a_sum = a_sum + abs(data[i] - data[j])
+        a_count = a_count + 1.0
+      end
+      j = j + 1.0
+    end
+    let a = a_sum / a_count
+    // b(i) = min mean distance to other clusters
+    let mut b_best = 999999.0
+    let mut c = 0.0
+    while c < k
+      if c != ci
+        let mut b_sum = 0.0
+        let mut b_count = 0.0
+        j = 0.0
+        while j < n
+          if labels[j] == c
+            b_sum = b_sum + abs(data[i] - data[j])
+            b_count = b_count + 1.0
+          end
+          j = j + 1.0
+        end
+        if b_count > 0.0
+          let b_val = b_sum / b_count
+          if b_val < b_best
+            b_best = b_val
+          end
+        end
+      end
+      c = c + 1.0
+    end
+    let mut mx = a
+    if b_best > mx
+      mx = b_best
+    end
+    if mx > 0.0
+      total = total + (b_best - a) / mx
+    end
+    i = i + 1.0
+  end
+  return total / n
+end

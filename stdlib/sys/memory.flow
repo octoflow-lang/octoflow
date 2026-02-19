@@ -1,0 +1,42 @@
+// stdlib/sys/memory.flow — GPU memory info and management
+
+fn gpu_mem_total()
+  let info = gpu_info()
+  if map_has(info, "mem_total")
+    return float(map_get(info, "mem_total"))
+  end
+  return 0.0
+end
+
+fn gpu_mem_used()
+  // Approximate from buffer pool tracking
+  let info = gpu_info()
+  if map_has(info, "mem_used")
+    return float(map_get(info, "mem_used"))
+  end
+  return 0.0
+end
+
+fn gpu_device_name()
+  let info = gpu_info()
+  if map_has(info, "device_name")
+    return map_get(info, "device_name")
+  end
+  return "unknown"
+end
+
+fn format_bytes(n)
+  if n < 1024.0
+    return str(round(n)) + " B"
+  end
+  let kb = n / 1024.0
+  if kb < 1024.0
+    return str(round(kb * 10.0) / 10.0) + " KB"
+  end
+  let mb = kb / 1024.0
+  if mb < 1024.0
+    return str(round(mb * 10.0) / 10.0) + " MB"
+  end
+  let gb = mb / 1024.0
+  return str(round(gb * 100.0) / 100.0) + " GB"
+end

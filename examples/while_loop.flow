@@ -1,0 +1,29 @@
+// Phase 19: While loop — iterate with mutable state
+// Demonstrates while loops with let mut + assignment
+
+// Countdown from 10 to 0
+let mut counter = 10.0
+let mut total = 0.0
+while counter > 0.0
+  total = total + counter
+  counter = counter - 1.0
+end
+print("Sum 1..10 = {total}")
+
+// Compute factorial of 6 (720)
+let mut n = 6.0
+let mut fact = 1.0
+while n > 1.0
+  fact = fact * n
+  n = n - 1.0
+end
+print("6! = {fact}")
+
+// Power of 2: double until > 100
+let mut val = 1.0
+let mut steps = 0.0
+while val <= 100.0
+  val = val * 2.0
+  steps = steps + 1.0
+end
+print("First power of 2 > 100: {val} (after {steps} doublings)")

@@ -1,0 +1,165 @@
+// stdlib/stats/correlation.flow — Correlation and regression
+
+fn pearson(x, y)
+  let n = len(x)
+  let mx = mean(x)
+  let my = mean(y)
+  let mut sum_xy = 0.0
+  let mut sum_x2 = 0.0
+  let mut sum_y2 = 0.0
+  let mut i = 0.0
+  while i < n
+    let dx = x[i] - mx
+    let dy = y[i] - my
+    sum_xy = sum_xy + dx * dy
+    sum_x2 = sum_x2 + dx * dx
+    sum_y2 = sum_y2 + dy * dy
+    i = i + 1.0
+  end
+  let denom = sqrt(sum_x2 * sum_y2)
+  if denom == 0.0
+    return 0.0
+  end
+  return sum_xy / denom
+end
+
+fn spearman(x, y)
+  let n = len(x)
+  let rx = rank_array(x)
+  let ry = rank_array(y)
+  return pearson(rx, ry)
+end
+
+fn rank_array(arr)
+  let n = len(arr)
+  let sorted = sort_array(arr)
+  let mut ranks = []
+  let mut i = 0.0
+  while i < n
+    let val = arr[i]
+    // Find position in sorted
+    let mut r = 0.0
+    let mut j = 0.0
+    while j < n
+      if sorted[j] == val
+        r = j + 1.0
+        break
+      end
+      j = j + 1.0
+    end
+    push(ranks, r)
+    i = i + 1.0
+  end
+  return ranks
+end
+
+fn covariance(x, y)
+  let n = len(x)
+  let mx = mean(x)
+  let my = mean(y)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n
+    sum = sum + (x[i] - mx) * (y[i] - my)
+    i = i + 1.0
+  end
+  return sum / (n - 1.0)
+end
+
+fn linear_fit(x, y)
+  // Returns map {slope, intercept, r_squared}
+  let n = len(x)
+  let mx = mean(x)
+  let my = mean(y)
+  let mut sum_xy = 0.0
+  let mut sum_x2 = 0.0
+  let mut i = 0.0
+  while i < n
+    let dx = x[i] - mx
+    sum_xy = sum_xy + dx * (y[i] - my)
+    sum_x2 = sum_x2 + dx * dx
+    i = i + 1.0
+  end
+  let slope = sum_xy / sum_x2
+  let intercept = my - slope * mx
+  // R-squared
+  let mut ss_res = 0.0
+  let mut ss_tot = 0.0
+  i = 0.0
+  while i < n
+    let pred = slope * x[i] + intercept
+    ss_res = ss_res + (y[i] - pred) * (y[i] - pred)
+    ss_tot = ss_tot + (y[i] - my) * (y[i] - my)
+    i = i + 1.0
+  end
+  let r2 = 1.0 - ss_res / ss_tot
+  let mut result = map()
+  map_set(result, "slope", str(slope))
+  map_set(result, "intercept", str(intercept))
+  map_set(result, "r_squared", str(r2))
+  return result
+end
+
+fn residuals(x, y, slope, intercept)
+  let n = len(x)
+  let mut res = []
+  let mut i = 0.0
+  while i < n
+    let pred = slope * x[i] + intercept
+    push(res, y[i] - pred)
+    i = i + 1.0
+  end
+  return res
+end
+
+fn polynomial_fit(x, y, degree)
+  // Least squares polynomial fit (degree 1-3)
+  // Returns coefficients array [a0, a1, a2, ...]
+  if degree == 1.0
+    let fit = linear_fit(x, y)
+    let mut c = []
+    push(c, float(map_get(fit, "intercept")))
+    push(c, float(map_get(fit, "slope")))
+    return c
+  end
+  // For degree 2+, use normal equations (simplified)
+  let n = len(x)
+  // Degree 2: y = a + bx + cx^2
+  let mut sx = 0.0
+  let mut sx2 = 0.0
+  let mut sx3 = 0.0
+  let mut sx4 = 0.0
+  let mut sy = 0.0
+  let mut sxy = 0.0
+  let mut sx2y = 0.0
+  let mut i = 0.0
+  while i < n
+    let xi = x[i]
+    let yi = y[i]
+    sx = sx + xi
+    sx2 = sx2 + xi * xi
+    sx3 = sx3 + xi * xi * xi
+    sx4 = sx4 + xi * xi * xi * xi
+    sy = sy + yi
+    sxy = sxy + xi * yi
+    sx2y = sx2y + xi * xi * yi
+    i = i + 1.0
+  end
+  // Solve 3x3 system using Cramer's rule
+  let d = n * (sx2 * sx4 - sx3 * sx3) - sx * (sx * sx4 - sx2 * sx3) + sx2 * (sx * sx3 - sx2 * sx2)
+  if abs(d) < 0.0001
+    let mut c = []
+    push(c, 0.0)
+    push(c, 0.0)
+    push(c, 0.0)
+    return c
+  end
+  let a = (sy * (sx2 * sx4 - sx3 * sx3) - sx * (sxy * sx4 - sx2y * sx3) + sx2 * (sxy * sx3 - sx2y * sx2)) / d
+  let b = (n * (sxy * sx4 - sx2y * sx3) - sy * (sx * sx4 - sx2 * sx3) + sx2 * (sx * sx2y - sx2 * sxy)) / d
+  let c_val = (n * (sx2 * sx2y - sx3 * sxy) - sx * (sx * sx2y - sx2 * sxy) + sy * (sx * sx3 - sx2 * sx2)) / d
+  let mut coeffs = []
+  push(coeffs, a)
+  push(coeffs, b)
+  push(coeffs, c_val)
+  return coeffs
+end

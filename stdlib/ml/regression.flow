@@ -1,0 +1,101 @@
+// stdlib/ml/regression.flow — Regression models
+
+fn linear_regression(x, y)
+  // Simple linear regression using normal equation
+  let n = len(x)
+  let mx = mean(x)
+  let my = mean(y)
+  let mut sxy = 0.0
+  let mut sxx = 0.0
+  let mut i = 0.0
+  while i < n
+    sxy = sxy + (x[i] - mx) * (y[i] - my)
+    sxx = sxx + (x[i] - mx) * (x[i] - mx)
+    i = i + 1.0
+  end
+  let slope = sxy / sxx
+  let intercept = my - slope * mx
+  let mut model = map()
+  map_set(model, "type", "linear")
+  map_set(model, "slope", str(slope))
+  map_set(model, "intercept", str(intercept))
+  return model
+end
+
+fn ridge_regression(x, y, alpha)
+  // Ridge regression (L2 regularization)
+  let n = len(x)
+  let mx = mean(x)
+  let my = mean(y)
+  let mut sxy = 0.0
+  let mut sxx = 0.0
+  let mut i = 0.0
+  while i < n
+    sxy = sxy + (x[i] - mx) * (y[i] - my)
+    sxx = sxx + (x[i] - mx) * (x[i] - mx)
+    i = i + 1.0
+  end
+  let slope = sxy / (sxx + alpha)
+  let intercept = my - slope * mx
+  let mut model = map()
+  map_set(model, "type", "ridge")
+  map_set(model, "slope", str(slope))
+  map_set(model, "intercept", str(intercept))
+  map_set(model, "alpha", str(alpha))
+  return model
+end
+
+fn predict_linear(model, x_arr)
+  let slope = float(map_get(model, "slope"))
+  let intercept = float(map_get(model, "intercept"))
+  let mut result = []
+  for x in x_arr
+    push(result, slope * x + intercept)
+  end
+  return result
+end
+
+fn r_squared(y_actual, y_predicted)
+  let n = len(y_actual)
+  let m = mean(y_actual)
+  let mut ss_res = 0.0
+  let mut ss_tot = 0.0
+  let mut i = 0.0
+  while i < n
+    ss_res = ss_res + (y_actual[i] - y_predicted[i]) * (y_actual[i] - y_predicted[i])
+    ss_tot = ss_tot + (y_actual[i] - m) * (y_actual[i] - m)
+    i = i + 1.0
+  end
+  if ss_tot == 0.0
+    return 0.0
+  end
+  return 1.0 - ss_res / ss_tot
+end
+
+fn gradient_descent_linear(x, y, lr, epochs)
+  // Gradient descent for linear regression
+  let n = len(x)
+  let mut w = 0.0
+  let mut b = 0.0
+  let mut epoch = 0.0
+  while epoch < epochs
+    let mut dw = 0.0
+    let mut db = 0.0
+    let mut i = 0.0
+    while i < n
+      let pred = w * x[i] + b
+      let err = pred - y[i]
+      dw = dw + err * x[i]
+      db = db + err
+      i = i + 1.0
+    end
+    w = w - lr * dw / n
+    b = b - lr * db / n
+    epoch = epoch + 1.0
+  end
+  let mut model = map()
+  map_set(model, "type", "linear_gd")
+  map_set(model, "slope", str(w))
+  map_set(model, "intercept", str(b))
+  return model
+end

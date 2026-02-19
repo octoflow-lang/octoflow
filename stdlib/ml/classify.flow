@@ -1,0 +1,156 @@
+// stdlib/ml/classify.flow — Classification algorithms
+
+fn knn_predict(x_train, y_train, x_test, k)
+  // K-nearest neighbors (1D features)
+  let n_train = len(x_train)
+  let n_test = len(x_test)
+  let mut predictions = []
+  let mut ti = 0.0
+  while ti < n_test
+    // Find k nearest neighbors
+    let mut dists = []
+    let mut labels = []
+    let mut i = 0.0
+    while i < n_train
+      let d = abs(x_test[ti] - x_train[i])
+      // Insert into sorted position (keep only k smallest)
+      if len(dists) < k
+        push(dists, d)
+        push(labels, y_train[i])
+      elif d < dists[len(dists) - 1.0]
+        dists[len(dists) - 1.0] = d
+        labels[len(labels) - 1.0] = y_train[i]
+      end
+      // Simple sort of last k
+      let nd = len(dists)
+      let mut j = nd - 1.0
+      while j > 0.0
+        if dists[j] < dists[j - 1.0]
+          let tmp_d = dists[j]
+          dists[j] = dists[j - 1.0]
+          dists[j - 1.0] = tmp_d
+          let tmp_l = labels[j]
+          labels[j] = labels[j - 1.0]
+          labels[j - 1.0] = tmp_l
+        end
+        j = j - 1.0
+      end
+      i = i + 1.0
+    end
+    // Majority vote
+    let mut votes = map()
+    let mut best_label = labels[0]
+    let mut best_count = 0.0
+    let mut ki = 0.0
+    while ki < k && ki < len(labels)
+      let key = str(labels[ki])
+      let mut c = 1.0
+      if map_has(votes, key)
+        c = float(map_get(votes, key)) + 1.0
+      end
+      map_set(votes, key, str(c))
+      if c > best_count
+        best_count = c
+        best_label = labels[ki]
+      end
+      ki = ki + 1.0
+    end
+    push(predictions, best_label)
+    ti = ti + 1.0
+  end
+  return predictions
+end
+
+fn logistic_regression(x, y, lr, epochs)
+  // Binary logistic regression (1D)
+  let n = len(x)
+  let mut w = 0.0
+  let mut b = 0.0
+  let mut epoch = 0.0
+  while epoch < epochs
+    let mut dw = 0.0
+    let mut db = 0.0
+    let mut i = 0.0
+    while i < n
+      let z = w * x[i] + b
+      let pred = 1.0 / (1.0 + exp(-1.0 * z))
+      let err = pred - y[i]
+      dw = dw + err * x[i]
+      db = db + err
+      i = i + 1.0
+    end
+    w = w - lr * dw / n
+    b = b - lr * db / n
+    epoch = epoch + 1.0
+  end
+  let mut model = map()
+  map_set(model, "type", "logistic")
+  map_set(model, "weight", str(w))
+  map_set(model, "bias", str(b))
+  return model
+end
+
+fn logistic_predict(model, x_arr)
+  let w = float(map_get(model, "weight"))
+  let b = float(map_get(model, "bias"))
+  let mut result = []
+  for x in x_arr
+    let z = w * x + b
+    let p = 1.0 / (1.0 + exp(-1.0 * z))
+    if p >= 0.5
+      push(result, 1.0)
+    else
+      push(result, 0.0)
+    end
+  end
+  return result
+end
+
+fn naive_bayes_train(x, y, num_classes)
+  // Gaussian Naive Bayes (1D)
+  let mut model = map()
+  let mut c = 0.0
+  while c < num_classes
+    let mut class_x = []
+    let mut i = 0.0
+    while i < len(x)
+      if y[i] == c
+        push(class_x, x[i])
+      end
+      i = i + 1.0
+    end
+    let m = mean(class_x)
+    let s = stddev(class_x)
+    let prior = len(class_x) / len(x)
+    map_set(model, "mean_" + str(c), str(m))
+    map_set(model, "std_" + str(c), str(s))
+    map_set(model, "prior_" + str(c), str(prior))
+    c = c + 1.0
+  end
+  map_set(model, "num_classes", str(num_classes))
+  return model
+end
+
+fn naive_bayes_predict(model, x_arr)
+  let nc = float(map_get(model, "num_classes"))
+  let mut result = []
+  for x in x_arr
+    let mut best_c = 0.0
+    let mut best_score = -999999.0
+    let mut c = 0.0
+    while c < nc
+      let m = float(map_get(model, "mean_" + str(c)))
+      let s = float(map_get(model, "std_" + str(c)))
+      let p = float(map_get(model, "prior_" + str(c)))
+      let z = (x - m) / (s + 0.0001)
+      let log_prob = log(p) - 0.5 * z * z - log(s + 0.0001)
+      if log_prob > best_score
+        best_score = log_prob
+        best_c = c
+      end
+      c = c + 1.0
+    end
+    push(result, best_c)
+  end
+  return result
+end

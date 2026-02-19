@@ -1,0 +1,53 @@
+// stdlib/web/url.flow — URL parsing and manipulation
+
+fn url_parse(url)
+  let mut result = map()
+  // Protocol
+  let proto_end = index_of(url, "://")
+  if proto_end >= 0.0
+    map_set(result, "protocol", substr(url, 0.0, proto_end))
+    let rest = substr(url, proto_end + 3.0, len(url))
+    // Host + path
+    let slash = index_of(rest, "/")
+    if slash >= 0.0
+      let host_part = substr(rest, 0.0, slash)
+      let path_part = substr(rest, slash, len(rest))
+      map_set(result, "host", host_part)
+      // Check for query string
+      let qmark = index_of(path_part, "?")
+      if qmark >= 0.0
+        map_set(result, "path", substr(path_part, 0.0, qmark))
+        map_set(result, "query", substr(path_part, qmark + 1.0, len(path_part)))
+      else
+        map_set(result, "path", path_part)
+      end
+    else
+      map_set(result, "host", rest)
+      map_set(result, "path", "/")
+    end
+  else
+    map_set(result, "protocol", "")
+    map_set(result, "host", url)
+    map_set(result, "path", "/")
+  end
+  return result
+end
+
+fn build_url(protocol, host, path, query)
+  let mut url = protocol + "://" + host + path
+  if len(query) > 0.0
+    url = url + "?" + query
+  end
+  return url
+end
+
+fn query_string(params)
+  // params: map of key -> value
+  let keys = split(map_keys(params), ",")
+  let mut parts = []
+  for key in keys
+    let val = map_get(params, key)
+    push(parts, key + "=" + val)
+  end
+  return join(parts, "&")
+end

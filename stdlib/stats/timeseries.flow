@@ -1,0 +1,408 @@
+// stdlib/stats/timeseries.flow — Time series analysis (trading indicators)
+
+fn sma(arr, period)
+  let n = len(arr)
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    if i < period - 1.0
+      push(result, 0.0)
+    else
+      let mut sum = 0.0
+      let mut j = i - period + 1.0
+      while j <= i
+        sum = sum + arr[j]
+        j = j + 1.0
+      end
+      push(result, sum / period)
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn ema(arr, period)
+  let n = len(arr)
+  let alpha = 2.0 / (period + 1.0)
+  let mut result = []
+  let mut prev = arr[0]
+  push(result, prev)
+  let mut i = 1.0
+  while i < n
+    prev = alpha * arr[i] + (1.0 - alpha) * prev
+    push(result, prev)
+    i = i + 1.0
+  end
+  return result
+end
+
+fn wma(arr, period)
+  let n = len(arr)
+  let mut result = []
+  let denom = period * (period + 1.0) / 2.0
+  let mut i = 0.0
+  while i < n
+    if i < period - 1.0
+      push(result, 0.0)
+    else
+      let mut sum = 0.0
+      let mut w = 1.0
+      let mut j = i - period + 1.0
+      while j <= i
+        sum = sum + arr[j] * w
+        w = w + 1.0
+        j = j + 1.0
+      end
+      push(result, sum / denom)
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn rsi(arr, period)
+  let n = len(arr)
+  let mut result = []
+  push(result, 50.0)
+  let mut avg_gain = 0.0
+  let mut avg_loss = 0.0
+  // Initial average
+  let mut i = 1.0
+  while i <= period && i < n
+    let change = arr[i] - arr[i - 1.0]
+    if change > 0.0
+      avg_gain = avg_gain + change
+    else
+      avg_loss = avg_loss - change
+    end
+    push(result, 50.0)
+    i = i + 1.0
+  end
+  avg_gain = avg_gain / period
+  avg_loss = avg_loss / period
+  while i < n
+    let change = arr[i] - arr[i - 1.0]
+    let mut gain = 0.0
+    let mut loss = 0.0
+    if change > 0.0
+      gain = change
+    else
+      loss = -1.0 * change
+    end
+    avg_gain = (avg_gain * (period - 1.0) + gain) / period
+    avg_loss = (avg_loss * (period - 1.0) + loss) / period
+    if avg_loss == 0.0
+      push(result, 100.0)
+    else
+      let rs = avg_gain / avg_loss
+      push(result, 100.0 - 100.0 / (1.0 + rs))
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn macd(arr, fast, slow, signal)
+  let ema_fast = ema(arr, fast)
+  let ema_slow = ema(arr, slow)
+  let n = len(arr)
+  let mut macd_line = []
+  let mut i = 0.0
+  while i < n
+    push(macd_line, ema_fast[i] - ema_slow[i])
+    i = i + 1.0
+  end
+  let signal_line = ema(macd_line, signal)
+  let mut histogram = []
+  i = 0.0
+  while i < n
+    push(histogram, macd_line[i] - signal_line[i])
+    i = i + 1.0
+  end
+  // Returns macd_line array (use macd_signal/macd_hist separately)
+  return macd_line
+end
+
+fn macd_signal(arr, fast, slow, signal_period)
+  let ema_fast = ema(arr, fast)
+  let ema_slow = ema(arr, slow)
+  let n = len(arr)
+  let mut macd_line = []
+  let mut i = 0.0
+  while i < n
+    push(macd_line, ema_fast[i] - ema_slow[i])
+    i = i + 1.0
+  end
+  return ema(macd_line, signal_period)
+end
+
+fn macd_histogram(arr, fast, slow, signal_period)
+  let ml = macd(arr, fast, slow, signal_period)
+  let sl = macd_signal(arr, fast, slow, signal_period)
+  let n = len(arr)
+  let mut hist = []
+  let mut i = 0.0
+  while i < n
+    push(hist, ml[i] - sl[i])
+    i = i + 1.0
+  end
+  return hist
+end
+
+fn bollinger(arr, period, num_std)
+  let mid = sma(arr, period)
+  let n = len(arr)
+  let mut upper = []
+  let mut lower = []
+  let mut i = 0.0
+  while i < n
+    if i < period - 1.0
+      push(upper, 0.0)
+      push(lower, 0.0)
+    else
+      let mut sum_sq = 0.0
+      let mut j = i - period + 1.0
+      while j <= i
+        let d = arr[j] - mid[i]
+        sum_sq = sum_sq + d * d
+        j = j + 1.0
+      end
+      let sd = sqrt(sum_sq / period)
+      push(upper, mid[i] + num_std * sd)
+      push(lower, mid[i] - num_std * sd)
+    end
+    i = i + 1.0
+  end
+  // Returns middle band (use bollinger_upper/lower for bands)
+  return mid
+end
+
+fn bollinger_upper(arr, period, num_std)
+  let mid = sma(arr, period)
+  let n = len(arr)
+  let mut band = []
+  let mut i = 0.0
+  while i < n
+    if i < period - 1.0
+      push(band, 0.0)
+    else
+      let mut sum_sq = 0.0
+      let mut j = i - period + 1.0
+      while j <= i
+        let d = arr[j] - mid[i]
+        sum_sq = sum_sq + d * d
+        j = j + 1.0
+      end
+      let sd = sqrt(sum_sq / period)
+      push(band, mid[i] + num_std * sd)
+    end
+    i = i + 1.0
+  end
+  return band
+end
+
+fn bollinger_lower(arr, period, num_std)
+  let mid = sma(arr, period)
+  let n = len(arr)
+  let mut band = []
+  let mut i = 0.0
+  while i < n
+    if i < period - 1.0
+      push(band, 0.0)
+    else
+      let mut sum_sq = 0.0
+      let mut j = i - period + 1.0
+      while j <= i
+        let d = arr[j] - mid[i]
+        sum_sq = sum_sq + d * d
+        j = j + 1.0
+      end
+      let sd = sqrt(sum_sq / period)
+      push(band, mid[i] - num_std * sd)
+    end
+    i = i + 1.0
+  end
+  return band
+end
+
+fn atr(high, low, close, period)
+  let n = len(close)
+  let mut tr = []
+  push(tr, high[0] - low[0])
+  let mut i = 1.0
+  while i < n
+    let hl = high[i] - low[i]
+    let hc = abs(high[i] - close[i - 1.0])
+    let lc = abs(low[i] - close[i - 1.0])
+    let mut mx = hl
+    if hc > mx
+      mx = hc
+    end
+    if lc > mx
+      mx = lc
+    end
+    push(tr, mx)
+    i = i + 1.0
+  end
+  return ema(tr, period)
+end
+
+fn vwap(price, volume)
+  let n = len(price)
+  let mut cum_pv = 0.0
+  let mut cum_v = 0.0
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    cum_pv = cum_pv + price[i] * volume[i]
+    cum_v = cum_v + volume[i]
+    if cum_v == 0.0
+      push(result, price[i])
+    else
+      push(result, cum_pv / cum_v)
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn returns(arr)
+  let n = len(arr)
+  let mut result = []
+  push(result, 0.0)
+  let mut i = 1.0
+  while i < n
+    if arr[i - 1.0] == 0.0
+      push(result, 0.0)
+    else
+      push(result, (arr[i] - arr[i - 1.0]) / arr[i - 1.0])
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn log_returns(arr)
+  let n = len(arr)
+  let mut result = []
+  push(result, 0.0)
+  let mut i = 1.0
+  while i < n
+    if arr[i - 1.0] <= 0.0 || arr[i] <= 0.0
+      push(result, 0.0)
+    else
+      push(result, log(arr[i]) - log(arr[i - 1.0]))
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn drawdown(arr)
+  let n = len(arr)
+  let mut result = []
+  let mut peak = arr[0]
+  let mut i = 0.0
+  while i < n
+    if arr[i] > peak
+      peak = arr[i]
+    end
+    if peak == 0.0
+      push(result, 0.0)
+    else
+      push(result, (arr[i] - peak) / peak)
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn rolling(arr, period, func_name)
+  // Rolling window applying named statistic
+  let n = len(arr)
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    if i < period - 1.0
+      push(result, 0.0)
+    else
+      let mut window = []
+      let mut j = i - period + 1.0
+      while j <= i
+        push(window, arr[j])
+        j = j + 1.0
+      end
+      if func_name == "mean"
+        push(result, mean(window))
+      elif func_name == "std"
+        push(result, stddev(window))
+      elif func_name == "var"
+        push(result, variance(window))
+      elif func_name == "median"
+        push(result, median(window))
+      elif func_name == "max"
+        let mut mx = window[0]
+        for v in window
+          if v > mx
+            mx = v
+          end
+        end
+        push(result, mx)
+      elif func_name == "min"
+        let mut mn = window[0]
+        for v in window
+          if v < mn
+            mn = v
+          end
+        end
+        push(result, mn)
+      else
+        push(result, mean(window))
+      end
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn diff(arr)
+  let n = len(arr)
+  let mut result = []
+  push(result, 0.0)
+  let mut i = 1.0
+  while i < n
+    push(result, arr[i] - arr[i - 1.0])
+    i = i + 1.0
+  end
+  return result
+end
+
+fn cumsum(arr)
+  let n = len(arr)
+  let mut result = []
+  let mut total = 0.0
+  for x in arr
+    total = total + x
+    push(result, total)
+  end
+  return result
+end
+
+fn autocorrelation(arr, lag)
+  let n = len(arr)
+  let m = mean(arr)
+  let mut num = 0.0
+  let mut den = 0.0
+  let mut i = 0.0
+  while i < n
+    den = den + (arr[i] - m) * (arr[i] - m)
+    if i + lag < n
+      num = num + (arr[i] - m) * (arr[i + lag] - m)
+    end
+    i = i + 1.0
+  end
+  if den == 0.0
+    return 0.0
+  end
+  return num / den
+end

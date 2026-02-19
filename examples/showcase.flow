@@ -1,0 +1,326 @@
+// OctoFlow GPU Showcase — Galaxy Collision
+// Two proto-galaxies merge under GPU-computed N² gravity
+// Run:  octoflow run --allow-net examples/showcase.flow
+// Exit: Ctrl+C
+
+// ═══ Configuration ═══════════════════════════════════════════
+let HALF = 500
+let NP = 1000
+let NN = NP * NP
+let W = 500
+let H = 350
+let N_PIX = W * H
+let MAX_PIX = N_PIX - 1.0
+
+// Physics
+let G_EFF = 0.001
+let SOFT2 = 0.0004
+let DT = 0.012
+let DAMP = 0.998
+
+// ═══ Precompute tile indices for N² force pairs (once) ══════
+let nn_range = gpu_range(0.0, NN, 1.0)
+let np_fill = gpu_fill(NP, NN)
+let div_nn = gpu_div(nn_range, np_fill)
+let tile_i = gpu_floor(div_nn)
+let tile_i_sc = gpu_scale(tile_i, NP)
+let tile_j = gpu_sub(nn_range, tile_i_sc)
+
+// Constants
+let ones_np = gpu_fill(1.0, NP)
+let soft_arr = gpu_fill(SOFT2, NN)
+let w_fill = gpu_fill(W, NP)
+
+// ═══ Initialize two galaxies ═════════════════════════════════
+// Galaxy A (left, clockwise rotation, drifts right)
+let ang_a = gpu_random(HALF, 0.0, 6.28318)
+let rr_a = gpu_random(HALF, 0.0, 1.0)
+let ra = gpu_sqrt(rr_a)
+let dra = gpu_scale(ra, 0.28)
+let cos_a = gpu_cos(ang_a)
+let sin_a = gpu_sin(ang_a)
+let xa_loc = gpu_mul(dra, cos_a)
+let ya_loc = gpu_mul(dra, sin_a)
+let oxa = gpu_fill(-0.35, HALF)
+let xa = gpu_add(xa_loc, oxa)
+let oya = gpu_fill(0.08, HALF)
+let ya = gpu_add(ya_loc, oya)
+
+let nsin_a = gpu_negate(sin_a)
+let vxa_orb = gpu_scale(nsin_a, 0.5)
+let vxa_dr = gpu_fill(0.15, HALF)
+let vxa = gpu_add(vxa_orb, vxa_dr)
+let vya_orb = gpu_scale(cos_a, 0.5)
+let vya_dr = gpu_fill(-0.03, HALF)
+let vya = gpu_add(vya_orb, vya_dr)
+
+// Galaxy B (right, counter-clockwise, drifts left)
+let ang_b = gpu_random(HALF, 0.0, 6.28318)
+let rr_b = gpu_random(HALF, 0.0, 1.0)
+let rb = gpu_sqrt(rr_b)
+let drb = gpu_scale(rb, 0.28)
+let cos_b = gpu_cos(ang_b)
+let sin_b = gpu_sin(ang_b)
+let xb_loc = gpu_mul(drb, cos_b)
+let yb_loc = gpu_mul(drb, sin_b)
+let oxb = gpu_fill(0.35, HALF)
+let xb = gpu_add(xb_loc, oxb)
+let oyb = gpu_fill(-0.08, HALF)
+let yb = gpu_add(yb_loc, oyb)
+
+let vxb_orb = gpu_scale(sin_b, 0.5)
+let vxb_dr = gpu_fill(-0.15, HALF)
+let vxb = gpu_add(vxb_orb, vxb_dr)
+let ncos_b = gpu_negate(cos_b)
+let vyb_orb = gpu_scale(ncos_b, 0.5)
+let vyb_dr = gpu_fill(0.03, HALF)
+let vyb = gpu_add(vyb_orb, vyb_dr)
+
+// Merge into single arrays
+let mut x = gpu_concat(xa, xb)
+let mut y = gpu_concat(ya, yb)
+let mut vx = gpu_concat(vxa, vxb)
+let mut vy = gpu_concat(vya, vyb)
+
+// Team identity: Galaxy A = 0, Galaxy B = 1 (permanent)
+let team_a = gpu_fill(0.0, HALF)
+let team_b = gpu_fill(1.0, HALF)
+let team = gpu_concat(team_a, team_b)
+
+// ═══ HTTP Live View (Phase 83c) ═══════════════════════════════
+let srv = http_listen(8080)
+
+// Build HTML page — single quotes only (no escape sequences in .flow strings)
+let html_hd = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>OctoFlow — Galaxy Collision</title>"
+let html_st = "<style>*{margin:0;padding:0;background:#0a0a12}body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh}"
+let html_s2 = "h1{color:#00c8b4;font:24px monospace;margin-bottom:8px}canvas{image-rendering:pixelated;border:1px solid #333}</style></head>"
+let html_bd = "<body><h1>OctoFlow GPU Showcase</h1><canvas id='c' width='1000' height='700'></canvas>"
+let html_js = "<script>var c=document.getElementById('c'),x=c.getContext('2d');x.imageSmoothingEnabled=false;"
+let html_j2 = "function f(){fetch('/frame').then(r=>r.blob()).then(b=>{var i=new Image();i.onload=function(){"
+let html_j3 = "x.drawImage(i,0,0,1000,700)};i.src=URL.createObjectURL(b)}).catch(()=>{});"
+let html_j4 = "setTimeout(f,80)}f()</script></body></html>"
+let html = html_hd + html_st + html_s2 + html_bd + html_js + html_j2 + html_j3 + html_j4
+
+// ═══ Terminal setup ═════════════════════════════════════════
+let esc = chr(27)
+let reset = esc + "[0m"
+let clr = esc + "[K"
+
+let mut info = gpu_info()
+let gpu_name = info["name"]
+
+let hide = esc + "[?25l" + esc + "[2J" + esc + "[H"
+print("{hide}")
+
+let c_title = esc + "[38;2;0;200;180m"
+let c_dim = esc + "[38;2;80;80;80m"
+let c_info = esc + "[38;2;140;160;180m"
+let c_hot = esc + "[38;2;255;180;60m"
+
+// Static header (rows 1-4)
+print("")
+let title = c_title + "  OctoFlow GPU Showcase — Galaxy Collision" + reset
+print("{title}")
+let rule = c_dim + "  ────────────────────────────────────────────" + reset
+print("{rule}")
+let c_link = esc + "[38;2;100;200;255m"
+let srv_line = c_info + "  Also serving at: " + c_link + "http://localhost:8080" + c_info + " — Open in browser for HD view" + reset
+if srv >= 0
+    print("{srv_line}")
+end
+
+// ═══ Simulation loop ════════════════════════════════════════
+let mut frame = 0
+let nn_str = str(int(NN))
+let mut prev_ms = 0.0
+
+while frame < 99999
+    let t_start = now_ms()
+
+    // ─── Status lines at rows 5-7 (previous frame timing) ───
+    let goto5 = esc + "[5;1H"
+    print("{goto5}")
+
+    let el_safe = prev_ms + 0.001
+    let fps_raw = 1000.0 / el_safe
+    let fps_i = int(fps_raw)
+    let calcs_f = NN * fps_raw
+    let calcs_m = int(calcs_f / 1000000.0)
+    let se = str(int(prev_ms))
+    let sf = str(int(frame))
+    let snp = str(int(NP))
+    let sfps = str(fps_i)
+    let scalcs = str(calcs_m)
+
+    let s1 = c_info + "  " + c_hot + snp + " bodies" + c_info + " | " + c_hot + nn_str + " force pairs/frame" + c_info + " | " + c_hot + scalcs + "M calcs/sec" + c_info + " | " + se + "ms" + clr + reset
+    print("{s1}")
+    let s2 = c_info + "  GPU: " + c_hot + gpu_name + c_info + " | " + sfps + " fps | Frame " + sf + clr + reset
+    print("{s2}")
+    let hint = c_dim + "  Press Ctrl+C to exit" + clr + reset
+    print("{hint}")
+
+    // ─── Gravity computation (N² force pairs) ─────────────
+    let x_i = gpu_gather(x, tile_i)
+    let x_j = gpu_gather(x, tile_j)
+    let y_i = gpu_gather(y, tile_i)
+    let y_j = gpu_gather(y, tile_j)
+
+    let dx = gpu_sub(x_j, x_i)
+    let dy = gpu_sub(y_j, y_i)
+
+    let dx2 = gpu_mul(dx, dx)
+    let dy2 = gpu_mul(dy, dy)
+    let r2 = gpu_add(dx2, dy2)
+    let r2s = gpu_add(r2, soft_arr)
+
+    let inv_r32 = gpu_pow(r2s, -1.5)
+    let dx_f = gpu_mul(dx, inv_r32)
+    let fx = gpu_scale(dx_f, G_EFF)
+    let dy_f = gpu_mul(dy, inv_r32)
+    let fy = gpu_scale(dy_f, G_EFF)
+
+    let ax = gpu_matmul(fx, ones_np, NP, 1, NP)
+    let ay = gpu_matmul(fy, ones_np, NP, 1, NP)
+
+    // ─── Update velocities and positions ──────────────────
+    let dvx = gpu_scale(ax, DT)
+    let dvy = gpu_scale(ay, DT)
+    let vx_step = gpu_add(vx, dvx)
+    let vy_step = gpu_add(vy, dvy)
+    let vx = gpu_scale(vx_step, DAMP)
+    let vy = gpu_scale(vy_step, DAMP)
+
+    let dpx = gpu_scale(vx, DT)
+    let dpy = gpu_scale(vy, DT)
+    let x = gpu_add(x, dpx)
+    let y = gpu_add(y, dpy)
+
+    // ─── Pixel coordinates ────────────────────────────────
+    let x_shift = gpu_add(x, ones_np)
+    let x_half = gpu_scale(x_shift, 0.5)
+    let wm1 = W - 1.0
+    let x_pix = gpu_scale(x_half, wm1)
+    let x_cl = gpu_clamp(x_pix, 0.0, wm1)
+    let px = gpu_floor(x_cl)
+
+    let y_shift = gpu_add(y, ones_np)
+    let y_half = gpu_scale(y_shift, 0.5)
+    let hm1 = H - 1.0
+    let y_pix = gpu_scale(y_half, hm1)
+    let y_cl = gpu_clamp(y_pix, 0.0, hm1)
+    let py = gpu_floor(y_cl)
+
+    let py_w = gpu_scale(py, W)
+    let pix_idx = gpu_add(py_w, px)
+
+    // ─── Color by team + speed brightness ─────────────────
+    // Speed for brightness boost
+    let vx2 = gpu_mul(vx, vx)
+    let vy2 = gpu_mul(vy, vy)
+    let spd2 = gpu_add(vx2, vy2)
+    let spd = gpu_pow(spd2, 0.5)
+    let bright = gpu_scale(spd, 0.4)
+    let brt = gpu_clamp(bright, 0.0, 0.6)
+
+    // Galaxy A base: blue-cyan (R=50, G=120, B=255)
+    // Galaxy B base: orange-red (R=255, G=100, B=40)
+    // Blend: base + brightness * (255 - base)
+
+    // R base: 50 + team * 205 → A=50, B=255
+    let r_t = gpu_scale(team, 205.0)
+    let r_base_fill = gpu_fill(50.0, NP)
+    let r_base = gpu_add(r_base_fill, r_t)
+    let white_np = gpu_fill(255.0, NP)
+    let r_gap = gpu_sub(white_np, r_base)
+    let r_boost = gpu_mul(brt, r_gap)
+    let r_col = gpu_add(r_base, r_boost)
+
+    // G base: 120 - team * 20 → A=120, B=100
+    let g_t = gpu_scale(team, -20.0)
+    let g_base_fill = gpu_fill(120.0, NP)
+    let g_base = gpu_add(g_base_fill, g_t)
+    let g_gap = gpu_sub(white_np, g_base)
+    let g_boost = gpu_mul(brt, g_gap)
+    let g_col = gpu_add(g_base, g_boost)
+
+    // B base: 255 - team * 215 → A=255, B=40
+    let b_t = gpu_scale(team, -215.0)
+    let b_base_fill = gpu_fill(255.0, NP)
+    let b_base = gpu_add(b_base_fill, b_t)
+    let b_gap = gpu_sub(white_np, b_base)
+    let b_boost = gpu_mul(brt, b_gap)
+    let b_col = gpu_add(b_base, b_boost)
+
+    // ─── 5-pixel cross for larger bodies ──────────────────
+    // Cross neighbor indices (clamped to valid range)
+    let idx_r = gpu_add(pix_idx, ones_np)
+    let idx_l = gpu_sub(pix_idx, ones_np)
+    let idx_u = gpu_sub(pix_idx, w_fill)
+    let idx_d = gpu_add(pix_idx, w_fill)
+    let idx_r_cl = gpu_clamp(idx_r, 0.0, MAX_PIX)
+    let idx_l_cl = gpu_clamp(idx_l, 0.0, MAX_PIX)
+    let idx_u_cl = gpu_clamp(idx_u, 0.0, MAX_PIX)
+    let idx_d_cl = gpu_clamp(idx_d, 0.0, MAX_PIX)
+
+    // Dim colors for cross arms (70%)
+    let r_dim = gpu_scale(r_col, 0.7)
+    let g_dim = gpu_scale(g_col, 0.7)
+    let b_dim = gpu_scale(b_col, 0.7)
+
+    // Concat: cross arms first, then center (center overwrites)
+    let ai1 = gpu_concat(idx_r_cl, idx_l_cl)
+    let ai2 = gpu_concat(ai1, idx_u_cl)
+    let ai3 = gpu_concat(ai2, idx_d_cl)
+    let all_idx = gpu_concat(ai3, pix_idx)
+
+    let ar1 = gpu_concat(r_dim, r_dim)
+    let ar2 = gpu_concat(ar1, r_dim)
+    let ar3 = gpu_concat(ar2, r_dim)
+    let all_r = gpu_concat(ar3, r_col)
+
+    let ag1 = gpu_concat(g_dim, g_dim)
+    let ag2 = gpu_concat(ag1, g_dim)
+    let ag3 = gpu_concat(ag2, g_dim)
+    let all_g = gpu_concat(ag3, g_col)
+
+    let ab1 = gpu_concat(b_dim, b_dim)
+    let ab2 = gpu_concat(ab1, b_dim)
+    let ab3 = gpu_concat(ab2, b_dim)
+    let all_b = gpu_concat(ab3, b_col)
+
+    // Single scatter with 5000 points
+    let r_buf = gpu_scatter(all_r, all_idx, N_PIX)
+    let g_buf = gpu_scatter(all_g, all_idx, N_PIX)
+    let b_buf = gpu_scatter(all_b, all_idx, N_PIX)
+
+    // ─── Display image at row 8 ───────────────────────────
+    let goto8 = esc + "[8;1H"
+    print("{goto8}")
+    term_image(W, H, r_buf, g_buf, b_buf)
+
+    // ─── HTTP Live View: serve frames to browser ──────────
+    if srv >= 0
+        let client = http_accept_nonblock(srv)
+        if client >= 0
+            let req_path = http_path(client)
+            let mut served = 0
+            if req_path == "/"
+                http_respond_html(client, 200, html)
+                served = 1
+            end
+            if req_path == "/frame"
+                http_respond_image(client, 200, W, H, r_buf, g_buf, b_buf)
+                served = 1
+            end
+            if served == 0
+                http_respond(client, 404, "Not Found")
+            end
+        end
+    end
+
+    prev_ms = now_ms() - t_start
+    frame = frame + 1
+end
+
+let restore = esc + "[?25h"
+print("{restore}")

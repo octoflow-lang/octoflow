@@ -1,0 +1,120 @@
+// OctoFlow GPU Fractal — Mandelbrot to PPM image
+// Run:    octoflow run examples/fractal.flow
+// Output: fractal.ppm (open with any image viewer)
+//
+// All 57,600 pixels computed in parallel on your GPU.
+// Change W/H for higher resolution (GPU handles millions).
+
+let W = 320
+let H = 180
+let N = W * H
+let max_iter = 100
+
+// --- Seahorse Valley: deep zoom ---
+let cx = -0.7453
+let cy = 0.1127
+let zoom = 0.005
+
+let t_start = now_ms()
+
+// --- GPU constants ---
+let gpu_one = gpu_fill(1.0, N)
+let gpu_four = gpu_fill(4.0, N)
+let gpu_W = gpu_fill(W, N)
+
+// --- Viewport ---
+let aspect = H / W
+let x_min = cx - zoom * 0.5
+let y_min = cy - zoom * aspect * 0.5
+let dx = zoom / W
+let dy = zoom * aspect / H
+
+// --- GPU: pixel -> complex plane ---
+let idx = gpu_range(0.0, N, 1.0)
+let div_tmp = gpu_div(idx, gpu_W)
+let row = gpu_floor(div_tmp)
+let mul_tmp = gpu_mul(row, gpu_W)
+let col = gpu_sub(idx, mul_tmp)
+let col_sc = gpu_scale(col, dx)
+let xmin_arr = gpu_fill(x_min, N)
+let cr = gpu_add(col_sc, xmin_arr)
+let row_sc = gpu_scale(row, dy)
+let ymin_arr = gpu_fill(y_min, N)
+let ci = gpu_add(row_sc, ymin_arr)
+
+// --- GPU: Mandelbrot z = z^2 + c ---
+let mut zr = gpu_fill(0.0, N)
+let mut zi = gpu_fill(0.0, N)
+let mut count = gpu_fill(0.0, N)
+
+for k in range(0, max_iter)
+    let zr2 = gpu_mul(zr, zr)
+    let zi2 = gpu_mul(zi, zi)
+    let mag = gpu_add(zr2, zi2)
+    let diff = gpu_sub(gpu_four, mag)
+    let clamped = gpu_clamp(diff, 0.0, 1.0)
+    let mask = gpu_ceil(clamped)
+    let inv = gpu_sub(gpu_one, mask)
+    let dz = gpu_sub(zr2, zi2)
+    let nr = gpu_add(dz, cr)
+    let prod = gpu_mul(zr, zi)
+    let prod2 = gpu_scale(prod, 2.0)
+    let ni = gpu_add(prod2, ci)
+    let nr_m = gpu_mul(nr, mask)
+    let zr_k = gpu_mul(zr, inv)
+    let zr = gpu_add(nr_m, zr_k)
+    let ni_m = gpu_mul(ni, mask)
+    let zi_k = gpu_mul(zi, inv)
+    let zi = gpu_add(ni_m, zi_k)
+    let count = gpu_add(count, mask)
+end
+
+// --- GPU: Bernstein color mapping ---
+let t = gpu_scale(count, 1.0 / max_iter)
+let omt = gpu_sub(gpu_one, t)
+let t2 = gpu_mul(t, t)
+let t3 = gpu_mul(t2, t)
+let omt2 = gpu_mul(omt, omt)
+let omt3 = gpu_mul(omt2, omt)
+let r_raw = gpu_mul(omt, t3)
+let r_sc = gpu_scale(r_raw, 2295.0)
+let r_fl = gpu_floor(r_sc)
+let r = gpu_clamp(r_fl, 0.0, 255.0)
+let g_raw = gpu_mul(omt2, t2)
+let g_sc = gpu_scale(g_raw, 3825.0)
+let g_fl = gpu_floor(g_sc)
+let g = gpu_clamp(g_fl, 0.0, 255.0)
+let b_raw = gpu_mul(omt3, t)
+let b_sc = gpu_scale(b_raw, 2167.5)
+let b_fl = gpu_floor(b_sc)
+let b = gpu_clamp(b_fl, 0.0, 255.0)
+
+let t_gpu = now_ms() - t_start
+let gpu_ms = str(int(t_gpu))
+let sn = str(int(N))
+print("GPU: {sn} pixels in {gpu_ms}ms")
+
+// --- Build PPM image file ---
+print("Writing PPM...")
+let nl = chr(10)
+let sw = str(int(W))
+let sh = str(int(H))
+let mut ppm = "P3" + nl + sw + " " + sh + nl + "255" + nl
+
+for y in range(0, H)
+    let mut row_str = ""
+    for x in range(0, W)
+        let i = y * W + x
+        let ri = str(int(r[i]))
+        let gi = str(int(g[i]))
+        let bi = str(int(b[i]))
+        row_str = row_str + ri + " " + gi + " " + bi + " "
+    end
+    ppm = ppm + row_str + nl
+end
+
+write_file("fractal.ppm", ppm)
+
+let t_total = now_ms() - t_start
+let total_ms = str(int(t_total))
+print("Saved: fractal.ppm ({sw}x{sh}) in {total_ms}ms")

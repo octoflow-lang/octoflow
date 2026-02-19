@@ -1,0 +1,161 @@
+// stdlib/collections/collections.flow — Data structure utilities
+
+// ── Stack (LIFO) ──────────────────────────────────────────────
+fn stack_new()
+  let mut s = []
+  return s
+end
+
+fn stack_push(s, val)
+  push(s, val)
+  return 0.0
+end
+
+fn stack_pop(s)
+  return pop(s)
+end
+
+fn stack_peek(s)
+  return s[len(s) - 1.0]
+end
+
+fn stack_is_empty(s)
+  if len(s) == 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+// ── Queue (FIFO via array — O(n) dequeue) ─────────────────────
+fn queue_new()
+  let mut q = map()
+  map_set(q, "head", "0")
+  map_set(q, "tail", "0")
+  return q
+end
+
+fn queue_enqueue(q, val)
+  let tail = float(map_get(q, "tail"))
+  let key = "v_" + str(tail)
+  map_set(q, key, str(val))
+  map_set(q, "tail", str(tail + 1.0))
+  return 0.0
+end
+
+fn queue_dequeue(q)
+  let head = float(map_get(q, "head"))
+  let tail = float(map_get(q, "tail"))
+  if head >= tail
+    return ""
+  end
+  let key = "v_" + str(head)
+  let val = map_get(q, key)
+  map_remove(q, key)
+  map_set(q, "head", str(head + 1.0))
+  return val
+end
+
+fn queue_size(q)
+  let head = float(map_get(q, "head"))
+  let tail = float(map_get(q, "tail"))
+  return tail - head
+end
+
+fn queue_is_empty(q)
+  if queue_size(q) == 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+// ── Counter (like Python collections.Counter) ─────────────────
+fn counter_new()
+  let mut c = map()
+  return c
+end
+
+fn counter_add(c, key)
+  if map_has(c, key)
+    let cur = float(map_get(c, key))
+    map_set(c, key, str(cur + 1.0))
+  else
+    map_set(c, key, "1")
+  end
+  return 0.0
+end
+
+fn counter_get(c, key)
+  if map_has(c, key)
+    return float(map_get(c, key))
+  end
+  return 0.0
+end
+
+fn counter_from_array(arr)
+  let mut c = map()
+  for item in arr
+    let key = str(item)
+    counter_add(c, key)
+  end
+  return c
+end
+
+// ── Set (via map keys) ────────────────────────────────────────
+fn set_new()
+  let mut s = map()
+  return s
+end
+
+fn set_add(s, val)
+  map_set(s, str(val), "1")
+  return 0.0
+end
+
+fn set_has(s, val)
+  return map_has(s, str(val))
+end
+
+fn set_remove(s, val)
+  map_remove(s, str(val))
+  return 0.0
+end
+
+fn set_size(s)
+  let keys = map_keys(s)
+  return len(keys)
+end
+
+// ── DefaultMap (map with default value) ───────────────────────
+fn dmap_new(default_val)
+  let mut m = map()
+  map_set(m, "__default", str(default_val))
+  return m
+end
+
+fn dmap_get(m, key)
+  if map_has(m, key)
+    return map_get(m, key)
+  end
+  return map_get(m, "__default")
+end
+
+fn dmap_set(m, key, val)
+  map_set(m, key, val)
+  return 0.0
+end
+
+// ── Pair / Tuple helpers ──────────────────────────────────────
+fn pair(a, b)
+  let mut p = map()
+  map_set(p, "first", str(a))
+  map_set(p, "second", str(b))
+  return p
+end
+
+fn pair_first(p)
+  return map_get(p, "first")
+end
+
+fn pair_second(p)
+  return map_get(p, "second")
+end

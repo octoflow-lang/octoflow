@@ -1,0 +1,80 @@
+// stdlib/string/regex.flow — Pattern matching and text utilities
+
+fn glob_match(pattern, text)
+  // Simple glob matching: * matches any sequence, ? matches one char
+  let plen = len(pattern)
+  let tlen = len(text)
+  let mut pi = 0.0
+  let mut ti = 0.0
+  let mut star_pi = -1.0
+  let mut star_ti = -1.0
+  while ti < tlen
+    if pi < plen && char_at(pattern, pi) == "?"
+      pi = pi + 1.0
+      ti = ti + 1.0
+    elif pi < plen && char_at(pattern, pi) == "*"
+      star_pi = pi
+      star_ti = ti
+      pi = pi + 1.0
+    elif pi < plen && char_at(pattern, pi) == char_at(text, ti)
+      pi = pi + 1.0
+      ti = ti + 1.0
+    elif star_pi >= 0.0
+      pi = star_pi + 1.0
+      star_ti = star_ti + 1.0
+      ti = star_ti
+    else
+      return 0.0
+    end
+  end
+  while pi < plen && char_at(pattern, pi) == "*"
+    pi = pi + 1.0
+  end
+  if pi == plen
+    return 1.0
+  end
+  return 0.0
+end
+
+fn str_escape(s)
+  // Escape glob/regex special chars: * ? [ ] with backslash
+  let n = len(s)
+  let mut result = ""
+  let mut i = 0.0
+  while i < n
+    let c = char_at(s, i)
+    if c == "*" || c == "?" || c == "[" || c == "]"
+      result = result + "\" + c
+    else
+      result = result + c
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn word_count(s)
+  // Count whitespace-separated words in string
+  let trimmed = trim(s)
+  if len(trimmed) == 0.0
+    return 0.0
+  end
+  let mut count = 1.0
+  let n = len(trimmed)
+  let mut in_space = 0.0
+  let mut i = 0.0
+  while i < n
+    let c = char_at(trimmed, i)
+    let is_ws = c == " " || ord(c) == 9.0 || ord(c) == 10.0 || ord(c) == 13.0
+    if is_ws == 1.0
+      if in_space == 0.0
+        count = count + 1.0
+        in_space = 1.0
+      end
+    else
+      in_space = 0.0
+    end
+    i = i + 1.0
+  end
+  return count
+end

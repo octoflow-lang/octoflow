@@ -1,0 +1,155 @@
+// stdlib/time/datetime.flow — Date/time utilities (Python datetime equivalent)
+
+fn unix_now()
+  return now()
+end
+
+fn ms_now()
+  return now_ms()
+end
+
+fn unix_to_date(ts)
+  // Convert Unix timestamp to date map {year, month, day, hour, minute, second}
+  let mut m = map()
+  // Days since epoch
+  let total_secs = floor(ts)
+  let secs_in_day = 86400.0
+  let mut days = floor(total_secs / secs_in_day)
+  let day_secs = total_secs - days * secs_in_day
+  let hour = floor(day_secs / 3600.0)
+  let minute = floor((day_secs - hour * 3600.0) / 60.0)
+  let second = floor(day_secs - hour * 3600.0 - minute * 60.0)
+  map_set(m, "hour", str(hour))
+  map_set(m, "minute", str(minute))
+  map_set(m, "second", str(second))
+  // Calculate year/month/day from days since 1970-01-01
+  let mut year = 1970.0
+  let mut remaining = days
+  while remaining >= 365.0
+    let leap = is_leap_year(year)
+    let yd = 365.0 + leap
+    if remaining < yd
+      break
+    end
+    remaining = remaining - yd
+    year = year + 1.0
+  end
+  map_set(m, "year", str(year))
+  // Month
+  let mut month_days = []
+  push(month_days, 31.0)
+  let feb = 28.0 + is_leap_year(year)
+  push(month_days, feb)
+  push(month_days, 31.0)
+  push(month_days, 30.0)
+  push(month_days, 31.0)
+  push(month_days, 30.0)
+  push(month_days, 31.0)
+  push(month_days, 31.0)
+  push(month_days, 30.0)
+  push(month_days, 31.0)
+  push(month_days, 30.0)
+  push(month_days, 31.0)
+  let mut month = 1.0
+  let mut mi = 0.0
+  while mi < 12.0 && remaining >= month_days[mi]
+    remaining = remaining - month_days[mi]
+    month = month + 1.0
+    mi = mi + 1.0
+  end
+  let day = remaining + 1.0
+  map_set(m, "month", str(month))
+  map_set(m, "day", str(day))
+  return m
+end
+
+fn is_leap_year(y)
+  let d4 = y - floor(y / 4.0) * 4.0
+  let d100 = y - floor(y / 100.0) * 100.0
+  let d400 = y - floor(y / 400.0) * 400.0
+  if d400 == 0.0
+    return 1.0
+  end
+  if d100 == 0.0
+    return 0.0
+  end
+  if d4 == 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn format_date(d)
+  let y = map_get(d, "year")
+  let m = str_zfill(map_get(d, "month"), 2.0)
+  let dy = str_zfill(map_get(d, "day"), 2.0)
+  return y + "-" + m + "-" + dy
+end
+
+fn format_datetime_full(d)
+  let y = map_get(d, "year")
+  let m = str_zfill(map_get(d, "month"), 2.0)
+  let dy = str_zfill(map_get(d, "day"), 2.0)
+  let h = str_zfill(map_get(d, "hour"), 2.0)
+  let mn = str_zfill(map_get(d, "minute"), 2.0)
+  let s = str_zfill(map_get(d, "second"), 2.0)
+  return y + "-" + m + "-" + dy + " " + h + ":" + mn + ":" + s
+end
+
+fn str_zfill(s, width)
+  let n = len(s)
+  if n >= width
+    return s
+  end
+  let mut result = ""
+  let mut i = n
+  while i < width
+    result = result + "0"
+    i = i + 1.0
+  end
+  return result + s
+end
+
+fn day_of_week(ts)
+  // 0=Thursday (epoch), 1=Friday, ..., 6=Wednesday
+  // Returns 0-6 where 0=Monday
+  let days = floor(ts / 86400.0)
+  let dow = days + 4.0
+  let r = dow - floor(dow / 7.0) * 7.0
+  return r
+end
+
+fn day_name(dow)
+  if dow == 0.0
+    return "Monday"
+  elif dow == 1.0
+    return "Tuesday"
+  elif dow == 2.0
+    return "Wednesday"
+  elif dow == 3.0
+    return "Thursday"
+  elif dow == 4.0
+    return "Friday"
+  elif dow == 5.0
+    return "Saturday"
+  elif dow == 6.0
+    return "Sunday"
+  end
+  return "Unknown"
+end
+
+fn days_between(ts1, ts2)
+  let mut diff = ts2 - ts1
+  if diff < 0.0
+    diff = diff * -1.0
+  end
+  return floor(diff / 86400.0)
+end
+
+fn hours_between(ts1, ts2)
+  let mut diff = ts2 - ts1
+  if diff < 0.0
+    diff = diff * -1.0
+  end
+  return floor(diff / 3600.0)
+end

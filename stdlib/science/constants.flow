@@ -1,0 +1,21 @@
+// stdlib/science/constants.flow — Physical and mathematical constants
+
+let PI = 3.14159265358979
+let E = 2.71828182845905
+let TAU = 6.28318530717959
+let GOLDEN_RATIO = 1.61803398874989
+let SQRT2 = 1.41421356237310
+let LN2 = 0.69314718055995
+let LN10 = 2.30258509299405
+
+// Physical constants (SI units) — computed to avoid scientific notation
+let SPEED_OF_LIGHT = 299792458.0
+let PLANCK = 6.62607015 * pow(10.0, -34.0)
+let BOLTZMANN = 1.380649 * pow(10.0, -23.0)
+let AVOGADRO = 6.02214076 * pow(10.0, 23.0)
+let GRAVITY = 9.80665
+let GAS_CONSTANT = 8.31446
+let ELECTRON_MASS = 9.1093837 * pow(10.0, -31.0)
+let PROTON_MASS = 1.67262192 * pow(10.0, -27.0)
+let ELEMENTARY_CHARGE = 1.60217663 * pow(10.0, -19.0)
+let VACUUM_PERMITTIVITY = 8.85418782 * pow(10.0, -12.0)

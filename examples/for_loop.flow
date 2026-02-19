@@ -1,0 +1,88 @@
+// Phase 20-22: for-loop with nested loop support, break & continue
+//
+// Demonstrates counted iteration, empty ranges, scalar bounds,
+// nested for/while loops, and break/continue control flow.
+
+let mut total = 0.0
+let mut sum_sq = 0.0
+
+for i in range(0, 10)
+  total = total + i
+  let sq = i * i
+  sum_sq = sum_sq + sq
+end
+
+print("sum(0..10)   = {total:.0}")
+print("sum_sq(0..10)= {sum_sq:.0}")
+
+// Empty range produces zero iterations
+let mut guard = 99.0
+for i in range(5, 3)
+  guard = 0.0
+end
+print("guard (unchanged) = {guard:.0}")
+
+// Range from scalar variable
+let n = 6.0
+let mut factorial = 1.0
+for i in range(1, n)
+  factorial = factorial * i
+end
+print("5! = {factorial:.0}")
+
+// Phase 21: Nested for-in-for — multiplication table sum
+let mut table_sum = 0.0
+for i in range(1, 4)
+  for j in range(1, 4)
+    let product = i * j
+    table_sum = table_sum + product
+  end
+end
+print("3x3 table sum = {table_sum:.0}")
+
+// Nested while-in-for — countdown inside each iteration
+let mut nested_total = 0.0
+for i in range(1, 4)
+  let mut count = i
+  while count > 0.0
+    nested_total = nested_total + 1.0
+    count = count - 1.0
+  end
+end
+print("nested countdown = {nested_total:.0}")
+
+// Phase 22: break — exit loop early
+let mut first_big = 0.0
+for i in range(0, 100)
+  first_big = i
+  break
+end
+print("break after first = {first_big:.0}")
+
+// Phase 22: continue — skip remainder of body
+let mut skipped_count = 0.0
+let mut full_count = 0.0
+for i in range(0, 5)
+  full_count = full_count + 1.0
+  continue
+  skipped_count = skipped_count + 1.0
+end
+print("full = {full_count:.0}, skipped = {skipped_count:.0}")
+
+// break in while — exit infinite-style loop
+let mut while_break = 0.0
+while true
+  while_break = while_break + 1.0
+  break
+end
+print("while+break ran {while_break:.0} time(s)")
+
+// break in nested loop — only inner loop exits
+let mut outer_runs = 0.0
+for i in range(0, 3)
+  for j in range(0, 100)
+    break
+  end
+  outer_runs = outer_runs + 1.0
+end
+print("nested break: outer ran {outer_runs:.0} times")

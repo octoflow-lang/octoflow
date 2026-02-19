@@ -1,0 +1,30 @@
+// Phase 39: Structured CSV Demo
+// Demonstrates read_csv, write_csv, and data pipelines with lambdas
+
+let data = read_csv("examples/sample.csv")
+let count = len(data)
+print("Loaded {count} rows")
+
+// Access fields via bracket notation
+for row in data
+    let name = row["name"]
+    let score = row["score"]
+    print("{name}: {score}")
+end
+
+// Extract column with map_each
+let scores = map_each(data, fn(r) r["score"] end)
+
+// Compute stats with reduce
+let total = reduce(scores, 0.0, fn(acc, x) acc + x end)
+let avg = total / len(scores)
+print("Average score: {avg}")
+
+// Filter rows
+let high = filter(data, fn(r) r["score"] >= 90.0 end)
+let n_high = len(high)
+print("High scorers: {n_high}")
+
+// Write filtered results
+write_csv("examples/high_scores.csv", high)
+print("CSV demo complete")
