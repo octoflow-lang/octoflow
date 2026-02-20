@@ -1,0 +1,179 @@
+// stdlib/algo/pathfind.flow — A* pathfinding on a 2D grid
+// Grid is a flat array: grid[y * width + x], 0.0=passable, 1.0=wall
+// Returns path as [x1,y1,x2,y2,...] from start to goal, empty if no path
+
+fn manhattan(x1, y1, x2, y2)
+  let mut dx = x2 - x1
+  let mut dy = y2 - y1
+  if dx < 0.0
+    dx = 0.0 - dx
+  end
+  if dy < 0.0
+    dy = 0.0 - dy
+  end
+  return dx + dy
+end
+
+fn astar(grid, gw, gh, sx, sy, gx, gy)
+  // Validate start and goal
+  let si = sy * gw + sx
+  let gi = gy * gw + gx
+  if grid[si] == 1.0
+    let mut empty = []
+    return empty
+  end
+  if grid[gi] == 1.0
+    let mut empty = []
+    return empty
+  end
+  // Trivial: start == goal
+  if sx == gx && sy == gy
+    let mut path = []
+    push(path, sx)
+    push(path, sy)
+    return path
+  end
+
+  let total = gw * gh
+
+  // Closed set: 1.0 if visited, 0.0 otherwise
+  let mut closed = []
+  for ci in range(0, total)
+    push(closed, 0.0)
+  end
+
+  // g_cost: cost from start to each cell (init large)
+  let mut g_cost = []
+  for gi2 in range(0, total)
+    push(g_cost, 999999.0)
+  end
+
+  // f_cost: g + heuristic (init large)
+  let mut f_cost = []
+  for fi in range(0, total)
+    push(f_cost, 999999.0)
+  end
+
+  // Parent tracking for path reconstruction
+  let mut parent_x = []
+  let mut parent_y = []
+  for pi in range(0, total)
+    push(parent_x, -1.0)
+    push(parent_y, -1.0)
+  end
+
+  // Open list as parallel arrays (positions and f-scores)
+  let mut open_x = []
+  let mut open_y = []
+  let mut open_f = []
+
+  // Initialize start node
+  let start_idx = sy * gw + sx
+  g_cost[start_idx] = 0.0
+  let start_h = manhattan(sx, sy, gx, gy)
+  f_cost[start_idx] = start_h
+  push(open_x, sx)
+  push(open_y, sy)
+  push(open_f, start_h)
+
+  // Direction offsets: right, left, down, up
+  let mut dx = [1.0, -1.0, 0.0, 0.0]
+  let mut dy = [0.0, 0.0, 1.0, -1.0]
+
+  let mut found = 0.0
+
+  while len(open_x) > 0.0 && found == 0.0
+    // Find node with minimum f in open list
+    let mut best = 0.0
+    let mut best_f = open_f[0]
+    for oi in range(1, len(open_x))
+      if open_f[oi] < best_f
+        best_f = open_f[oi]
+        best = oi
+      end
+    end
+
+    // Extract best node
+    let cx = open_x[best]
+    let cy = open_y[best]
+    let last_idx = len(open_x) - 1.0
+
+    // Remove from open list by swapping with last
+    open_x[best] = open_x[last_idx]
+    open_y[best] = open_y[last_idx]
+    open_f[best] = open_f[last_idx]
+    pop(open_x)
+    pop(open_y)
+    pop(open_f)
+
+    let cur_idx = cy * gw + cx
+
+    // Skip if already closed
+    if closed[cur_idx] == 1.0
+      continue
+    end
+    closed[cur_idx] = 1.0
+
+    // Goal check
+    if cx == gx && cy == gy
+      found = 1.0
+      continue
+    end
+
+    // Expand 4 neighbors
+    let cur_g = g_cost[cur_idx]
+    for d in range(0, 4)
+      let nx = cx + dx[d]
+      let ny = cy + dy[d]
+      // Bounds check
+      if nx >= 0.0 && nx < gw && ny >= 0.0 && ny < gh
+        let ni = ny * gw + nx
+        if grid[ni] == 0.0 && closed[ni] == 0.0
+          let tent_g = cur_g + 1.0
+          if tent_g < g_cost[ni]
+            g_cost[ni] = tent_g
+            let h = manhattan(nx, ny, gx, gy)
+            f_cost[ni] = tent_g + h
+            parent_x[ni] = cx
+            parent_y[ni] = cy
+            // Add to open list (may have duplicates, closed check handles it)
+            push(open_x, nx)
+            push(open_y, ny)
+            push(open_f, tent_g + h)
+          end
+        end
+      end
+    end
+  end
+
+  // Reconstruct path or return empty
+  if found == 0.0
+    let mut empty = []
+    return empty
+  end
+
+  // Build path backwards from goal to start
+  let mut rev_x = []
+  let mut rev_y = []
+  let mut rx = gx
+  let mut ry = gy
+  while rx != -1.0
+    push(rev_x, rx)
+    push(rev_y, ry)
+    let ri = ry * gw + rx
+    let prx = parent_x[ri]
+    let pry = parent_y[ri]
+    rx = prx
+    ry = pry
+  end
+
+  // Reverse into result path [x1,y1,x2,y2,...]
+  let mut path = []
+  let rlen = len(rev_x)
+  for k in range(0, rlen)
+    let idx = rlen - 1.0 - k
+    push(path, rev_x[idx])
+    push(path, rev_y[idx])
+  end
+  return path
+end

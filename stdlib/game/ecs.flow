@@ -1,0 +1,119 @@
+// stdlib/game/ecs.flow — Simple Entity Component System
+// Data-oriented ECS using parallel arrays for cache-friendly iteration.
+// Entities are integer IDs. Components stored in contiguous arrays.
+// Pattern: comp_eid[i] = entity owner, comp_field[i] = data
+
+fn ecs_new()
+  // Returns initial entity counter (next available ID)
+  return 0.0
+end
+
+fn ecs_create(ids, next_id)
+  // Create a new entity: push its ID to the entity list
+  // Returns the new next_id (caller must capture it)
+  push(ids, next_id)
+  return next_id + 1.0
+end
+
+fn ecs_find(comp_eid, target_id)
+  // Find component index for a given entity ID
+  // Returns index or -1.0 if not found
+  let n = len(comp_eid)
+  for i in range(0, n)
+    if comp_eid[i] == target_id
+      return i
+    end
+  end
+  return -1.0
+end
+
+fn ecs_add_pos(ent_id, pos_eid, pos_x, pos_y)
+  // Add position component (x, y) for entity
+  push(pos_eid, ent_id)
+  push(pos_x, ent_id * 0.0)
+  push(pos_y, ent_id * 0.0)
+  // Set actual values at the last index
+  let idx = len(pos_x) - 1.0
+  pos_x[idx] = pos_x[idx] + ent_id * 0.0
+  pos_y[idx] = pos_y[idx] + ent_id * 0.0
+  // We need the caller to pass the values separately
+  // Since .flow uses snapshot semantics for scalars, we store zeros
+  // and the caller overwrites via array indexing
+  return idx
+end
+
+fn ecs_add_pos_at(ent_id, pos_eid, pos_x, pos_y, x, y)
+  // Add position component with specific coordinates
+  push(pos_eid, ent_id)
+  push(pos_x, x)
+  push(pos_y, y)
+  return len(pos_eid) - 1.0
+end
+
+fn ecs_add_vel(ent_id, vel_eid, vel_vx, vel_vy, vx, vy)
+  // Add velocity component with specific values
+  push(vel_eid, ent_id)
+  push(vel_vx, vx)
+  push(vel_vy, vy)
+  return len(vel_eid) - 1.0
+end
+
+fn ecs_add_hp(ent_id, hp_eid, hp_val, hp)
+  // Add health component with specific value
+  push(hp_eid, ent_id)
+  push(hp_val, hp)
+  return len(hp_eid) - 1.0
+end
+
+fn ecs_update_physics(pos_eid, pos_x, pos_y, vel_eid, vel_vx, vel_vy, dt)
+  // Move entities that have both position and velocity
+  // For each velocity component, find matching position and update
+  let vn = len(vel_eid)
+  for vi in range(0, vn)
+    let eid = vel_eid[vi]
+    // Find matching position component
+    let pi = ecs_find(pos_eid, eid)
+    if pi >= 0.0
+      pos_x[pi] = pos_x[pi] + vel_vx[vi] * dt
+      pos_y[pi] = pos_y[pi] + vel_vy[vi] * dt
+    end
+  end
+  return vn
+end
+
+fn ecs_damage(ent_id, hp_eid, hp_val, amount)
+  // Apply damage to an entity's health component
+  let idx = ecs_find(hp_eid, ent_id)
+  if idx >= 0.0
+    hp_val[idx] = hp_val[idx] - amount
+    if hp_val[idx] < 0.0
+      hp_val[idx] = 0.0
+    end
+    return hp_val[idx]
+  end
+  return -1.0
+end
+
+fn ecs_get_pos(ent_id, pos_eid, pos_x, pos_y, result)
+  // Get position of entity into result array [x, y]
+  // result must be pre-allocated with 2 elements
+  let idx = ecs_find(pos_eid, ent_id)
+  if idx >= 0.0
+    result[0] = pos_x[idx]
+    result[1] = pos_y[idx]
+    return 1.0
+  end
+  return 0.0
+end
+
+fn ecs_alive_count(hp_eid, hp_val)
+  // Count entities with hp > 0
+  let mut count = 0.0
+  let n = len(hp_eid)
+  for i in range(0, n)
+    if hp_val[i] > 0.0
+      count = count + 1.0
+    end
+  end
+  return count
+end

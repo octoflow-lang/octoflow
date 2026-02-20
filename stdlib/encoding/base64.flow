@@ -1,0 +1,154 @@
+// stdlib/encoding/base64.flow — Pure .flow Base64 encoder/decoder
+// Standard Base64 alphabet (A-Z, a-z, 0-9, +, /) with = padding
+// All byte values are f32 floats in range 0-255
+
+// Helper: index (0-63) to base64 character
+fn b64_char(idx)
+  // A-Z = 0-25
+  if idx < 26.0
+    return chr(65.0 + idx)
+  end
+  // a-z = 26-51
+  if idx < 52.0
+    return chr(97.0 + idx - 26.0)
+  end
+  // 0-9 = 52-61
+  if idx < 62.0
+    return chr(48.0 + idx - 52.0)
+  end
+  // + = 62
+  if idx == 62.0
+    return "+"
+  end
+  // / = 63
+  return "/"
+end
+
+// Helper: base64 character to index (0-63), -1 for padding or invalid
+fn b64_val(c)
+  let code = ord(c)
+  // A-Z (65-90) -> 0-25
+  if code >= 65.0 && code <= 90.0
+    return code - 65.0
+  end
+  // a-z (97-122) -> 26-51
+  if code >= 97.0 && code <= 122.0
+    return code - 97.0 + 26.0
+  end
+  // 0-9 (48-57) -> 52-61
+  if code >= 48.0 && code <= 57.0
+    return code - 48.0 + 52.0
+  end
+  // + -> 62
+  if code == 43.0
+    return 62.0
+  end
+  // / -> 63
+  if code == 47.0
+    return 63.0
+  end
+  // = or invalid
+  return -1.0
+end
+
+// Encode array of byte values (0-255 floats) to base64 string
+fn b64_encode(data)
+  let n = len(data)
+  if n == 0.0
+    return ""
+  end
+  let mut result = ""
+  let mut i = 0.0
+  while i < n
+    // Byte 0 (always present)
+    let b0 = int(data[i])
+    // Byte 1 (may be padding)
+    let mut b1 = 0.0
+    let mut have1 = 0.0
+    let i1 = i + 1.0
+    if i1 < n
+      b1 = int(data[i1])
+      have1 = 1.0
+    end
+    // Byte 2 (may be padding)
+    let mut b2 = 0.0
+    let mut have2 = 0.0
+    let i2 = i + 2.0
+    if i2 < n
+      b2 = int(data[i2])
+      have2 = 1.0
+    end
+
+    // 3 bytes (24 bits) -> 4 base64 chars (6 bits each)
+    // c0 = top 6 bits of b0
+    let c0 = bit_shr(b0, 2.0)
+    // c1 = bottom 2 bits of b0 (shifted left 4) | top 4 bits of b1
+    let c1 = bit_or(bit_shl(bit_and(b0, 3.0), 4.0), bit_shr(b1, 4.0))
+    // c2 = bottom 4 bits of b1 (shifted left 2) | top 2 bits of b2
+    let c2 = bit_or(bit_shl(bit_and(b1, 15.0), 2.0), bit_shr(b2, 6.0))
+    // c3 = bottom 6 bits of b2
+    let c3 = bit_and(b2, 63.0)
+
+    // Always emit first two chars
+    result = result + b64_char(c0)
+    result = result + b64_char(c1)
+
+    // Third char: real if we had byte 1, else padding
+    if have1 == 1.0
+      result = result + b64_char(c2)
+    else
+      result = result + "="
+    end
+
+    // Fourth char: real if we had byte 2, else padding
+    if have2 == 1.0
+      result = result + b64_char(c3)
+    else
+      result = result + "="
+    end
+
+    i = i + 3.0
+  end
+  return result
+end
+
+// Decode base64 string to array of byte values (0-255 floats)
+fn b64_decode(s)
+  let mut out = []
+  let n = len(s)
+  if n == 0.0
+    return out
+  end
+  let mut i = 0.0
+  while i < n
+    // Read 4 base64 chars
+    let ch0 = char_at(s, i)
+    let ch1 = char_at(s, i + 1.0)
+    let ch2 = char_at(s, i + 2.0)
+    let ch3 = char_at(s, i + 3.0)
+
+    let v0 = b64_val(ch0)
+    let v1 = b64_val(ch1)
+    let v2 = b64_val(ch2)
+    let v3 = b64_val(ch3)
+
+    // Byte 0: top 6 from v0, top 2 from v1
+    let byte0 = bit_or(bit_shl(v0, 2.0), bit_shr(v1, 4.0))
+    push(out, byte0)
+
+    // Byte 1: bottom 4 from v1, top 4 from v2 (skip if v2 is padding)
+    if ch2 != "="
+      let byte1 = bit_and(bit_or(bit_shl(v1, 4.0), bit_shr(v2, 2.0)), 255.0)
+      push(out, byte1)
+    end
+
+    // Byte 2: bottom 2 from v2, all 6 from v3 (skip if v3 is padding)
+    if ch3 != "="
+      let byte2 = bit_and(bit_or(bit_shl(v2, 6.0), v3), 255.0)
+      push(out, byte2)
+    end
+
+    i = i + 4.0
+  end
+  return out
+end

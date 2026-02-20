@@ -1,0 +1,291 @@
+// test_pathfind.flow — Tests for stdlib/algo/pathfind.flow
+// Functions tested: manhattan, astar (A* pathfinding on 2D grid)
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from algo/pathfind.flow --
+
+fn manhattan(x1, y1, x2, y2)
+  let mut dx = x2 - x1
+  let mut dy = y2 - y1
+  if dx < 0.0
+    dx = 0.0 - dx
+  end
+  if dy < 0.0
+    dy = 0.0 - dy
+  end
+  return dx + dy
+end
+
+fn astar(grid, gw, gh, sx, sy, gx, gy)
+  if grid[sy * gw + sx] == 1.0
+    let mut empty = []
+    return empty
+  end
+  if grid[gy * gw + gx] == 1.0
+    let mut empty = []
+    return empty
+  end
+  if sx == gx && sy == gy
+    let mut path = []
+    push(path, sx)
+    push(path, sy)
+    return path
+  end
+  let total = gw * gh
+  let mut closed = []
+  for ci in range(0, total)
+    push(closed, 0.0)
+  end
+  let mut g_cost = []
+  for gi2 in range(0, total)
+    push(g_cost, 999999.0)
+  end
+  let mut f_cost = []
+  for fi in range(0, total)
+    push(f_cost, 999999.0)
+  end
+  let mut parent_x = []
+  let mut parent_y = []
+  for pi in range(0, total)
+    push(parent_x, -1.0)
+    push(parent_y, -1.0)
+  end
+  let mut open_x = []
+  let mut open_y = []
+  let mut open_f = []
+  let start_idx = sy * gw + sx
+  g_cost[start_idx] = 0.0
+  let start_h = manhattan(sx, sy, gx, gy)
+  f_cost[start_idx] = start_h
+  push(open_x, sx)
+  push(open_y, sy)
+  push(open_f, start_h)
+  let mut dx = [1.0, -1.0, 0.0, 0.0]
+  let mut dy = [0.0, 0.0, 1.0, -1.0]
+  let mut found = 0.0
+  while len(open_x) > 0.0 && found == 0.0
+    let mut best = 0.0
+    let mut best_f = open_f[0]
+    for oi in range(1, len(open_x))
+      if open_f[oi] < best_f
+        best_f = open_f[oi]
+        best = oi
+      end
+    end
+    let cx = open_x[best]
+    let cy = open_y[best]
+    let last_idx = len(open_x) - 1.0
+    open_x[best] = open_x[last_idx]
+    open_y[best] = open_y[last_idx]
+    open_f[best] = open_f[last_idx]
+    pop(open_x)
+    pop(open_y)
+    pop(open_f)
+    let cur_idx = cy * gw + cx
+    if closed[cur_idx] == 1.0
+      continue
+    end
+    closed[cur_idx] = 1.0
+    if cx == gx && cy == gy
+      found = 1.0
+      continue
+    end
+    let cur_g = g_cost[cur_idx]
+    for d in range(0, 4)
+      let nx = cx + dx[d]
+      let ny = cy + dy[d]
+      if nx >= 0.0 && nx < gw && ny >= 0.0 && ny < gh
+        let ni = ny * gw + nx
+        if grid[ni] == 0.0 && closed[ni] == 0.0
+          let tent_g = cur_g + 1.0
+          if tent_g < g_cost[ni]
+            g_cost[ni] = tent_g
+            let h = manhattan(nx, ny, gx, gy)
+            f_cost[ni] = tent_g + h
+            parent_x[ni] = cx
+            parent_y[ni] = cy
+            push(open_x, nx)
+            push(open_y, ny)
+            push(open_f, tent_g + h)
+          end
+        end
+      end
+    end
+  end
+  if found == 0.0
+    let mut empty = []
+    return empty
+  end
+  let mut rev_x = []
+  let mut rev_y = []
+  let mut rx = gx
+  let mut ry = gy
+  while rx != -1.0
+    push(rev_x, rx)
+    push(rev_y, ry)
+    let ri = ry * gw + rx
+    let prx = parent_x[ri]
+    let pry = parent_y[ri]
+    rx = prx
+    ry = pry
+  end
+  let mut path = []
+  let rlen = len(rev_x)
+  for k in range(0, rlen)
+    let idx = rlen - 1.0 - k
+    push(path, rev_x[idx])
+    push(path, rev_y[idx])
+  end
+  return path
+end
+
+// -- Tests --
+
+print("=== test_pathfind ===")
+
+// Test 1: manhattan distance basic
+let d1 = manhattan(0.0, 0.0, 3.0, 4.0)
+if d1 == 7.0
+  pass = pass + 1.0
+else
+  print("  FAIL: manhattan(0,0,3,4) expected 7 got {d1}")
+  fail = fail + 1.0
+end
+
+// Test 2: manhattan distance same point
+let d2 = manhattan(5.0, 5.0, 5.0, 5.0)
+if d2 == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: manhattan same point expected 0 got {d2}")
+  fail = fail + 1.0
+end
+
+// Test 3: manhattan distance negative direction
+let d3 = manhattan(4.0, 4.0, 1.0, 1.0)
+if d3 == 6.0
+  pass = pass + 1.0
+else
+  print("  FAIL: manhattan(4,4,1,1) expected 6 got {d3}")
+  fail = fail + 1.0
+end
+
+// Test 4: simple 5x5 open grid, path from (0,0) to (4,4)
+// All zeros = fully passable
+let mut grid1 = []
+for i in range(0, 25)
+  push(grid1, 0.0)
+end
+let mut p1 = astar(grid1, 5.0, 5.0, 0.0, 0.0, 4.0, 4.0)
+// Path should exist and have correct length
+// Manhattan distance is 8, so optimal path has 9 nodes = 18 elements
+let p1_len = len(p1)
+if p1_len == 18.0
+  pass = pass + 1.0
+else
+  print("  FAIL: open grid path length expected 18 got {p1_len}")
+  fail = fail + 1.0
+end
+// Check start and end of path
+let p1_sx = p1[0]
+let p1_sy = p1[1]
+let p1_ex = p1[p1_len - 2.0]
+let p1_ey = p1[p1_len - 1.0]
+if p1_sx == 0.0 && p1_sy == 0.0 && p1_ex == 4.0 && p1_ey == 4.0
+  pass = pass + 1.0
+else
+  print("  FAIL: open grid path endpoints wrong")
+  fail = fail + 1.0
+end
+
+// Test 5: grid with wall blocking direct path
+// 5x5 grid with wall across middle column at x=2
+let mut grid2 = []
+for i in range(0, 25)
+  push(grid2, 0.0)
+end
+// Wall at (2,0), (2,1), (2,2), (2,3) — leave (2,4) open
+grid2[2] = 1.0
+grid2[7] = 1.0
+grid2[12] = 1.0
+grid2[17] = 1.0
+let mut p2 = astar(grid2, 5.0, 5.0, 0.0, 0.0, 4.0, 0.0)
+// Path must exist (go around the wall via row 4)
+let p2_len = len(p2)
+if p2_len > 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: wall grid should have path around wall")
+  fail = fail + 1.0
+end
+// Path must be longer than direct manhattan (4)
+// Direct would be 5 nodes = 10 elements, with wall it must be longer
+if p2_len > 10.0
+  pass = pass + 1.0
+else
+  print("  FAIL: wall grid path should be longer than direct, got {p2_len}")
+  fail = fail + 1.0
+end
+
+// Test 6: no path possible (goal surrounded by walls)
+// 5x5 grid, goal at (4,4) surrounded by walls
+let mut grid3 = []
+for i in range(0, 25)
+  push(grid3, 0.0)
+end
+// Wall around (4,4): block (3,4), (4,3), (3,3)
+grid3[23] = 1.0
+grid3[19] = 1.0
+grid3[18] = 1.0
+// Also block (4,4) itself
+grid3[24] = 1.0
+let mut p3 = astar(grid3, 5.0, 5.0, 0.0, 0.0, 4.0, 4.0)
+let p3_len = len(p3)
+if p3_len == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: blocked goal should have no path, got length {p3_len}")
+  fail = fail + 1.0
+end
+
+// Test 7: adjacent cells (trivial path)
+let mut grid4 = []
+for i in range(0, 25)
+  push(grid4, 0.0)
+end
+let mut p4 = astar(grid4, 5.0, 5.0, 0.0, 0.0, 1.0, 0.0)
+let p4_len = len(p4)
+// Should be 2 nodes = 4 elements: (0,0) -> (1,0)
+if p4_len == 4.0
+  pass = pass + 1.0
+else
+  print("  FAIL: adjacent path expected 4 elements got {p4_len}")
+  fail = fail + 1.0
+end
+
+// Test 8: start == goal
+let mut grid5 = []
+for i in range(0, 25)
+  push(grid5, 0.0)
+end
+let mut p5 = astar(grid5, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0)
+let p5_len = len(p5)
+if p5_len == 2.0
+  pass = pass + 1.0
+else
+  print("  FAIL: same start/goal expected 2 elements got {p5_len}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_pathfind ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

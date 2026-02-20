@@ -1,0 +1,248 @@
+// test_hex.flow — Tests for stdlib/encoding/hex.flow
+// Functions tested: bytes_to_hex, hex_to_bytes, hex_nibble, hex_val
+// Note: bytes_to_hex/hex_to_bytes work on byte arrays (f32 values 0-255).
+// Built-in hex_encode/hex_decode work on strings (not tested here).
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from encoding/hex.flow --
+
+fn hex_nibble(n)
+  if n < 10.0
+    return chr(48.0 + n)
+  end
+  return chr(97.0 + n - 10.0)
+end
+
+fn hex_val(c)
+  let code = ord(c)
+  if code >= 48.0 && code <= 57.0
+    return code - 48.0
+  end
+  if code >= 97.0 && code <= 102.0
+    return code - 97.0 + 10.0
+  end
+  if code >= 65.0 && code <= 70.0
+    return code - 65.0 + 10.0
+  end
+  return -1.0
+end
+
+fn bytes_to_hex(data)
+  let n = len(data)
+  if n == 0.0
+    return ""
+  end
+  let mut result = ""
+  let mut i = 0.0
+  while i < n
+    let byte = int(data[i])
+    let hi = bit_shr(byte, 4.0)
+    let lo = bit_and(byte, 15.0)
+    result = result + hex_nibble(hi)
+    result = result + hex_nibble(lo)
+    i = i + 1.0
+  end
+  return result
+end
+
+fn hex_to_bytes(s)
+  let mut out = []
+  let n = len(s)
+  if n == 0.0
+    return out
+  end
+  let mut i = 0.0
+  while i < n
+    let hi = hex_val(char_at(s, i))
+    let lo = hex_val(char_at(s, i + 1.0))
+    let byte = bit_or(bit_shl(hi, 4.0), lo)
+    push(out, byte)
+    i = i + 2.0
+  end
+  return out
+end
+
+// -- Tests --
+
+print("=== test_hex ===")
+
+// Test 1: hex_nibble lookup
+let h0 = hex_nibble(0.0)
+if h0 == "0"
+  pass = pass + 1.0
+else
+  print("  FAIL: hex_nibble(0) expected 0 got {h0}")
+  fail = fail + 1.0
+end
+
+let h9 = hex_nibble(9.0)
+if h9 == "9"
+  pass = pass + 1.0
+else
+  print("  FAIL: hex_nibble(9) expected 9 got {h9}")
+  fail = fail + 1.0
+end
+
+let ha = hex_nibble(10.0)
+if ha == "a"
+  pass = pass + 1.0
+else
+  print("  FAIL: hex_nibble(10) expected a got {ha}")
+  fail = fail + 1.0
+end
+
+let hf = hex_nibble(15.0)
+if hf == "f"
+  pass = pass + 1.0
+else
+  print("  FAIL: hex_nibble(15) expected f got {hf}")
+  fail = fail + 1.0
+end
+
+// Test 2: hex_val lookup
+let v0 = hex_val("0")
+if v0 == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: hex_val(0) expected 0 got {v0}")
+  fail = fail + 1.0
+end
+
+let vf_lower = hex_val("f")
+if vf_lower == 15.0
+  pass = pass + 1.0
+else
+  print("  FAIL: hex_val(f) expected 15 got {vf_lower}")
+  fail = fail + 1.0
+end
+
+let vf_upper = hex_val("F")
+if vf_upper == 15.0
+  pass = pass + 1.0
+else
+  print("  FAIL: hex_val(F) expected 15 got {vf_upper}")
+  fail = fail + 1.0
+end
+
+// Test 3: encode [0] -> "00"
+let zero_arr = [0.0]
+let enc_zero = bytes_to_hex(zero_arr)
+if enc_zero == "00"
+  pass = pass + 1.0
+else
+  print("  FAIL: encode [0] expected 00 got {enc_zero}")
+  fail = fail + 1.0
+end
+
+// Test 4: encode [255] -> "ff"
+let ff_arr = [255.0]
+let enc_ff = bytes_to_hex(ff_arr)
+if enc_ff == "ff"
+  pass = pass + 1.0
+else
+  print("  FAIL: encode [255] expected ff got {enc_ff}")
+  fail = fail + 1.0
+end
+
+// Test 5: encode "Hello" bytes -> "48656c6c6f"
+let hello_arr = [72.0, 101.0, 108.0, 108.0, 111.0]
+let enc_hello = bytes_to_hex(hello_arr)
+if enc_hello == "48656c6c6f"
+  pass = pass + 1.0
+else
+  print("  FAIL: encode Hello expected 48656c6c6f got {enc_hello}")
+  fail = fail + 1.0
+end
+
+// Test 6: decode "00" -> [0]
+let dec_zero = hex_to_bytes("00")
+let dec_zero_len = len(dec_zero)
+if dec_zero_len == 1.0
+  if dec_zero[0] == 0.0
+    pass = pass + 1.0
+  else
+    let dz0 = dec_zero[0]
+    print("  FAIL: decode 00 expected 0 got {dz0}")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL: decode 00 expected 1 byte got {dec_zero_len}")
+  fail = fail + 1.0
+end
+
+// Test 7: decode "ff" -> [255]
+let dec_ff = hex_to_bytes("ff")
+let dec_ff_len = len(dec_ff)
+if dec_ff_len == 1.0
+  if dec_ff[0] == 255.0
+    pass = pass + 1.0
+  else
+    let dff0 = dec_ff[0]
+    print("  FAIL: decode ff expected 255 got {dff0}")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL: decode ff expected 1 byte got {dec_ff_len}")
+  fail = fail + 1.0
+end
+
+// Test 8: decode "48656c6c6f" -> Hello bytes
+let dec_hello = hex_to_bytes("48656c6c6f")
+let dec_hello_len = len(dec_hello)
+if dec_hello_len == 5.0
+  if dec_hello[0] == 72.0 && dec_hello[1] == 101.0 && dec_hello[2] == 108.0 && dec_hello[3] == 108.0 && dec_hello[4] == 111.0
+    pass = pass + 1.0
+  else
+    print("  FAIL: decode 48656c6c6f wrong bytes")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL: decode 48656c6c6f expected 5 bytes got {dec_hello_len}")
+  fail = fail + 1.0
+end
+
+// Test 9: round-trip [0, 127, 255]
+let bin_arr = [0.0, 127.0, 255.0]
+let enc_bin = bytes_to_hex(bin_arr)
+let dec_bin = hex_to_bytes(enc_bin)
+let dec_bin_len = len(dec_bin)
+if dec_bin_len == 3.0
+  if dec_bin[0] == 0.0 && dec_bin[1] == 127.0 && dec_bin[2] == 255.0
+    pass = pass + 1.0
+  else
+    print("  FAIL: round-trip [0,127,255] mismatch")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL: round-trip [0,127,255] expected 3 bytes got {dec_bin_len}")
+  fail = fail + 1.0
+end
+
+// Test 10: decode uppercase "4A" -> [74]
+let dec_upper = hex_to_bytes("4A")
+let dec_upper_len = len(dec_upper)
+if dec_upper_len == 1.0
+  if dec_upper[0] == 74.0
+    pass = pass + 1.0
+  else
+    let du0 = dec_upper[0]
+    print("  FAIL: decode 4A expected 74 got {du0}")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL: decode 4A expected 1 byte got {dec_upper_len}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_hex ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

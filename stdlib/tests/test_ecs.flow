@@ -1,0 +1,247 @@
+// test_ecs.flow — Tests for stdlib/game/ecs.flow
+// Functions tested: ecs_new, ecs_create, ecs_add_pos_at, ecs_add_vel,
+//   ecs_add_hp, ecs_update_physics, ecs_find, ecs_damage, ecs_alive_count
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from game/ecs.flow --
+
+fn ecs_new()
+  return 0.0
+end
+
+fn ecs_find(comp_eid, target_id)
+  let n = len(comp_eid)
+  for i in range(0, n)
+    if comp_eid[i] == target_id
+      return i
+    end
+  end
+  return -1.0
+end
+
+fn ecs_create(ids, next_id)
+  push(ids, next_id)
+  return next_id + 1.0
+end
+
+fn ecs_add_pos_at(ent_id, pos_eid, pos_x, pos_y, x, y)
+  push(pos_eid, ent_id)
+  push(pos_x, x)
+  push(pos_y, y)
+  return len(pos_eid) - 1.0
+end
+
+fn ecs_add_vel(ent_id, vel_eid, vel_vx, vel_vy, vx, vy)
+  push(vel_eid, ent_id)
+  push(vel_vx, vx)
+  push(vel_vy, vy)
+  return len(vel_eid) - 1.0
+end
+
+fn ecs_add_hp(ent_id, hp_eid, hp_val, hp)
+  push(hp_eid, ent_id)
+  push(hp_val, hp)
+  return len(hp_eid) - 1.0
+end
+
+fn ecs_update_physics(pos_eid, pos_x, pos_y, vel_eid, vel_vx, vel_vy, dt)
+  let vn = len(vel_eid)
+  for vi in range(0, vn)
+    let eid = vel_eid[vi]
+    let pi = ecs_find(pos_eid, eid)
+    if pi >= 0.0
+      pos_x[pi] = pos_x[pi] + vel_vx[vi] * dt
+      pos_y[pi] = pos_y[pi] + vel_vy[vi] * dt
+    end
+  end
+  return vn
+end
+
+fn ecs_damage(ent_id, hp_eid, hp_val, amount)
+  let idx = ecs_find(hp_eid, ent_id)
+  if idx >= 0.0
+    hp_val[idx] = hp_val[idx] - amount
+    if hp_val[idx] < 0.0
+      hp_val[idx] = 0.0
+    end
+    return hp_val[idx]
+  end
+  return -1.0
+end
+
+fn ecs_alive_count(hp_eid, hp_val)
+  let mut count = 0.0
+  let n = len(hp_eid)
+  for i in range(0, n)
+    if hp_val[i] > 0.0
+      count = count + 1.0
+    end
+  end
+  return count
+end
+
+fn ecs_get_pos(ent_id, pos_eid, pos_x, pos_y, result)
+  let idx = ecs_find(pos_eid, ent_id)
+  if idx >= 0.0
+    result[0] = pos_x[idx]
+    result[1] = pos_y[idx]
+    return 1.0
+  end
+  return 0.0
+end
+
+// -- Tests --
+
+print("=== test_ecs ===")
+
+// Set up ECS storage arrays
+let mut ids = []
+let mut pos_eid = []
+let mut pos_x = []
+let mut pos_y = []
+let mut vel_eid = []
+let mut vel_vx = []
+let mut vel_vy = []
+let mut hp_eid = []
+let mut hp_val = []
+
+// Test 1: create entities
+let mut next_id = ecs_new()
+next_id = ecs_create(ids, next_id)
+next_id = ecs_create(ids, next_id)
+next_id = ecs_create(ids, next_id)
+let id_count = len(ids)
+if id_count == 3.0 && next_id == 3.0
+  pass = pass + 1.0
+else
+  print("  FAIL: entity creation expected 3 entities, next_id=3, got len={id_count} next={next_id}")
+  fail = fail + 1.0
+end
+
+// Test 2: add position components
+let _pi0 = ecs_add_pos_at(0.0, pos_eid, pos_x, pos_y, 10.0, 20.0)
+let _pi1 = ecs_add_pos_at(1.0, pos_eid, pos_x, pos_y, 50.0, 60.0)
+let _pi2 = ecs_add_pos_at(2.0, pos_eid, pos_x, pos_y, 0.0, 0.0)
+if len(pos_eid) == 3.0 && pos_x[0] == 10.0 && pos_y[0] == 20.0
+  pass = pass + 1.0
+else
+  print("  FAIL: position component add failed")
+  fail = fail + 1.0
+end
+
+// Test 3: add velocity components (only entities 0 and 2)
+let _vi0 = ecs_add_vel(0.0, vel_eid, vel_vx, vel_vy, 5.0, -3.0)
+let _vi2 = ecs_add_vel(2.0, vel_eid, vel_vx, vel_vy, 1.0, 1.0)
+let vel_count = len(vel_eid)
+if vel_count == 2.0
+  pass = pass + 1.0
+else
+  print("  FAIL: velocity component count expected 2 got {vel_count}")
+  fail = fail + 1.0
+end
+
+// Test 4: add health components
+let _hi0 = ecs_add_hp(0.0, hp_eid, hp_val, 100.0)
+let _hi1 = ecs_add_hp(1.0, hp_eid, hp_val, 50.0)
+let _hi2 = ecs_add_hp(2.0, hp_eid, hp_val, 75.0)
+if hp_val[0] == 100.0 && hp_val[1] == 50.0 && hp_val[2] == 75.0
+  pass = pass + 1.0
+else
+  print("  FAIL: health values wrong")
+  fail = fail + 1.0
+end
+
+// Test 5: ecs_find
+let found0 = ecs_find(pos_eid, 1.0)
+let found_miss = ecs_find(vel_eid, 1.0)
+if found0 == 1.0 && found_miss == -1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: ecs_find expected 1 and -1, got {found0} and {found_miss}")
+  fail = fail + 1.0
+end
+
+// Test 6: physics update (dt=1.0)
+let _updated = ecs_update_physics(pos_eid, pos_x, pos_y, vel_eid, vel_vx, vel_vy, 1.0)
+// Entity 0: (10+5, 20-3) = (15, 17)
+// Entity 2: (0+1, 0+1) = (1, 1)
+// Entity 1: no velocity, stays at (50, 60)
+if pos_x[0] == 15.0 && pos_y[0] == 17.0
+  pass = pass + 1.0
+else
+  print("  FAIL: entity 0 position after physics expected (15,17) got ({pos_x[0]},{pos_y[0]})")
+  fail = fail + 1.0
+end
+if pos_x[1] == 50.0 && pos_y[1] == 60.0
+  pass = pass + 1.0
+else
+  print("  FAIL: entity 1 should not move, got ({pos_x[1]},{pos_y[1]})")
+  fail = fail + 1.0
+end
+if pos_x[2] == 1.0 && pos_y[2] == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: entity 2 position after physics expected (1,1) got ({pos_x[2]},{pos_y[2]})")
+  fail = fail + 1.0
+end
+
+// Test 7: second physics step (dt=0.5)
+let _updated2 = ecs_update_physics(pos_eid, pos_x, pos_y, vel_eid, vel_vx, vel_vy, 0.5)
+// Entity 0: (15+2.5, 17-1.5) = (17.5, 15.5)
+if pos_x[0] == 17.5 && pos_y[0] == 15.5
+  pass = pass + 1.0
+else
+  print("  FAIL: entity 0 after 2nd step expected (17.5,15.5) got ({pos_x[0]},{pos_y[0]})")
+  fail = fail + 1.0
+end
+
+// Test 8: damage system
+let remaining = ecs_damage(0.0, hp_eid, hp_val, 30.0)
+if remaining == 70.0
+  pass = pass + 1.0
+else
+  print("  FAIL: damage expected 70 hp remaining got {remaining}")
+  fail = fail + 1.0
+end
+
+// Test 9: overkill damage clamps to 0
+let remaining2 = ecs_damage(1.0, hp_eid, hp_val, 999.0)
+if remaining2 == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: overkill damage expected 0 got {remaining2}")
+  fail = fail + 1.0
+end
+
+// Test 10: alive count
+let alive = ecs_alive_count(hp_eid, hp_val)
+// Entity 0: 70hp, Entity 1: 0hp, Entity 2: 75hp => 2 alive
+if alive == 2.0
+  pass = pass + 1.0
+else
+  print("  FAIL: alive count expected 2 got {alive}")
+  fail = fail + 1.0
+end
+
+// Test 11: get position via result array
+let mut res = [0.0, 0.0]
+let got = ecs_get_pos(2.0, pos_eid, pos_x, pos_y, res)
+if got == 1.0 && res[0] == 1.5 && res[1] == 1.5
+  pass = pass + 1.0
+else
+  print("  FAIL: get_pos entity 2 expected (1.5,1.5) got ({res[0]},{res[1]})")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_ecs ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

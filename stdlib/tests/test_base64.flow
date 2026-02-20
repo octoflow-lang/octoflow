@@ -1,0 +1,293 @@
+// test_base64.flow — Tests for stdlib/encoding/base64.flow
+// Functions tested: b64_encode, b64_decode, b64_char, b64_val
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from encoding/base64.flow --
+
+fn b64_char(idx)
+  if idx < 26.0
+    return chr(65.0 + idx)
+  end
+  if idx < 52.0
+    return chr(97.0 + idx - 26.0)
+  end
+  if idx < 62.0
+    return chr(48.0 + idx - 52.0)
+  end
+  if idx == 62.0
+    return "+"
+  end
+  return "/"
+end
+
+fn b64_val(c)
+  let code = ord(c)
+  if code >= 65.0 && code <= 90.0
+    return code - 65.0
+  end
+  if code >= 97.0 && code <= 122.0
+    return code - 97.0 + 26.0
+  end
+  if code >= 48.0 && code <= 57.0
+    return code - 48.0 + 52.0
+  end
+  if code == 43.0
+    return 62.0
+  end
+  if code == 47.0
+    return 63.0
+  end
+  return -1.0
+end
+
+fn b64_encode(data)
+  let n = len(data)
+  if n == 0.0
+    return ""
+  end
+  let mut result = ""
+  let mut i = 0.0
+  while i < n
+    let b0 = int(data[i])
+    let mut b1 = 0.0
+    let mut have1 = 0.0
+    let i1 = i + 1.0
+    if i1 < n
+      b1 = int(data[i1])
+      have1 = 1.0
+    end
+    let mut b2 = 0.0
+    let mut have2 = 0.0
+    let i2 = i + 2.0
+    if i2 < n
+      b2 = int(data[i2])
+      have2 = 1.0
+    end
+    let c0 = bit_shr(b0, 2.0)
+    let c1 = bit_or(bit_shl(bit_and(b0, 3.0), 4.0), bit_shr(b1, 4.0))
+    let c2 = bit_or(bit_shl(bit_and(b1, 15.0), 2.0), bit_shr(b2, 6.0))
+    let c3 = bit_and(b2, 63.0)
+    result = result + b64_char(c0)
+    result = result + b64_char(c1)
+    if have1 == 1.0
+      result = result + b64_char(c2)
+    else
+      result = result + "="
+    end
+    if have2 == 1.0
+      result = result + b64_char(c3)
+    else
+      result = result + "="
+    end
+    i = i + 3.0
+  end
+  return result
+end
+
+fn b64_decode(s)
+  let mut out = []
+  let n = len(s)
+  if n == 0.0
+    return out
+  end
+  let mut i = 0.0
+  while i < n
+    let ch0 = char_at(s, i)
+    let ch1 = char_at(s, i + 1.0)
+    let ch2 = char_at(s, i + 2.0)
+    let ch3 = char_at(s, i + 3.0)
+    let v0 = b64_val(ch0)
+    let v1 = b64_val(ch1)
+    let v2 = b64_val(ch2)
+    let v3 = b64_val(ch3)
+    let byte0 = bit_or(bit_shl(v0, 2.0), bit_shr(v1, 4.0))
+    push(out, byte0)
+    if ch2 != "="
+      let byte1 = bit_and(bit_or(bit_shl(v1, 4.0), bit_shr(v2, 2.0)), 255.0)
+      push(out, byte1)
+    end
+    if ch3 != "="
+      let byte2 = bit_and(bit_or(bit_shl(v2, 6.0), v3), 255.0)
+      push(out, byte2)
+    end
+    i = i + 4.0
+  end
+  return out
+end
+
+// -- Tests --
+
+print("=== test_base64 ===")
+
+// Test 1: b64_char lookup boundaries
+let ch_a = b64_char(0.0)
+if ch_a == "A"
+  pass = pass + 1.0
+else
+  print("  FAIL: b64_char(0) expected A got {ch_a}")
+  fail = fail + 1.0
+end
+
+let ch_z = b64_char(25.0)
+if ch_z == "Z"
+  pass = pass + 1.0
+else
+  print("  FAIL: b64_char(25) expected Z got {ch_z}")
+  fail = fail + 1.0
+end
+
+let ch_slash = b64_char(63.0)
+if ch_slash == "/"
+  pass = pass + 1.0
+else
+  print("  FAIL: b64_char(63) expected / got {ch_slash}")
+  fail = fail + 1.0
+end
+
+// Test 2: b64_val lookup
+let val_a = b64_val("A")
+if val_a == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: b64_val(A) expected 0 got {val_a}")
+  fail = fail + 1.0
+end
+
+let val_plus = b64_val("+")
+if val_plus == 62.0
+  pass = pass + 1.0
+else
+  print("  FAIL: b64_val(+) expected 62 got {val_plus}")
+  fail = fail + 1.0
+end
+
+let val_pad = b64_val("=")
+if val_pad == -1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: b64_val(=) expected -1 got {val_pad}")
+  fail = fail + 1.0
+end
+
+// Test 3: encode "Hello" -> "SGVsbG8="
+let hello_bytes = [72.0, 101.0, 108.0, 108.0, 111.0]
+let enc_hello = b64_encode(hello_bytes)
+if enc_hello == "SGVsbG8="
+  pass = pass + 1.0
+else
+  print("  FAIL: encode Hello expected SGVsbG8= got {enc_hello}")
+  fail = fail + 1.0
+end
+
+// Test 4: encode "Hi" -> "SGk=" (1 padding char)
+let hi_bytes = [72.0, 105.0]
+let enc_hi = b64_encode(hi_bytes)
+if enc_hi == "SGk="
+  pass = pass + 1.0
+else
+  print("  FAIL: encode Hi expected SGk= got {enc_hi}")
+  fail = fail + 1.0
+end
+
+// Test 5: encode "A" -> "QQ==" (2 padding chars)
+let a_bytes = [65.0]
+let enc_a = b64_encode(a_bytes)
+if enc_a == "QQ=="
+  pass = pass + 1.0
+else
+  print("  FAIL: encode A expected QQ== got {enc_a}")
+  fail = fail + 1.0
+end
+
+// Test 6: encode "Man" -> "TWFu" (no padding, 3 bytes exact)
+let man_bytes = [77.0, 97.0, 110.0]
+let enc_man = b64_encode(man_bytes)
+if enc_man == "TWFu"
+  pass = pass + 1.0
+else
+  print("  FAIL: encode Man expected TWFu got {enc_man}")
+  fail = fail + 1.0
+end
+
+// Test 7: decode "SGVsbG8=" -> Hello bytes
+let dec_hello = b64_decode("SGVsbG8=")
+let dec_hello_len = len(dec_hello)
+if dec_hello_len == 5.0
+  if dec_hello[0] == 72.0 && dec_hello[1] == 101.0 && dec_hello[2] == 108.0 && dec_hello[3] == 108.0 && dec_hello[4] == 111.0
+    pass = pass + 1.0
+  else
+    print("  FAIL: decode SGVsbG8= wrong bytes")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL: decode SGVsbG8= expected 5 bytes got {dec_hello_len}")
+  fail = fail + 1.0
+end
+
+// Test 8: decode "QQ==" -> [65]
+let dec_a = b64_decode("QQ==")
+let dec_a_len = len(dec_a)
+if dec_a_len == 1.0
+  if dec_a[0] == 65.0
+    pass = pass + 1.0
+  else
+    let da0 = dec_a[0]
+    print("  FAIL: decode QQ== expected 65 got {da0}")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL: decode QQ== expected 1 byte got {dec_a_len}")
+  fail = fail + 1.0
+end
+
+// Test 9: round-trip with binary data (0, 127, 255)
+let bin_bytes = [0.0, 127.0, 255.0]
+let enc_bin = b64_encode(bin_bytes)
+let dec_bin = b64_decode(enc_bin)
+let dec_bin_len = len(dec_bin)
+if dec_bin_len == 3.0
+  if dec_bin[0] == 0.0 && dec_bin[1] == 127.0 && dec_bin[2] == 255.0
+    pass = pass + 1.0
+  else
+    print("  FAIL: round-trip [0,127,255] mismatch")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL: round-trip [0,127,255] expected 3 bytes got {dec_bin_len}")
+  fail = fail + 1.0
+end
+
+// Test 10: round-trip with longer data (byte range 0-7)
+let range_bytes = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+let enc_range = b64_encode(range_bytes)
+let dec_range = b64_decode(enc_range)
+let dec_range_len = len(dec_range)
+if dec_range_len == 8.0
+  if dec_range[0] == 0.0 && dec_range[1] == 1.0 && dec_range[2] == 2.0 && dec_range[3] == 3.0
+    if dec_range[4] == 4.0 && dec_range[5] == 5.0 && dec_range[6] == 6.0 && dec_range[7] == 7.0
+      pass = pass + 1.0
+    else
+      print("  FAIL: round-trip [0..7] high bytes mismatch")
+      fail = fail + 1.0
+    end
+  else
+    print("  FAIL: round-trip [0..7] low bytes mismatch")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL: round-trip [0..7] expected 8 bytes got {dec_range_len}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_base64 ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end
