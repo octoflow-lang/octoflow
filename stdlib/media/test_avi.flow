@@ -1,0 +1,333 @@
+// test_avi.flow — Tests for stdlib/media/avi.flow
+// Tests AVI/RIFF parsing: helpers, container structure, frame extraction
+// Run: octoflow run stdlib/media/test_avi.flow --allow-read
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+use avi
+
+// ─── Test avi_u16le / avi_u32le ────────────────────────────────
+let mut tb = [0.0, 1.0, 255.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+
+let v16a = avi_u16le(tb, 0.0)
+if v16a == 256.0
+  pass = pass + 1.0
+else
+  print("FAIL u16le(0,1) expected 256, got {v16a}")
+  fail = fail + 1.0
+end
+
+let v16b = avi_u16le(tb, 2.0)
+if v16b == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL u16le(255,0) expected 255, got {v16b}")
+  fail = fail + 1.0
+end
+
+let v32a = avi_u32le(tb, 0.0)
+// bytes: 0, 1, 255, 0 → 0 + 256 + 255*65536 + 0 = 16711936
+if v32a == 16711936.0
+  pass = pass + 1.0
+else
+  print("FAIL u32le expected 16711936, got {v32a}")
+  fail = fail + 1.0
+end
+
+let v32b = avi_u32le(tb, 4.0)
+// bytes: 1, 0, 0, 1 → 1 + 0 + 0 + 16777216 = 16777217
+if v32b == 16777217.0
+  pass = pass + 1.0
+else
+  print("FAIL u32le expected 16777217, got {v32b}")
+  fail = fail + 1.0
+end
+
+// ─── Test avi_fourcc ───────────────────────────────────────────
+// "RIFF" = 82, 73, 70, 70
+let mut fcc_bytes = [82.0, 73.0, 70.0, 70.0, 65.0, 86.0, 73.0, 32.0]
+let fcc1 = avi_fourcc(fcc_bytes, 0.0)
+if fcc1 == "RIFF"
+  pass = pass + 1.0
+else
+  print("FAIL fourcc expected RIFF, got {fcc1}")
+  fail = fail + 1.0
+end
+
+let fcc2 = avi_fourcc(fcc_bytes, 4.0)
+if fcc2 == "AVI "
+  pass = pass + 1.0
+else
+  print("FAIL fourcc expected 'AVI ', got {fcc2}")
+  fail = fail + 1.0
+end
+
+// ─── Test avi_pad ──────────────────────────────────────────────
+let p1 = avi_pad(5.0)
+if p1 == 6.0
+  pass = pass + 1.0
+else
+  print("FAIL pad(5) expected 6, got {p1}")
+  fail = fail + 1.0
+end
+
+let p2 = avi_pad(4.0)
+if p2 == 4.0
+  pass = pass + 1.0
+else
+  print("FAIL pad(4) expected 4, got {p2}")
+  fail = fail + 1.0
+end
+
+// ─── Test avi_parse with minimal AVI ──────────────────────────
+// Build a minimal RIFF AVI with:
+//   - hdrl LIST with avih chunk (56 bytes) + strl LIST with strf
+//   - movi LIST with one 4-byte 00dc frame
+//
+// Helpers to push a u32le
+fn push_u32le(arr, val)
+  let mut v = val
+  let b0 = v - floor(v / 256.0) * 256.0
+  v = floor(v / 256.0)
+  let b1 = v - floor(v / 256.0) * 256.0
+  v = floor(v / 256.0)
+  let b2 = v - floor(v / 256.0) * 256.0
+  v = floor(v / 256.0)
+  let b3 = v
+  push(arr, b0)
+  push(arr, b1)
+  push(arr, b2)
+  push(arr, b3)
+  return 0.0
+end
+
+fn push_str4(arr, s)
+  push(arr, ord(char_at(s, 0.0)))
+  push(arr, ord(char_at(s, 1.0)))
+  push(arr, ord(char_at(s, 2.0)))
+  push(arr, ord(char_at(s, 3.0)))
+  return 0.0
+end
+
+// Build AVI byte by byte
+let mut avi = []
+
+// RIFF header (filled in at end)
+push_str4(avi, "RIFF")
+push_u32le(avi, 0.0)   // placeholder for total size
+push_str4(avi, "AVI ")
+
+// hdrl LIST
+let hdrl_start = len(avi)
+push_str4(avi, "LIST")
+push_u32le(avi, 0.0)   // placeholder
+push_str4(avi, "hdrl")
+
+// avih chunk (56 bytes of main header)
+push_str4(avi, "avih")
+push_u32le(avi, 56.0)  // chunk size
+// avih data: us_per_frame (offset +0)
+push_u32le(avi, 40000.0)  // 40000 us = 25 fps
+// avih data: max_bytes_per_sec (+4), padding_granularity (+8), flags (+12)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+// total_frames (+16), initial_frames (+20), streams (+24), suggested_buf (+28)
+push_u32le(avi, 1.0)
+push_u32le(avi, 0.0)
+push_u32le(avi, 1.0)
+push_u32le(avi, 0.0)
+// width (+32), height (+36)
+push_u32le(avi, 8.0)   // 8 pixels wide
+push_u32le(avi, 6.0)   // 6 pixels tall
+// reserved[4] (+40 to +55)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+
+// strl LIST with strf
+let strl_start = len(avi)
+push_str4(avi, "LIST")
+push_u32le(avi, 0.0)   // placeholder
+push_str4(avi, "strl")
+
+// strh chunk (minimal — just needs to exist)
+push_str4(avi, "strh")
+push_u32le(avi, 8.0)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+
+// strf chunk (BITMAPINFOHEADER: size, width, height, ...)
+push_str4(avi, "strf")
+push_u32le(avi, 40.0)  // chunk size = sizeof(BITMAPINFOHEADER)
+push_u32le(avi, 40.0)  // biSize
+push_u32le(avi, 16.0)  // biWidth = 16
+push_u32le(avi, 12.0)  // biHeight = 12
+// rest of BITMAPINFOHEADER (planes, bitcount, compression, etc.)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+push_u32le(avi, 0.0)
+
+// Fix strl LIST size
+let strl_size = len(avi) - strl_start - 8.0
+let strl_off = strl_start + 4.0
+avi[int(strl_off)] = strl_size - floor(strl_size / 256.0) * 256.0
+avi[int(strl_off + 1.0)] = floor(strl_size / 256.0) - floor(strl_size / 65536.0) * 256.0
+avi[int(strl_off + 2.0)] = floor(strl_size / 65536.0) - floor(strl_size / 16777216.0) * 256.0
+avi[int(strl_off + 3.0)] = floor(strl_size / 16777216.0)
+
+// Fix hdrl LIST size
+let hdrl_size = len(avi) - hdrl_start - 8.0
+let hdrl_off = hdrl_start + 4.0
+avi[int(hdrl_off)] = hdrl_size - floor(hdrl_size / 256.0) * 256.0
+avi[int(hdrl_off + 1.0)] = floor(hdrl_size / 256.0) - floor(hdrl_size / 65536.0) * 256.0
+avi[int(hdrl_off + 2.0)] = floor(hdrl_size / 65536.0) - floor(hdrl_size / 16777216.0) * 256.0
+avi[int(hdrl_off + 3.0)] = floor(hdrl_size / 16777216.0)
+
+// movi LIST
+let movi_start = len(avi)
+push_str4(avi, "LIST")
+push_u32le(avi, 0.0)   // placeholder
+push_str4(avi, "movi")
+
+// One video frame: 00dc with 4 bytes of fake JPEG data
+push_str4(avi, "00dc")
+push_u32le(avi, 4.0)
+push(avi, 0xFF)
+push(avi, 0xD8)
+push(avi, 0xFF)
+push(avi, 0xD9)
+
+// Fix movi LIST size
+let movi_size = len(avi) - movi_start - 8.0
+let movi_off = movi_start + 4.0
+avi[int(movi_off)] = movi_size - floor(movi_size / 256.0) * 256.0
+avi[int(movi_off + 1.0)] = floor(movi_size / 256.0) - floor(movi_size / 65536.0) * 256.0
+avi[int(movi_off + 2.0)] = floor(movi_size / 65536.0) - floor(movi_size / 16777216.0) * 256.0
+avi[int(movi_off + 3.0)] = floor(movi_size / 16777216.0)
+
+// Fix RIFF total size (file size - 8)
+let riff_size = len(avi) - 8.0
+avi[4] = riff_size - floor(riff_size / 256.0) * 256.0
+avi[5] = floor(riff_size / 256.0) - floor(riff_size / 65536.0) * 256.0
+avi[6] = floor(riff_size / 65536.0) - floor(riff_size / 16777216.0) * 256.0
+avi[7] = floor(riff_size / 16777216.0)
+
+// ─── Parse and verify ──────────────────────────────────────────
+let info = avi_parse(avi)
+
+let aok = info["ok"]
+if aok == 1.0
+  pass = pass + 1.0
+else
+  let aerr = info["error"]
+  print("FAIL avi_parse ok expected 1, got error: {aerr}")
+  fail = fail + 1.0
+end
+
+// Width should be 16 (from strf BITMAPINFOHEADER, overrides avih)
+let aw = info["width"]
+if aw == 16.0
+  pass = pass + 1.0
+else
+  print("FAIL avi width expected 16, got {aw}")
+  fail = fail + 1.0
+end
+
+let ah = info["height"]
+if ah == 12.0
+  pass = pass + 1.0
+else
+  print("FAIL avi height expected 12, got {ah}")
+  fail = fail + 1.0
+end
+
+let afc = info["frame_count"]
+if afc == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL avi frame_count expected 1, got {afc}")
+  fail = fail + 1.0
+end
+
+// FPS should be 1000000/40000 = 25
+let afps = info["fps"]
+if afps == 25.0
+  pass = pass + 1.0
+else
+  print("FAIL avi fps expected 25, got {afps}")
+  fail = fail + 1.0
+end
+
+// Test frame extraction
+let frame0 = avi_get_frame(avi, 0.0)
+let flen = len(frame0)
+if flen == 4.0
+  pass = pass + 1.0
+else
+  print("FAIL frame0 length expected 4, got {flen}")
+  fail = fail + 1.0
+end
+
+// Verify frame bytes are JPEG SOI/EOI markers
+if flen >= 4.0
+  let fb0 = frame0[0]
+  let fb1 = frame0[1]
+  let fb2 = frame0[2]
+  let fb3 = frame0[3]
+  if fb0 == 255.0
+    if fb1 == 216.0
+      if fb2 == 255.0
+        if fb3 == 217.0
+          pass = pass + 1.0
+        else
+          print("FAIL frame byte3 expected 217 (0xD9), got {fb3}")
+          fail = fail + 1.0
+        end
+      else
+        print("FAIL frame byte2 expected 255 (0xFF), got {fb2}")
+        fail = fail + 1.0
+      end
+    else
+      print("FAIL frame byte1 expected 216 (0xD8), got {fb1}")
+      fail = fail + 1.0
+    end
+  else
+    print("FAIL frame byte0 expected 255 (0xFF), got {fb0}")
+    fail = fail + 1.0
+  end
+end
+
+// Test avi_offsets array
+let num_offsets = len(avi_offsets)
+if num_offsets == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL avi_offsets length expected 2 (1 frame * 2), got {num_offsets}")
+  fail = fail + 1.0
+end
+
+// Test error handling: not a RIFF file
+let mut bad = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let bad_info = avi_parse(bad)
+let bok = bad_info["ok"]
+if bok == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL bad file should return ok=0")
+  fail = fail + 1.0
+end
+
+// ─── Summary ─────────────────────────────────────────────────
+let total = pass + fail
+print("")
+print("avi.flow tests: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

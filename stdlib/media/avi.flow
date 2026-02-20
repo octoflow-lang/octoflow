@@ -1,0 +1,216 @@
+// avi.flow — Pure OctoFlow AVI/RIFF container parser
+// Parses AVI files to extract video metadata and frame locations.
+// Frame data is raw bytes (typically MJPEG) — decoding is separate.
+//
+// Usage:
+//   let bytes = read_bytes("video.avi")
+//   let info = avi_parse(bytes)
+//   // info["width"], info["height"], info["fps"], info["frame_count"], info["ok"]
+//   // avi_offsets = [off0, len0, off1, len1, ...] frame byte ranges
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+fn avi_u16le(bytes, pos)
+  let lo = bytes[int(pos)]
+  let hi = bytes[int(pos + 1.0)]
+  return hi * 256.0 + lo
+end
+
+fn avi_u32le(bytes, pos)
+  let b0 = bytes[int(pos)]
+  let b1 = bytes[int(pos + 1.0)]
+  let b2 = bytes[int(pos + 2.0)]
+  let b3 = bytes[int(pos + 3.0)]
+  return b0 + b1 * 256.0 + b2 * 65536.0 + b3 * 16777216.0
+end
+
+// Build a 4-char string from bytes at pos
+fn avi_fourcc(bytes, pos)
+  let c0 = chr(bytes[int(pos)])
+  let c1 = chr(bytes[int(pos + 1.0)])
+  let c2 = chr(bytes[int(pos + 2.0)])
+  let c3 = chr(bytes[int(pos + 3.0)])
+  return c0 + c1 + c2 + c3
+end
+
+// Pad size to even (RIFF chunks are word-aligned)
+fn avi_pad(size)
+  return size + bit_and(size, 1.0)
+end
+
+// ─── Module-level result arrays ──────────────────────────────
+
+// Frame offsets: flat pairs [offset0, length0, offset1, length1, ...]
+let mut avi_offsets = []
+
+// ─── Main Parser ─────────────────────────────────────────────
+
+fn avi_parse(bytes)
+  let n = len(bytes)
+  let mut result = map()
+
+  // Verify RIFF AVI signature
+  if n < 12.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "AVI: too short")
+    return result
+  end
+
+  let sig = avi_fourcc(bytes, 0.0)
+  if sig != "RIFF"
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "AVI: not a RIFF file")
+    return result
+  end
+
+  let fmt = avi_fourcc(bytes, 8.0)
+  if fmt != "AVI "
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "AVI: not an AVI file")
+    return result
+  end
+
+  let mut width = 0.0
+  let mut height = 0.0
+  let mut us_per_frame = 33333.0
+  let mut frame_count = 0.0
+
+  // Clear module-level offsets
+  while len(avi_offsets) > 0.0
+    pop(avi_offsets)
+  end
+
+  // Walk top-level RIFF chunks starting after "RIFF" + size + "AVI "
+  let mut pos = 12.0
+  while pos + 8.0 <= n
+    let tag = avi_fourcc(bytes, pos)
+    let size = avi_u32le(bytes, pos + 4.0)
+    let chunk_end = pos + 8.0 + size
+
+    if tag == "LIST"
+      if pos + 12.0 <= n
+        let list_type = avi_fourcc(bytes, pos + 8.0)
+
+        if list_type == "movi"
+          // Scan for video frame chunks
+          let mut mpos = pos + 12.0
+          let mend = chunk_end
+          if mend > n
+            mend = n
+          end
+          while mpos + 8.0 <= mend
+            let mtag = avi_fourcc(bytes, mpos)
+            let msize = avi_u32le(bytes, mpos + 4.0)
+            // 00dc = compressed video, 00db = uncompressed video
+            if mtag == "00dc"
+              if mpos + 8.0 + msize <= n
+                push(avi_offsets, mpos + 8.0)
+                push(avi_offsets, msize)
+                frame_count = frame_count + 1.0
+              end
+            elif mtag == "00db"
+              if mpos + 8.0 + msize <= n
+                push(avi_offsets, mpos + 8.0)
+                push(avi_offsets, msize)
+                frame_count = frame_count + 1.0
+              end
+            end
+            mpos = mpos + 8.0 + avi_pad(msize)
+          end
+
+        elif list_type == "hdrl"
+          // Parse AVI main header and stream headers
+          let mut hpos = pos + 12.0
+          let hend = chunk_end
+          if hend > n
+            hend = n
+          end
+          while hpos + 8.0 <= hend
+            let htag = avi_fourcc(bytes, hpos)
+            let hsize = avi_u32le(bytes, hpos + 4.0)
+
+            if htag == "avih"
+              if hsize >= 32.0
+                if hpos + 8.0 + 40.0 <= n
+                  us_per_frame = avi_u32le(bytes, hpos + 8.0)
+                  width = avi_u32le(bytes, hpos + 8.0 + 32.0)
+                  height = avi_u32le(bytes, hpos + 8.0 + 36.0)
+                end
+              end
+            elif htag == "LIST"
+              if hpos + 12.0 <= n
+                let sub_type = avi_fourcc(bytes, hpos + 8.0)
+                if sub_type == "strl"
+                  // Look for strf (stream format) inside
+                  let mut spos = hpos + 12.0
+                  let send = hpos + 8.0 + hsize
+                  while spos + 8.0 <= send
+                    if spos + 8.0 > n
+                      break
+                    end
+                    let stag = avi_fourcc(bytes, spos)
+                    let ssize = avi_u32le(bytes, spos + 4.0)
+                    if stag == "strf"
+                      if ssize >= 12.0
+                        if spos + 8.0 + 12.0 <= n
+                          // BITMAPINFOHEADER: biWidth at +4, biHeight at +8
+                          let bw = avi_u32le(bytes, spos + 8.0 + 4.0)
+                          let bh = avi_u32le(bytes, spos + 8.0 + 8.0)
+                          if bw > 0.0
+                            width = bw
+                          end
+                          if bh > 0.0
+                            height = bh
+                          end
+                        end
+                      end
+                    end
+                    spos = spos + 8.0 + avi_pad(ssize)
+                  end
+                end
+              end
+            end
+            hpos = hpos + 8.0 + avi_pad(hsize)
+          end
+        end
+      end
+    end
+
+    pos = pos + 8.0 + avi_pad(size)
+  end
+
+  if frame_count == 0.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "AVI: no video frames found")
+    return result
+  end
+
+  let mut fps = 30.0
+  if us_per_frame > 0.0
+    fps = 1000000.0 / us_per_frame
+  end
+
+  map_set(result, "width", width)
+  map_set(result, "height", height)
+  map_set(result, "fps", fps)
+  map_set(result, "frame_count", frame_count)
+  map_set(result, "ok", 1.0)
+  return result
+end
+
+// Extract frame N as a byte sub-array from the original AVI bytes
+fn avi_get_frame(bytes, frame_idx)
+  let pair_idx = frame_idx * 2.0
+  let total_pairs = len(avi_offsets)
+  if pair_idx + 1.0 >= total_pairs
+    let mut err = []
+    return err
+  end
+  let offset = avi_offsets[int(pair_idx)]
+  let flen = avi_offsets[int(pair_idx + 1.0)]
+  let mut frame = []
+  for i in range(0, int(flen))
+    push(frame, bytes[int(offset + i)])
+  end
+  return frame
+end
