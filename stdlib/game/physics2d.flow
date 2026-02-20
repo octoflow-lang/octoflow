@@ -1,0 +1,136 @@
+// stdlib/game/physics2d.flow — Simple 2D physics engine
+// Uses parallel arrays for body state (SoA layout for cache efficiency).
+// Arrays: bx, by (position), bvx, bvy (velocity), bmass, bradius
+
+fn phys_add_body(bx, by, bvx, bvy, bmass, bradius, x, y, vx, vy, mass, radius)
+  // Add a body to the physics system
+  push(bx, x)
+  push(by, y)
+  push(bvx, vx)
+  push(bvy, vy)
+  push(bmass, mass)
+  push(bradius, radius)
+  return len(bx) - 1.0
+end
+
+fn phys_gravity(by, bvy, bmass, dt, g)
+  // Apply gravity to all bodies: vy += g * dt
+  // g is positive downward (9.81 for standard gravity)
+  let n = len(bvy)
+  for i in range(0, n)
+    bvy[i] = bvy[i] + g * dt
+  end
+  return n
+end
+
+fn phys_integrate(bx, by, bvx, bvy, dt)
+  // Euler integration: pos += vel * dt
+  let n = len(bx)
+  for i in range(0, n)
+    bx[i] = bx[i] + bvx[i] * dt
+    by[i] = by[i] + bvy[i] * dt
+  end
+  return n
+end
+
+fn phys_bounce_walls(bx, by, bvx, bvy, bradius, min_x, min_y, max_x, max_y, restitution)
+  // Bounce bodies off axis-aligned walls with restitution coefficient
+  // restitution: 1.0 = perfectly elastic, 0.0 = perfectly inelastic
+  let n = len(bx)
+  let mut bounces = 0.0
+  for i in range(0, n)
+    let r = bradius[i]
+    // Left wall
+    if bx[i] - r < min_x
+      bx[i] = min_x + r
+      bvx[i] = 0.0 - bvx[i] * restitution
+      bounces = bounces + 1.0
+    end
+    // Right wall
+    if bx[i] + r > max_x
+      bx[i] = max_x - r
+      bvx[i] = 0.0 - bvx[i] * restitution
+      bounces = bounces + 1.0
+    end
+    // Bottom wall
+    if by[i] - r < min_y
+      by[i] = min_y + r
+      bvy[i] = 0.0 - bvy[i] * restitution
+      bounces = bounces + 1.0
+    end
+    // Top wall
+    if by[i] + r > max_y
+      by[i] = max_y - r
+      bvy[i] = 0.0 - bvy[i] * restitution
+      bounces = bounces + 1.0
+    end
+  end
+  return bounces
+end
+
+fn phys_dist_sq(x1, y1, x2, y2)
+  // Squared distance between two points (avoids sqrt)
+  let dx = x2 - x1
+  let dy = y2 - y1
+  return dx * dx + dy * dy
+end
+
+fn phys_collide_pairs(bx, by, bvx, bvy, bmass, bradius)
+  // Check all pairs for circle-circle overlap, apply elastic collision response
+  // Returns number of collisions detected
+  let n = len(bx)
+  let mut collisions = 0.0
+  for i in range(0, n)
+    let j_start = i + 1.0
+    for j in range(j_start, n)
+      let dx = bx[j] - bx[i]
+      let dy = by[j] - by[i]
+      let dist_sq = dx * dx + dy * dy
+      let min_dist = bradius[i] + bradius[j]
+      let min_dist_sq = min_dist * min_dist
+      if dist_sq < min_dist_sq && dist_sq > 0.0
+        // Collision detected
+        collisions = collisions + 1.0
+        let dist = sqrt(dist_sq)
+        // Normal vector from i to j
+        let nx = dx / dist
+        let ny = dy / dist
+        // Relative velocity of j w.r.t. i
+        let dvx = bvx[j] - bvx[i]
+        let dvy = bvy[j] - bvy[i]
+        // Relative velocity along normal
+        let dvn = dvx * nx + dvy * ny
+        // Only resolve if bodies are approaching
+        if dvn < 0.0
+          // Mass-based impulse (elastic collision)
+          let m_sum = bmass[i] + bmass[j]
+          let impulse = 2.0 * dvn / m_sum
+          // Apply impulse
+          bvx[i] = bvx[i] + impulse * bmass[j] * nx
+          bvy[i] = bvy[i] + impulse * bmass[j] * ny
+          bvx[j] = bvx[j] - impulse * bmass[i] * nx
+          bvy[j] = bvy[j] - impulse * bmass[i] * ny
+        end
+        // Separate overlapping bodies (push apart along normal)
+        let overlap = min_dist - dist
+        let sep = overlap / 2.0
+        bx[i] = bx[i] - sep * nx
+        by[i] = by[i] - sep * ny
+        bx[j] = bx[j] + sep * nx
+        by[j] = by[j] + sep * ny
+      end
+    end
+  end
+  return collisions
+end
+
+fn phys_kinetic_energy(bvx, bvy, bmass)
+  // Total kinetic energy: sum of 0.5 * m * v^2
+  let n = len(bvx)
+  let mut ke = 0.0
+  for i in range(0, n)
+    let v_sq = bvx[i] * bvx[i] + bvy[i] * bvy[i]
+    ke = ke + 0.5 * bmass[i] * v_sq
+  end
+  return ke
+end

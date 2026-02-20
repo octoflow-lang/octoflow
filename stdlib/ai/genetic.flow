@@ -1,0 +1,174 @@
+// stdlib/ai/genetic.flow — Simple genetic algorithm framework
+// Population stored as flat array: pop[i * gene_len + j] = gene j of individual i
+// All genes are floats in range [0.0, 1.0]
+
+fn ga_create_population(pop_size, gene_len)
+  // Create random population as flat array (pop_size * gene_len values)
+  let mut pop = []
+  let total = pop_size * gene_len
+  for i in range(0, total)
+    push(pop, random())
+  end
+  return pop
+end
+
+fn ga_evaluate(pop, pop_size, gene_len, fitness)
+  // Evaluate population: caller computes fitness externally and fills
+  // the fitness array. This helper extracts individual genes into a
+  // temp array for convenience and returns best fitness index.
+  let mut best_idx = 0.0
+  let mut best_fit = fitness[0]
+  for i in range(1, pop_size)
+    if fitness[i] > best_fit
+      best_fit = fitness[i]
+      best_idx = i
+    end
+  end
+  return best_idx
+end
+
+fn ga_select_tournament(fitness, pop_size, tournament_size)
+  // Tournament selection: pick tournament_size random individuals,
+  // return index of the one with highest fitness
+  let mut best_idx = floor(random() * pop_size)
+  if best_idx >= pop_size
+    best_idx = pop_size - 1.0
+  end
+  let mut best_fit = fitness[best_idx]
+  for t in range(1, tournament_size)
+    let mut cand = floor(random() * pop_size)
+    if cand >= pop_size
+      cand = pop_size - 1.0
+    end
+    if fitness[cand] > best_fit
+      best_fit = fitness[cand]
+      best_idx = cand
+    end
+  end
+  return best_idx
+end
+
+fn ga_crossover(parent1, parent2, gene_len, child)
+  // Single-point crossover: pick random point, copy genes from
+  // parent1 up to point, then parent2 after point.
+  // parent1/parent2 are gene arrays of length gene_len.
+  // child must be pre-allocated with gene_len elements.
+  let mut point = floor(random() * gene_len)
+  if point < 1.0
+    point = 1.0
+  end
+  if point >= gene_len
+    point = gene_len - 1.0
+  end
+  for i in range(0, gene_len)
+    if i < point
+      child[i] = parent1[i]
+    else
+      child[i] = parent2[i]
+    end
+  end
+  return point
+end
+
+fn ga_mutate(individual, gene_len, mutation_rate)
+  // Mutate genes: each gene has mutation_rate probability of being
+  // replaced with a new random value in [0.0, 1.0]
+  let mut mutations = 0.0
+  for i in range(0, gene_len)
+    let r = random()
+    if r < mutation_rate
+      individual[i] = random()
+      mutations = mutations + 1.0
+    end
+  end
+  return mutations
+end
+
+fn ga_get_individual(pop, idx, gene_len, dest)
+  // Extract individual idx from flat population into dest array
+  // dest must be pre-allocated with gene_len elements
+  let base = idx * gene_len
+  for j in range(0, gene_len)
+    dest[j] = pop[base + j]
+  end
+  return 0.0
+end
+
+fn ga_set_individual(pop, idx, gene_len, src)
+  // Copy src genes into flat population at individual idx
+  let base = idx * gene_len
+  for j in range(0, gene_len)
+    pop[base + j] = src[j]
+  end
+  return 0.0
+end
+
+fn ga_evolve(pop, pop_size, gene_len, fitness, mutation_rate, elitism)
+  // One generation step:
+  //   1. Find top `elitism` individuals (copy them unchanged)
+  //   2. Fill rest via tournament selection + crossover + mutation
+  // Returns new population as flat array
+  let total = pop_size * gene_len
+  let mut new_pop = []
+  for i in range(0, total)
+    push(new_pop, 0.0)
+  end
+
+  // Find elite indices by sorting fitness (simple selection sort for top elitism)
+  let mut elite_idx = []
+  let mut used = []
+  for i in range(0, pop_size)
+    push(used, 0.0)
+  end
+  for e in range(0, elitism)
+    let mut best = -1.0
+    let mut best_fit = -999999.0
+    for i in range(0, pop_size)
+      if used[i] == 0.0 && fitness[i] > best_fit
+        best_fit = fitness[i]
+        best = i
+      end
+    end
+    if best >= 0.0
+      push(elite_idx, best)
+      used[best] = 1.0
+    end
+  end
+
+  // Copy elites to new population
+  let n_elites = len(elite_idx)
+  for e in range(0, n_elites)
+    let src_base = elite_idx[e] * gene_len
+    let dst_base = e * gene_len
+    for j in range(0, gene_len)
+      new_pop[dst_base + j] = pop[src_base + j]
+    end
+  end
+
+  // Pre-allocate temp arrays for crossover
+  let mut p1 = []
+  let mut p2 = []
+  let mut child = []
+  for j in range(0, gene_len)
+    push(p1, 0.0)
+    push(p2, 0.0)
+    push(child, 0.0)
+  end
+
+  // Fill remaining slots via selection + crossover + mutation
+  for i in range(n_elites, pop_size)
+    let idx1 = ga_select_tournament(fitness, pop_size, 3.0)
+    let idx2 = ga_select_tournament(fitness, pop_size, 3.0)
+    // Extract parents
+    let _r1 = ga_get_individual(pop, idx1, gene_len, p1)
+    let _r2 = ga_get_individual(pop, idx2, gene_len, p2)
+    // Crossover
+    let _cx = ga_crossover(p1, p2, gene_len, child)
+    // Mutation
+    let _mt = ga_mutate(child, gene_len, mutation_rate)
+    // Write child to new population
+    let _ws = ga_set_individual(new_pop, i, gene_len, child)
+  end
+
+  return new_pop
+end

@@ -1,0 +1,324 @@
+// test_genetic.flow — Tests for stdlib/ai/genetic.flow
+// Functions tested: ga_create_population, ga_evaluate, ga_select_tournament,
+//   ga_crossover, ga_mutate, ga_get_individual, ga_set_individual, ga_evolve
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from ai/genetic.flow --
+
+fn ga_create_population(pop_size, gene_len)
+  let mut pop = []
+  let total = pop_size * gene_len
+  for i in range(0, total)
+    push(pop, random())
+  end
+  return pop
+end
+
+fn ga_evaluate(pop, pop_size, gene_len, fitness)
+  let mut best_idx = 0.0
+  let mut best_fit = fitness[0]
+  for i in range(1, pop_size)
+    if fitness[i] > best_fit
+      best_fit = fitness[i]
+      best_idx = i
+    end
+  end
+  return best_idx
+end
+
+fn ga_select_tournament(fitness, pop_size, tournament_size)
+  let mut best_idx = floor(random() * pop_size)
+  if best_idx >= pop_size
+    best_idx = pop_size - 1.0
+  end
+  let mut best_fit = fitness[best_idx]
+  for t in range(1, tournament_size)
+    let mut cand = floor(random() * pop_size)
+    if cand >= pop_size
+      cand = pop_size - 1.0
+    end
+    if fitness[cand] > best_fit
+      best_fit = fitness[cand]
+      best_idx = cand
+    end
+  end
+  return best_idx
+end
+
+fn ga_crossover(parent1, parent2, gene_len, child)
+  let mut point = floor(random() * gene_len)
+  if point < 1.0
+    point = 1.0
+  end
+  if point >= gene_len
+    point = gene_len - 1.0
+  end
+  for i in range(0, gene_len)
+    if i < point
+      child[i] = parent1[i]
+    else
+      child[i] = parent2[i]
+    end
+  end
+  return point
+end
+
+fn ga_mutate(individual, gene_len, mutation_rate)
+  let mut mutations = 0.0
+  for i in range(0, gene_len)
+    let r = random()
+    if r < mutation_rate
+      individual[i] = random()
+      mutations = mutations + 1.0
+    end
+  end
+  return mutations
+end
+
+fn ga_get_individual(pop, idx, gene_len, dest)
+  let base = idx * gene_len
+  for j in range(0, gene_len)
+    dest[j] = pop[base + j]
+  end
+  return 0.0
+end
+
+fn ga_set_individual(pop, idx, gene_len, src)
+  let base = idx * gene_len
+  for j in range(0, gene_len)
+    pop[base + j] = src[j]
+  end
+  return 0.0
+end
+
+fn ga_evolve(pop, pop_size, gene_len, fitness, mutation_rate, elitism)
+  let total = pop_size * gene_len
+  let mut new_pop = []
+  for i in range(0, total)
+    push(new_pop, 0.0)
+  end
+  let mut elite_idx = []
+  let mut used = []
+  for i in range(0, pop_size)
+    push(used, 0.0)
+  end
+  for e in range(0, elitism)
+    let mut best = -1.0
+    let mut best_fit = -999999.0
+    for i in range(0, pop_size)
+      if used[i] == 0.0 && fitness[i] > best_fit
+        best_fit = fitness[i]
+        best = i
+      end
+    end
+    if best >= 0.0
+      push(elite_idx, best)
+      used[best] = 1.0
+    end
+  end
+  let n_elites = len(elite_idx)
+  for e in range(0, n_elites)
+    let src_base = elite_idx[e] * gene_len
+    let dst_base = e * gene_len
+    for j in range(0, gene_len)
+      new_pop[dst_base + j] = pop[src_base + j]
+    end
+  end
+  let mut p1 = []
+  let mut p2 = []
+  let mut child = []
+  for j in range(0, gene_len)
+    push(p1, 0.0)
+    push(p2, 0.0)
+    push(child, 0.0)
+  end
+  for i in range(n_elites, pop_size)
+    let idx1 = ga_select_tournament(fitness, pop_size, 3.0)
+    let idx2 = ga_select_tournament(fitness, pop_size, 3.0)
+    let _r1 = ga_get_individual(pop, idx1, gene_len, p1)
+    let _r2 = ga_get_individual(pop, idx2, gene_len, p2)
+    let _cx = ga_crossover(p1, p2, gene_len, child)
+    let _mt = ga_mutate(child, gene_len, mutation_rate)
+    let _ws = ga_set_individual(new_pop, i, gene_len, child)
+  end
+  return new_pop
+end
+
+// -- Tests --
+
+print("=== test_genetic ===")
+
+// Test 1: Create population — correct size
+let mut pop = ga_create_population(10.0, 5.0)
+let pop_len = len(pop)
+if pop_len == 50.0
+  pass = pass + 1.0
+else
+  print("  FAIL: population size expected 50 got {pop_len}")
+  fail = fail + 1.0
+end
+
+// Test 2: All genes in [0, 1]
+let mut all_valid = 1.0
+for i in range(0, pop_len)
+  if pop[i] < 0.0
+    all_valid = 0.0
+  end
+  if pop[i] > 1.0
+    all_valid = 0.0
+  end
+end
+if all_valid == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: some genes outside [0,1]")
+  fail = fail + 1.0
+end
+
+// Test 3: Evaluate finds best
+let mut fit = [3.0, 7.0, 1.0, 9.0, 5.0, 2.0, 8.0, 4.0, 6.0, 0.0]
+let best = ga_evaluate(pop, 10.0, 5.0, fit)
+if best == 3.0
+  pass = pass + 1.0
+else
+  print("  FAIL: evaluate expected best_idx=3 got {best}")
+  fail = fail + 1.0
+end
+
+// Test 4: Tournament selection returns valid index
+let sel = ga_select_tournament(fit, 10.0, 3.0)
+if sel >= 0.0 && sel < 10.0
+  pass = pass + 1.0
+else
+  print("  FAIL: tournament selection returned invalid index {sel}")
+  fail = fail + 1.0
+end
+
+// Test 5: Crossover produces valid child
+let mut p1 = [0.1, 0.2, 0.3, 0.4, 0.5]
+let mut p2 = [0.6, 0.7, 0.8, 0.9, 1.0]
+let mut ch = [0.0, 0.0, 0.0, 0.0, 0.0]
+let _cp = ga_crossover(p1, p2, 5.0, ch)
+// Each gene must come from either parent
+let mut child_valid = 1.0
+for i in range(0, 5)
+  let from_p1 = abs(ch[i] - p1[i]) < 0.001
+  let from_p2 = abs(ch[i] - p2[i]) < 0.001
+  if from_p1 == 0.0 && from_p2 == 0.0
+    child_valid = 0.0
+  end
+end
+if child_valid == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: crossover child has genes not from either parent")
+  fail = fail + 1.0
+end
+
+// Test 6: Mutation changes at least some genes (high rate, run multiple times)
+let mut orig = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+let mut to_mutate = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+let _nm = ga_mutate(to_mutate, 10.0, 0.9)
+// With 90% rate and 10 genes, at least one should differ
+let mut any_diff = 0.0
+for i in range(0, 10)
+  let diff = abs(to_mutate[i] - orig[i])
+  if diff > 0.001
+    any_diff = 1.0
+  end
+end
+if any_diff == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: mutation with 0.9 rate changed nothing (very unlikely)")
+  fail = fail + 1.0
+end
+
+// Test 7: Full evolution step preserves population size
+let mut pop2 = ga_create_population(8.0, 4.0)
+let mut fit2 = []
+for i in range(0, 8)
+  push(fit2, random() * 10.0)
+end
+let mut new_pop = ga_evolve(pop2, 8.0, 4.0, fit2, 0.1, 2.0)
+let new_len = len(new_pop)
+if new_len == 32.0
+  pass = pass + 1.0
+else
+  print("  FAIL: evolved population size expected 32 got {new_len}")
+  fail = fail + 1.0
+end
+
+// Test 8: Maximize sum-of-genes — fitness should improve over generations
+// Fitness = sum of genes. Optimal = all genes = 1.0
+let pop_sz = 20.0
+let gene_ln = 6.0
+let mut cur_pop = ga_create_population(pop_sz, gene_ln)
+
+// Compute initial average fitness
+let mut init_fit = []
+for i in range(0, pop_sz)
+  let mut fsum = 0.0
+  let base = i * gene_ln
+  for j in range(0, gene_ln)
+    fsum = fsum + cur_pop[base + j]
+  end
+  push(init_fit, fsum)
+end
+let mut init_total = 0.0
+for i in range(0, pop_sz)
+  init_total = init_total + init_fit[i]
+end
+let init_avg = init_total / pop_sz
+
+// Run 10 generations
+for gen in range(0, 10)
+  // Compute fitness
+  let mut gfit = []
+  for i in range(0, pop_sz)
+    let mut fsum = 0.0
+    let base = i * gene_ln
+    for j in range(0, gene_ln)
+      fsum = fsum + cur_pop[base + j]
+    end
+    push(gfit, fsum)
+  end
+  // Evolve
+  cur_pop = ga_evolve(cur_pop, pop_sz, gene_ln, gfit, 0.05, 2.0)
+end
+
+// Compute final average fitness
+let mut final_fit = []
+for i in range(0, pop_sz)
+  let mut fsum = 0.0
+  let base = i * gene_ln
+  for j in range(0, gene_ln)
+    fsum = fsum + cur_pop[base + j]
+  end
+  push(final_fit, fsum)
+end
+let mut final_total = 0.0
+for i in range(0, pop_sz)
+  final_total = final_total + final_fit[i]
+end
+let final_avg = final_total / pop_sz
+
+if final_avg > init_avg
+  pass = pass + 1.0
+else
+  print("  FAIL: fitness did not improve: init_avg={init_avg} final_avg={final_avg}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_genetic ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end
