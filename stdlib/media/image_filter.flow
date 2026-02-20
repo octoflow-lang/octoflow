@@ -1,0 +1,132 @@
+// image_filter.flow — Convolution filters for OctoFlow image processing
+// Works with flat (r, g, b) channel arrays of width*height floats (0-255)
+//
+// Usage:
+//   use image_filter
+//   let mut out_r = []
+//   let mut out_g = []
+//   let mut out_b = []
+//   img_blur_box(r, g, b, w, h, out_r, out_g, out_b)
+
+// ─── Generic Convolution ──────────────────────────────────────
+
+fn img_convolve(r, g, b, w, h, kernel, ksize, out_r, out_g, out_b)
+  let count = w * h
+  let half = floor(ksize / 2.0)
+  // Clear output arrays
+  while len(out_r) > 0.0
+    pop(out_r)
+  end
+  while len(out_g) > 0.0
+    pop(out_g)
+  end
+  while len(out_b) > 0.0
+    pop(out_b)
+  end
+  // Pre-fill output with zeros
+  let mut i = 0.0
+  while i < count
+    push(out_r, 0.0)
+    push(out_g, 0.0)
+    push(out_b, 0.0)
+    i = i + 1.0
+  end
+  // Apply convolution
+  let mut y = 0.0
+  while y < h
+    let mut x = 0.0
+    while x < w
+      let mut sum_r = 0.0
+      let mut sum_g = 0.0
+      let mut sum_b = 0.0
+      let mut ky = 0.0
+      while ky < ksize
+        let mut kx = 0.0
+        while kx < ksize
+          let sy = y + ky - half
+          let sx = x + kx - half
+          // Clamp to image bounds
+          let cy = clamp(sy, 0.0, h - 1.0)
+          let cx = clamp(sx, 0.0, w - 1.0)
+          let src_idx = int(cy * w + cx)
+          let k_idx = int(ky * ksize + kx)
+          let kv = kernel[k_idx]
+          sum_r = sum_r + r[src_idx] * kv
+          sum_g = sum_g + g[src_idx] * kv
+          sum_b = sum_b + b[src_idx] * kv
+          kx = kx + 1.0
+        end
+        ky = ky + 1.0
+      end
+      let dst_idx = int(y * w + x)
+      out_r[dst_idx] = clamp(sum_r, 0.0, 255.0)
+      out_g[dst_idx] = clamp(sum_g, 0.0, 255.0)
+      out_b[dst_idx] = clamp(sum_b, 0.0, 255.0)
+      x = x + 1.0
+    end
+    y = y + 1.0
+  end
+  return count
+end
+
+// ─── Preset Filters ───────────────────────────────────────────
+
+fn img_blur_box(r, g, b, w, h, out_r, out_g, out_b)
+  // 3x3 box blur kernel: each weight = 1/9
+  let v = 1.0 / 9.0
+  let mut kernel = [v, v, v, v, v, v, v, v, v]
+  let result = img_convolve(r, g, b, w, h, kernel, 3.0, out_r, out_g, out_b)
+  return result
+end
+
+fn img_sharpen(r, g, b, w, h, out_r, out_g, out_b)
+  // 3x3 sharpen kernel:  0 -1  0 / -1  5 -1 /  0 -1  0
+  let mut kernel = [0.0, -1.0, 0.0, -1.0, 5.0, -1.0, 0.0, -1.0, 0.0]
+  let result = img_convolve(r, g, b, w, h, kernel, 3.0, out_r, out_g, out_b)
+  return result
+end
+
+fn img_edge_detect(r, g, b, w, h, out_r, out_g, out_b)
+  // Laplacian edge detection: -1 -1 -1 / -1  8 -1 / -1 -1 -1
+  let mut kernel = [-1.0, -1.0, -1.0, -1.0, 8.0, -1.0, -1.0, -1.0, -1.0]
+  let result = img_convolve(r, g, b, w, h, kernel, 3.0, out_r, out_g, out_b)
+  return result
+end
+
+// ─── Point Operations ─────────────────────────────────────────
+
+fn img_threshold(r, g, b, count, thresh)
+  let mut i = 0.0
+  while i < count
+    let idx = int(i)
+    if r[idx] > thresh
+      r[idx] = 255.0
+    else
+      r[idx] = 0.0
+    end
+    if g[idx] > thresh
+      g[idx] = 255.0
+    else
+      g[idx] = 0.0
+    end
+    if b[idx] > thresh
+      b[idx] = 255.0
+    else
+      b[idx] = 0.0
+    end
+    i = i + 1.0
+  end
+  return count
+end
+
+fn img_invert(r, g, b, count)
+  let mut i = 0.0
+  while i < count
+    let idx = int(i)
+    r[idx] = 255.0 - r[idx]
+    g[idx] = 255.0 - g[idx]
+    b[idx] = 255.0 - b[idx]
+    i = i + 1.0
+  end
+  return count
+end

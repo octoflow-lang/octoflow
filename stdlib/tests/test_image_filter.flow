@@ -1,0 +1,282 @@
+// test_image_filter.flow — Tests for stdlib/media/image_filter.flow
+// Functions tested: img_convolve, img_blur_box, img_threshold, img_invert,
+//   img_edge_detect, img_sharpen
+// Run: octoflow run stdlib/tests/test_image_filter.flow
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from media/image_filter.flow --
+
+fn img_convolve(r, g, b, w, h, kernel, ksize, out_r, out_g, out_b)
+  let count = w * h
+  let half = floor(ksize / 2.0)
+  while len(out_r) > 0.0
+    pop(out_r)
+  end
+  while len(out_g) > 0.0
+    pop(out_g)
+  end
+  while len(out_b) > 0.0
+    pop(out_b)
+  end
+  let mut i = 0.0
+  while i < count
+    push(out_r, 0.0)
+    push(out_g, 0.0)
+    push(out_b, 0.0)
+    i = i + 1.0
+  end
+  let mut y = 0.0
+  while y < h
+    let mut x = 0.0
+    while x < w
+      let mut sum_r = 0.0
+      let mut sum_g = 0.0
+      let mut sum_b = 0.0
+      let mut ky = 0.0
+      while ky < ksize
+        let mut kx = 0.0
+        while kx < ksize
+          let sy = y + ky - half
+          let sx = x + kx - half
+          let cy = clamp(sy, 0.0, h - 1.0)
+          let cx = clamp(sx, 0.0, w - 1.0)
+          let src_idx = int(cy * w + cx)
+          let k_idx = int(ky * ksize + kx)
+          let kv = kernel[k_idx]
+          sum_r = sum_r + r[src_idx] * kv
+          sum_g = sum_g + g[src_idx] * kv
+          sum_b = sum_b + b[src_idx] * kv
+          kx = kx + 1.0
+        end
+        ky = ky + 1.0
+      end
+      let dst_idx = int(y * w + x)
+      out_r[dst_idx] = clamp(sum_r, 0.0, 255.0)
+      out_g[dst_idx] = clamp(sum_g, 0.0, 255.0)
+      out_b[dst_idx] = clamp(sum_b, 0.0, 255.0)
+      x = x + 1.0
+    end
+    y = y + 1.0
+  end
+  return count
+end
+
+fn img_blur_box(r, g, b, w, h, out_r, out_g, out_b)
+  let v = 1.0 / 9.0
+  let mut kernel = [v, v, v, v, v, v, v, v, v]
+  let result = img_convolve(r, g, b, w, h, kernel, 3.0, out_r, out_g, out_b)
+  return result
+end
+
+fn img_sharpen(r, g, b, w, h, out_r, out_g, out_b)
+  let mut kernel = [0.0, -1.0, 0.0, -1.0, 5.0, -1.0, 0.0, -1.0, 0.0]
+  let result = img_convolve(r, g, b, w, h, kernel, 3.0, out_r, out_g, out_b)
+  return result
+end
+
+fn img_edge_detect(r, g, b, w, h, out_r, out_g, out_b)
+  let mut kernel = [-1.0, -1.0, -1.0, -1.0, 8.0, -1.0, -1.0, -1.0, -1.0]
+  let result = img_convolve(r, g, b, w, h, kernel, 3.0, out_r, out_g, out_b)
+  return result
+end
+
+fn img_threshold(r, g, b, count, thresh)
+  let mut i = 0.0
+  while i < count
+    let idx = int(i)
+    if r[idx] > thresh
+      r[idx] = 255.0
+    else
+      r[idx] = 0.0
+    end
+    if g[idx] > thresh
+      g[idx] = 255.0
+    else
+      g[idx] = 0.0
+    end
+    if b[idx] > thresh
+      b[idx] = 255.0
+    else
+      b[idx] = 0.0
+    end
+    i = i + 1.0
+  end
+  return count
+end
+
+fn img_invert(r, g, b, count)
+  let mut i = 0.0
+  while i < count
+    let idx = int(i)
+    r[idx] = 255.0 - r[idx]
+    g[idx] = 255.0 - g[idx]
+    b[idx] = 255.0 - b[idx]
+    i = i + 1.0
+  end
+  return count
+end
+
+// -- Tests --
+
+print("=== test_image_filter ===")
+
+// Test 1: box blur — uniform image stays uniform
+// 3x3 image all 100.0 => blur should keep 100.0
+let mut br = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+let mut bg = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+let mut bb = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+let mut bor = []
+let mut bog = []
+let mut bob = []
+let blur_res = img_blur_box(br, bg, bb, 3.0, 3.0, bor, bog, bob)
+let blur_diff = abs(bor[4] - 100.0)
+if blur_diff < 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: box blur uniform center={bor[4]}")
+  fail = fail + 1.0
+end
+
+// Test 2: box blur — center pixel becomes average of neighbors
+// 3x3 image: center=90, all others=0 => center blurred = 90/9 = 10
+let mut br2 = [0.0, 0.0, 0.0, 0.0, 90.0, 0.0, 0.0, 0.0, 0.0]
+let mut bg2 = [0.0, 0.0, 0.0, 0.0, 90.0, 0.0, 0.0, 0.0, 0.0]
+let mut bb2 = [0.0, 0.0, 0.0, 0.0, 90.0, 0.0, 0.0, 0.0, 0.0]
+let mut bor2 = []
+let mut bog2 = []
+let mut bob2 = []
+let blur_res2 = img_blur_box(br2, bg2, bb2, 3.0, 3.0, bor2, bog2, bob2)
+let blur_center = bor2[4]
+let blur_diff2 = abs(blur_center - 10.0)
+if blur_diff2 < 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: box blur center expected ~10, got {blur_center}")
+  fail = fail + 1.0
+end
+
+// Test 3: threshold — values above/below threshold
+let mut tr = [50.0, 150.0, 200.0]
+let mut tg = [50.0, 150.0, 200.0]
+let mut tb = [50.0, 150.0, 200.0]
+let th_res = img_threshold(tr, tg, tb, 3.0, 100.0)
+if tr[0] == 0.0 && tr[1] == 255.0 && tr[2] == 255.0
+  pass = pass + 1.0
+else
+  print("  FAIL: threshold")
+  fail = fail + 1.0
+end
+
+// Test 4: threshold — exact boundary (100 is NOT > 100, so goes to 0)
+let mut tr2 = [100.0]
+let mut tg2 = [100.0]
+let mut tb2 = [100.0]
+let th_res2 = img_threshold(tr2, tg2, tb2, 1.0, 100.0)
+if tr2[0] == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: threshold boundary expected 0, got {tr2[0]}")
+  fail = fail + 1.0
+end
+
+// Test 5: invert — 0 -> 255
+let mut ir = [0.0]
+let mut ig = [0.0]
+let mut ib = [0.0]
+let inv_res = img_invert(ir, ig, ib, 1.0)
+if ir[0] == 255.0 && ig[0] == 255.0 && ib[0] == 255.0
+  pass = pass + 1.0
+else
+  print("  FAIL: invert 0->255")
+  fail = fail + 1.0
+end
+
+// Test 6: invert — 255 -> 0
+let mut ir2 = [255.0]
+let mut ig2 = [255.0]
+let mut ib2 = [255.0]
+let inv_res2 = img_invert(ir2, ig2, ib2, 1.0)
+if ir2[0] == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: invert 255->0: got {ir2[0]}")
+  fail = fail + 1.0
+end
+
+// Test 7: invert — 128 -> 127
+let mut ir3 = [128.0]
+let mut ig3 = [128.0]
+let mut ib3 = [128.0]
+let inv_res3 = img_invert(ir3, ig3, ib3, 1.0)
+if ir3[0] == 127.0
+  pass = pass + 1.0
+else
+  print("  FAIL: invert 128->127: got {ir3[0]}")
+  fail = fail + 1.0
+end
+
+// Test 8: edge detect — flat region = 0
+// 3x3 uniform image => Laplacian edge kernel gives 0 everywhere
+let mut er = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+let mut eg2 = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+let mut eb = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+let mut eor = []
+let mut eog = []
+let mut eob = []
+let edge_res = img_edge_detect(er, eg2, eb, 3.0, 3.0, eor, eog, eob)
+let edge_center = eor[4]
+if abs(edge_center) < 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: edge detect flat center={edge_center}")
+  fail = fail + 1.0
+end
+
+// Test 9: edge detect — edge region > 0
+// 3x3 image with sharp edge: left col=0, right cols=255
+let mut er2 = [0.0, 255.0, 255.0, 0.0, 255.0, 255.0, 0.0, 255.0, 255.0]
+let mut erg2 = [0.0, 255.0, 255.0, 0.0, 255.0, 255.0, 0.0, 255.0, 255.0]
+let mut erb2 = [0.0, 255.0, 255.0, 0.0, 255.0, 255.0, 0.0, 255.0, 255.0]
+let mut eor2 = []
+let mut eog2 = []
+let mut eob2 = []
+let edge_res2 = img_edge_detect(er2, erg2, erb2, 3.0, 3.0, eor2, eog2, eob2)
+let edge_center2 = eor2[4]
+if edge_center2 > 10.0
+  pass = pass + 1.0
+else
+  print("  FAIL: edge detect with edge expected >10, got {edge_center2}")
+  fail = fail + 1.0
+end
+
+// Test 10: sharpen — center pixel enhanced vs original
+// 3x3 image with center brighter than surround
+let mut sr = [50.0, 50.0, 50.0, 50.0, 100.0, 50.0, 50.0, 50.0, 50.0]
+let mut sg = [50.0, 50.0, 50.0, 50.0, 100.0, 50.0, 50.0, 50.0, 50.0]
+let mut sb = [50.0, 50.0, 50.0, 50.0, 100.0, 50.0, 50.0, 50.0, 50.0]
+let mut sor = []
+let mut sog = []
+let mut sob = []
+let sharp_res = img_sharpen(sr, sg, sb, 3.0, 3.0, sor, sog, sob)
+// Sharpen: 0*50 + (-1)*50 + 0*50 + (-1)*50 + 5*100 + (-1)*50 + 0*50 + (-1)*50 + 0*50
+// = -200 + 500 = 300, clamped to 255
+let sharp_center = sor[4]
+if sharp_center > 100.0
+  pass = pass + 1.0
+else
+  print("  FAIL: sharpen center expected >100, got {sharp_center}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_image_filter ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

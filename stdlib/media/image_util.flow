@@ -1,0 +1,249 @@
+// image_util.flow — Image processing utilities for OctoFlow
+// Images stored as 3 flat arrays (r, g, b) of width*height floats (0-255)
+// Pixel at (x, y) is at index y * width + x
+//
+// Usage:
+//   use image_util
+//   let mut r = []
+//   let mut g = []
+//   let mut b = []
+//   img_fill(r, g, b, 4.0, 4.0, 128.0, 64.0, 32.0)
+
+// ─── Pixel Access ─────────────────────────────────────────────
+
+fn img_get_pixel(r, g, b, w, x, y, result)
+  let idx = int(y * w + x)
+  result[0] = r[idx]
+  result[1] = g[idx]
+  result[2] = b[idx]
+  return 1.0
+end
+
+fn img_set_pixel(r, g, b, w, x, y, pr, pg, pb)
+  let idx = int(y * w + x)
+  r[idx] = pr
+  g[idx] = pg
+  b[idx] = pb
+  return 1.0
+end
+
+// ─── Fill / Copy ──────────────────────────────────────────────
+
+fn img_fill(r, g, b, w, h, pr, pg, pb)
+  let count = w * h
+  // Clear arrays
+  while len(r) > 0.0
+    pop(r)
+  end
+  while len(g) > 0.0
+    pop(g)
+  end
+  while len(b) > 0.0
+    pop(b)
+  end
+  // Fill with color
+  let mut i = 0.0
+  while i < count
+    push(r, pr)
+    push(g, pg)
+    push(b, pb)
+    i = i + 1.0
+  end
+  return count
+end
+
+fn img_copy(src_r, src_g, src_b, dst_r, dst_g, dst_b, count)
+  // Clear destination
+  while len(dst_r) > 0.0
+    pop(dst_r)
+  end
+  while len(dst_g) > 0.0
+    pop(dst_g)
+  end
+  while len(dst_b) > 0.0
+    pop(dst_b)
+  end
+  // Copy pixels
+  let mut i = 0.0
+  while i < count
+    push(dst_r, src_r[int(i)])
+    push(dst_g, src_g[int(i)])
+    push(dst_b, src_b[int(i)])
+    i = i + 1.0
+  end
+  return count
+end
+
+// ─── Crop / Paste ─────────────────────────────────────────────
+
+fn img_crop(r, g, b, w, cx, cy, cw, ch, out_r, out_g, out_b)
+  // Clear output arrays
+  while len(out_r) > 0.0
+    pop(out_r)
+  end
+  while len(out_g) > 0.0
+    pop(out_g)
+  end
+  while len(out_b) > 0.0
+    pop(out_b)
+  end
+  // Extract rectangular region
+  let mut row = 0.0
+  while row < ch
+    let mut col = 0.0
+    while col < cw
+      let src_idx = int((cy + row) * w + (cx + col))
+      push(out_r, r[src_idx])
+      push(out_g, g[src_idx])
+      push(out_b, b[src_idx])
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+  return cw * ch
+end
+
+fn img_paste(dst_r, dst_g, dst_b, dst_w, src_r, src_g, src_b, src_w, src_h, px, py)
+  let mut row = 0.0
+  while row < src_h
+    let mut col = 0.0
+    while col < src_w
+      let src_idx = int(row * src_w + col)
+      let dst_idx = int((py + row) * dst_w + (px + col))
+      dst_r[dst_idx] = src_r[src_idx]
+      dst_g[dst_idx] = src_g[src_idx]
+      dst_b[dst_idx] = src_b[src_idx]
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+  return src_w * src_h
+end
+
+// ─── Flip ─────────────────────────────────────────────────────
+
+fn img_flip_h(r, g, b, w, h)
+  let half_w = floor(w / 2.0)
+  let mut row = 0.0
+  while row < h
+    let mut col = 0.0
+    while col < half_w
+      let left = int(row * w + col)
+      let right = int(row * w + (w - 1.0 - col))
+      // Swap r
+      let tr = r[left]
+      r[left] = r[right]
+      r[right] = tr
+      // Swap g
+      let tg = g[left]
+      g[left] = g[right]
+      g[right] = tg
+      // Swap b
+      let tb = b[left]
+      b[left] = b[right]
+      b[right] = tb
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+  return 1.0
+end
+
+fn img_flip_v(r, g, b, w, h)
+  let half_h = floor(h / 2.0)
+  let mut row = 0.0
+  while row < half_h
+    let mut col = 0.0
+    while col < w
+      let top = int(row * w + col)
+      let bot = int((h - 1.0 - row) * w + col)
+      // Swap r
+      let tr = r[top]
+      r[top] = r[bot]
+      r[bot] = tr
+      // Swap g
+      let tg = g[top]
+      g[top] = g[bot]
+      g[bot] = tg
+      // Swap b
+      let tb = b[top]
+      b[top] = b[bot]
+      b[bot] = tb
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+  return 1.0
+end
+
+// ─── Color Adjustments ────────────────────────────────────────
+
+fn img_grayscale(r, g, b, count)
+  let mut i = 0.0
+  while i < count
+    let idx = int(i)
+    let gray = floor(0.299 * r[idx] + 0.587 * g[idx] + 0.114 * b[idx])
+    let clamped = clamp(gray, 0.0, 255.0)
+    r[idx] = clamped
+    g[idx] = clamped
+    b[idx] = clamped
+    i = i + 1.0
+  end
+  return count
+end
+
+fn img_brightness(r, g, b, count, amount)
+  let mut i = 0.0
+  while i < count
+    let idx = int(i)
+    let nr = r[idx] + amount
+    let ng = g[idx] + amount
+    let nb = b[idx] + amount
+    r[idx] = clamp(nr, 0.0, 255.0)
+    g[idx] = clamp(ng, 0.0, 255.0)
+    b[idx] = clamp(nb, 0.0, 255.0)
+    i = i + 1.0
+  end
+  return count
+end
+
+fn img_contrast(r, g, b, count, factor)
+  let mut i = 0.0
+  while i < count
+    let idx = int(i)
+    let nr = factor * (r[idx] - 128.0) + 128.0
+    let ng = factor * (g[idx] - 128.0) + 128.0
+    let nb = factor * (b[idx] - 128.0) + 128.0
+    r[idx] = clamp(nr, 0.0, 255.0)
+    g[idx] = clamp(ng, 0.0, 255.0)
+    b[idx] = clamp(nb, 0.0, 255.0)
+    i = i + 1.0
+  end
+  return count
+end
+
+// ─── Quality Metrics ──────────────────────────────────────────
+
+fn img_mse(r1, g1, b1, r2, g2, b2, count)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < count
+    let idx = int(i)
+    let dr = r1[idx] - r2[idx]
+    let dg = g1[idx] - g2[idx]
+    let db = b1[idx] - b2[idx]
+    sum = sum + dr * dr + dg * dg + db * db
+    i = i + 1.0
+  end
+  return sum / (count * 3.0)
+end
+
+fn img_psnr(mse_val)
+  if mse_val < 0.0001
+    return 999.0
+  end
+  let ratio = 255.0 * 255.0 / mse_val
+  let log_ratio = log(ratio)
+  let log_10 = log(10.0)
+  return 10.0 * log_ratio / log_10
+end
