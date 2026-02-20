@@ -1,0 +1,286 @@
+// life.flow — Conway's Game of Life in OctoFlow
+// Click to toggle cells, Space to step, Enter to auto-play, C to clear.
+// Run: octoflow run examples/life.flow
+
+let cell = 10.0
+let cols = 40.0
+let rows = 30.0
+let w = cols * cell
+let h = rows * cell
+let grid_sz = int(cols * rows)
+
+let ok = window_open(w, h, "OctoFlow — Game of Life")
+if ok == 0.0
+  print("Failed to open window")
+end
+
+// Pixel arrays
+let total = int(w * h)
+let mut r = []
+let mut g = []
+let mut b = []
+for i in range(0, total)
+  push(r, 20.0)
+  push(g, 20.0)
+  push(b, 28.0)
+end
+
+// Cell grids (0=dead, 1=alive)
+let mut grid = []
+let mut next = []
+for i in range(0, grid_sz)
+  push(grid, 0.0)
+  push(next, 0.0)
+end
+
+// Seed: R-pentomino (classic chaotic pattern)
+let cx = int(cols / 2.0)
+let cy = int(rows / 2.0)
+grid[int(cy * cols + cx + 1)] = 1.0
+grid[int(cy * cols + cx)] = 1.0
+grid[int((cy - 1) * cols + cx)] = 1.0
+grid[int((cy - 1) * cols + cx + 1)] = 1.0
+grid[int((cy + 1) * cols + cx)] = 1.0
+
+let mut running = 0.0
+let mut gen = 0.0
+let mut tick_cd = 0.0
+let mut tick_rate = 6.0
+
+// Draw initial state
+for gy in range(0, int(rows))
+  for gx in range(0, int(cols))
+    let ci = int(gy * cols + gx)
+    if grid[ci] == 1.0
+      let mut ddy = 1.0
+      while ddy < cell - 1.0
+        let mut ddx = 1.0
+        while ddx < cell - 1.0
+          let pi = int((gy * cell + ddy) * w + gx * cell + ddx)
+          r[pi] = 80.0
+          g[pi] = 220.0
+          b[pi] = 80.0
+          ddx = ddx + 1.0
+        end
+        ddy = ddy + 1.0
+      end
+    end
+  end
+end
+window_draw(r, g, b)
+print("Game of Life — Space=step, Enter=auto, C=clear, Click=toggle")
+
+while window_alive() == 1.0
+  let mut evt = window_poll()
+  let mut need_step = 0.0
+  while evt != "none"
+    if evt == "close"
+      window_close()
+    elif evt == "key_down"
+      let key = window_event_key()
+      if key == "escape"
+        window_close()
+      elif key == "space"
+        need_step = 1.0
+      elif key == "enter"
+        if running == 0.0
+          running = 1.0
+          print("Auto-play ON")
+        else
+          running = 0.0
+          print("Auto-play OFF")
+        end
+      elif key == "c"
+        for ci2 in range(0, grid_sz)
+          grid[ci2] = 0.0
+        end
+        // Clear pixels
+        for pi2 in range(0, total)
+          r[pi2] = 20.0
+          g[pi2] = 20.0
+          b[pi2] = 28.0
+        end
+        gen = 0.0
+        running = 0.0
+        window_draw(r, g, b)
+        print("Cleared")
+      end
+    elif evt == "mouse_down"
+      let mx = window_event_x()
+      let my = window_event_y()
+      let gx2 = floor(mx / cell)
+      let gy2 = floor(my / cell)
+      if gx2 >= 0.0
+        if gx2 < cols
+          if gy2 >= 0.0
+            if gy2 < rows
+              let ci3 = int(gy2 * cols + gx2)
+              if grid[ci3] == 0.0
+                grid[ci3] = 1.0
+                // Draw alive cell
+                let mut dy3 = 1.0
+                while dy3 < cell - 1.0
+                  let mut dx3 = 1.0
+                  while dx3 < cell - 1.0
+                    let pi3 = int((gy2 * cell + dy3) * w + gx2 * cell + dx3)
+                    r[pi3] = 80.0
+                    g[pi3] = 220.0
+                    b[pi3] = 80.0
+                    dx3 = dx3 + 1.0
+                  end
+                  dy3 = dy3 + 1.0
+                end
+              else
+                grid[ci3] = 0.0
+                // Draw dead cell
+                let mut dy4 = 1.0
+                while dy4 < cell - 1.0
+                  let mut dx4 = 1.0
+                  while dx4 < cell - 1.0
+                    let pi4 = int((gy2 * cell + dy4) * w + gx2 * cell + dx4)
+                    r[pi4] = 20.0
+                    g[pi4] = 20.0
+                    b[pi4] = 28.0
+                    dx4 = dx4 + 1.0
+                  end
+                  dy4 = dy4 + 1.0
+                end
+              end
+              window_draw(r, g, b)
+            end
+          end
+        end
+      end
+    end
+    evt = window_poll()
+  end
+
+  if window_alive() == 0.0
+    break
+  end
+
+  // Auto-play timing
+  if running == 1.0
+    tick_cd = tick_cd - 1.0
+    if tick_cd <= 0.0
+      tick_cd = tick_rate
+      need_step = 1.0
+    end
+  end
+
+  // Step simulation
+  if need_step == 1.0
+    // Compute next generation
+    for gy5 in range(0, int(rows))
+      for gx5 in range(0, int(cols))
+        // Count live neighbors (wrap-around)
+        let mut nbr = 0.0
+        let mut ndy = -1.0
+        while ndy <= 1.0
+          let mut ndx = -1.0
+          while ndx <= 1.0
+            if ndy != 0.0
+              let mut ny5 = gy5 + ndy
+              let mut nx5 = gx5 + ndx
+              if nx5 < 0.0
+                nx5 = cols - 1.0
+              end
+              if nx5 >= cols
+                nx5 = 0.0
+              end
+              if ny5 < 0.0
+                ny5 = rows - 1.0
+              end
+              if ny5 >= rows
+                ny5 = 0.0
+              end
+              nbr = nbr + grid[int(ny5 * cols + nx5)]
+            elif ndx != 0.0
+              let mut ny6 = gy5 + ndy
+              let mut nx6 = gx5 + ndx
+              if nx6 < 0.0
+                nx6 = cols - 1.0
+              end
+              if nx6 >= cols
+                nx6 = 0.0
+              end
+              if ny6 < 0.0
+                ny6 = rows - 1.0
+              end
+              if ny6 >= rows
+                ny6 = 0.0
+              end
+              nbr = nbr + grid[int(ny6 * cols + nx6)]
+            end
+            ndx = ndx + 1.0
+          end
+          ndy = ndy + 1.0
+        end
+
+        let ci5 = int(gy5 * cols + gx5)
+        if grid[ci5] == 1.0
+          // Alive: survive with 2 or 3 neighbors
+          if nbr == 2.0
+            next[ci5] = 1.0
+          elif nbr == 3.0
+            next[ci5] = 1.0
+          else
+            next[ci5] = 0.0
+          end
+        else
+          // Dead: born with exactly 3 neighbors
+          if nbr == 3.0
+            next[ci5] = 1.0
+          else
+            next[ci5] = 0.0
+          end
+        end
+      end
+    end
+
+    // Apply and render changes
+    for gi6 in range(0, grid_sz)
+      if grid[gi6] != next[gi6]
+        grid[gi6] = next[gi6]
+        let gx6 = gi6 - floor(gi6 / cols) * cols
+        let gy6 = floor(gi6 / cols)
+        if next[gi6] == 1.0
+          // Born — green
+          let mut dy6 = 1.0
+          while dy6 < cell - 1.0
+            let mut dx6 = 1.0
+            while dx6 < cell - 1.0
+              let pi6 = int((gy6 * cell + dy6) * w + gx6 * cell + dx6)
+              r[pi6] = 80.0
+              g[pi6] = 220.0
+              b[pi6] = 80.0
+              dx6 = dx6 + 1.0
+            end
+            dy6 = dy6 + 1.0
+          end
+        else
+          // Died — dark
+          let mut dy7 = 1.0
+          while dy7 < cell - 1.0
+            let mut dx7 = 1.0
+            while dx7 < cell - 1.0
+              let pi7 = int((gy6 * cell + dy7) * w + gx6 * cell + dx7)
+              r[pi7] = 20.0
+              g[pi7] = 20.0
+              b[pi7] = 28.0
+              dx7 = dx7 + 1.0
+            end
+            dy7 = dy7 + 1.0
+          end
+        end
+      end
+    end
+
+    gen = gen + 1.0
+    window_draw(r, g, b)
+  end
+
+  sleep(16)
+end
+
+print("Life ended after {gen} generations.")
