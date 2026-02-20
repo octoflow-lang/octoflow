@@ -1,0 +1,501 @@
+// test_wav.flow — Tests for stdlib/media/wav.flow
+// Tests WAV/RIFF parsing: helpers, metadata extraction, PCM sample decoding
+// Run: octoflow run stdlib/media/test_wav.flow
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+use wav
+
+// ─── Test wav_u16le / wav_u32le ──────────────────────────────
+
+let mut tb = [0.0, 1.0, 255.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+
+let v16a = wav_u16le(tb, 0.0)
+if v16a == 256.0
+  pass = pass + 1.0
+else
+  print("FAIL u16le(0,1) expected 256, got {v16a}")
+  fail = fail + 1.0
+end
+
+let v16b = wav_u16le(tb, 2.0)
+if v16b == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL u16le(255,0) expected 255, got {v16b}")
+  fail = fail + 1.0
+end
+
+let v32a = wav_u32le(tb, 0.0)
+// bytes: 0, 1, 255, 0 -> 0 + 256 + 255*65536 + 0 = 16711936
+if v32a == 16711936.0
+  pass = pass + 1.0
+else
+  print("FAIL u32le expected 16711936, got {v32a}")
+  fail = fail + 1.0
+end
+
+let v32b = wav_u32le(tb, 4.0)
+// bytes: 1, 0, 0, 1 -> 1 + 0 + 0 + 16777216 = 16777217
+if v32b == 16777217.0
+  pass = pass + 1.0
+else
+  print("FAIL u32le expected 16777217, got {v32b}")
+  fail = fail + 1.0
+end
+
+// ─── Test wav_fourcc ─────────────────────────────────────────
+
+// "RIFF" = 82, 73, 70, 70
+let mut fcc_bytes = [82.0, 73.0, 70.0, 70.0, 87.0, 65.0, 86.0, 69.0]
+let fcc1 = wav_fourcc(fcc_bytes, 0.0)
+if fcc1 == "RIFF"
+  pass = pass + 1.0
+else
+  print("FAIL fourcc expected RIFF, got {fcc1}")
+  fail = fail + 1.0
+end
+
+// "WAVE" = 87, 65, 86, 69
+let fcc2 = wav_fourcc(fcc_bytes, 4.0)
+if fcc2 == "WAVE"
+  pass = pass + 1.0
+else
+  print("FAIL fourcc expected WAVE, got {fcc2}")
+  fail = fail + 1.0
+end
+
+// ─── Build minimal 8-bit mono WAV and test wav_parse ─────────
+// Format: 8-bit unsigned PCM, mono, 8000 Hz
+// Samples: [128, 255, 0, 64] (4 samples = 4 bytes)
+// Total: 44 header bytes + 4 data bytes = 48 bytes
+
+fn push_u32le(arr, val)
+  let mut v = val
+  let b0 = v - floor(v / 256.0) * 256.0
+  v = floor(v / 256.0)
+  let b1 = v - floor(v / 256.0) * 256.0
+  v = floor(v / 256.0)
+  let b2 = v - floor(v / 256.0) * 256.0
+  v = floor(v / 256.0)
+  let b3 = v
+  push(arr, b0)
+  push(arr, b1)
+  push(arr, b2)
+  push(arr, b3)
+  return 0.0
+end
+
+fn push_u16le(arr, val)
+  let lo = val - floor(val / 256.0) * 256.0
+  let hi = floor(val / 256.0)
+  push(arr, lo)
+  push(arr, hi)
+  return 0.0
+end
+
+fn push_str4(arr, s)
+  push(arr, ord(char_at(s, 0.0)))
+  push(arr, ord(char_at(s, 1.0)))
+  push(arr, ord(char_at(s, 2.0)))
+  push(arr, ord(char_at(s, 3.0)))
+  return 0.0
+end
+
+let mut wav8 = []
+
+// RIFF header
+push_str4(wav8, "RIFF")
+push_u32le(wav8, 40.0)   // file size - 8 = 48 - 8 = 40
+push_str4(wav8, "WAVE")
+
+// fmt chunk
+push_str4(wav8, "fmt ")
+push_u32le(wav8, 16.0)   // chunk size = 16 (PCM)
+push_u16le(wav8, 1.0)    // audio_format = 1 (PCM)
+push_u16le(wav8, 1.0)    // channels = 1 (mono)
+push_u32le(wav8, 8000.0) // sample_rate = 8000
+push_u32le(wav8, 8000.0) // byte_rate = 8000 (8000 * 1 * 1)
+push_u16le(wav8, 1.0)    // block_align = 1 (1 channel * 1 byte)
+push_u16le(wav8, 8.0)    // bits_per_sample = 8
+
+// data chunk
+push_str4(wav8, "data")
+push_u32le(wav8, 4.0)    // data size = 4 bytes
+push(wav8, 128.0)        // sample 0: silence (128 = 0.0 normalized)
+push(wav8, 255.0)        // sample 1: max positive
+push(wav8, 0.0)          // sample 2: max negative
+push(wav8, 64.0)         // sample 3: half negative
+
+// Verify file size
+let wav8_len = len(wav8)
+if wav8_len == 48.0
+  pass = pass + 1.0
+else
+  print("FAIL wav8 file size expected 48, got {wav8_len}")
+  fail = fail + 1.0
+end
+
+// ─── Parse 8-bit WAV ─────────────────────────────────────────
+
+let info8 = wav_parse(wav8)
+
+let ok8 = info8["ok"]
+if ok8 == 1.0
+  pass = pass + 1.0
+else
+  let err8 = info8["error"]
+  print("FAIL wav_parse ok expected 1, got error: {err8}")
+  fail = fail + 1.0
+end
+
+let fmt8 = info8["format"]
+if fmt8 == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL format expected 1 (PCM), got {fmt8}")
+  fail = fail + 1.0
+end
+
+let ch8 = info8["channels"]
+if ch8 == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL channels expected 1, got {ch8}")
+  fail = fail + 1.0
+end
+
+let sr8 = info8["sample_rate"]
+if sr8 == 8000.0
+  pass = pass + 1.0
+else
+  print("FAIL sample_rate expected 8000, got {sr8}")
+  fail = fail + 1.0
+end
+
+let bps8 = info8["bits_per_sample"]
+if bps8 == 8.0
+  pass = pass + 1.0
+else
+  print("FAIL bits_per_sample expected 8, got {bps8}")
+  fail = fail + 1.0
+end
+
+let br8 = info8["byte_rate"]
+if br8 == 8000.0
+  pass = pass + 1.0
+else
+  print("FAIL byte_rate expected 8000, got {br8}")
+  fail = fail + 1.0
+end
+
+let ba8 = info8["block_align"]
+if ba8 == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL block_align expected 1, got {ba8}")
+  fail = fail + 1.0
+end
+
+let doff8 = info8["data_offset"]
+if doff8 == 44.0
+  pass = pass + 1.0
+else
+  print("FAIL data_offset expected 44, got {doff8}")
+  fail = fail + 1.0
+end
+
+let dsz8 = info8["data_size"]
+if dsz8 == 4.0
+  pass = pass + 1.0
+else
+  print("FAIL data_size expected 4, got {dsz8}")
+  fail = fail + 1.0
+end
+
+let ns8 = info8["num_samples"]
+if ns8 == 4.0
+  pass = pass + 1.0
+else
+  print("FAIL num_samples expected 4, got {ns8}")
+  fail = fail + 1.0
+end
+
+// duration = 4 / 8000 = 0.0005
+let dur8 = info8["duration_sec"]
+if dur8 > 0.0004
+  if dur8 < 0.0006
+    pass = pass + 1.0
+  else
+    print("FAIL duration_sec expected ~0.0005, got {dur8}")
+    fail = fail + 1.0
+  end
+else
+  print("FAIL duration_sec expected ~0.0005, got {dur8}")
+  fail = fail + 1.0
+end
+
+// ─── Test wav_get_samples (8-bit) ────────────────────────────
+
+wav_get_samples(wav8, info8, 100.0)
+
+let slen8 = len(wav_samples)
+if slen8 == 4.0
+  pass = pass + 1.0
+else
+  print("FAIL wav_samples length expected 4, got {slen8}")
+  fail = fail + 1.0
+end
+
+// Sample 0: raw=128, normalized = (128-128)/128 = 0.0
+if slen8 >= 1.0
+  let s0 = wav_samples[0]
+  if s0 == 0.0
+    pass = pass + 1.0
+  else
+    print("FAIL sample 0 expected 0.0 (silence), got {s0}")
+    fail = fail + 1.0
+  end
+end
+
+// Sample 1: raw=255, normalized = (255-128)/128 = 0.9921875
+if slen8 >= 2.0
+  let s1 = wav_samples[1]
+  if s1 > 0.99
+    if s1 < 1.0
+      pass = pass + 1.0
+    else
+      print("FAIL sample 1 expected ~0.992, got {s1}")
+      fail = fail + 1.0
+    end
+  else
+    print("FAIL sample 1 expected ~0.992, got {s1}")
+    fail = fail + 1.0
+  end
+end
+
+// Sample 2: raw=0, normalized = (0-128)/128 = -1.0
+if slen8 >= 3.0
+  let s2 = wav_samples[2]
+  if s2 == -1.0
+    pass = pass + 1.0
+  else
+    print("FAIL sample 2 expected -1.0, got {s2}")
+    fail = fail + 1.0
+  end
+end
+
+// Sample 3: raw=64, normalized = (64-128)/128 = -0.5
+if slen8 >= 4.0
+  let s3 = wav_samples[3]
+  if s3 == -0.5
+    pass = pass + 1.0
+  else
+    print("FAIL sample 3 expected -0.5, got {s3}")
+    fail = fail + 1.0
+  end
+end
+
+// ─── Build 16-bit stereo WAV ─────────────────────────────────
+// 16-bit signed PCM, stereo, 44100 Hz, 2 sample frames (4 values total)
+// Each sample frame = 4 bytes (2 channels * 2 bytes)
+// Data = 2 frames * 4 bytes = 8 bytes
+// Total = 44 + 8 = 52 bytes
+
+let mut wav16 = []
+
+// RIFF header
+push_str4(wav16, "RIFF")
+push_u32le(wav16, 44.0)     // file size - 8 = 52 - 8 = 44
+push_str4(wav16, "WAVE")
+
+// fmt chunk
+push_str4(wav16, "fmt ")
+push_u32le(wav16, 16.0)     // chunk size
+push_u16le(wav16, 1.0)      // format = PCM
+push_u16le(wav16, 2.0)      // channels = 2 (stereo)
+push_u32le(wav16, 44100.0)  // sample_rate
+push_u32le(wav16, 176400.0) // byte_rate = 44100 * 2 * 2
+push_u16le(wav16, 4.0)      // block_align = 2 channels * 2 bytes
+push_u16le(wav16, 16.0)     // bits_per_sample = 16
+
+// data chunk
+push_str4(wav16, "data")
+push_u32le(wav16, 8.0)      // data size = 8 bytes
+
+// Frame 0: L=0 (silence), R=32767 (max positive)
+// L channel: 0x0000 = [0, 0]
+push(wav16, 0.0)
+push(wav16, 0.0)
+// R channel: 0x7FFF = 32767 = [255, 127]
+push(wav16, 255.0)
+push(wav16, 127.0)
+
+// Frame 1: L=-32768 (max negative = 0x8000), R=256 (small positive = 0x0100)
+// L channel: 0x8000 = [0, 128]
+push(wav16, 0.0)
+push(wav16, 128.0)
+// R channel: 0x0100 = 256 = [0, 1]
+push(wav16, 0.0)
+push(wav16, 1.0)
+
+// Parse 16-bit stereo WAV
+let info16 = wav_parse(wav16)
+
+let ok16 = info16["ok"]
+if ok16 == 1.0
+  pass = pass + 1.0
+else
+  let err16 = info16["error"]
+  print("FAIL 16-bit wav_parse expected ok=1, error: {err16}")
+  fail = fail + 1.0
+end
+
+let ch16 = info16["channels"]
+if ch16 == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL 16-bit channels expected 2, got {ch16}")
+  fail = fail + 1.0
+end
+
+let sr16 = info16["sample_rate"]
+if sr16 == 44100.0
+  pass = pass + 1.0
+else
+  print("FAIL 16-bit sample_rate expected 44100, got {sr16}")
+  fail = fail + 1.0
+end
+
+let ns16 = info16["num_samples"]
+if ns16 == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL 16-bit num_samples expected 2, got {ns16}")
+  fail = fail + 1.0
+end
+
+// ─── Test wav_get_samples (16-bit stereo) ────────────────────
+
+wav_get_samples(wav16, info16, 100.0)
+
+let slen16 = len(wav_samples)
+// 2 frames * 2 channels = 4 values
+if slen16 == 4.0
+  pass = pass + 1.0
+else
+  print("FAIL 16-bit samples length expected 4, got {slen16}")
+  fail = fail + 1.0
+end
+
+// Frame 0, L: raw=0, normalized = 0/32768 = 0.0
+if slen16 >= 1.0
+  let s16_0 = wav_samples[0]
+  if s16_0 == 0.0
+    pass = pass + 1.0
+  else
+    print("FAIL 16-bit sample[0] expected 0.0, got {s16_0}")
+    fail = fail + 1.0
+  end
+end
+
+// Frame 0, R: raw=32767, normalized = 32767/32768 ~ 0.99997
+if slen16 >= 2.0
+  let s16_1 = wav_samples[1]
+  if s16_1 > 0.999
+    if s16_1 < 1.001
+      pass = pass + 1.0
+    else
+      print("FAIL 16-bit sample[1] expected ~1.0, got {s16_1}")
+      fail = fail + 1.0
+    end
+  else
+    print("FAIL 16-bit sample[1] expected ~1.0, got {s16_1}")
+    fail = fail + 1.0
+  end
+end
+
+// Frame 1, L: raw=0x8000=32768 unsigned -> -32768 signed, normalized = -32768/32768 = -1.0
+if slen16 >= 3.0
+  let s16_2 = wav_samples[2]
+  if s16_2 == -1.0
+    pass = pass + 1.0
+  else
+    print("FAIL 16-bit sample[2] expected -1.0, got {s16_2}")
+    fail = fail + 1.0
+  end
+end
+
+// Frame 1, R: raw=256, normalized = 256/32768 ~ 0.0078125
+if slen16 >= 4.0
+  let s16_3 = wav_samples[3]
+  if s16_3 > 0.007
+    if s16_3 < 0.009
+      pass = pass + 1.0
+    else
+      print("FAIL 16-bit sample[3] expected ~0.0078, got {s16_3}")
+      fail = fail + 1.0
+    end
+  else
+    print("FAIL 16-bit sample[3] expected ~0.0078, got {s16_3}")
+    fail = fail + 1.0
+  end
+end
+
+// ─── Test max_samples limit ──────────────────────────────────
+
+wav_get_samples(wav8, info8, 2.0)
+let slim = len(wav_samples)
+if slim == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL max_samples=2 expected 2 values, got {slim}")
+  fail = fail + 1.0
+end
+
+// ─── Error handling tests ────────────────────────────────────
+
+// Too short
+let mut short = [0.0, 0.0, 0.0, 0.0]
+let short_info = wav_parse(short)
+let sok = short_info["ok"]
+if sok == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL short file should return ok=0")
+  fail = fail + 1.0
+end
+
+// Not RIFF
+let mut bad = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let bad_info = wav_parse(bad)
+let bok = bad_info["ok"]
+if bok == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL non-RIFF file should return ok=0")
+  fail = fail + 1.0
+end
+
+// RIFF but not WAVE
+let mut notwav = []
+push_str4(notwav, "RIFF")
+push_u32le(notwav, 4.0)
+push_str4(notwav, "AVI ")
+let nw_info = wav_parse(notwav)
+let nwok = nw_info["ok"]
+if nwok == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL RIFF-AVI should return ok=0 for WAV parser")
+  fail = fail + 1.0
+end
+
+// ─── Summary ─────────────────────────────────────────────────
+let total = pass + fail
+print("")
+print("wav.flow tests: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

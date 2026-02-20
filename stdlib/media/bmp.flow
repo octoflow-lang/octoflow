@@ -1,0 +1,244 @@
+// bmp.flow — Pure OctoFlow BMP image file decoder
+// Decodes uncompressed BMP files from raw bytes
+// Supports: 24-bit BGR, 32-bit BGRA, 8-bit with palette
+//
+// Usage:
+//   let bytes = read_bytes("image.bmp")
+//   let info = bmp_decode(bytes)
+//   // info["width"], info["height"], info["ok"]
+//   // bmp_r, bmp_g, bmp_b, bmp_a = pixel channel arrays (top-down, left-to-right)
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+fn bmp_u16le(bytes, pos)
+  let lo = bytes[int(pos)]
+  let hi = bytes[int(pos + 1.0)]
+  return hi * 256.0 + lo
+end
+
+fn bmp_u32le(bytes, pos)
+  let b0 = bytes[int(pos)]
+  let b1 = bytes[int(pos + 1.0)]
+  let b2 = bytes[int(pos + 2.0)]
+  let b3 = bytes[int(pos + 3.0)]
+  return b0 + b1 * 256.0 + b2 * 65536.0 + b3 * 16777216.0
+end
+
+// ─── Header Parser ───────────────────────────────────────────
+
+fn bmp_parse(bytes)
+  let mut result = map()
+  let n = len(bytes)
+
+  // Need at least 54 bytes for file header + DIB header
+  if n < 54.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "File too small for BMP")
+    return result
+  end
+
+  // Check "BM" magic (0x42, 0x4D)
+  let b0 = bytes[0]
+  let b1 = bytes[1]
+  if b0 != 66.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Not a BMP file")
+    return result
+  end
+  if b1 != 77.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Not a BMP file")
+    return result
+  end
+
+  // File header (14 bytes)
+  let file_size = bmp_u32le(bytes, 2.0)
+  let pixel_offset = bmp_u32le(bytes, 10.0)
+
+  // DIB header (BITMAPINFOHEADER = 40 bytes starting at offset 14)
+  let dib_size = bmp_u32le(bytes, 14.0)
+  let width = bmp_u32le(bytes, 18.0)
+  let height = bmp_u32le(bytes, 22.0)
+  let planes = bmp_u16le(bytes, 26.0)
+  let bpp = bmp_u16le(bytes, 28.0)
+  let compression = bmp_u32le(bytes, 30.0)
+
+  map_set(result, "ok", 1.0)
+  map_set(result, "width", width)
+  map_set(result, "height", height)
+  map_set(result, "bpp", bpp)
+  map_set(result, "compression", compression)
+  map_set(result, "pixel_offset", pixel_offset)
+  map_set(result, "dib_size", dib_size)
+  map_set(result, "file_size", file_size)
+  return result
+end
+
+// ─── Module-level result arrays ──────────────────────────────
+
+let mut bmp_r = []
+let mut bmp_g = []
+let mut bmp_b = []
+let mut bmp_a = []
+
+// ─── Main Decoder ────────────────────────────────────────────
+
+fn bmp_decode(bytes)
+  let mut result = map()
+  let n = len(bytes)
+
+  // Parse header first
+  if n < 54.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "File too small for BMP")
+    return result
+  end
+  let b0 = bytes[0]
+  let b1 = bytes[1]
+  if b0 != 66.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Not a BMP file")
+    return result
+  end
+  if b1 != 77.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Not a BMP file")
+    return result
+  end
+
+  let pixel_offset = bmp_u32le(bytes, 10.0)
+  let dib_size = bmp_u32le(bytes, 14.0)
+  let width = bmp_u32le(bytes, 18.0)
+  let height = bmp_u32le(bytes, 22.0)
+  let bpp = bmp_u16le(bytes, 28.0)
+  let compression = bmp_u32le(bytes, 30.0)
+
+  // Only support uncompressed (0) and BITFIELDS (3) for 32-bit
+  if compression != 0.0
+    if compression != 3.0
+      map_set(result, "ok", 0.0)
+      map_set(result, "error", "Unsupported compression")
+      return result
+    end
+  end
+
+  // Validate bpp
+  if bpp != 8.0
+    if bpp != 24.0
+      if bpp != 32.0
+        map_set(result, "ok", 0.0)
+        map_set(result, "error", "Unsupported bpp")
+        return result
+      end
+    end
+  end
+
+  // Clear module-level arrays
+  while len(bmp_r) > 0.0
+    pop(bmp_r)
+  end
+  while len(bmp_g) > 0.0
+    pop(bmp_g)
+  end
+  while len(bmp_b) > 0.0
+    pop(bmp_b)
+  end
+  while len(bmp_a) > 0.0
+    pop(bmp_a)
+  end
+
+  // Pre-fill channel arrays with zeros (width * height)
+  let pix_count = width * height
+  for i in range(0, int(pix_count))
+    push(bmp_r, 0.0)
+    push(bmp_g, 0.0)
+    push(bmp_b, 0.0)
+    push(bmp_a, 255.0)
+  end
+
+  // ── 8-bit palettized ─────────────────────────────────────
+  if bpp == 8.0
+    // Read palette: starts at offset 14 + dib_size, 4 bytes per entry (BGRA)
+    let palette_offset = 14.0 + dib_size
+    let num_colors = 256.0
+    let mut pal_r = []
+    let mut pal_g = []
+    let mut pal_b = []
+    for i in range(0, int(num_colors))
+      let po = palette_offset + i * 4.0
+      push(pal_b, bytes[int(po)])
+      push(pal_g, bytes[int(po + 1.0)])
+      push(pal_r, bytes[int(po + 2.0)])
+    end
+
+    // Row stride: each row padded to 4-byte boundary
+    let row_stride = floor((width + 3.0) / 4.0) * 4.0
+
+    // Read pixels bottom-up, write top-down
+    for row in range(0, int(height))
+      // BMP row 0 is bottom, so source row for top-down row `row` is (height-1-row)
+      let src_row = height - 1.0 - row
+      let row_start = pixel_offset + src_row * row_stride
+      for col in range(0, int(width))
+        let idx = bytes[int(row_start + col)]
+        let dst = row * width + col
+        bmp_r[int(dst)] = pal_r[int(idx)]
+        bmp_g[int(dst)] = pal_g[int(idx)]
+        bmp_b[int(dst)] = pal_b[int(idx)]
+      end
+    end
+  end
+
+  // ── 24-bit BGR ───────────────────────────────────────────
+  if bpp == 24.0
+    // Row stride: each row is width*3 bytes, padded to 4-byte boundary
+    let raw_row = width * 3.0
+    let row_stride = floor((raw_row + 3.0) / 4.0) * 4.0
+
+    // Read pixels bottom-up, write top-down
+    for row in range(0, int(height))
+      let src_row = height - 1.0 - row
+      let row_start = pixel_offset + src_row * row_stride
+      for col in range(0, int(width))
+        let bp = row_start + col * 3.0
+        let bb = bytes[int(bp)]
+        let bg = bytes[int(bp + 1.0)]
+        let br = bytes[int(bp + 2.0)]
+        let dst = row * width + col
+        bmp_r[int(dst)] = br
+        bmp_g[int(dst)] = bg
+        bmp_b[int(dst)] = bb
+      end
+    end
+  end
+
+  // ── 32-bit BGRA ──────────────────────────────────────────
+  if bpp == 32.0
+    // Row stride: width * 4 (always 4-byte aligned for 32-bit)
+    let row_stride = width * 4.0
+
+    // Read pixels bottom-up, write top-down
+    for row in range(0, int(height))
+      let src_row = height - 1.0 - row
+      let row_start = pixel_offset + src_row * row_stride
+      for col in range(0, int(width))
+        let bp = row_start + col * 4.0
+        let bb = bytes[int(bp)]
+        let bg = bytes[int(bp + 1.0)]
+        let br = bytes[int(bp + 2.0)]
+        let ba = bytes[int(bp + 3.0)]
+        let dst = row * width + col
+        bmp_r[int(dst)] = br
+        bmp_g[int(dst)] = bg
+        bmp_b[int(dst)] = bb
+        bmp_a[int(dst)] = ba
+      end
+    end
+  end
+
+  map_set(result, "ok", 1.0)
+  map_set(result, "width", width)
+  map_set(result, "height", height)
+  map_set(result, "bpp", bpp)
+  return result
+end

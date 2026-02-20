@@ -1,0 +1,375 @@
+// test_bmp.flow — Tests for stdlib/media/bmp.flow
+// Tests BMP header parsing and pixel decoding
+// Run: octoflow run stdlib/media/test_bmp.flow
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// ─── Import bmp functions ────────────────────────────────────
+use bmp
+
+// ─── Test bmp_u16le ──────────────────────────────────────────
+let mut tb = [0.0, 1.0, 255.0, 0.0]
+let v1 = bmp_u16le(tb, 0.0)
+if v1 == 256.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_u16le(0,1) expected 256, got {v1}")
+  fail = fail + 1.0
+end
+
+let v2 = bmp_u16le(tb, 2.0)
+if v2 == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_u16le(255,0) expected 255, got {v2}")
+  fail = fail + 1.0
+end
+
+// ─── Test bmp_u32le ──────────────────────────────────────────
+let mut tb2 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+let v3 = bmp_u32le(tb2, 0.0)
+if v3 == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_u32le([1,0,0,0]) expected 1, got {v3}")
+  fail = fail + 1.0
+end
+
+let v4 = bmp_u32le(tb2, 4.0)
+if v4 == 256.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_u32le([0,1,0,0]) expected 256, got {v4}")
+  fail = fail + 1.0
+end
+
+// ─── Build a 2x2 24-bit BMP in memory ───────────────────────
+// Layout:
+//   File header: 14 bytes
+//   DIB header (BITMAPINFOHEADER): 40 bytes
+//   Pixel data: 2 rows * 8 bytes/row = 16 bytes
+//   Total: 70 bytes
+//
+// Pixels (top-down after decode):
+//   row 0: red(255,0,0)  green(0,255,0)
+//   row 1: blue(0,0,255) white(255,255,255)
+//
+// BMP stores bottom-up, BGR order:
+//   BMP row 0 (= image bottom = row 1): blue(255,0,0 BGR) white(255,255,255 BGR) + 2 pad
+//   BMP row 1 (= image top = row 0):    red(0,0,255 BGR)  green(0,255,0 BGR) + 2 pad
+
+let mut bmp1 = []
+
+// ── File header (14 bytes) ──
+// "BM" signature
+push(bmp1, 66.0)   // 'B'
+push(bmp1, 77.0)   // 'M'
+// File size = 70 = 0x46 (little-endian)
+push(bmp1, 70.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// Reserved (4 bytes)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// Pixel data offset = 54 = 0x36
+push(bmp1, 54.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+
+// ── DIB header (40 bytes) ──
+// Header size = 40 = 0x28
+push(bmp1, 40.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// Width = 2
+push(bmp1, 2.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// Height = 2
+push(bmp1, 2.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// Planes = 1
+push(bmp1, 1.0)
+push(bmp1, 0.0)
+// Bits per pixel = 24
+push(bmp1, 24.0)
+push(bmp1, 0.0)
+// Compression = 0 (BI_RGB)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// Image size = 16 (2 rows * 8 bytes)
+push(bmp1, 16.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// X pixels per meter = 0
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// Y pixels per meter = 0
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// Colors used = 0
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// Important colors = 0
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+
+// ── Pixel data (16 bytes) ──
+// BMP row 0 (bottom of image = row 1 after flip): blue, white
+// Blue pixel in BGR: B=255, G=0, R=0
+push(bmp1, 255.0)
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+// White pixel in BGR: B=255, G=255, R=255
+push(bmp1, 255.0)
+push(bmp1, 255.0)
+push(bmp1, 255.0)
+// 2 bytes padding
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+
+// BMP row 1 (top of image = row 0 after flip): red, green
+// Red pixel in BGR: B=0, G=0, R=255
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+push(bmp1, 255.0)
+// Green pixel in BGR: B=0, G=255, R=0
+push(bmp1, 0.0)
+push(bmp1, 255.0)
+push(bmp1, 0.0)
+// 2 bytes padding
+push(bmp1, 0.0)
+push(bmp1, 0.0)
+
+// ─── Test bmp_parse ──────────────────────────────────────────
+let hdr = bmp_parse(bmp1)
+
+let hok = hdr["ok"]
+if hok == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_parse ok expected 1")
+  fail = fail + 1.0
+end
+
+let hw = hdr["width"]
+if hw == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_parse width expected 2, got {hw}")
+  fail = fail + 1.0
+end
+
+let hh = hdr["height"]
+if hh == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_parse height expected 2, got {hh}")
+  fail = fail + 1.0
+end
+
+let hbpp = hdr["bpp"]
+if hbpp == 24.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_parse bpp expected 24, got {hbpp}")
+  fail = fail + 1.0
+end
+
+let hcomp = hdr["compression"]
+if hcomp == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_parse compression expected 0, got {hcomp}")
+  fail = fail + 1.0
+end
+
+let hpo = hdr["pixel_offset"]
+if hpo == 54.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_parse pixel_offset expected 54, got {hpo}")
+  fail = fail + 1.0
+end
+
+// ─── Test bmp_decode (24-bit) ────────────────────────────────
+let dec = bmp_decode(bmp1)
+
+let dok = dec["ok"]
+if dok == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_decode ok expected 1")
+  fail = fail + 1.0
+end
+
+let dw = dec["width"]
+if dw == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_decode width expected 2, got {dw}")
+  fail = fail + 1.0
+end
+
+// Check pixel array lengths (should be 4 = 2*2)
+let rlen = len(bmp_r)
+if rlen == 4.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_r length expected 4, got {rlen}")
+  fail = fail + 1.0
+end
+
+// Check pixels (top-down order after decode):
+//   index 0 = row0,col0 = red   (R=255, G=0, B=0)
+//   index 1 = row0,col1 = green (R=0, G=255, B=0)
+//   index 2 = row1,col0 = blue  (R=0, G=0, B=255)
+//   index 3 = row1,col1 = white (R=255, G=255, B=255)
+
+// Pixel 0: red
+let p0r = bmp_r[0]
+let p0g = bmp_g[0]
+let p0b = bmp_b[0]
+if p0r == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel0 R expected 255, got {p0r}")
+  fail = fail + 1.0
+end
+if p0g == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel0 G expected 0, got {p0g}")
+  fail = fail + 1.0
+end
+if p0b == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel0 B expected 0, got {p0b}")
+  fail = fail + 1.0
+end
+
+// Pixel 1: green
+let p1r = bmp_r[1]
+let p1g = bmp_g[1]
+let p1b = bmp_b[1]
+if p1r == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel1 R expected 0, got {p1r}")
+  fail = fail + 1.0
+end
+if p1g == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel1 G expected 255, got {p1g}")
+  fail = fail + 1.0
+end
+if p1b == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel1 B expected 0, got {p1b}")
+  fail = fail + 1.0
+end
+
+// Pixel 2: blue
+let p2r = bmp_r[2]
+let p2g = bmp_g[2]
+let p2b = bmp_b[2]
+if p2r == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel2 R expected 0, got {p2r}")
+  fail = fail + 1.0
+end
+if p2g == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel2 G expected 0, got {p2g}")
+  fail = fail + 1.0
+end
+if p2b == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel2 B expected 255, got {p2b}")
+  fail = fail + 1.0
+end
+
+// Pixel 3: white
+let p3r = bmp_r[3]
+let p3g = bmp_g[3]
+let p3b = bmp_b[3]
+if p3r == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel3 R expected 255, got {p3r}")
+  fail = fail + 1.0
+end
+if p3g == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel3 G expected 255, got {p3g}")
+  fail = fail + 1.0
+end
+if p3b == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL pixel3 B expected 255, got {p3b}")
+  fail = fail + 1.0
+end
+
+// ─── Test error cases ────────────────────────────────────────
+// Too-small file
+let mut tiny = [66.0, 77.0, 0.0]
+let err1 = bmp_parse(tiny)
+let e1ok = err1["ok"]
+if e1ok == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_parse tiny file should fail")
+  fail = fail + 1.0
+end
+
+// Wrong magic
+let mut bad_magic = []
+for i in range(0, 60)
+  push(bad_magic, 0.0)
+end
+bad_magic[0] = 80.0
+bad_magic[1] = 78.0
+let err2 = bmp_parse(bad_magic)
+let e2ok = err2["ok"]
+if e2ok == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL bmp_parse bad magic should fail")
+  fail = fail + 1.0
+end
+
+// ─── Summary ─────────────────────────────────────────────────
+let total = pass + fail
+print("")
+print("bmp.flow tests: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

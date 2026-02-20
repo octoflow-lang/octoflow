@@ -1,0 +1,230 @@
+// wav.flow — Pure OctoFlow WAV audio file parser
+// Parses RIFF WAVE files to extract audio metadata and PCM samples.
+// Supports 8-bit and 16-bit PCM (format 1) mono and stereo.
+//
+// Usage:
+//   let bytes = read_bytes("audio.wav")
+//   let info = wav_parse(bytes)
+//   // info["ok"], info["format"], info["channels"], info["sample_rate"]
+//   // info["bits_per_sample"], info["byte_rate"], info["block_align"]
+//   // info["data_offset"], info["data_size"], info["num_samples"], info["duration_sec"]
+//   wav_get_samples(bytes, info, 1000.0)
+//   // wav_samples = [-1.0 .. 1.0] normalized floats
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+fn wav_u16le(bytes, pos)
+  let lo = bytes[int(pos)]
+  let hi = bytes[int(pos + 1.0)]
+  return hi * 256.0 + lo
+end
+
+fn wav_u32le(bytes, pos)
+  let b0 = bytes[int(pos)]
+  let b1 = bytes[int(pos + 1.0)]
+  let b2 = bytes[int(pos + 2.0)]
+  let b3 = bytes[int(pos + 3.0)]
+  return b0 + b1 * 256.0 + b2 * 65536.0 + b3 * 16777216.0
+end
+
+fn wav_fourcc(bytes, pos)
+  let c0 = chr(bytes[int(pos)])
+  let c1 = chr(bytes[int(pos + 1.0)])
+  let c2 = chr(bytes[int(pos + 2.0)])
+  let c3 = chr(bytes[int(pos + 3.0)])
+  return c0 + c1 + c2 + c3
+end
+
+// ─── Module-level sample array ───────────────────────────────
+
+let mut wav_samples = []
+
+// ─── Main Parser ─────────────────────────────────────────────
+
+fn wav_parse(bytes)
+  let n = len(bytes)
+  let mut result = map()
+
+  // Need at least RIFF header (12 bytes)
+  if n < 12.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "WAV: too short")
+    return result
+  end
+
+  // Verify RIFF signature
+  let sig = wav_fourcc(bytes, 0.0)
+  if sig != "RIFF"
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "WAV: not a RIFF file")
+    return result
+  end
+
+  // Verify WAVE format
+  let fmt_id = wav_fourcc(bytes, 8.0)
+  if fmt_id != "WAVE"
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "WAV: not a WAVE file")
+    return result
+  end
+
+  // Walk chunks starting after "RIFF" + size(4) + "WAVE"
+  let mut found_fmt = 0.0
+  let mut found_data = 0.0
+  let mut audio_format = 0.0
+  let mut channels = 0.0
+  let mut sample_rate = 0.0
+  let mut byte_rate = 0.0
+  let mut block_align = 0.0
+  let mut bits_per_sample = 0.0
+  let mut data_offset = 0.0
+  let mut data_size = 0.0
+
+  let mut pos = 12.0
+  while pos + 8.0 <= n
+    // Read chunk tag and size (inline fourcc to avoid scope issues)
+    let tc0 = chr(bytes[int(pos)])
+    let tc1 = chr(bytes[int(pos + 1.0)])
+    let tc2 = chr(bytes[int(pos + 2.0)])
+    let tc3 = chr(bytes[int(pos + 3.0)])
+    let tag = tc0 + tc1 + tc2 + tc3
+    let chunk_size = wav_u32le(bytes, pos + 4.0)
+
+    if tag == "fmt "
+      // fmt chunk: audio_format(2) + channels(2) + sample_rate(4) +
+      //            byte_rate(4) + block_align(2) + bits_per_sample(2) = 16 min
+      if chunk_size >= 16.0
+        let fmt_data = pos + 8.0
+        if fmt_data + 16.0 <= n
+          audio_format = wav_u16le(bytes, fmt_data)
+          channels = wav_u16le(bytes, fmt_data + 2.0)
+          sample_rate = wav_u32le(bytes, fmt_data + 4.0)
+          byte_rate = wav_u32le(bytes, fmt_data + 8.0)
+          block_align = wav_u16le(bytes, fmt_data + 12.0)
+          bits_per_sample = wav_u16le(bytes, fmt_data + 14.0)
+          found_fmt = 1.0
+        end
+      end
+    elif tag == "data"
+      data_offset = pos + 8.0
+      data_size = chunk_size
+      // Clamp data_size to file bounds
+      if data_offset + data_size > n
+        data_size = n - data_offset
+      end
+      found_data = 1.0
+    end
+
+    // Advance to next chunk (pad to even boundary)
+    let advance = chunk_size + bit_and(chunk_size, 1.0)
+    pos = pos + 8.0 + advance
+  end
+
+  if found_fmt == 0.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "WAV: fmt chunk not found")
+    return result
+  end
+
+  if found_data == 0.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "WAV: data chunk not found")
+    return result
+  end
+
+  if audio_format != 1.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "WAV: unsupported format (not PCM)")
+    return result
+  end
+
+  // Calculate derived values
+  let bytes_per_sample = floor(bits_per_sample / 8.0)
+  let mut num_samples = 0.0
+  if bytes_per_sample > 0.0
+    if channels > 0.0
+      num_samples = floor(data_size / (bytes_per_sample * channels))
+    end
+  end
+
+  let mut duration_sec = 0.0
+  if sample_rate > 0.0
+    duration_sec = num_samples / sample_rate
+  end
+
+  map_set(result, "ok", 1.0)
+  map_set(result, "format", audio_format)
+  map_set(result, "channels", channels)
+  map_set(result, "sample_rate", sample_rate)
+  map_set(result, "byte_rate", byte_rate)
+  map_set(result, "block_align", block_align)
+  map_set(result, "bits_per_sample", bits_per_sample)
+  map_set(result, "data_offset", data_offset)
+  map_set(result, "data_size", data_size)
+  map_set(result, "num_samples", num_samples)
+  map_set(result, "duration_sec", duration_sec)
+  return result
+end
+
+// ─── Sample Extraction ───────────────────────────────────────
+
+// Extract up to max_samples PCM samples as floats normalized to [-1.0, 1.0]
+// For stereo, samples are interleaved: [L0, R0, L1, R1, ...]
+// Total values pushed = min(max_samples, num_samples) * channels
+fn wav_get_samples(bytes, info, max_samples)
+  // Clear module-level sample array
+  while len(wav_samples) > 0.0
+    pop(wav_samples)
+  end
+
+  let ok = map_get(info, "ok")
+  if ok != 1.0
+    return 0.0
+  end
+
+  let d_offset = map_get(info, "data_offset")
+  let bps = map_get(info, "bits_per_sample")
+  let ch = map_get(info, "channels")
+  let num = map_get(info, "num_samples")
+
+  let mut count = num
+  if count > max_samples
+    count = max_samples
+  end
+
+  let values_per_sample = ch
+  let bytes_per_value = floor(bps / 8.0)
+  let n = len(bytes)
+
+  for i in range(0, int(count))
+    for c in range(0, int(values_per_sample))
+      let sample_idx = i * values_per_sample + c
+      let byte_pos = d_offset + sample_idx * bytes_per_value
+
+      if bps == 8.0
+        // 8-bit PCM: unsigned, 128 = silence
+        if byte_pos < n
+          let raw = bytes[int(byte_pos)]
+          let normalized = (raw - 128.0) / 128.0
+          push(wav_samples, normalized)
+        end
+      elif bps == 16.0
+        // 16-bit PCM: signed little-endian, 0 = silence
+        let bp1 = byte_pos + 1.0
+        if bp1 < n
+          let lo = bytes[int(byte_pos)]
+          let hi = bytes[int(bp1)]
+          let mut raw = hi * 256.0 + lo
+          // Convert unsigned to signed: values >= 32768 are negative
+          if raw >= 32768.0
+            raw = raw - 65536.0
+          end
+          let normalized = raw / 32768.0
+          push(wav_samples, normalized)
+        end
+      end
+    end
+  end
+
+  return count
+end
