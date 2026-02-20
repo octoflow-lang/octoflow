@@ -1,0 +1,294 @@
+// test_h264.flow — Tests for stdlib/media/h264.flow
+// Tests H.264 decoder: bitstream reader, Exp-Golomb, SPS/PPS, transforms
+// Run: octoflow run stdlib/media/test_h264.flow --allow-read
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+use h264
+
+// ─── Test RBSP extraction ────────────────────────────────────
+// Input with emulation prevention: 00 00 03 01 -> 00 00 01
+let mut ep_bytes = [0.0, 0.0, 3.0, 1.0, 5.0, 0.0, 0.0, 3.0, 2.0]
+let rbsp = h264_rbsp(ep_bytes)
+let rbsp_len = len(rbsp)
+if rbsp_len == 7.0
+  pass = pass + 1.0
+else
+  print("FAIL rbsp length expected 7, got {rbsp_len}")
+  fail = fail + 1.0
+end
+
+if rbsp_len >= 3.0
+  let rb2 = rbsp[2]
+  if rb2 == 1.0
+    pass = pass + 1.0
+  else
+    print("FAIL rbsp[2] expected 1 (0x03 removed), got {rb2}")
+    fail = fail + 1.0
+  end
+end
+
+// ─── Test bitstream reader ───────────────────────────────────
+// Byte 0xA5 = 10100101 in binary
+let mut test_bs_data = [165.0]  // 0xA5
+let mut bs = [0.0, 0.0]
+
+// Read first bit (MSB) = 1
+let b0 = h264_read_bit(test_bs_data, bs)
+if b0 == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL read_bit expected 1, got {b0}")
+  fail = fail + 1.0
+end
+
+// Read next 3 bits = 010 = 2
+let b3 = h264_read_bits(test_bs_data, bs, 3.0)
+if b3 == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL read_bits(3) expected 2 (010), got {b3}")
+  fail = fail + 1.0
+end
+
+// Read next 4 bits = 0101 = 5
+let b4 = h264_read_bits(test_bs_data, bs, 4.0)
+if b4 == 5.0
+  pass = pass + 1.0
+else
+  print("FAIL read_bits(4) expected 5 (0101), got {b4}")
+  fail = fail + 1.0
+end
+
+// ─── Test Exp-Golomb ─────────────────────────────────────────
+// ue(v): code 0 -> bits: 1
+// ue(v): code 1 -> bits: 010
+// ue(v): code 3 -> bits: 00100
+// Byte stream: 1_010_001 | 00_......
+//              = 0b10100010 = 0xA2 (162), 0b0....... = 0x00
+let mut ue_data = [162.0, 0.0]
+
+let mut bs2 = [0.0, 0.0]
+let ue0 = h264_read_ue(ue_data, bs2)
+if ue0 == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL ue(0) expected 0, got {ue0}")
+  fail = fail + 1.0
+end
+
+let ue1 = h264_read_ue(ue_data, bs2)
+if ue1 == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL ue(1) expected 1, got {ue1}")
+  fail = fail + 1.0
+end
+
+let ue3 = h264_read_ue(ue_data, bs2)
+if ue3 == 3.0
+  pass = pass + 1.0
+else
+  print("FAIL ue(3) expected 3, got {ue3}")
+  fail = fail + 1.0
+end
+
+// ─── Test signed Exp-Golomb ──────────────────────────────────
+// se(v): code=0 -> 0, code=1 -> 1, code=2 -> -1
+// Bits: 1 (=0), 010 (=1), 011 (=2)
+// = 1_010_011_0 = 0b10100110 = 0xA6 (166)
+let mut se_data = [166.0, 0.0]
+let mut bs3 = [0.0, 0.0]
+
+let se0 = h264_read_se(se_data, bs3)
+if se0 == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL se(0) expected 0, got {se0}")
+  fail = fail + 1.0
+end
+
+let se1 = h264_read_se(se_data, bs3)
+if se1 == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL se(1) expected 1, got {se1}")
+  fail = fail + 1.0
+end
+
+let sen1 = h264_read_se(se_data, bs3)
+if sen1 == -1.0
+  pass = pass + 1.0
+else
+  print("FAIL se(-1) expected -1, got {sen1}")
+  fail = fail + 1.0
+end
+
+// ─── Test SPS decode ─────────────────────────────────────────
+// Minimal Baseline SPS: profile=66, constraint=0, level=30
+// NAL byte: 0x67 (type 7)
+// Then profile(8), constraint(8), level(8) as raw bytes
+// sps_id = ue(0) = 1 bit
+// log2_max_frame_num = ue(0) + 4 = 4
+// poc_type = ue(0) = 0
+// log2_max_poc_lsb = ue(0) + 4 = 4
+// max_ref_frames = ue(0) = 0
+// gaps = u(1) = 0
+// pic_width_in_mbs = ue(0) + 1 = 1 (16 pixels)
+// pic_height_in_mbs = ue(0) + 1 = 1 (16 pixels)
+// frame_mbs_only = u(1) = 1
+// All ue(0) = bit 1, u(1) 0/1
+// Bytes: 0x67, 66, 0, 30, then bits: 1_1_1_1_1_0_1_1 = 0b11111011 = 0xFB (251)
+let mut test_sps = [103.0, 66.0, 0.0, 30.0, 251.0, 0.0]
+
+h264_decode_sps(test_sps)
+
+let sps_w = h264_dims[0]
+if sps_w == 16.0
+  pass = pass + 1.0
+else
+  print("FAIL sps width expected 16, got {sps_w}")
+  fail = fail + 1.0
+end
+
+let sps_h = h264_dims[1]
+if sps_h == 16.0
+  pass = pass + 1.0
+else
+  print("FAIL sps height expected 16, got {sps_h}")
+  fail = fail + 1.0
+end
+
+let sps_profile = h264_sps[0]
+if sps_profile == 66.0
+  pass = pass + 1.0
+else
+  print("FAIL sps profile expected 66, got {sps_profile}")
+  fail = fail + 1.0
+end
+
+// ─── Test PPS decode ─────────────────────────────────────────
+// NAL byte: 0x68 (type 8)
+// pps_id = ue(0) = 0, sps_id = ue(0) = 0, entropy=u(1)=0, bottom=u(1)=0
+// slice_groups = ue(0)=0, ref_l0=ue(0)=0, ref_l1=ue(0)=0
+// weighted_pred=u(1)=0, weighted_bipred=u(2)=00
+// pic_init_qp_m26 = se(0)=0, pic_init_qs_m26 = se(0)=0, chroma_qp_off = se(0)=0
+// deblock_present = u(1)=1
+// All the ue(0)=1bit each + u(1)/u(2):
+// 1_1_00_1_1_1_0_00_1_1_1_1 = bits from MSB
+// = 11001110 01111000 = 0xCE (206), 0x78 (120)
+let mut test_pps = [104.0, 206.0, 120.0, 0.0]
+
+h264_decode_pps(test_pps)
+
+let pps_entropy = h264_pps[2]
+if pps_entropy == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL pps entropy expected 0 (CAVLC), got {pps_entropy}")
+  fail = fail + 1.0
+end
+
+// ─── Test inverse 4x4 DCT ────────────────────────────────────
+// Simple: all-zero coefficients -> all-zero output
+let mut zero_coeffs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let mut dct_out = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+h264_idct4x4(zero_coeffs, 0.0, dct_out)
+if dct_out[0] == 0.0
+  pass = pass + 1.0
+else
+  let dv = dct_out[0]
+  print("FAIL idct zero input should give 0, got {dv}")
+  fail = fail + 1.0
+end
+
+// DC-only: coefficient[0][0] = 64 -> all pixels = 64/64 * (1+1)*(1+1) = 1 each
+// Actually: DC=64, after row transform: [64,64,64,64], after col: [64,64,...]/64 = 1
+let mut dc_coeffs = [64.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let mut dc_out = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+h264_idct4x4(dc_coeffs, 0.0, dc_out)
+// With DC=64: row transform gives [64,64,64,64] for each row
+// Col transform on uniform columns gives same: 64 per element
+// Then (64 + 32) / 64 = 1.0
+let dc_out0 = dc_out[0]
+if dc_out0 == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL idct DC=64 expected 1, got {dc_out0}")
+  fail = fail + 1.0
+end
+
+// ─── Test Hadamard 4x4 ──────────────────────────────────────
+let mut had = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+h264_hadamard4x4(had)
+// DC input [1,0,0,...,0] -> after row: [1,1,1,1,0,...,0]
+// After col on first 4 cols: all 1
+if had[0] == 1.0
+  pass = pass + 1.0
+else
+  let hv = had[0]
+  print("FAIL hadamard[0] expected 1, got {hv}")
+  fail = fail + 1.0
+end
+
+if had[15] == 1.0
+  pass = pass + 1.0
+else
+  let hv15 = had[15]
+  print("FAIL hadamard[15] expected 1, got {hv15}")
+  fail = fail + 1.0
+end
+
+// ─── Test Hadamard 2x2 ──────────────────────────────────────
+let mut had2 = [4.0, 0.0, 0.0, 0.0]
+h264_hadamard2x2(had2)
+// [4,0,0,0] -> [4+0+0+0, 4-0+0-0, 4+0-0-0, 4-0-0+0] = [4,4,4,4]
+if had2[0] == 4.0
+  pass = pass + 1.0
+else
+  let h2v = had2[0]
+  print("FAIL hadamard2x2[0] expected 4, got {h2v}")
+  fail = fail + 1.0
+end
+
+if had2[3] == 4.0
+  pass = pass + 1.0
+else
+  let h2v3 = had2[3]
+  print("FAIL hadamard2x2[3] expected 4, got {h2v3}")
+  fail = fail + 1.0
+end
+
+// ─── Test clamp ──────────────────────────────────────────────
+let cv1 = h264_clamp(300.0)
+if cv1 == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL clamp(300) expected 255, got {cv1}")
+  fail = fail + 1.0
+end
+
+let cv2 = h264_clamp(-5.0)
+if cv2 == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL clamp(-5) expected 0, got {cv2}")
+  fail = fail + 1.0
+end
+
+let cv3 = h264_clamp(128.0)
+if cv3 == 128.0
+  pass = pass + 1.0
+else
+  print("FAIL clamp(128) expected 128, got {cv3}")
+  fail = fail + 1.0
+end
+
+// ─── Summary ─────────────────────────────────────────────────
+let total = pass + fail
+print("")
+print("h264.flow tests: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

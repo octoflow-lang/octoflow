@@ -1,0 +1,821 @@
+// h264.flow — Pure OctoFlow H.264 Baseline I-frame decoder
+// Decodes I-frames from NAL units (SPS, PPS, IDR slice).
+// Input: SPS/PPS/NAL bytes from mp4.flow's mp4_sps/mp4_pps/mp4_get_sample.
+//
+// Usage:
+//   use mp4
+//   use h264
+//   let bytes = read_bytes("video.mp4")
+//   let info = mp4_parse(bytes)
+//   h264_decode_sps(mp4_sps)
+//   h264_decode_pps(mp4_pps)
+//   let sample = mp4_get_sample(bytes, 0.0)
+//   let rgb = h264_decode_idr(sample, info["nal_length_size"])
+//   // h264_dims = [width, height, mb_width, mb_height] set after SPS decode
+
+// ─── Module state ──────────────────────────────────────────
+// Dimensions stored in array (scalars don't propagate from fn calls)
+// h264_dims = [width, height, mb_width, mb_height]
+let mut h264_dims = [0.0, 0.0, 0.0, 0.0]
+
+// SPS fields
+let mut h264_sps = []    // [profile, level, sps_id, log2_max_frame_num, poc_type, log2_max_poc_lsb, frame_mbs_only]
+// PPS fields
+let mut h264_pps = []    // [pps_id, sps_id, entropy_mode, pic_init_qp_m26, chroma_qp_offset, deblock_present]
+
+// Reconstructed frame (flat Y, Cb, Cr arrays)
+let mut h264_y = []
+let mut h264_cb = []
+let mut h264_cr = []
+// Output RGB
+let mut h264_rgb = []
+
+// Nonzero coefficient count per 4x4 block (for CAVLC context)
+let mut h264_nz = []
+
+// ─── Bitstream reader ──────────────────────────────────────
+// State: bs[0]=byte_pos, bs[1]=bit_pos (0-7, MSB first)
+
+fn h264_rbsp(nal)
+  // Remove emulation prevention bytes (0x00 0x00 0x03 -> 0x00 0x00)
+  let n = len(nal)
+  let mut out = []
+  let mut i = 0.0
+  while i < n
+    if i + 2.0 < n
+      let a = nal[int(i)]
+      let b = nal[int(i + 1.0)]
+      let c = nal[int(i + 2.0)]
+      if a == 0.0
+        if b == 0.0
+          if c == 3.0
+            push(out, 0.0)
+            push(out, 0.0)
+            i = i + 3.0
+          else
+            push(out, nal[int(i)])
+            i = i + 1.0
+          end
+        else
+          push(out, nal[int(i)])
+          i = i + 1.0
+        end
+      else
+        push(out, nal[int(i)])
+        i = i + 1.0
+      end
+    else
+      push(out, nal[int(i)])
+      i = i + 1.0
+    end
+  end
+  return out
+end
+
+fn h264_read_bits(rbsp, bs, n)
+  // Read n bits (1-24) from MSB-first bitstream
+  let mut val = 0.0
+  let mut bits_left = n
+  let mut bpos = bs[0]
+  let mut bbit = bs[1]
+  while bits_left > 0.0
+    let byte_val = rbsp[int(bpos)]
+    let bits_avail = 8.0 - bbit
+    if bits_avail <= bits_left
+      // Take all remaining bits from this byte
+      let mask = bit_shl(1.0, bits_avail) - 1.0
+      let bits = bit_and(byte_val, mask)
+      val = bit_or(bit_shl(val, bits_avail), bits)
+      bits_left = bits_left - bits_avail
+      bpos = bpos + 1.0
+      bbit = 0.0
+    else
+      // Take only bits_left bits from high part of remaining
+      let shift = bits_avail - bits_left
+      let mask = bit_shl(1.0, bits_left) - 1.0
+      let bits = bit_and(bit_shr(byte_val, shift), mask)
+      val = bit_or(bit_shl(val, bits_left), bits)
+      bbit = bbit + bits_left
+      bits_left = 0.0
+    end
+  end
+  bs[0] = bpos
+  bs[1] = bbit
+  return val
+end
+
+fn h264_read_bit(rbsp, bs)
+  let bpos = bs[0]
+  let bbit = bs[1]
+  let byte_val = rbsp[int(bpos)]
+  let shift = 7.0 - bbit
+  let val = bit_and(bit_shr(byte_val, shift), 1.0)
+  let nbit = bbit + 1.0
+  if nbit >= 8.0
+    bs[0] = bpos + 1.0
+    bs[1] = 0.0
+  else
+    bs[1] = nbit
+  end
+  return val
+end
+
+fn h264_read_ue(rbsp, bs)
+  // Unsigned Exp-Golomb
+  let mut lz = 0.0
+  let mut bit = h264_read_bit(rbsp, bs)
+  while bit == 0.0
+    lz = lz + 1.0
+    bit = h264_read_bit(rbsp, bs)
+  end
+  if lz == 0.0
+    return 0.0
+  end
+  let suffix = h264_read_bits(rbsp, bs, lz)
+  return bit_shl(1.0, lz) - 1.0 + suffix
+end
+
+fn h264_read_se(rbsp, bs)
+  // Signed Exp-Golomb
+  let code = h264_read_ue(rbsp, bs)
+  if code == 0.0
+    return 0.0
+  end
+  if bit_and(code, 1.0) == 1.0
+    return (code + 1.0) / 2.0
+  else
+    return 0.0 - code / 2.0
+  end
+end
+
+// ─── SPS Decoder ───────────────────────────────────────────
+
+fn h264_decode_sps(sps_bytes)
+  let rbsp = h264_rbsp(sps_bytes)
+  let mut bs = [0.0, 0.0]
+
+  // Skip NAL header byte if present (type 7)
+  let first = rbsp[0]
+  let nal_type = bit_and(first, 31.0)
+  if nal_type == 7.0
+    bs[0] = 1.0
+  end
+
+  let profile = h264_read_bits(rbsp, bs, 8.0)
+  let constraint = h264_read_bits(rbsp, bs, 8.0)
+  let level = h264_read_bits(rbsp, bs, 8.0)
+  let sps_id = h264_read_ue(rbsp, bs)
+
+  // High profile: skip extra fields
+  if profile >= 100.0
+    let chroma_fmt = h264_read_ue(rbsp, bs)
+    if chroma_fmt == 3.0
+      let sep = h264_read_bit(rbsp, bs)
+    end
+    let bit_depth_l = h264_read_ue(rbsp, bs)
+    let bit_depth_c = h264_read_ue(rbsp, bs)
+    let qp_bypass = h264_read_bit(rbsp, bs)
+    let scaling_present = h264_read_bit(rbsp, bs)
+    // Skip scaling lists if present (complex — not needed for baseline)
+  end
+
+  let log2_max_fn = h264_read_ue(rbsp, bs) + 4.0
+  let poc_type = h264_read_ue(rbsp, bs)
+  let mut log2_max_poc_lsb = 8.0
+  if poc_type == 0.0
+    log2_max_poc_lsb = h264_read_ue(rbsp, bs) + 4.0
+  end
+  let max_ref = h264_read_ue(rbsp, bs)
+  let gaps = h264_read_bit(rbsp, bs)
+  let mb_w = h264_read_ue(rbsp, bs) + 1.0
+  let mb_h = h264_read_ue(rbsp, bs) + 1.0
+  let frame_mbs_only = h264_read_bit(rbsp, bs)
+
+  h264_dims[0] = mb_w * 16.0
+  h264_dims[1] = mb_h * 16.0
+  h264_dims[2] = mb_w
+  h264_dims[3] = mb_h
+
+  // Store SPS fields
+  while len(h264_sps) > 0.0
+    pop(h264_sps)
+  end
+  push(h264_sps, profile)
+  push(h264_sps, level)
+  push(h264_sps, sps_id)
+  push(h264_sps, log2_max_fn)
+  push(h264_sps, poc_type)
+  push(h264_sps, log2_max_poc_lsb)
+  push(h264_sps, frame_mbs_only)
+
+  return 1.0
+end
+
+// ─── PPS Decoder ───────────────────────────────────────────
+
+fn h264_decode_pps(pps_bytes)
+  let rbsp = h264_rbsp(pps_bytes)
+  let mut bs = [0.0, 0.0]
+
+  let first = rbsp[0]
+  let nal_type = bit_and(first, 31.0)
+  if nal_type == 8.0
+    bs[0] = 1.0
+  end
+
+  let pps_id = h264_read_ue(rbsp, bs)
+  let sps_id = h264_read_ue(rbsp, bs)
+  let entropy_mode = h264_read_bit(rbsp, bs)
+  let bottom_field = h264_read_bit(rbsp, bs)
+  let num_slice_groups = h264_read_ue(rbsp, bs)
+  let ref_l0 = h264_read_ue(rbsp, bs)
+  let ref_l1 = h264_read_ue(rbsp, bs)
+  let weighted_pred = h264_read_bit(rbsp, bs)
+  let weighted_bipred = h264_read_bits(rbsp, bs, 2.0)
+  let pic_init_qp_m26 = h264_read_se(rbsp, bs)
+  let pic_init_qs_m26 = h264_read_se(rbsp, bs)
+  let chroma_qp_off = h264_read_se(rbsp, bs)
+  let deblock_present = h264_read_bit(rbsp, bs)
+
+  while len(h264_pps) > 0.0
+    pop(h264_pps)
+  end
+  push(h264_pps, pps_id)
+  push(h264_pps, sps_id)
+  push(h264_pps, entropy_mode)
+  push(h264_pps, pic_init_qp_m26)
+  push(h264_pps, chroma_qp_off)
+  push(h264_pps, deblock_present)
+
+  return 1.0
+end
+
+// ─── Inverse 4x4 integer DCT ──────────────────────────────
+
+fn h264_idct4x4(coeffs, out_off, out)
+  // coeffs: 16-element array (row-major 4x4)
+  // Writes to out[out_off .. out_off+15]
+  // Step 1: row transform
+  let mut tmp = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  for r in range(0, 4)
+    let ri = r * 4.0
+    let a = coeffs[int(ri)]
+    let b = coeffs[int(ri + 1.0)]
+    let c = coeffs[int(ri + 2.0)]
+    let d = coeffs[int(ri + 3.0)]
+    let e = a + c
+    let f = a - c
+    let g = floor(b / 2.0) - d
+    let h = b + floor(d / 2.0)
+    tmp[int(ri)] = e + h
+    tmp[int(ri + 1.0)] = f + g
+    tmp[int(ri + 2.0)] = f - g
+    tmp[int(ri + 3.0)] = e - h
+  end
+  // Step 2: column transform
+  for col in range(0, 4)
+    let a = tmp[int(col)]
+    let b = tmp[int(col + 4.0)]
+    let c = tmp[int(col + 8.0)]
+    let d = tmp[int(col + 12.0)]
+    let e = a + c
+    let f = a - c
+    let g = floor(b / 2.0) - d
+    let h = b + floor(d / 2.0)
+    let oi = out_off + col
+    out[int(oi)] = floor((e + h + 32.0) / 64.0)
+    out[int(oi + 4.0)] = floor((f + g + 32.0) / 64.0)
+    out[int(oi + 8.0)] = floor((f - g + 32.0) / 64.0)
+    out[int(oi + 12.0)] = floor((e - h + 32.0) / 64.0)
+  end
+  return 0.0
+end
+
+// 4x4 Hadamard transform for I_16x16 luma DC
+fn h264_hadamard4x4(dc)
+  // dc: 16-element array, transforms in-place
+  let mut tmp = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  // Row transform
+  for r in range(0, 4)
+    let ri = r * 4.0
+    let a = dc[int(ri)]
+    let b = dc[int(ri + 1.0)]
+    let c = dc[int(ri + 2.0)]
+    let d = dc[int(ri + 3.0)]
+    tmp[int(ri)] = a + b + c + d
+    tmp[int(ri + 1.0)] = a + b - c - d
+    tmp[int(ri + 2.0)] = a - b - c + d
+    tmp[int(ri + 3.0)] = a - b + c - d
+  end
+  // Column transform
+  for col in range(0, 4)
+    let a = tmp[int(col)]
+    let b = tmp[int(col + 4.0)]
+    let c = tmp[int(col + 8.0)]
+    let d = tmp[int(col + 12.0)]
+    dc[int(col)] = a + b + c + d
+    dc[int(col + 4.0)] = a + b - c - d
+    dc[int(col + 8.0)] = a - b - c + d
+    dc[int(col + 12.0)] = a - b + c - d
+  end
+  return 0.0
+end
+
+// 2x2 Hadamard for chroma DC
+fn h264_hadamard2x2(dc)
+  let a = dc[0]
+  let b = dc[1]
+  let c = dc[2]
+  let d = dc[3]
+  dc[0] = a + b + c + d
+  dc[1] = a - b + c - d
+  dc[2] = a + b - c - d
+  dc[3] = a - b - c + d
+  return 0.0
+end
+
+// ─── Dequantization ────────────────────────────────────────
+
+// LevelScale matrices for qp%6 = 0..5 (flat 4x4 each)
+let mut h264_ls0 = [10.0,13.0,10.0,13.0, 13.0,16.0,13.0,16.0, 10.0,13.0,10.0,13.0, 13.0,16.0,13.0,16.0]
+let mut h264_ls1 = [11.0,14.0,11.0,14.0, 14.0,18.0,14.0,18.0, 11.0,14.0,11.0,14.0, 14.0,18.0,14.0,18.0]
+let mut h264_ls2 = [13.0,16.0,13.0,16.0, 16.0,20.0,16.0,20.0, 13.0,16.0,13.0,16.0, 16.0,20.0,16.0,20.0]
+let mut h264_ls3 = [14.0,18.0,14.0,18.0, 18.0,23.0,18.0,23.0, 14.0,18.0,14.0,18.0, 18.0,23.0,18.0,23.0]
+let mut h264_ls4 = [16.0,20.0,16.0,20.0, 20.0,25.0,20.0,25.0, 16.0,20.0,16.0,20.0, 20.0,25.0,20.0,25.0]
+let mut h264_ls5 = [18.0,23.0,18.0,23.0, 23.0,29.0,23.0,29.0, 18.0,23.0,18.0,23.0, 23.0,29.0,23.0,29.0]
+
+// Zigzag scan order for 4x4 block
+let mut h264_zigzag = [0.0,1.0,4.0,8.0, 5.0,2.0,3.0,6.0, 9.0,12.0,13.0,10.0, 7.0,11.0,14.0,15.0]
+
+fn h264_dequant4x4(coeffs, qp)
+  let qp_mod = qp - floor(qp / 6.0) * 6.0
+  let qp_div = floor(qp / 6.0)
+  for i in range(0, 16)
+    let c = coeffs[int(i)]
+    if c != 0.0
+      let row = floor(i / 4.0)
+      let col = i - row * 4.0
+      let idx = row * 4.0 + col
+      // Select level scale for qp%6
+      let mut scale = 10.0
+      if qp_mod == 0.0
+        scale = h264_ls0[int(idx)]
+      elif qp_mod == 1.0
+        scale = h264_ls1[int(idx)]
+      elif qp_mod == 2.0
+        scale = h264_ls2[int(idx)]
+      elif qp_mod == 3.0
+        scale = h264_ls3[int(idx)]
+      elif qp_mod == 4.0
+        scale = h264_ls4[int(idx)]
+      else
+        scale = h264_ls5[int(idx)]
+      end
+      let dq = c * scale
+      if qp_div >= 1.0
+        coeffs[int(i)] = dq * bit_shl(1.0, qp_div - 1.0)
+      else
+        coeffs[int(i)] = dq
+      end
+    end
+  end
+  return 0.0
+end
+
+// ─── Intra prediction ──────────────────────────────────────
+
+fn h264_clamp(v)
+  if v < 0.0
+    return 0.0
+  end
+  if v > 255.0
+    return 255.0
+  end
+  return floor(v)
+end
+
+// Predict a 4x4 block. mode: 0=V, 1=H, 2=DC
+// Writes prediction to pred[0..15]
+fn h264_predict_4x4(plane, stride, bx, by, mode, pred)
+  let has_top = 0.0
+  let has_left = 0.0
+  if by > 0.0
+    has_top = 1.0
+  end
+  if bx > 0.0
+    has_left = 1.0
+  end
+  if mode == 0.0
+    // Vertical: copy top row
+    if has_top == 1.0
+      let ty = (by - 1.0) * stride + bx
+      for r in range(0, 4)
+        for c in range(0, 4)
+          pred[int(r * 4.0 + c)] = plane[int(ty + c)]
+        end
+      end
+    else
+      for i in range(0, 16)
+        pred[int(i)] = 128.0
+      end
+    end
+  elif mode == 1.0
+    // Horizontal: copy left column
+    if has_left == 1.0
+      for r in range(0, 4)
+        let ly = (by + r) * stride + bx - 1.0
+        let lv = plane[int(ly)]
+        for c in range(0, 4)
+          pred[int(r * 4.0 + c)] = lv
+        end
+      end
+    else
+      for i in range(0, 16)
+        pred[int(i)] = 128.0
+      end
+    end
+  else
+    // DC: average of available neighbors
+    let mut sum = 0.0
+    let mut cnt = 0.0
+    if has_top == 1.0
+      let ty = (by - 1.0) * stride + bx
+      for c in range(0, 4)
+        sum = sum + plane[int(ty + c)]
+        cnt = cnt + 1.0
+      end
+    end
+    if has_left == 1.0
+      for r in range(0, 4)
+        let ly = (by + r) * stride + bx - 1.0
+        sum = sum + plane[int(ly)]
+        cnt = cnt + 1.0
+      end
+    end
+    let mut dc = 128.0
+    if cnt > 0.0
+      dc = floor((sum + cnt / 2.0) / cnt)
+    end
+    for i in range(0, 16)
+      pred[int(i)] = dc
+    end
+  end
+  return 0.0
+end
+
+// Predict 16x16 block. mode: 0=V, 1=H, 2=DC, 3=Plane
+fn h264_predict_16x16(plane, stride, mbx, mby, mode, pred)
+  let px = mbx * 16.0
+  let py = mby * 16.0
+  if mode == 0.0
+    // Vertical
+    if mby > 0.0
+      let ty = (py - 1.0) * stride + px
+      for r in range(0, 16)
+        for c in range(0, 16)
+          pred[int(r * 16.0 + c)] = plane[int(ty + c)]
+        end
+      end
+    else
+      for i in range(0, 256)
+        pred[int(i)] = 128.0
+      end
+    end
+  elif mode == 1.0
+    // Horizontal
+    if mbx > 0.0
+      for r in range(0, 16)
+        let ly = (py + r) * stride + px - 1.0
+        let lv = plane[int(ly)]
+        for c in range(0, 16)
+          pred[int(r * 16.0 + c)] = lv
+        end
+      end
+    else
+      for i in range(0, 256)
+        pred[int(i)] = 128.0
+      end
+    end
+  else
+    // DC (mode 2 and fallback for mode 3)
+    let mut sum = 0.0
+    let mut cnt = 0.0
+    if mby > 0.0
+      let ty = (py - 1.0) * stride + px
+      for c in range(0, 16)
+        sum = sum + plane[int(ty + c)]
+        cnt = cnt + 1.0
+      end
+    end
+    if mbx > 0.0
+      for r in range(0, 16)
+        let ly = (py + r) * stride + px - 1.0
+        sum = sum + plane[int(ly)]
+        cnt = cnt + 1.0
+      end
+    end
+    let mut dc = 128.0
+    if cnt > 0.0
+      dc = floor((sum + cnt / 2.0) / cnt)
+    end
+    for i in range(0, 256)
+      pred[int(i)] = dc
+    end
+  end
+  return 0.0
+end
+
+// ─── CAVLC coefficient tables ──────────────────────────────
+// Simplified: coeff_token for nC=0..1 (Table 9-5(a))
+// Encoded as flat array: [totalcoeff, trailingones, code_len, code_val, ...]
+// For POC we use procedural decoding rather than table lookup
+
+// CBP mapping table for I-slices (Table 9-4)
+// Maps coded value (from ue) to (luma_cbp, chroma_cbp)
+// Stored as flat pairs: cbp_intra[i*2]=luma, cbp_intra[i*2+1]=chroma
+let mut h264_cbp_intra = [47.0, 0.0, 31.0, 16.0, 15.0, 1.0, 0.0, 2.0, 23.0, 4.0, 27.0, 8.0, 29.0, 32.0, 30.0, 3.0, 7.0, 5.0, 11.0, 10.0, 13.0, 12.0, 14.0, 15.0, 39.0, 47.0, 43.0, 7.0, 45.0, 11.0, 46.0, 13.0, 16.0, 14.0, 3.0, 6.0, 5.0, 9.0, 10.0, 31.0, 12.0, 35.0, 19.0, 37.0, 21.0, 42.0, 26.0, 44.0, 28.0, 33.0, 35.0, 34.0, 37.0, 36.0, 42.0, 40.0, 44.0, 39.0, 1.0, 43.0, 2.0, 45.0, 4.0, 46.0, 8.0, 17.0, 17.0, 18.0, 18.0, 20.0, 20.0, 24.0, 24.0, 19.0, 6.0, 21.0, 9.0, 22.0, 22.0, 25.0, 25.0, 26.0, 33.0, 27.0, 34.0, 28.0, 36.0, 29.0, 40.0, 30.0, 38.0, 41.0, 32.0, 38.0]
+
+// ─── YUV to RGB ────────────────────────────────────────────
+
+fn h264_yuv_to_rgb(y_plane, cb_plane, cr_plane, w, h, rgb_out)
+  let cw = floor(w / 2.0)
+  for row in range(0, int(h))
+    for col in range(0, int(w))
+      let yv = y_plane[int(row * w + col)]
+      let cy = floor(row / 2.0)
+      let cx = floor(col / 2.0)
+      let cb = cb_plane[int(cy * cw + cx)]
+      let cr = cr_plane[int(cy * cw + cx)]
+      let r = h264_clamp(yv + 1.402 * (cr - 128.0))
+      let g = h264_clamp(yv - 0.344136 * (cb - 128.0) - 0.714136 * (cr - 128.0))
+      let b = h264_clamp(yv + 1.772 * (cb - 128.0))
+      push(rgb_out, r)
+      push(rgb_out, g)
+      push(rgb_out, b)
+    end
+  end
+  return 0.0
+end
+
+// ─── I-frame decoder ───────────────────────────────────────
+
+fn h264_decode_idr(sample, nal_length_size)
+  let w = h264_dims[0]
+  let h = h264_dims[1]
+  let mbw = h264_dims[2]
+  let mbh = h264_dims[3]
+
+  if w == 0.0
+    return 0.0
+  end
+
+  // Initialize frame buffers
+  let y_size = w * h
+  let c_size = floor(w / 2.0) * floor(h / 2.0)
+
+  while len(h264_y) > 0.0
+    pop(h264_y)
+  end
+  while len(h264_cb) > 0.0
+    pop(h264_cb)
+  end
+  while len(h264_cr) > 0.0
+    pop(h264_cr)
+  end
+  while len(h264_rgb) > 0.0
+    pop(h264_rgb)
+  end
+  while len(h264_nz) > 0.0
+    pop(h264_nz)
+  end
+
+  // Fill with 128 (mid-gray)
+  for i in range(0, int(y_size))
+    push(h264_y, 128.0)
+  end
+  for i in range(0, int(c_size))
+    push(h264_cb, 128.0)
+    push(h264_cr, 128.0)
+  end
+
+  // NZ counts: one per 4x4 block in frame
+  let nz_w = mbw * 4.0
+  let nz_h = mbh * 4.0
+  for i in range(0, int(nz_w * nz_h))
+    push(h264_nz, 0.0)
+  end
+
+  // Extract first NAL from sample (skip length prefix)
+  let mut nal_start = nal_length_size
+  let slen = len(sample)
+
+  // Get NAL type
+  let nal_byte = sample[int(nal_start)]
+  let nal_type = bit_and(nal_byte, 31.0)
+
+  // RBSP (inline to avoid scope issues)
+  let mut rbsp = []
+  let mut ri = nal_start
+  while ri < slen
+    if ri + 2.0 < slen
+      let ra = sample[int(ri)]
+      let rb = sample[int(ri + 1.0)]
+      let rc = sample[int(ri + 2.0)]
+      if ra == 0.0
+        if rb == 0.0
+          if rc == 3.0
+            push(rbsp, 0.0)
+            push(rbsp, 0.0)
+            ri = ri + 3.0
+          else
+            push(rbsp, sample[int(ri)])
+            ri = ri + 1.0
+          end
+        else
+          push(rbsp, sample[int(ri)])
+          ri = ri + 1.0
+        end
+      else
+        push(rbsp, sample[int(ri)])
+        ri = ri + 1.0
+      end
+    else
+      push(rbsp, sample[int(ri)])
+      ri = ri + 1.0
+    end
+  end
+
+  // Parse slice header (inline bitstream reading)
+  let mut bs = [1.0, 0.0]  // Skip NAL byte
+
+  let first_mb = h264_read_ue(rbsp, bs)
+  let slice_type = h264_read_ue(rbsp, bs)
+  let pps_id = h264_read_ue(rbsp, bs)
+
+  let log2_max_fn = h264_sps[3]
+  let frame_num = h264_read_bits(rbsp, bs, log2_max_fn)
+
+  // IDR: idr_pic_id
+  if nal_type == 5.0
+    let idr_id = h264_read_ue(rbsp, bs)
+  end
+
+  // POC
+  let poc_type = h264_sps[4]
+  if poc_type == 0.0
+    let log2_poc = h264_sps[5]
+    let poc_lsb = h264_read_bits(rbsp, bs, log2_poc)
+  end
+
+  // Dec ref pic marking for IDR
+  if nal_type == 5.0
+    let no_output = h264_read_bit(rbsp, bs)
+    let long_term = h264_read_bit(rbsp, bs)
+  end
+
+  // Slice QP
+  let slice_qp_delta = h264_read_se(rbsp, bs)
+  let pic_init_qp = h264_pps[3] + 26.0
+  let qp = pic_init_qp + slice_qp_delta
+
+  // Deblocking filter params (skip)
+  let deblock_present = h264_pps[5]
+  if deblock_present == 1.0
+    let disable_deblock = h264_read_ue(rbsp, bs)
+  end
+
+  // ── Macroblock decoding loop ────────────────────────────
+  let total_mbs = mbw * mbh
+  let stride = w
+
+  for mb_idx in range(0, int(total_mbs))
+    let mby = floor(mb_idx / mbw)
+    let mbx = mb_idx - mby * mbw
+    let px = mbx * 16.0
+    let py = mby * 16.0
+
+    // Read mb_type
+    let mb_type = h264_read_ue(rbsp, bs)
+
+    if mb_type == 25.0
+      // I_PCM: read 256 luma + 64 Cb + 64 Cr raw bytes
+      // Align to byte boundary
+      if bs[1] > 0.0
+        bs[0] = bs[0] + 1.0
+        bs[1] = 0.0
+      end
+      for r in range(0, 16)
+        for c in range(0, 16)
+          let ypos = (py + r) * stride + px + c
+          h264_y[int(ypos)] = rbsp[int(bs[0])]
+          bs[0] = bs[0] + 1.0
+        end
+      end
+      let cstride = floor(w / 2.0)
+      let cpx = floor(px / 2.0)
+      let cpy = floor(py / 2.0)
+      for r in range(0, 8)
+        for c in range(0, 8)
+          h264_cb[int((cpy + r) * cstride + cpx + c)] = rbsp[int(bs[0])]
+          bs[0] = bs[0] + 1.0
+        end
+      end
+      for r in range(0, 8)
+        for c in range(0, 8)
+          h264_cr[int((cpy + r) * cstride + cpx + c)] = rbsp[int(bs[0])]
+          bs[0] = bs[0] + 1.0
+        end
+      end
+
+    elif mb_type >= 1.0
+      if mb_type <= 24.0
+        // I_16x16: prediction mode + CBP encoded in mb_type
+        let t = mb_type - 1.0
+        let i16_mode = t - floor(t / 4.0) * 4.0
+        let cbp_chroma = floor(t / 4.0) - floor(t / 12.0) * 3.0
+        let mut cbp_luma = 0.0
+        if floor(t / 12.0) >= 1.0
+          cbp_luma = 15.0
+        end
+
+        // 16x16 prediction
+        let mut pred16 = []
+        for i in range(0, 256)
+          push(pred16, 0.0)
+        end
+        h264_predict_16x16(h264_y, stride, mbx, mby, i16_mode, pred16)
+
+        // Write prediction to Y plane
+        for r in range(0, 16)
+          for c in range(0, 16)
+            let ypos = (py + r) * stride + px + c
+            h264_y[int(ypos)] = pred16[int(r * 16.0 + c)]
+          end
+        end
+
+        // Skip CAVLC residual for now (zero residual = prediction only)
+        // TODO: decode DC coefficients + AC blocks when cbp_luma > 0
+
+        // Chroma prediction (DC for simplicity)
+        let cstride = floor(w / 2.0)
+        let cpx = floor(px / 2.0)
+        let cpy = floor(py / 2.0)
+        // Simple DC prediction for chroma
+        let mut cb_sum = 0.0
+        let mut cr_sum = 0.0
+        let mut cnt = 0.0
+        if mby > 0.0
+          for c in range(0, 8)
+            cb_sum = cb_sum + h264_cb[int((cpy - 1.0) * cstride + cpx + c)]
+            cr_sum = cr_sum + h264_cr[int((cpy - 1.0) * cstride + cpx + c)]
+            cnt = cnt + 1.0
+          end
+        end
+        if mbx > 0.0
+          for r in range(0, 8)
+            cb_sum = cb_sum + h264_cb[int((cpy + r) * cstride + cpx - 1.0)]
+            cr_sum = cr_sum + h264_cr[int((cpy + r) * cstride + cpx - 1.0)]
+            cnt = cnt + 1.0
+          end
+        end
+        let mut cb_dc = 128.0
+        let mut cr_dc = 128.0
+        if cnt > 0.0
+          cb_dc = floor((cb_sum + cnt / 2.0) / cnt)
+          cr_dc = floor((cr_sum + cnt / 2.0) / cnt)
+        end
+        for r in range(0, 8)
+          for c in range(0, 8)
+            h264_cb[int((cpy + r) * cstride + cpx + c)] = cb_dc
+            h264_cr[int((cpy + r) * cstride + cpx + c)] = cr_dc
+          end
+        end
+      end
+
+    else
+      // mb_type == 0: I_4x4
+      // Read 16 prediction modes
+      for blk in range(0, 16)
+        let prev_flag = h264_read_bit(rbsp, bs)
+        if prev_flag == 0.0
+          let rem_mode = h264_read_bits(rbsp, bs, 3.0)
+        end
+      end
+      // Read CBP
+      let cbp_code = h264_read_ue(rbsp, bs)
+
+      // For now: DC prediction for all sub-blocks
+      for r in range(0, 16)
+        for c in range(0, 16)
+          let ypos = (py + r) * stride + px + c
+          h264_y[int(ypos)] = 128.0
+        end
+      end
+    end
+  end
+
+  // Convert YUV to RGB
+  h264_yuv_to_rgb(h264_y, h264_cb, h264_cr, w, h, h264_rgb)
+
+  return 1.0
+end
