@@ -1,0 +1,73 @@
+// gui_demo.flow — First OctoFlow GUI window
+// Draws a gradient that follows the mouse cursor.
+// Run: octoflow run examples/gui_demo.flow
+
+let w = 400.0
+let h = 300.0
+let title = "OctoFlow — GPU Pixels in a Window"
+
+let ok = window_open(w, h, title)
+if ok == 0.0
+  print("Failed to open window")
+end
+
+// Pre-allocate pixel arrays
+let total = int(w * h)
+let mut r = []
+let mut g = []
+let mut b = []
+for i in range(0, total)
+  push(r, 0.0)
+  push(g, 0.0)
+  push(b, 0.0)
+end
+
+let mut mx = w / 2.0
+let mut my = h / 2.0
+let mut frame = 0.0
+
+while window_alive() == 1.0
+  // Poll all pending events
+  let mut evt = window_poll()
+  while evt != "none"
+    if evt == "close"
+      window_close()
+    elif evt == "mouse_move"
+      mx = window_event_x()
+      my = window_event_y()
+    elif evt == "key_down"
+      let key = window_event_key()
+      if key == "escape"
+        window_close()
+      end
+    end
+    evt = window_poll()
+  end
+
+  if window_alive() == 0.0
+    break
+  end
+
+  // Render gradient centered on mouse
+  for y in range(0, int(h))
+    for x in range(0, int(w))
+      let idx = int(y * w + x)
+      let dx = x - mx
+      let dy = y - my
+      let dist = sqrt(dx * dx + dy * dy)
+      let mut fade = 1.0 - dist / 300.0
+      if fade < 0.0
+        fade = 0.0
+      end
+      r[idx] = fade * 255.0
+      g[idx] = fade * 128.0 + sin(frame * 0.05 + x * 0.02) * 50.0 + 50.0
+      b[idx] = (1.0 - fade) * 200.0
+    end
+  end
+
+  window_draw(r, g, b)
+  frame = frame + 1.0
+  sleep(16)
+end
+
+print("Window closed after {frame} frames")
