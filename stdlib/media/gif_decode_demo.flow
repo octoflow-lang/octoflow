@@ -1,0 +1,105 @@
+// gif_decode_demo.flow — Decode a GIF and display in terminal
+// Usage: octoflow run stdlib/media/gif_decode_demo.flow --allow-read
+//
+// Self-hosting milestone: binary format decoding in pure .flow.
+// No Rust GIF decoder — just bitwise builtins + arrays.
+
+use gif
+
+// ─── Create a tiny 2x2 GIF in memory ──────────────────────────
+// 4 pixels: red, green, blue, white
+// This proves the decoder works end-to-end without needing a file.
+
+// GIF89a header
+let mut bytes = [71.0, 73.0, 70.0, 56.0, 57.0, 97.0]
+// LSD: w=2, h=2, packed=0x82 (GCT, 4 colors), bg=0, aspect=0
+push(bytes, 2.0)    // width low
+push(bytes, 0.0)    // width high
+push(bytes, 2.0)    // height low
+push(bytes, 0.0)    // height high
+push(bytes, 129.0)  // 0x81: GCT=1, color_res=0, sort=0, gct_size=1 (2^(1+1)=4 entries)
+push(bytes, 0.0)    // bg index
+push(bytes, 0.0)    // aspect ratio
+
+// Global Color Table: 4 entries
+// 0=red, 1=green, 2=blue, 3=white
+push(bytes, 255.0)  // 0: R
+push(bytes, 0.0)    // 0: G
+push(bytes, 0.0)    // 0: B
+push(bytes, 0.0)    // 1: R
+push(bytes, 255.0)  // 1: G
+push(bytes, 0.0)    // 1: B
+push(bytes, 0.0)    // 2: R
+push(bytes, 0.0)    // 2: G
+push(bytes, 255.0)  // 2: B
+push(bytes, 255.0)  // 3: R
+push(bytes, 255.0)  // 3: G
+push(bytes, 255.0)  // 3: B
+
+// Image Descriptor
+push(bytes, 44.0)   // 0x2C
+push(bytes, 0.0)    // left low
+push(bytes, 0.0)    // left high
+push(bytes, 0.0)    // top low
+push(bytes, 0.0)    // top high
+push(bytes, 2.0)    // width low
+push(bytes, 0.0)    // width high
+push(bytes, 2.0)    // height low
+push(bytes, 0.0)    // height high
+push(bytes, 0.0)    // packed (no LCT, no interlace)
+
+// LZW data: min_code_size=2, clear=4, eoi=5
+// Codes: clear(4), 0, 1, 2, 3, eoi(5)
+// code_size starts at 3, increases to 4 after dict entry 7 (next_code=8)
+//   4=100  3 bits  (bits 0-2)
+//   0=000  3 bits  (bits 3-5)
+//   1=001  3 bits  (bits 6-8)
+//   2=010  3 bits  (bits 9-11) → after decode, next_code=8 → code_size=4
+//   3=0011 4 bits  (bits 12-15)
+//   5=0101 4 bits  (bits 16-19)
+// byte 0 (bits 0-7): 0,0,1,0,0,0,1,0 = 68
+// byte 1 (bits 8-15): 0,0,1,0,1,1,0,0 = 4+16+32 = 52
+// byte 2 (bits 16-23): 1,0,1,0 = 1+4 = 5
+
+push(bytes, 2.0)    // min code size
+push(bytes, 3.0)    // sub-block length = 3 bytes
+push(bytes, 68.0)   // LZW byte 0
+push(bytes, 52.0)   // LZW byte 1
+push(bytes, 5.0)    // LZW byte 2
+push(bytes, 0.0)    // sub-block terminator
+
+// Trailer
+push(bytes, 59.0)   // 0x3B
+
+// ─── Decode ────────────────────────────────────────────────────
+let g = gif_decode(bytes)
+let ok = g["ok"]
+if ok != 1.0
+  let err = g["error"]
+  print("Decode error: {err}")
+end
+
+let w = g["width"]
+let h = g["height"]
+let fc = g["frame_count"]
+
+print("Pure .flow GIF decoder")
+print("Decoded {w}x{h} image, {fc} frame(s)")
+print("")
+
+// Extract R, G, B arrays
+let r = gif_extract_r(gif_pixels, 0.0, w, h)
+let g_ch = gif_extract_g(gif_pixels, 0.0, w, h)
+let b = gif_extract_b(gif_pixels, 0.0, w, h)
+
+// Display in terminal
+term_image(w, h, r, g_ch, b)
+
+print("")
+print("Pixel data (RGBRGBRGB...):")
+let npix = len(gif_pixels)
+for i in range(0, int(npix))
+  let v = gif_pixels[int(i)]
+  let iv = int(v)
+  print("  [{i}] = {iv}")
+end

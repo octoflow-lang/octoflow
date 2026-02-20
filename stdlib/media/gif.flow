@@ -1,0 +1,511 @@
+// gif.flow — Pure OctoFlow GIF decoder
+// Decodes GIF87a/GIF89a files from raw bytes
+// Supports: LZW decompression, color tables, transparency,
+//           disposal methods, interlace, multi-frame animation
+//
+// Usage:
+//   let bytes = read_bytes("image.gif")
+//   let g = gif_decode(bytes)
+//   // g.width, g.height, g.frame_count, g.ok
+//   // gif_delays = per-frame delay in ms
+//   // gif_pixels = concatenated RGB (frame_count * width * height * 3)
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+fn gif_u16le(bytes, pos)
+  let lo = bytes[int(pos)]
+  let hi = bytes[int(pos + 1.0)]
+  return hi * 256.0 + lo
+end
+
+fn gif_interlace_row(pass, row, height)
+  if pass == 0.0
+    return row * 8.0
+  elif pass == 1.0
+    return row * 8.0 + 4.0
+  elif pass == 2.0
+    return row * 4.0 + 2.0
+  else
+    return row * 2.0 + 1.0
+  end
+end
+
+// Read GIF sub-blocks: sequence of (len, data...) until len=0
+// Returns flat byte array of all concatenated data
+fn gif_read_sub_blocks(bytes, start_pos)
+  let mut out = []
+  let mut p = start_pos
+  let mut block_len = bytes[int(p)]
+  p = p + 1.0
+  while block_len > 0.0
+    for i in range(0, int(block_len))
+      push(out, bytes[int(p + i)])
+    end
+    p = p + block_len
+    block_len = bytes[int(p)]
+    p = p + 1.0
+  end
+  return out
+end
+
+// Count bytes consumed by sub-blocks (for position tracking)
+fn gif_sub_block_size(bytes, start_pos)
+  let mut p = start_pos
+  let mut block_len = bytes[int(p)]
+  p = p + 1.0
+  while block_len > 0.0
+    p = p + block_len
+    block_len = bytes[int(p)]
+    p = p + 1.0
+  end
+  return p - start_pos
+end
+
+// ─── LZW Decompression ──────────────────────────────────────
+
+fn gif_lzw(data, min_code_size)
+  let clear_code = bit_shl(1.0, min_code_size)
+  let eoi_code = clear_code + 1.0
+  let first_entry = clear_code + 2.0
+
+  // Dictionary: 3 parallel arrays
+  let mut tbl_prefix = []
+  let mut tbl_suffix = []
+  let mut tbl_first = []
+
+  // Initialize single-byte entries
+  for i in range(0, int(clear_code))
+    push(tbl_prefix, -1.0)
+    push(tbl_suffix, i)
+    push(tbl_first, i)
+  end
+  // Clear code entry
+  push(tbl_prefix, -1.0)
+  push(tbl_suffix, 0.0)
+  push(tbl_first, 0.0)
+  // EOI entry
+  push(tbl_prefix, -1.0)
+  push(tbl_suffix, 0.0)
+  push(tbl_first, 0.0)
+
+  let mut code_size = min_code_size + 1.0
+  let mut next_code = first_entry
+  let max_code = 4096.0
+
+  // Bit reader state
+  let mut br_buf = 0.0
+  let mut br_cnt = 0.0
+  let mut br_pos = 0.0
+  let data_len = len(data)
+
+  let mut output = []
+  let mut prev_code = -1.0
+
+  let mut done = 0.0
+  while done == 0.0
+    // Read code_size bits
+    while br_cnt < code_size
+      if br_pos >= data_len
+        done = 1.0
+      end
+      if done == 0.0
+        br_buf = bit_or(br_buf, bit_shl(data[int(br_pos)], br_cnt))
+        br_pos = br_pos + 1.0
+        br_cnt = br_cnt + 8.0
+      end
+    end
+    if done == 1.0
+      break
+    end
+    let mask = bit_shl(1.0, code_size) - 1.0
+    let code = bit_and(br_buf, mask)
+    br_buf = bit_shr(br_buf, code_size)
+    br_cnt = br_cnt - code_size
+
+    if code == eoi_code
+      break
+    end
+
+    if code == clear_code
+      // Reset dictionary
+      code_size = min_code_size + 1.0
+      next_code = first_entry
+      // Trim tables back to initial size
+      let tbl_len = len(tbl_prefix)
+      while tbl_len > first_entry
+        pop(tbl_prefix)
+        pop(tbl_suffix)
+        pop(tbl_first)
+        tbl_len = tbl_len - 1.0
+      end
+      prev_code = -1.0
+      continue
+    end
+
+    if prev_code == -1.0
+      // First code after clear — just output it
+      push(output, tbl_suffix[int(code)])
+      prev_code = code
+      continue
+    end
+
+    // Decode current code
+    let mut chain = []
+    if code < next_code
+      // Known code — walk the chain
+      let mut c = code
+      while c >= first_entry
+        push(chain, tbl_suffix[int(c)])
+        c = tbl_prefix[int(c)]
+      end
+      push(chain, tbl_suffix[int(c)])
+      // Output chain in correct order (reverse of what we built)
+      let clen = len(chain)
+      for j in range(0, int(clen))
+        push(output, chain[int(clen - 1.0 - j)])
+      end
+    else
+      // Special case: code == next_code
+      // Output = prev_code's string + first byte of prev_code's string
+      let mut c = prev_code
+      while c >= first_entry
+        push(chain, tbl_suffix[int(c)])
+        c = tbl_prefix[int(c)]
+      end
+      push(chain, tbl_suffix[int(c)])
+      // chain is reversed: [last_suffix, ..., first_suffix]
+      let first_byte = chain[int(len(chain) - 1.0)]
+      // Output reversed chain (prev_code's string)
+      let clen = len(chain)
+      for j in range(0, int(clen))
+        push(output, chain[int(clen - 1.0 - j)])
+      end
+      // Append first byte of prev_code string
+      push(output, first_byte)
+    end
+
+    // Add dictionary entry: prev_code + first byte of current output
+    if next_code < max_code
+      let first_of_current = chain[int(clen - 1.0)]
+      push(tbl_prefix, prev_code)
+      push(tbl_suffix, first_of_current)
+      push(tbl_first, tbl_first[int(prev_code)])
+      next_code = next_code + 1.0
+
+      // Increase code size when needed
+      if next_code >= bit_shl(1.0, code_size)
+        if code_size < 12.0
+          code_size = code_size + 1.0
+        end
+      end
+    end
+
+    prev_code = code
+  end
+
+  return output
+end
+
+// ─── Main Decoder ────────────────────────────────────────────
+
+// Module-level result arrays (set by gif_decode, read by caller)
+let mut gif_delays = []
+let mut gif_pixels = []
+
+fn gif_decode(bytes)
+  let n = len(bytes)
+  let mut result = map()
+
+  // Verify magic
+  let b0 = bytes[0]
+  let b1 = bytes[1]
+  let b2 = bytes[2]
+  if b0 != 71.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Not a GIF file")
+    return result
+  end
+  if b1 != 73.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Not a GIF file")
+    return result
+  end
+  if b2 != 70.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Not a GIF file")
+    return result
+  end
+
+  // Logical screen descriptor
+  let width = gif_u16le(bytes, 6.0)
+  let height = gif_u16le(bytes, 8.0)
+  let packed = bytes[10]
+  let has_gct = bit_and(bit_shr(packed, 7.0), 1.0)
+  let gct_size_bits = bit_and(packed, 7.0)
+  let gct_entries = bit_shl(1.0, gct_size_bits + 1.0)
+  let bg_index = bytes[11]
+
+  let mut pos = 13.0
+
+  // Read global color table
+  let mut gct = []
+  if has_gct == 1.0
+    for i in range(0, int(gct_entries))
+      let base = pos + i * 3.0
+      push(gct, bytes[int(base)])
+      push(gct, bytes[int(base + 1.0)])
+      push(gct, bytes[int(base + 2.0)])
+    end
+    pos = pos + gct_entries * 3.0
+  end
+
+  // Canvas for compositing
+  let pix_count = width * height
+  let mut canvas = []
+  for i in range(0, int(pix_count * 3.0))
+    push(canvas, 0.0)
+  end
+
+  let mut frame_count = 0.0
+
+  // Clear module-level arrays (in case of re-decode)
+  while len(gif_delays) > 0.0
+    pop(gif_delays)
+  end
+  while len(gif_pixels) > 0.0
+    pop(gif_pixels)
+  end
+
+  // Per-frame GCE state
+  let mut dispose = 0.0
+  let mut delay_ms = 0.0
+  let mut trans_flag = 0.0
+  let mut trans_idx = 0.0
+
+  // Parse blocks
+  let mut parsing = 1.0
+  while parsing == 1.0
+    if pos >= n
+      break
+    end
+    let block_type = bytes[int(pos)]
+    pos = pos + 1.0
+
+    if block_type == 59.0
+      // Trailer (0x3B)
+      break
+    elif block_type == 33.0
+      // Extension (0x21)
+      let ext_label = bytes[int(pos)]
+      pos = pos + 1.0
+
+      if ext_label == 249.0
+        // Graphics Control Extension
+        let gce_size = bytes[int(pos)]
+        pos = pos + 1.0
+        let gce_packed = bytes[int(pos)]
+        dispose = bit_and(bit_shr(gce_packed, 2.0), 7.0)
+        trans_flag = bit_and(gce_packed, 1.0)
+        delay_ms = gif_u16le(bytes, pos + 1.0) * 10.0
+        trans_idx = bytes[int(pos + 3.0)]
+        pos = pos + gce_size
+        pos = pos + 1.0  // block terminator
+      else
+        // Skip unknown extension (application, comment, etc.)
+        let skip = gif_sub_block_size(bytes, pos)
+        pos = pos + skip
+      end
+    elif block_type == 44.0
+      // Image descriptor (0x2C)
+      let img_left = gif_u16le(bytes, pos)
+      let img_top = gif_u16le(bytes, pos + 2.0)
+      let img_w = gif_u16le(bytes, pos + 4.0)
+      let img_h = gif_u16le(bytes, pos + 6.0)
+      let img_packed = bytes[int(pos + 8.0)]
+      pos = pos + 9.0
+
+      let has_lct = bit_and(bit_shr(img_packed, 7.0), 1.0)
+      let interlace = bit_and(bit_shr(img_packed, 6.0), 1.0)
+      let lct_size_bits = bit_and(img_packed, 7.0)
+
+      // Read local color table (or use global)
+      let mut ct = []
+      if has_lct == 1.0
+        let lct_entries = bit_shl(1.0, lct_size_bits + 1.0)
+        for i in range(0, int(lct_entries))
+          let base = pos + i * 3.0
+          push(ct, bytes[int(base)])
+          push(ct, bytes[int(base + 1.0)])
+          push(ct, bytes[int(base + 2.0)])
+        end
+        pos = pos + lct_entries * 3.0
+      else
+        // Copy global CT
+        for i in range(0, int(len(gct)))
+          push(ct, gct[int(i)])
+        end
+      end
+
+      // Save canvas for disposal mode 3
+      let mut prev_canvas = []
+      if dispose == 3.0
+        for i in range(0, int(len(canvas)))
+          push(prev_canvas, canvas[int(i)])
+        end
+      end
+
+      // LZW minimum code size
+      let min_code_size = bytes[int(pos)]
+      pos = pos + 1.0
+
+      // Read sub-blocks into flat data
+      let lzw_data = gif_read_sub_blocks(bytes, pos)
+      let skip = gif_sub_block_size(bytes, pos)
+      pos = pos + skip
+
+      // Decompress
+      let indices = gif_lzw(lzw_data, min_code_size)
+
+      // Paint onto canvas
+      let idx_len = len(indices)
+      let mut ix = 0.0
+
+      if interlace == 1.0
+        // Interlaced: 4 passes
+        for pass in range(0, 4)
+          let mut row = 0.0
+          let mut actual_y = gif_interlace_row(pass, row, img_h)
+          while actual_y < img_h
+            for col in range(0, int(img_w))
+              if ix < idx_len
+                let pidx = indices[int(ix)]
+                ix = ix + 1.0
+                if trans_flag == 1.0
+                  if pidx == trans_idx
+                    continue
+                  end
+                end
+                let cx = img_left + col
+                let cy = img_top + actual_y
+                if cx < width
+                  if cy < height
+                    let coff = (cy * width + cx) * 3.0
+                    let ci = pidx * 3.0
+                    canvas[int(coff)] = ct[int(ci)]
+                    canvas[int(coff + 1.0)] = ct[int(ci + 1.0)]
+                    canvas[int(coff + 2.0)] = ct[int(ci + 2.0)]
+                  end
+                end
+              end
+            end
+            row = row + 1.0
+            actual_y = gif_interlace_row(pass, row, img_h)
+          end
+        end
+      else
+        // Sequential scan
+        for row in range(0, int(img_h))
+          for col in range(0, int(img_w))
+            if ix < idx_len
+              let pidx = indices[int(ix)]
+              ix = ix + 1.0
+              if trans_flag == 1.0
+                if pidx == trans_idx
+                  continue
+                end
+              end
+              let cx = img_left + col
+              let cy = img_top + row
+              if cx < width
+                if cy < height
+                  let coff = (cy * width + cx) * 3.0
+                  let ci = pidx * 3.0
+                  canvas[int(coff)] = ct[int(ci)]
+                  canvas[int(coff + 1.0)] = ct[int(ci + 1.0)]
+                  canvas[int(coff + 2.0)] = ct[int(ci + 2.0)]
+                end
+              end
+            end
+          end
+        end
+      end
+
+      // Store frame: copy canvas RGB to module-level gif_pixels
+      for i in range(0, int(pix_count * 3.0))
+        push(gif_pixels, canvas[int(i)])
+      end
+      push(gif_delays, delay_ms)
+      frame_count = frame_count + 1.0
+
+      // Disposal
+      if dispose == 2.0
+        // Restore background in sub-image region
+        for row in range(0, int(img_h))
+          for col in range(0, int(img_w))
+            let cx = img_left + col
+            let cy = img_top + row
+            if cx < width
+              if cy < height
+                let coff = (cy * width + cx) * 3.0
+                canvas[int(coff)] = 0.0
+                canvas[int(coff + 1.0)] = 0.0
+                canvas[int(coff + 2.0)] = 0.0
+              end
+            end
+          end
+        end
+      elif dispose == 3.0
+        // Restore previous canvas
+        for i in range(0, int(len(prev_canvas)))
+          canvas[int(i)] = prev_canvas[int(i)]
+        end
+      end
+
+      // Reset GCE for next frame
+      dispose = 0.0
+      delay_ms = 0.0
+      trans_flag = 0.0
+      trans_idx = 0.0
+    else
+      // Unknown block — skip
+      break
+    end
+  end
+
+  map_set(result, "width", width)
+  map_set(result, "height", height)
+  map_set(result, "frame_count", frame_count)
+  map_set(result, "ok", 1.0)
+  return result
+end
+
+// Extract R, G, B arrays for frame N from concatenated gif_pixels
+fn gif_extract_r(pixels, frame_idx, width, height)
+  let pix_count = width * height
+  let base = frame_idx * pix_count * 3.0
+  let mut r = []
+  for i in range(0, int(pix_count))
+    push(r, pixels[int(base + i * 3.0)])
+  end
+  return r
+end
+
+fn gif_extract_g(pixels, frame_idx, width, height)
+  let pix_count = width * height
+  let base = frame_idx * pix_count * 3.0
+  let mut g = []
+  for i in range(0, int(pix_count))
+    push(g, pixels[int(base + i * 3.0 + 1.0)])
+  end
+  return g
+end
+
+fn gif_extract_b(pixels, frame_idx, width, height)
+  let pix_count = width * height
+  let base = frame_idx * pix_count * 3.0
+  let mut b = []
+  for i in range(0, int(pix_count))
+    push(b, pixels[int(base + i * 3.0 + 2.0)])
+  end
+  return b
+end

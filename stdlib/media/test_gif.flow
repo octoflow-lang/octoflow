@@ -1,0 +1,232 @@
+// test_gif.flow — Tests for stdlib/media/gif.flow
+// Tests GIF decoding: helpers, LZW, full decode
+// Run: octoflow run stdlib/media/test_gif.flow --allow-read
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// ─── Import gif functions ────────────────────────────────────
+use gif
+
+// ─── Test gif_u16le ──────────────────────────────────────────
+let mut test_bytes = [0.0, 1.0, 255.0, 0.0]
+let v1 = gif_u16le(test_bytes, 0.0)
+if v1 == 256.0
+  pass = pass + 1.0
+else
+  print("FAIL gif_u16le(0,1) expected 256, got {v1}")
+  fail = fail + 1.0
+end
+
+let v2 = gif_u16le(test_bytes, 2.0)
+if v2 == 255.0
+  pass = pass + 1.0
+else
+  print("FAIL gif_u16le(255,0) expected 255, got {v2}")
+  fail = fail + 1.0
+end
+
+// ─── Test gif_interlace_row ──────────────────────────────────
+let r0 = gif_interlace_row(0.0, 0.0, 16.0)
+let r1 = gif_interlace_row(0.0, 1.0, 16.0)
+let r2 = gif_interlace_row(1.0, 0.0, 16.0)
+let r3 = gif_interlace_row(2.0, 0.0, 16.0)
+let r4 = gif_interlace_row(3.0, 0.0, 16.0)
+if r0 == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL interlace pass0 row0 expected 0, got {r0}")
+  fail = fail + 1.0
+end
+if r1 == 8.0
+  pass = pass + 1.0
+else
+  print("FAIL interlace pass0 row1 expected 8, got {r1}")
+  fail = fail + 1.0
+end
+if r2 == 4.0
+  pass = pass + 1.0
+else
+  print("FAIL interlace pass1 row0 expected 4, got {r2}")
+  fail = fail + 1.0
+end
+if r3 == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL interlace pass2 row0 expected 2, got {r3}")
+  fail = fail + 1.0
+end
+if r4 == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL interlace pass3 row0 expected 1, got {r4}")
+  fail = fail + 1.0
+end
+
+// ─── Test gif_lzw ────────────────────────────────────────────
+// Minimal LZW stream: min_code_size=2, clear=4, eoi=5
+// Encode pixels: [0, 0, 0, 0] (4 red pixels with 4-color palette)
+// LZW stream (min_code_size=2):
+//   clear(4), 0, 0, 0, 0, eoi(5)
+//   Codes: 4, 0, 0, 0, 0, 5
+//   code_size starts at 3 bits
+//   Binary (LSB first):
+//     4=100, 0=000, 0=000, 0=000, 0=000, 5=101
+//   Packed into bytes (LSB first):
+//     bits: 100 000 000 000 000 101
+//     byte0: 00000100 = 4  (bits 0-7: 100 000 00)
+//     byte1: 00010100 = 20 (bits 8-15: 0 000 101 0) -- wait let me recalculate
+//
+// Actually, let me compute carefully:
+// 3-bit codes, LSB first packing:
+//   code 4 = 100  -> bits 0,1,2 = 0,0,1
+//   code 0 = 000  -> bits 3,4,5 = 0,0,0
+//   code 0 = 000  -> bits 6,7,8 = 0,0,0
+//   code 0 = 000  -> bits 9,10,11 = 0,0,0
+//   code 0 = 000  -> bits 12,13,14 = 0,0,0
+//   code 5 = 101  -> bits 15,16,17 = 1,0,1
+//
+// byte 0 (bits 0-7):  0,0,1,0,0,0,0,0 = 0b00000100 = 4
+// byte 1 (bits 8-15): 0,0,0,0,0,1,0,1 = 0b10100000 = 160
+// byte 2 (bits 16-17): 0,1 = pad = 0b00000010 = 2
+//
+// Wait — bit 15 is the MSB of code 5's first bit
+// Let me redo: code 5 = 101 in binary, LSB first = 1,0,1
+// bit 15 = 1 (from code 5 bit 0)
+// bit 16 = 0 (from code 5 bit 1)
+// bit 17 = 1 (from code 5 bit 2)
+//
+// byte 0 (bits 0-7): bit0=0,bit1=0,bit2=1,bit3=0,bit4=0,bit5=0,bit6=0,bit7=0 = 4
+// byte 1 (bits 8-15): bit8=0,bit9=0,bit10=0,bit11=0,bit12=0,bit13=0,bit14=0,bit15=1 = 128
+// byte 2 (bits 16-23): bit16=0,bit17=1 = 2
+//
+// Hmm let me just use a known good minimal GIF and test the full decode path instead.
+
+// ─── Test full gif_decode with a 1x1 red pixel GIF ─────────
+// Minimal valid GIF89a: 1x1 pixel, color index 0 = red (255,0,0)
+// Header: GIF89a
+// LSD: width=1, height=1, GCT flag=1, GCT size=0 (2 colors)
+// GCT: [255,0,0, 0,0,0] (red, black)
+// Image descriptor: 0x2C, left=0, top=0, w=1, h=1, packed=0
+// LZW min code size: 2
+// Image data sub-blocks: [2 bytes of LZW data], terminator
+// Trailer: 0x3B
+
+// GIF89a header
+let mut gif1 = [71.0, 73.0, 70.0, 56.0, 57.0, 97.0]
+// Logical Screen Descriptor: w=1, h=1, packed=0x80 (GCT, 2 colors), bg=0, aspect=0
+push(gif1, 1.0)    // width low
+push(gif1, 0.0)    // width high
+push(gif1, 1.0)    // height low
+push(gif1, 0.0)    // height high
+push(gif1, 128.0)  // packed: GCT=1, color_res=0, sort=0, gct_size=0 (2 entries)
+push(gif1, 0.0)    // bg index
+push(gif1, 0.0)    // aspect ratio
+// Global Color Table: 2 entries (red, black)
+push(gif1, 255.0)  // entry 0: R
+push(gif1, 0.0)    // entry 0: G
+push(gif1, 0.0)    // entry 0: B
+push(gif1, 0.0)    // entry 1: R
+push(gif1, 0.0)    // entry 1: G
+push(gif1, 0.0)    // entry 1: B
+// Image Descriptor
+push(gif1, 44.0)   // 0x2C image separator
+push(gif1, 0.0)    // left low
+push(gif1, 0.0)    // left high
+push(gif1, 0.0)    // top low
+push(gif1, 0.0)    // top high
+push(gif1, 1.0)    // width low
+push(gif1, 0.0)    // width high
+push(gif1, 1.0)    // height low
+push(gif1, 0.0)    // height high
+push(gif1, 0.0)    // packed (no LCT, no interlace)
+// LZW min code size
+push(gif1, 2.0)
+// LZW data sub-blocks
+// min_code_size=2, clear=4, eoi=5
+// Codes: clear(4), 0, eoi(5)  — 3 codes at 3 bits each = 9 bits = 2 bytes
+// code 4 = 100 (LSB: 0,0,1)  bits 0-2
+// code 0 = 000 (LSB: 0,0,0)  bits 3-5
+// code 5 = 101 (LSB: 1,0,1)  bits 6-8
+// byte 0 bits 0-7: 0,0,1,0,0,0,1,0 = 0b01000100 = 68
+// byte 1 bits 8:   1,0,0,0,0,0,0,0 = 0b00000001 = 1
+push(gif1, 2.0)    // sub-block length
+push(gif1, 68.0)   // LZW byte 0
+push(gif1, 1.0)    // LZW byte 1
+push(gif1, 0.0)    // sub-block terminator
+// Trailer
+push(gif1, 59.0)   // 0x3B
+
+let g = gif_decode(gif1)
+if g["ok"] == 1.0
+  pass = pass + 1.0
+else
+  let err = g["error"]
+  print("FAIL gif_decode ok expected 1, got error: {err}")
+  fail = fail + 1.0
+end
+
+let gw = g["width"]
+if gw == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL gif width expected 1, got {gw}")
+  fail = fail + 1.0
+end
+
+let gh = g["height"]
+if gh == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL gif height expected 1, got {gh}")
+  fail = fail + 1.0
+end
+
+let gfc = g["frame_count"]
+if gfc == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL gif frame_count expected 1, got {gfc}")
+  fail = fail + 1.0
+end
+
+// Check pixel data: should be red (255, 0, 0)
+let plen = len(gif_pixels)
+if plen == 3.0
+  pass = pass + 1.0
+else
+  print("FAIL gif_pixels length expected 3, got {plen}")
+  fail = fail + 1.0
+end
+
+if plen >= 3.0
+  let pr = gif_pixels[0]
+  let pg = gif_pixels[1]
+  let pb = gif_pixels[2]
+  if pr == 255.0
+    pass = pass + 1.0
+  else
+    print("FAIL pixel R expected 255, got {pr}")
+    fail = fail + 1.0
+  end
+  if pg == 0.0
+    pass = pass + 1.0
+  else
+    print("FAIL pixel G expected 0, got {pg}")
+    fail = fail + 1.0
+  end
+  if pb == 0.0
+    pass = pass + 1.0
+  else
+    print("FAIL pixel B expected 0, got {pb}")
+    fail = fail + 1.0
+  end
+end
+
+// ─── Summary ─────────────────────────────────────────────────
+let total = pass + fail
+print("")
+print("gif.flow tests: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end
