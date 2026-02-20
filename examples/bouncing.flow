@@ -1,0 +1,185 @@
+// bouncing.flow — Bouncing balls physics demo
+// Click to add balls, Escape to quit.
+// Run: octoflow run examples/bouncing.flow
+
+let w = 400.0
+let h = 300.0
+
+let ok = window_open(w, h, "OctoFlow — Bouncing Balls")
+if ok == 0.0
+  print("Failed to open window")
+end
+
+// Pixel arrays
+let total = int(w * h)
+let mut r = []
+let mut g = []
+let mut b = []
+for i in range(0, total)
+  push(r, 10.0)
+  push(g, 10.0)
+  push(b, 20.0)
+end
+
+// Physics bodies — parallel arrays
+let mut bx = []
+let mut by = []
+let mut bvx = []
+let mut bvy = []
+let mut bmass = []
+let mut brad = []
+let mut bcr = []
+let mut bcg = []
+let mut bcb = []
+
+// Seed with a few balls
+let mut bi = 0.0
+while bi < 5.0
+  push(bx, 50.0 + bi * 70.0)
+  push(by, 50.0 + bi * 30.0)
+  push(bvx, random() * 200.0 - 100.0)
+  push(bvy, random() * 200.0 - 100.0)
+  push(bmass, 1.0)
+  push(brad, 8.0 + random() * 8.0)
+  push(bcr, 100.0 + random() * 155.0)
+  push(bcg, 100.0 + random() * 155.0)
+  push(bcb, 100.0 + random() * 155.0)
+  bi = bi + 1.0
+end
+
+let dt = 0.016
+let gravity = 300.0
+let restitution = 0.85
+let mut frame = 0.0
+
+print("Bouncing balls! Click to add, Escape to quit.")
+
+while window_alive() == 1.0
+  let mut evt = window_poll()
+  while evt != "none"
+    if evt == "close"
+      window_close()
+    elif evt == "key_down"
+      let key = window_event_key()
+      if key == "escape"
+        window_close()
+      end
+    elif evt == "mouse_down"
+      let mx = window_event_x()
+      let my = window_event_y()
+      push(bx, mx)
+      push(by, my)
+      push(bvx, random() * 200.0 - 100.0)
+      push(bvy, random() * -200.0)
+      push(bmass, 1.0)
+      push(brad, 8.0 + random() * 8.0)
+      push(bcr, 100.0 + random() * 155.0)
+      push(bcg, 100.0 + random() * 155.0)
+      push(bcb, 100.0 + random() * 155.0)
+    end
+    evt = window_poll()
+  end
+
+  if window_alive() == 0.0
+    break
+  end
+
+  let n = len(bx)
+
+  // Apply gravity
+  let mut gi = 0.0
+  while gi < n
+    bvy[int(gi)] = bvy[int(gi)] + gravity * dt
+    gi = gi + 1.0
+  end
+
+  // Integrate positions
+  let mut ii = 0.0
+  while ii < n
+    bx[int(ii)] = bx[int(ii)] + bvx[int(ii)] * dt
+    by[int(ii)] = by[int(ii)] + bvy[int(ii)] * dt
+    ii = ii + 1.0
+  end
+
+  // Wall bounce
+  let mut wi = 0.0
+  while wi < n
+    let rad = brad[int(wi)]
+    if bx[int(wi)] - rad < 0.0
+      bx[int(wi)] = rad
+      bvx[int(wi)] = abs(bvx[int(wi)]) * restitution
+    end
+    if bx[int(wi)] + rad > w
+      bx[int(wi)] = w - rad
+      bvx[int(wi)] = 0.0 - abs(bvx[int(wi)]) * restitution
+    end
+    if by[int(wi)] - rad < 0.0
+      by[int(wi)] = rad
+      bvy[int(wi)] = abs(bvy[int(wi)]) * restitution
+    end
+    if by[int(wi)] + rad > h
+      by[int(wi)] = h - rad
+      bvy[int(wi)] = 0.0 - abs(bvy[int(wi)]) * restitution
+    end
+    wi = wi + 1.0
+  end
+
+  // Clear pixel buffer
+  let mut ci = 0.0
+  while ci < total
+    r[int(ci)] = 10.0
+    g[int(ci)] = 10.0
+    b[int(ci)] = 20.0
+    ci = ci + 1.0
+  end
+
+  // Draw each ball as filled circle
+  let mut di = 0.0
+  while di < n
+    let cx = bx[int(di)]
+    let cy = by[int(di)]
+    let cr2 = bcr[int(di)]
+    let cg2 = bcg[int(di)]
+    let cb2 = bcb[int(di)]
+    let rad2 = brad[int(di)]
+    let r2 = rad2 * rad2
+
+    let y0 = cy - rad2
+    let y1 = cy + rad2
+    let x0 = cx - rad2
+    let x1 = cx + rad2
+
+    let mut py = y0
+    while py <= y1
+      if py >= 0.0
+        if py < h
+          let mut px = x0
+          while px <= x1
+            if px >= 0.0
+              if px < w
+                let ddx = px - cx
+                let ddy = py - cy
+                if ddx * ddx + ddy * ddy <= r2
+                  let pi = int(py * w + px)
+                  r[pi] = cr2
+                  g[pi] = cg2
+                  b[pi] = cb2
+                end
+              end
+            end
+            px = px + 1.0
+          end
+        end
+      end
+      py = py + 1.0
+    end
+    di = di + 1.0
+  end
+
+  window_draw(r, g, b)
+  frame = frame + 1.0
+  sleep(16)
+end
+
+let nfinal = len(bx)
+print("Bouncing ended after {frame} frames with {nfinal} balls")
