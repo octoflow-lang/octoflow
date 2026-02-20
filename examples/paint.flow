@@ -1,0 +1,172 @@
+// paint.flow — Minimal pixel painting tool
+// Left-click to draw, right-click to erase, C to clear, Escape to quit.
+// Run: octoflow run examples/paint.flow
+
+let w = 400.0
+let h = 300.0
+
+let ok = window_open(w, h, "OctoFlow Paint")
+if ok == 0.0
+  print("Failed to open window")
+end
+
+// Pixel arrays — white canvas
+let total = int(w * h)
+let mut r = []
+let mut g = []
+let mut b = []
+for i in range(0, total)
+  push(r, 240.0)
+  push(g, 240.0)
+  push(b, 240.0)
+end
+window_draw(r, g, b)
+
+// Brush state
+let mut mx = 0.0
+let mut my = 0.0
+let mut drawing = 0.0
+let mut erasing = 0.0
+let mut brush = 4.0
+let mut dirty = 0.0
+
+// Paint color
+let mut pcr = 20.0
+let mut pcg = 20.0
+let mut pcb = 20.0
+
+print("Paint ready! Left-click=draw, Right-click=erase, C=clear, Escape=quit")
+
+while window_alive() == 1.0
+  let mut evt = window_poll()
+  while evt != "none"
+    if evt == "close"
+      window_close()
+    elif evt == "key_down"
+      let key = window_event_key()
+      if key == "escape"
+        window_close()
+      elif key == "c"
+        // Clear canvas
+        for i in range(0, total)
+          r[i] = 240.0
+          g[i] = 240.0
+          b[i] = 240.0
+        end
+        dirty = 1.0
+        print("Canvas cleared")
+      end
+    elif evt == "mouse_move"
+      mx = window_event_x()
+      my = window_event_y()
+      if drawing == 1.0
+        // Inline paint dot
+        let mut iy = my - brush
+        while iy <= my + brush
+          let mut ix = mx - brush
+          while ix <= mx + brush
+            if ix >= 0.0
+              if ix < w
+                if iy >= 0.0
+                  if iy < h
+                    let ddx = ix - mx
+                    let ddy = iy - my
+                    if ddx * ddx + ddy * ddy <= brush * brush
+                      let di = int(iy * w + ix)
+                      r[di] = pcr
+                      g[di] = pcg
+                      b[di] = pcb
+                    end
+                  end
+                end
+              end
+            end
+            ix = ix + 1.0
+          end
+          iy = iy + 1.0
+        end
+        dirty = 1.0
+      end
+      if erasing == 1.0
+        let erad = brush * 2.0
+        let mut iy2 = my - erad
+        while iy2 <= my + erad
+          let mut ix2 = mx - erad
+          while ix2 <= mx + erad
+            if ix2 >= 0.0
+              if ix2 < w
+                if iy2 >= 0.0
+                  if iy2 < h
+                    let ddx2 = ix2 - mx
+                    let ddy2 = iy2 - my
+                    if ddx2 * ddx2 + ddy2 * ddy2 <= erad * erad
+                      let di2 = int(iy2 * w + ix2)
+                      r[di2] = 240.0
+                      g[di2] = 240.0
+                      b[di2] = 240.0
+                    end
+                  end
+                end
+              end
+            end
+            ix2 = ix2 + 1.0
+          end
+          iy2 = iy2 + 1.0
+        end
+        dirty = 1.0
+      end
+    elif evt == "mouse_down"
+      mx = window_event_x()
+      my = window_event_y()
+      let btn = window_event_key()
+      if btn == "left"
+        drawing = 1.0
+        // Paint initial dot
+        let mut iy3 = my - brush
+        while iy3 <= my + brush
+          let mut ix3 = mx - brush
+          while ix3 <= mx + brush
+            if ix3 >= 0.0
+              if ix3 < w
+                if iy3 >= 0.0
+                  if iy3 < h
+                    let ddx3 = ix3 - mx
+                    let ddy3 = iy3 - my
+                    if ddx3 * ddx3 + ddy3 * ddy3 <= brush * brush
+                      let di3 = int(iy3 * w + ix3)
+                      r[di3] = pcr
+                      g[di3] = pcg
+                      b[di3] = pcb
+                    end
+                  end
+                end
+              end
+            end
+            ix3 = ix3 + 1.0
+          end
+          iy3 = iy3 + 1.0
+        end
+        dirty = 1.0
+      elif btn == "right"
+        erasing = 1.0
+      end
+    elif evt == "mouse_up"
+      drawing = 0.0
+      erasing = 0.0
+    end
+    evt = window_poll()
+  end
+
+  if window_alive() == 0.0
+    break
+  end
+
+  if dirty == 1.0
+    window_draw(r, g, b)
+    dirty = 0.0
+  end
+
+  sleep(8)
+end
+
+print("Paint session ended.")

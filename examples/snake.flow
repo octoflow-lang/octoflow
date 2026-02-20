@@ -1,0 +1,270 @@
+// snake.flow — Classic Snake game in OctoFlow
+// Arrow keys to steer, Escape to quit.
+// Run: octoflow run examples/snake.flow
+
+let cell = 20.0
+let cols = 20.0
+let rows = 15.0
+let w = cols * cell
+let h = rows * cell
+
+let ok = window_open(w, h, "OctoFlow Snake")
+if ok == 0.0
+  print("Failed to open window")
+end
+
+// Pixel arrays — dark background
+let total = int(w * h)
+let mut r = []
+let mut g = []
+let mut b = []
+for i in range(0, total)
+  push(r, 24.0)
+  push(g, 24.0)
+  push(b, 32.0)
+end
+
+// Ring buffer for snake body
+let max_sn = int(cols * rows)
+let mut sx = []
+let mut sy = []
+for i in range(0, max_sn)
+  push(sx, 0.0)
+  push(sy, 0.0)
+end
+sx[0] = 10.0
+sy[0] = 7.0
+let mut sn_head = 0.0
+let mut sn_tail = 0.0
+let mut sn_len = 1.0
+
+// Direction (current and queued)
+let mut cur_dx = 1.0
+let mut cur_dy = 0.0
+let mut nxt_dx = 1.0
+let mut nxt_dy = 0.0
+
+// Food position
+let mut fx = int(random() * cols)
+let mut fy = int(random() * rows)
+
+// Game state
+let mut score = 0.0
+let mut alive = 1.0
+let mut move_cd = 8.0
+let mut speed = 8.0
+
+// --- Inline draw: snake head at (10, 7) ---
+let mut dpy = 1.0
+while dpy < cell - 1.0
+  let mut dpx = 1.0
+  while dpx < cell - 1.0
+    let di = int((7.0 * cell + dpy) * w + 10.0 * cell + dpx)
+    r[di] = 60.0
+    g[di] = 210.0
+    b[di] = 60.0
+    dpx = dpx + 1.0
+  end
+  dpy = dpy + 1.0
+end
+
+// --- Inline draw: food at (fx, fy) ---
+dpy = 1.0
+while dpy < cell - 1.0
+  let mut dpx = 1.0
+  while dpx < cell - 1.0
+    let di = int((fy * cell + dpy) * w + fx * cell + dpx)
+    r[di] = 230.0
+    g[di] = 60.0
+    b[di] = 60.0
+    dpx = dpx + 1.0
+  end
+  dpy = dpy + 1.0
+end
+
+window_draw(r, g, b)
+print("Snake started! Arrow keys to move.")
+
+while window_alive() == 1.0
+  // Poll events
+  let mut evt = window_poll()
+  while evt != "none"
+    if evt == "close"
+      window_close()
+    elif evt == "key_down"
+      let key = window_event_key()
+      if key == "escape"
+        window_close()
+      elif key == "up"
+        if cur_dy != 1.0
+          nxt_dx = 0.0
+          nxt_dy = -1.0
+        end
+      elif key == "down"
+        if cur_dy != -1.0
+          nxt_dx = 0.0
+          nxt_dy = 1.0
+        end
+      elif key == "left"
+        if cur_dx != 1.0
+          nxt_dx = -1.0
+          nxt_dy = 0.0
+        end
+      elif key == "right"
+        if cur_dx != -1.0
+          nxt_dx = 1.0
+          nxt_dy = 0.0
+        end
+      end
+    end
+    evt = window_poll()
+  end
+
+  if window_alive() == 0.0
+    break
+  end
+
+  if alive == 1.0
+    move_cd = move_cd - 1.0
+    if move_cd <= 0.0
+      move_cd = speed
+      cur_dx = nxt_dx
+      cur_dy = nxt_dy
+
+      // Compute new head position (wrap-around)
+      let hx = sx[int(sn_head)]
+      let hy = sy[int(sn_head)]
+      let mut nx = hx + cur_dx
+      let mut ny = hy + cur_dy
+      if nx < 0.0
+        nx = cols - 1.0
+      end
+      if nx >= cols
+        nx = 0.0
+      end
+      if ny < 0.0
+        ny = rows - 1.0
+      end
+      if ny >= rows
+        ny = 0.0
+      end
+
+      // Self-collision check (walk ring buffer)
+      let mut hit = 0.0
+      let mut ci = sn_tail
+      let mut cn = 0.0
+      while cn < sn_len
+        if sx[int(ci)] == nx
+          if sy[int(ci)] == ny
+            hit = 1.0
+          end
+        end
+        ci = ci + 1.0
+        if ci >= max_sn * 1.0
+          ci = 0.0
+        end
+        cn = cn + 1.0
+      end
+
+      if hit == 1.0
+        alive = 0.0
+        // Flash head red
+        let mut dpy2 = 1.0
+        while dpy2 < cell - 1.0
+          let mut dpx2 = 1.0
+          while dpx2 < cell - 1.0
+            let di2 = int((hy * cell + dpy2) * w + hx * cell + dpx2)
+            r[di2] = 200.0
+            g[di2] = 30.0
+            b[di2] = 30.0
+            dpx2 = dpx2 + 1.0
+          end
+          dpy2 = dpy2 + 1.0
+        end
+        window_draw(r, g, b)
+        print("Game Over! Final score: {score}")
+      else
+        // Advance head in ring buffer
+        sn_head = sn_head + 1.0
+        if sn_head >= max_sn * 1.0
+          sn_head = 0.0
+        end
+        sx[int(sn_head)] = nx
+        sy[int(sn_head)] = ny
+
+        // Draw new head (green)
+        let mut dpy3 = 1.0
+        while dpy3 < cell - 1.0
+          let mut dpx3 = 1.0
+          while dpx3 < cell - 1.0
+            let di3 = int((ny * cell + dpy3) * w + nx * cell + dpx3)
+            r[di3] = 60.0
+            g[di3] = 210.0
+            b[di3] = 60.0
+            dpx3 = dpx3 + 1.0
+          end
+          dpy3 = dpy3 + 1.0
+        end
+
+        // Check food collision
+        let mut ate = 0.0
+        if nx == fx
+          if ny == fy
+            ate = 1.0
+          end
+        end
+
+        if ate == 1.0
+          score = score + 1.0
+          sn_len = sn_len + 1.0
+          print("Score: {score}")
+          // Respawn food
+          fx = int(random() * cols)
+          fy = int(random() * rows)
+          // Draw food (red)
+          let mut dpy4 = 1.0
+          while dpy4 < cell - 1.0
+            let mut dpx4 = 1.0
+            while dpx4 < cell - 1.0
+              let di4 = int((fy * cell + dpy4) * w + fx * cell + dpx4)
+              r[di4] = 230.0
+              g[di4] = 60.0
+              b[di4] = 60.0
+              dpx4 = dpx4 + 1.0
+            end
+            dpy4 = dpy4 + 1.0
+          end
+          if speed > 3.0
+            speed = speed - 0.3
+          end
+        else
+          // Erase tail (background color)
+          let tx = sx[int(sn_tail)]
+          let ty = sy[int(sn_tail)]
+          let mut dpy5 = 1.0
+          while dpy5 < cell - 1.0
+            let mut dpx5 = 1.0
+            while dpx5 < cell - 1.0
+              let di5 = int((ty * cell + dpy5) * w + tx * cell + dpx5)
+              r[di5] = 24.0
+              g[di5] = 24.0
+              b[di5] = 32.0
+              dpx5 = dpx5 + 1.0
+            end
+            dpy5 = dpy5 + 1.0
+          end
+          sn_tail = sn_tail + 1.0
+          if sn_tail >= max_sn * 1.0
+            sn_tail = 0.0
+          end
+        end
+
+        window_draw(r, g, b)
+      end
+    end
+  end
+
+  sleep(16)
+end
+
+print("Thanks for playing!")
