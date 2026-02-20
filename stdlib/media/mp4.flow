@@ -1,0 +1,367 @@
+// mp4.flow — Pure OctoFlow MP4/ISO BMFF container demuxer
+// Parses MP4 files to extract video track metadata and frame locations.
+// Frame data is raw H.264 NAL units — decoding is separate.
+//
+// Usage:
+//   let bytes = read_bytes("video.mp4")
+//   let info = mp4_parse(bytes)
+//   // info["width"], info["height"], info["fps"], info["frame_count"], info["ok"]
+//   // info["nal_length_size"] — bytes per NAL unit length prefix (1, 2, or 4)
+//   // mp4_offsets = [off0, len0, off1, len1, ...] sample byte ranges
+//   // mp4_sps / mp4_pps = SPS/PPS NAL unit bytes from avcC
+
+// ─── Helpers (big-endian, unlike AVI/GIF) ────────────────────
+
+fn mp4_u16be(bytes, pos)
+  let hi = bytes[int(pos)]
+  let lo = bytes[int(pos + 1.0)]
+  return hi * 256.0 + lo
+end
+
+fn mp4_u32be(bytes, pos)
+  let b0 = bytes[int(pos)]
+  let b1 = bytes[int(pos + 1.0)]
+  let b2 = bytes[int(pos + 2.0)]
+  let b3 = bytes[int(pos + 3.0)]
+  return b0 * 16777216.0 + b1 * 65536.0 + b2 * 256.0 + b3
+end
+
+fn mp4_fourcc(bytes, pos)
+  let c0 = chr(bytes[int(pos)])
+  let c1 = chr(bytes[int(pos + 1.0)])
+  let c2 = chr(bytes[int(pos + 2.0)])
+  let c3 = chr(bytes[int(pos + 3.0)])
+  return c0 + c1 + c2 + c3
+end
+
+// ─── Module-level result arrays ──────────────────────────────
+
+// Frame offsets: flat pairs [offset0, length0, offset1, length1, ...]
+let mut mp4_offsets = []
+// SPS and PPS NAL unit bytes (extracted from avcC box)
+let mut mp4_sps = []
+let mut mp4_pps = []
+
+// ─── Box walker (inlined helpers — see NOTE below) ──────────
+
+// Find a box by type within a range [start, end)
+// Returns position of box start, or -1 if not found
+// NOTE: u32be/fourcc inlined to avoid nested user fn calls losing locals
+fn mp4_find_box(bytes, start, box_end, tag)
+  let mut fbpos = start
+  let n = len(bytes)
+  let mut limit = box_end
+  if limit > n
+    limit = n
+  end
+  while fbpos + 8.0 <= limit
+    let sb0 = bytes[int(fbpos)]
+    let sb1 = bytes[int(fbpos + 1.0)]
+    let sb2 = bytes[int(fbpos + 2.0)]
+    let sb3 = bytes[int(fbpos + 3.0)]
+    let bsize = sb0 * 16777216.0 + sb1 * 65536.0 + sb2 * 256.0 + sb3
+    let fp = fbpos + 4.0
+    let fc0 = chr(bytes[int(fp)])
+    let fc1 = chr(bytes[int(fp + 1.0)])
+    let fc2 = chr(bytes[int(fp + 2.0)])
+    let fc3 = chr(bytes[int(fp + 3.0)])
+    let btype = fc0 + fc1 + fc2 + fc3
+    if bsize < 8.0
+      break
+    end
+    if btype == tag
+      return fbpos
+    end
+    fbpos = fbpos + bsize
+  end
+  return -1.0
+end
+
+// ─── Main Parser ─────────────────────────────────────────────
+
+fn mp4_parse(bytes)
+  let n = len(bytes)
+  let mut result = map()
+
+  if n < 8.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "MP4: too short")
+    return result
+  end
+
+  // Clear module arrays
+  while len(mp4_offsets) > 0.0
+    pop(mp4_offsets)
+  end
+  while len(mp4_sps) > 0.0
+    pop(mp4_sps)
+  end
+  while len(mp4_pps) > 0.0
+    pop(mp4_pps)
+  end
+
+  // Find moov box (contains all metadata)
+  let moov_pos = mp4_find_box(bytes, 0.0, n, "moov")
+  if moov_pos < 0.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "MP4: moov box not found")
+    return result
+  end
+  let moov_size = mp4_u32be(bytes, moov_pos)
+  let moov_end = moov_pos + moov_size
+  let moov_data = moov_pos + 8.0
+
+  // Find mvhd for timescale
+  let mut timescale = 1000.0
+  let mut duration = 0.0
+  let mvhd_pos = mp4_find_box(bytes, moov_data, moov_end, "mvhd")
+  if mvhd_pos >= 0.0
+    let mvhd_data = mvhd_pos + 8.0
+    let mvhd_ver = bytes[int(mvhd_data)]
+    if mvhd_ver == 0.0
+      timescale = mp4_u32be(bytes, mvhd_data + 12.0)
+      duration = mp4_u32be(bytes, mvhd_data + 16.0)
+    end
+  end
+
+  // Find first video trak
+  let mut trak_pos = mp4_find_box(bytes, moov_data, moov_end, "trak")
+  let mut found_video = 0.0
+  let mut width = 0.0
+  let mut height = 0.0
+  let mut nal_length_size = 4.0
+  let mut track_timescale = timescale
+
+  // stbl parsing state — arrays at this scope for copy-back
+  let mut chunk_offsets = []
+  let mut sample_sizes = []
+  let mut stsc_first = []
+  let mut stsc_spc = []
+
+  while trak_pos >= 0.0
+    if found_video == 1.0
+      break
+    end
+    let trak_size = mp4_u32be(bytes, trak_pos)
+    let trak_end = trak_pos + trak_size
+    let trak_data = trak_pos + 8.0
+
+    // Check if this is a video track via mdia -> hdlr
+    let mdia_pos = mp4_find_box(bytes, trak_data, trak_end, "mdia")
+    if mdia_pos >= 0.0
+      let mdia_size = mp4_u32be(bytes, mdia_pos)
+      let mdia_end = mdia_pos + mdia_size
+      let mdia_data = mdia_pos + 8.0
+
+      let hdlr_pos = mp4_find_box(bytes, mdia_data, mdia_end, "hdlr")
+      if hdlr_pos >= 0.0
+        // hdlr: FullBox(4) + pre_defined(4) + handler_type(4)
+        let handler = mp4_fourcc(bytes, hdlr_pos + 8.0 + 8.0)
+        if handler == "vide"
+          found_video = 1.0
+
+          // Get track timescale from mdhd
+          let mdhd_pos = mp4_find_box(bytes, mdia_data, mdia_end, "mdhd")
+          if mdhd_pos >= 0.0
+            let mdhd_data = mdhd_pos + 8.0
+            let mdhd_ver = bytes[int(mdhd_data)]
+            if mdhd_ver == 0.0
+              track_timescale = mp4_u32be(bytes, mdhd_data + 12.0)
+            end
+          end
+
+          // Find minf -> stbl
+          let minf_pos = mp4_find_box(bytes, mdia_data, mdia_end, "minf")
+          if minf_pos >= 0.0
+            let minf_size = mp4_u32be(bytes, minf_pos)
+            let minf_end = minf_pos + minf_size
+            let minf_data = minf_pos + 8.0
+
+            let stbl_pos = mp4_find_box(bytes, minf_data, minf_end, "stbl")
+            if stbl_pos >= 0.0
+              let stbl_size = mp4_u32be(bytes, stbl_pos)
+              let stbl_end = stbl_pos + stbl_size
+              let stbl_data = stbl_pos + 8.0
+
+              // Parse stsd for codec info (width, height, avcC)
+              let stsd_pos = mp4_find_box(bytes, stbl_data, stbl_end, "stsd")
+              if stsd_pos >= 0.0
+                let stsd_data = stsd_pos + 8.0
+                // FullBox(4) + entry_count(4) + sample_entry
+                let se_pos = stsd_data + 8.0
+                // Visual sample entry: size(4)+type(4)+reserved(6)+data_ref_idx(2)+pre_def(2)+reserved(2)+pre_def(12) = 32
+                let ve_base = se_pos + 32.0
+                width = mp4_u16be(bytes, ve_base)
+                height = mp4_u16be(bytes, ve_base + 2.0)
+
+                // Look for avcC box inside sample entry
+                let se_size = mp4_u32be(bytes, se_pos)
+                let se_end = se_pos + se_size
+                let avcc_pos = mp4_find_box(bytes, se_pos + 86.0, se_end, "avcC")
+                if avcc_pos >= 0.0
+                  let avcc_data = avcc_pos + 8.0
+                  // lengthSizeMinusOne — bottom 2 bits of byte at +4
+                  let ls_byte = bytes[int(avcc_data + 4.0)]
+                  nal_length_size = bit_and(ls_byte, 3.0) + 1.0
+                  // numOfSPS — bottom 5 bits of byte at +5
+                  let num_sps = bit_and(bytes[int(avcc_data + 5.0)], 31.0)
+                  let mut ap = avcc_data + 6.0
+                  if num_sps > 0.0
+                    let sps_len = mp4_u16be(bytes, ap)
+                    ap = ap + 2.0
+                    for k in range(0, int(sps_len))
+                      push(mp4_sps, bytes[int(ap + k)])
+                    end
+                    ap = ap + sps_len
+                  end
+                  // numOfPPS
+                  let num_pps = bytes[int(ap)]
+                  ap = ap + 1.0
+                  if num_pps > 0.0
+                    let pps_len = mp4_u16be(bytes, ap)
+                    ap = ap + 2.0
+                    for k in range(0, int(pps_len))
+                      push(mp4_pps, bytes[int(ap + k)])
+                    end
+                  end
+                end
+              end
+
+              // Parse stco (chunk offsets) — inlined to avoid scope corruption
+              let stco_pos = mp4_find_box(bytes, stbl_data, stbl_end, "stco")
+              if stco_pos >= 0.0
+                let co_data = stco_pos + 8.0
+                let co_count = mp4_u32be(bytes, co_data + 4.0)
+                let mut cop = co_data + 8.0
+                for ci in range(0, int(co_count))
+                  push(chunk_offsets, mp4_u32be(bytes, cop))
+                  cop = cop + 4.0
+                end
+              end
+
+              // Parse stsz (sample sizes) — inlined to avoid scope corruption
+              let stsz_pos = mp4_find_box(bytes, stbl_data, stbl_end, "stsz")
+              if stsz_pos >= 0.0
+                let sz_data = stsz_pos + 8.0
+                let sz_sample_size = mp4_u32be(bytes, sz_data + 4.0)
+                let sz_count = mp4_u32be(bytes, sz_data + 8.0)
+                if sz_sample_size > 0.0
+                  for si in range(0, int(sz_count))
+                    push(sample_sizes, sz_sample_size)
+                  end
+                else
+                  let mut szp = sz_data + 12.0
+                  for si in range(0, int(sz_count))
+                    push(sample_sizes, mp4_u32be(bytes, szp))
+                    szp = szp + 4.0
+                  end
+                end
+              end
+
+              // Parse stsc (sample-to-chunk) — inlined
+              let stsc_pos = mp4_find_box(bytes, stbl_data, stbl_end, "stsc")
+              if stsc_pos >= 0.0
+                let sc_data = stsc_pos + 8.0
+                let sc_count = mp4_u32be(bytes, sc_data + 4.0)
+                let mut sp = sc_data + 8.0
+                for i in range(0, int(sc_count))
+                  push(stsc_first, mp4_u32be(bytes, sp))
+                  push(stsc_spc, mp4_u32be(bytes, sp + 4.0))
+                  sp = sp + 12.0
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+
+    // Find next trak
+    let next_start = trak_pos + trak_size
+    trak_pos = mp4_find_box(bytes, next_start, moov_end, "trak")
+  end
+
+  if found_video == 0.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "MP4: no video track found")
+    return result
+  end
+
+  // Build frame offset table from stsc + stco + stsz
+  let num_samples = len(sample_sizes)
+  let num_chunks = len(chunk_offsets)
+  let num_stsc = len(stsc_first)
+
+  if num_samples == 0.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "MP4: no samples found")
+    return result
+  end
+
+  // Walk chunks, resolving samples per chunk from stsc
+  let mut sample_idx = 0.0
+  let mut stsc_entry = 0.0
+  let mut cur_spc = 1.0
+  if num_stsc > 0.0
+    cur_spc = stsc_spc[0]
+  end
+
+  for chunk_idx in range(0, int(num_chunks))
+    // Check if stsc entry changes (stsc uses 1-based chunk indices)
+    let chunk_1based = chunk_idx + 1.0
+    if stsc_entry + 1.0 < num_stsc
+      let next_first = stsc_first[int(stsc_entry + 1.0)]
+      if chunk_1based >= next_first
+        stsc_entry = stsc_entry + 1.0
+        cur_spc = stsc_spc[int(stsc_entry)]
+      end
+    end
+
+    let mut chunk_pos = chunk_offsets[int(chunk_idx)]
+    for s in range(0, int(cur_spc))
+      if sample_idx < num_samples
+        let ssize = sample_sizes[int(sample_idx)]
+        push(mp4_offsets, chunk_pos)
+        push(mp4_offsets, ssize)
+        chunk_pos = chunk_pos + ssize
+        sample_idx = sample_idx + 1.0
+      end
+    end
+  end
+
+  let frame_count = sample_idx
+  let mut fps = 30.0
+  if track_timescale > 0.0
+    if duration > 0.0
+      let dur_sec = duration / timescale
+      if dur_sec > 0.0
+        fps = frame_count / dur_sec
+      end
+    end
+  end
+
+  map_set(result, "width", width)
+  map_set(result, "height", height)
+  map_set(result, "fps", fps)
+  map_set(result, "frame_count", frame_count)
+  map_set(result, "nal_length_size", nal_length_size)
+  map_set(result, "ok", 1.0)
+  return result
+end
+
+// Extract sample N as a byte sub-array
+fn mp4_get_sample(bytes, sample_idx)
+  let pair_idx = sample_idx * 2.0
+  let total = len(mp4_offsets)
+  if pair_idx + 1.0 >= total
+    let mut err = []
+    return err
+  end
+  let offset = mp4_offsets[int(pair_idx)]
+  let slen = mp4_offsets[int(pair_idx + 1.0)]
+  let mut sample = []
+  for i in range(0, int(slen))
+    push(sample, bytes[int(offset + i)])
+  end
+  return sample
+end
