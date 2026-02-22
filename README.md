@@ -258,3 +258,66 @@ The [Language Guide](docs/language-guide.md) is designed as LLM context. Feed it
 - **Your .flow programs**: Yours entirely
 
 See [LICENSE](LICENSE) for full terms.
+
+## Transparency
+
+### How It's Built
+
+OctoFlow is vibe-coded. The architecture, design decisions, and system thinking are
+human-driven. The implementation is AI-assisted — built in collaboration with LLMs
+(primarily Claude), which is how a solo developer ships 121K lines of code across a
+compiler, GPU runtime, and 246 stdlib modules.
+
+Stated openly because honesty matters more than optics. Every line of code is reviewed,
+tested (1,200+ tests passing), and understood. The AI accelerates implementation; it
+doesn't replace understanding.
+
+### Rust as Bootstrapper
+
+OctoFlow is 69% self-hosted. The compiler — lexer, parser, preflight, evaluator, SPIR-V
+codegen — is written in .flow files. The remaining 31% is a first-party Rust runtime that
+provides:
+
+- **Execution engine** that loads and runs .flow files
+- **Vulkan FFI** — direct calls to vulkan-1 (no wrapper crates)
+- **OS interfaces** — file I/O, windowing (Win32/X11), network sockets, process execution
+
+The Rust layer is the bootstrapper and OS boundary. It is not a framework or library — it
+is ~37K lines of first-party Rust with **zero external crates**. `Cargo.lock` contains
+only workspace-internal packages. System links at runtime: `vulkan-1` (GPU driver),
+`ws2_32`/`kernel32`/`user32`/`gdi32` (Windows OS). On Linux: `libvulkan.so` + libc.
+
+"Zero dependencies" means zero third-party project dependencies. The binary does require
+a Vulkan GPU driver installed on the system.
+
+### Binary Size
+
+The compiled binary is **2.8 MB**. Previous documentation stated 2.2-2.3 MB, which
+reflected earlier builds before the GPU VM, media codecs, and expanded stdlib were added.
+The current size is 2.8 MB — still a single file, still no installer, still no runtime.
+
+For context: Python is ~30 MB, Node.js is ~40 MB, Go is ~150 MB (with stdlib),
+Rust's compiler is ~200+ MB. OctoFlow ships a compiler, GPU runtime, VM, 246 stdlib
+modules, media codecs, and a GUI toolkit in 2.8 MB.
+
+### GPU Kernel Count
+
+The "73+ GPU kernels" refers to built-in GPU operations available in the language —
+functions like `gpu_add`, `gpu_mul`, `gpu_sin`, `gpu_matmul`, `gpu_scatter`, `gpu_gather`,
+the GPU VM dispatch kernels (`vm_dequant_q4k`, `vm_where_gt`, `vm_delta_encode`,
+`vm_delta_decode`, `vm_dict_lookup`), LLM inference kernels (11 SPIR-V), and internal
+kernels (copy_register, regulator). Each compiles to SPIR-V at runtime via the `ir.flow`
+emitter pipeline. They are not pre-compiled .spv files — they are generated on demand.
+
+### Looking for Maintainers
+
+OctoFlow is a solo project looking for active maintainers and contributors, especially in:
+
+- **GPU compute** — kernel optimization, new GPU operations, benchmarking
+- **Stdlib modules** — expanding the 246 modules, improving test coverage
+- **Platform support** — macOS/Metal backend, ARM/aarch64, Wayland
+- **Documentation** — tutorials, guides, API reference improvements
+- **Testing** — edge cases, fuzzing, performance regression tests
+
+Open an issue or reach out. All contributions to stdlib, examples, and docs are Apache 2.0.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
