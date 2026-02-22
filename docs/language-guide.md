@@ -165,7 +165,7 @@ let sub = slice(arr, 1, 3)    // elements at index 1, 2
 ```
 let mut m = map()
 m["name"] = "OctoFlow"
-m["version"] = 0.83
+m["version"] = 1.0
 
 let val = m["name"]
 let has = map_has(m, "name")     // 1.0

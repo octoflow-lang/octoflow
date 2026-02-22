@@ -1,11 +1,17 @@
 # OctoFlow
 
+![License: Compiler Binary - Free Use](https://img.shields.io/badge/compiler-free%20to%20use-blue)
+![License: Stdlib - Apache 2.0](https://img.shields.io/badge/stdlib-Apache%202.0-green)
+![Tests: 658 passing](https://img.shields.io/badge/tests-658%20passing-brightgreen)
+![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)
+![Binary: 2.3 MB](https://img.shields.io/badge/binary-2.3%20MB-blue)
+
 A GPU-native general-purpose programming language.
 Designed for the GPU from scratch. Compiled by itself. Run on any GPU.
 
 **CPU on demand, not GPU on demand.**
 
-2.2 MB binary. Zero dependencies. Any GPU vendor. One file download.
+2.3 MB binary. Zero dependencies. Any GPU vendor. One file download.
 
 ## Install
 
@@ -30,9 +36,18 @@ Download from [Releases](https://github.com/octoflow-lang/octoflow/releases/late
 | Windows x64 | `octoflow-windows-x64.zip` |
 | Linux x64 | `octoflow-linux-x64.tar.gz` |
 
-Unzip. Run. No installer, no SDK, no dependencies. Just a 2.2 MB binary.
+Unzip. Run. No installer, no SDK, no dependencies. Just a 2.3 MB binary.
 
 Requirements: Any GPU with Vulkan driver (NVIDIA, AMD, Intel).
+
+## Zero Dependencies
+
+No external libraries. No package manager. No runtime.
+
+The compiler is a single static binary — zero Rust crates, zero C libraries, zero transitive dependencies.
+System links: Vulkan driver only. Binary size: 2.3 MB.
+
+No supply chain risk. Nothing to audit except the binary itself.
 
 ## Hello World
 
@@ -66,7 +81,7 @@ $ octoflow run hello_gpu.flow
 
 ```
 $ octoflow repl
-OctoFlow 0.83.1 — GPU-native language
+OctoFlow 1.0.0 — GPU-native language
 GPU: NVIDIA GeForce GTX 1660 SUPER
 >>> 2 + 2
 4
@@ -201,6 +216,28 @@ let result = gpu_matmul(mat_a, mat_b, rows_a, cols_a, cols_b)
 ```
 
 All GPU data stays in VRAM between operations. No CPU round-trips until you need the result.
+
+## GPU VM
+
+OctoFlow includes a GPU-native virtual machine where the GPU runs autonomously and the CPU acts only as a BIOS.
+
+```octoflow
+// Boot a GPU VM with 4 instances
+let vm = vm_boot()
+let prog = vm_program(vm, kernels, 4)
+
+// Write input, execute entire dispatch chain in one GPU submit
+vm_write_register(vm, 0, 0, input_data)
+vm_execute(prog)
+
+// Read output — everything between write and read happened on GPU
+let result = vm_read_register(vm, 3, 30)
+vm_shutdown(vm)
+```
+
+VM instances communicate via register-based message passing. The dispatch chain runs as a single `vkQueueSubmit` — no CPU round-trips between stages. Supports LLM inference, database queries, compression, and multi-agent workloads on the same substrate.
+
+See [GPU VM Guide](docs/gpu-vm-guide.md) for details.
 
 ## Security
 
