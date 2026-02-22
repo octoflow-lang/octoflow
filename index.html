@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OctoFlow — GPU-Native Programming Language</title>
-<meta name="description" content="A GPU-native general-purpose programming language. 2.2 MB binary. Zero dependencies. Any GPU vendor. One file download.">
+<meta name="description" content="A GPU-native general-purpose programming language. 2.3 MB binary. 247 stdlib modules. Zero dependencies. Any GPU vendor. One file download.">
 <meta property="og:title" content="OctoFlow — GPU-Native Programming Language">
 <meta property="og:description" content="Designed for the GPU from scratch. Compiled by itself. Run on any GPU.">
 <meta property="og:image" content="https://octoflow-lang.github.io/octoflow/assets/logo.png">
@@ -609,6 +609,38 @@ footer a:hover { color: var(--text); }
   position: relative;
 }
 
+/* ═══════════════════════════════════════ STATS STRIP ═══════════════════════════════════════ */
+.stats-strip {
+  display: flex;
+  justify-content: center;
+  gap: 48px;
+  flex-wrap: wrap;
+  padding: 48px 24px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.stat-item {
+  text-align: center;
+}
+.stat-number {
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--teal-light);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+}
+@media (max-width: 480px) {
+  .stats-strip { gap: 24px; }
+  .stat-number { font-size: 1.5rem; }
+}
+
 /* ═══════════════════════════════════════ SCROLL REVEAL ═══════════════════════════════════════ */
 .reveal {
   opacity: 0;
@@ -652,6 +684,7 @@ footer a:hover { color: var(--text); }
     <a href="#code">Examples</a>
     <a href="#features">Features</a>
     <a href="#stdlib">Library</a>
+    <a href="gpu-vm.html">GPU VM</a>
     <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/language-guide.md">Docs</a>
     <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn-nav">Download</a>
   </div>
@@ -678,7 +711,7 @@ footer a:hover { color: var(--text); }
     <div class="badges">
       <div class="badge">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M13 2v7h7"/></svg>
-        <strong>2.2 MB</strong> binary
+        <strong>2.3 MB</strong> binary
       </div>
       <div class="badge">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 12l2 2 4-4"/></svg>
@@ -692,7 +725,7 @@ footer a:hover { color: var(--text); }
     <div class="cta">
       <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn-hero primary">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Download v0.83.1
+        Download v1.0.0
       </a>
       <a href="https://github.com/octoflow-lang/octoflow" class="btn-hero secondary">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
@@ -713,6 +746,30 @@ footer a:hover { color: var(--text); }
   </div>
 </div>
 
+<!-- Stats Strip -->
+<div class="stats-strip reveal">
+  <div class="stat-item">
+    <div class="stat-number">247</div>
+    <div class="stat-label">Stdlib Modules</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">1,169+</div>
+    <div class="stat-label">Tests Passing</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">62+</div>
+    <div class="stat-label">GPU Kernels</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">106K</div>
+    <div class="stat-label">Lines of Code</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">68%</div>
+    <div class="stat-label">Self-Hosted</div>
+  </div>
+</div>
+
 <!-- Features -->
 <section id="features" class="reveal">
   <div class="centered">
@@ -721,6 +778,13 @@ footer a:hover { color: var(--text); }
     <p class="section-desc">Not a wrapper around CUDA. Not a shader language. A complete programming language that happens to run on GPUs.</p>
   </div>
   <div class="features-grid">
+    <div class="feature-card" style="border-color: rgba(26, 154, 154, 0.3); background: linear-gradient(135deg, var(--bg-card) 0%, rgba(26, 154, 154, 0.05) 100%);">
+      <div class="icon-wrap" style="background: rgba(26, 154, 154, 0.15);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="M6 8h4M6 11h3" opacity="0.5"/><circle cx="17" cy="9.5" r="2.5" fill="none"/></svg>
+      </div>
+      <h3>GPU Virtual Machine</h3>
+      <p>5 memory regions. Autonomous dispatch chains. Single vkQueueSubmit. The GPU runs your program — the CPU just watches. <a href="gpu-vm.html" style="font-weight:600;">Learn more &rarr;</a></p>
+    </div>
     <div class="feature-card">
       <div class="icon-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -732,7 +796,7 @@ footer a:hover { color: var(--text); }
       <div class="icon-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
       </div>
-      <h3>2.2 MB. Zero Deps.</h3>
+      <h3>2.3 MB. Zero Deps.</h3>
       <p>The entire compiler, runtime, GPU dispatch, and standard library in one binary. No SDK, no package manager, no runtime to install.</p>
     </div>
     <div class="feature-card">
@@ -879,10 +943,22 @@ footer a:hover { color: var(--text); }
 <section id="stdlib" class="reveal">
   <div class="centered">
     <span class="section-label">Batteries Included</span>
-    <h2>Standard library.</h2>
-    <p class="section-desc">ML, stats, science, data, collections, web, and more. All written in OctoFlow itself.</p>
+    <h2>247 stdlib modules.</h2>
+    <p class="section-desc">AI, media, GPU, ML, stats, science, data, and more. All written in OctoFlow itself.</p>
   </div>
   <div class="stdlib-grid">
+    <div class="stdlib-card">
+      <h4>AI &amp; LLM</h4>
+      <p>Transformer inference, GGUF model loading, BPE tokenization, streaming generation, GPU-accelerated layers</p>
+    </div>
+    <div class="stdlib-card">
+      <h4>GPU Compute</h4>
+      <p>62+ kernels, GPU VM, SPIR-V codegen, dispatch chains, resident buffers, deferred execution</p>
+    </div>
+    <div class="stdlib-card">
+      <h4>Media Codecs</h4>
+      <p>PNG, JPEG, GIF, BMP, AVI, MP4/H.264, WAV &mdash; all native. No ffmpeg. Terminal graphics (Kitty/Sixel)</p>
+    </div>
     <div class="stdlib-card">
       <h4>Machine Learning</h4>
       <p>Linear &amp; ridge regression, KNN, k-means, neural nets, decision trees, bagging ensembles, metrics</p>
@@ -896,62 +972,62 @@ footer a:hover { color: var(--text); }
       <p>Calculus, physics (RK4, spring-damper), signal processing (FIR, convolution), interpolation, matrices</p>
     </div>
     <div class="stdlib-card">
-      <h4>Data Processing</h4>
-      <p>CSV read/write, data pipelines, column transforms (scale, normalize, encode), validation rules</p>
+      <h4>GUI Toolkit</h4>
+      <p>Native windowing, 15+ widgets (button, textbox, dropdown, tabs), themes, layout engine, event system</p>
+    </div>
+    <div class="stdlib-card">
+      <h4>Self-Hosted Compiler</h4>
+      <p>Lexer, parser, evaluator, preflight, SPIR-V IR builder, codegen &mdash; the compiler written in .flow</p>
+    </div>
+    <div class="stdlib-card">
+      <h4>Data &amp; Formats</h4>
+      <p>CSV, JSON, GGUF, columnar DB with SQL-like queries, ETL pipelines, validation</p>
     </div>
     <div class="stdlib-card">
       <h4>Collections</h4>
       <p>Stack, queue, min/max heap, weighted directed graph with Dijkstra shortest path</p>
     </div>
     <div class="stdlib-card">
-      <h4>In-Memory Database</h4>
-      <p>Columnar DB with SQL-like SELECT, WHERE, JOIN, GROUP BY, ORDER BY. Import from CSV.</p>
+      <h4>Crypto &amp; Web</h4>
+      <p>SHA-256, base64, CSPRNG, HTTP client, JSON, URL encoding, TCP/UDP sockets</p>
     </div>
     <div class="stdlib-card">
-      <h4>Web &amp; Network</h4>
-      <p>HTTP GET/POST, JSON parse/stringify, URL encoding, TCP/UDP sockets</p>
-    </div>
-    <div class="stdlib-card">
-      <h4>String &amp; Regex</h4>
-      <p>Full regex support, capture groups, split, replace, format utilities</p>
-    </div>
-    <div class="stdlib-card">
-      <h4>System</h4>
-      <p>CLI arg parsing, environment variables, platform detection, execution timing</p>
+      <h4>DevOps &amp; System</h4>
+      <p>Process execution, filesystem, logging, config templates, env vars, platform detection, timing</p>
     </div>
   </div>
 </section>
 
-<!-- Next Release -->
+<!-- What's in v1.0.0 -->
 <section class="reveal">
   <div class="next-section">
-    <span class="section-label" style="position:relative;">Coming Next</span>
-    <h2 style="position:relative;">The next release.</h2>
-    <p class="section-desc" style="margin-left:auto;margin-right:auto;position:relative;">GPU pixels in your terminal. Native video decoding. Still 2.2 MB. Still zero dependencies.</p>
+    <span class="section-label" style="position:relative;">Now Shipping</span>
+    <h2 style="position:relative;">What's in v1.0.0</h2>
+    <p class="section-desc" style="margin-left:auto;margin-right:auto;position:relative;">GPU Virtual Machine. Native media codecs. Terminal graphics. Self-hosted SPIR-V backend. 2.3 MB. Zero dependencies.</p>
     <div class="next-items">
       <div class="next-item">
         <div class="next-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><circle cx="6" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="14" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="17" cy="11" r="1" fill="currentColor" stroke="none"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="M6 8h4M6 11h3" opacity="0.5"/><circle cx="17" cy="9.5" r="2.5" fill="none"/></svg>
         </div>
-        <h3>Terminal Graphics</h3>
-        <p>Real pixels in your terminal. GPU-computed, rendered via Kitty and Sixel protocols.</p>
+        <h3>GPU Virtual Machine</h3>
+        <p>5 memory regions. Autonomous dispatch chains. HOST_VISIBLE polling. Dormant VMs. The GPU is the computer.</p>
       </div>
       <div class="next-item">
         <div class="next-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8V4h16v4"/><path d="M4 16v4h16v-4"/><path d="M12 4v16"/><rect x="6" y="8" width="4" height="8" rx="1" opacity="0.4"/><rect x="14" y="8" width="4" height="8" rx="1" opacity="0.4"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg>
         </div>
-        <h3>Native Media</h3>
-        <p>PNG, JPEG, GIF, MP4/H.264 &mdash; all decoded natively. No ffmpeg. No external tools.</p>
+        <h3>Native Media Codecs</h3>
+        <p>PNG, JPEG, GIF, BMP, AVI, MP4/H.264, WAV &mdash; all decoded natively. No ffmpeg. Zero external tools.</p>
       </div>
       <div class="next-item">
         <div class="next-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/><circle cx="5" cy="8" r="2"/><circle cx="19" cy="8" r="2"/><circle cx="5" cy="16" r="2"/><circle cx="19" cy="16" r="2"/><path d="M7 8h10M7 16h10M5 10v4M19 10v4" opacity="0.3"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><circle cx="6" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="14" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="17" cy="11" r="1" fill="currentColor" stroke="none"/></svg>
         </div>
-        <h3>Showcases</h3>
-        <p>N-body physics, satellite imagery, video playback. All GPU-computed, all in your terminal.</p>
+        <h3>Terminal Graphics</h3>
+        <p>GPU-computed images in your terminal. Kitty, Sixel, and halfblock protocols. Native GUI windowing.</p>
       </div>
     </div>
-    <div class="next-version">v0.84 &mdash; Terminal Graphics &amp; Native Media</div>
+    <div class="next-version">v1.0.0 &mdash; GPU VM + 247 Stdlib Modules</div>
   </div>
 </section>
 
@@ -983,17 +1059,17 @@ footer a:hover { color: var(--text); }
   <div class="download-section">
     <span class="section-label">Get Started</span>
     <h2>Download OctoFlow</h2>
-    <p class="section-desc" style="margin-left:auto;margin-right:auto;">Unzip. Run. That's it. No installer, no SDK, no account.</p>
+    <p class="section-desc" style="margin-left:auto;margin-right:auto;">2.3 MB binary. Unzip. Run. That's it. No installer, no SDK, no account.</p>
     <div class="download-platforms">
       <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="dl-card">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
         <span class="dl-label">Windows x64</span>
-        <span class="dl-size">2.2 MB &middot; .zip</span>
+        <span class="dl-size">2.3 MB &middot; .zip</span>
       </a>
       <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="dl-card">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.504 0c-.155 0-.311.015-.466.046C8.756.684 6.26 3.576 5.552 5.263c-.354.84-.515 1.77-.422 2.662.052.472.18.9.38 1.285-.236.076-.474.166-.71.267C3.547 10.042 2.8 11.034 2.8 12.303c0 .782.287 1.508.77 2.073.325.38.736.689 1.2.91-.014.124-.02.25-.02.376 0 1.016.413 1.93 1.08 2.598.492.492 1.12.852 1.822 1.03.106.028.214.05.324.066-.028.184-.042.372-.042.563 0 .855.29 1.641.783 2.269.608.773 1.563 1.245 2.614 1.363.216.024.435.036.655.036 1.468 0 2.823-.607 3.783-1.594.85-.875 1.393-2.003 1.487-3.25.017-.221.017-.443.001-.664.463-.142.874-.377 1.21-.677.534-.476.87-1.136.94-1.845.033-.33.018-.663-.044-.99.34-.282.62-.633.82-1.033.304-.61.406-1.305.298-1.98-.044-.27-.122-.53-.232-.778.372-.378.655-.844.82-1.375.22-.705.19-1.466-.083-2.14-.147-.362-.367-.69-.647-.968-.124-.124-.26-.237-.406-.34.044-.334.045-.672.003-1.01C18.395 3.242 15.87.24 13.066.013 12.88 0 12.692 0 12.504 0z"/></svg>
         <span class="dl-label">Linux x64</span>
-        <span class="dl-size">2.2 MB &middot; .tar.gz</span>
+        <span class="dl-size">2.3 MB &middot; .tar.gz</span>
       </a>
     </div>
     <p class="download-note">Requires any GPU with Vulkan driver (NVIDIA, AMD, Intel)</p>
@@ -1097,7 +1173,7 @@ const seq = [
   { act: 'wait', ms: 300 },
   { act: 'print', text: '\n', cls: 'output' },
   { act: 'wait', ms: 180 },
-  { act: 'print', text: 'OctoFlow v0.83.1 \u2014 GPU-native language\n', cls: 'output' },
+  { act: 'print', text: 'OctoFlow 1.0.0 \u2014 GPU-native language (247 stdlib modules)\n', cls: 'output' },
   { act: 'wait', ms: 80 },
   { act: 'print', text: 'GPU: NVIDIA GeForce RTX 4090\n', cls: 'output' },
   { act: 'wait', ms: 500 },

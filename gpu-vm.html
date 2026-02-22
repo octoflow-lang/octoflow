@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPU Virtual Machine — OctoFlow</title>
+<meta name="description" content="OctoFlow GPU VM: 5 memory regions, autonomous dispatch chains, HOST_VISIBLE polling. The GPU is the computer.">
+<meta property="og:title" content="GPU Virtual Machine — OctoFlow">
+<meta property="og:description" content="GPU-resident autonomous execution. 5 SSBOs. Single vkQueueSubmit. Zero CPU orchestration.">
+<meta property="og:image" content="https://octoflow-lang.github.io/octoflow/assets/logo.png">
+<meta name="theme-color" content="#1a8a8a">
+<link rel="icon" type="image/png" href="assets/logo.png">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --teal: #1a9a9a;
+  --teal-dark: #0f7a7a;
+  --teal-glow: rgba(26, 154, 154, 0.4);
+  --teal-light: #3dd8d8;
+  --teal-subtle: rgba(26, 154, 154, 0.08);
+  --bg: #08090c;
+  --bg-elevated: #0d1117;
+  --bg-card: #131920;
+  --bg-card-hover: #171e27;
+  --text: #ecf0f5;
+  --text-secondary: #9aa5b4;
+  --text-dim: #6b7685;
+  --border: #1c2431;
+  --border-hover: #2a3545;
+  --code-bg: #0d1117;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+a { color: var(--teal-light); text-decoration: none; transition: color 0.2s; }
+a:hover { color: #fff; }
+
+/* ═══════════════════ NAV ═══════════════════ */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  padding: 16px 32px;
+  display: flex; align-items: center; justify-content: space-between;
+  background: rgba(8, 9, 12, 0.8);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.3s;
+}
+nav.scrolled { border-bottom-color: var(--border); }
+nav .logo {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 700; font-size: 1.1rem; color: var(--text);
+}
+nav .logo img { width: 32px; height: 32px; }
+nav .links { display: flex; align-items: center; gap: 24px; }
+nav .links a { color: var(--text-secondary); font-size: 0.9rem; font-weight: 500; }
+nav .links a:hover { color: var(--text); }
+nav .links .btn-nav {
+  background: var(--teal); color: #fff;
+  padding: 8px 20px; border-radius: 8px;
+  font-weight: 600; font-size: 0.9rem; transition: all 0.2s;
+}
+nav .links .btn-nav:hover { background: var(--teal-light); color: #000; }
+
+/* ═══════════════════ HERO ═══════════════════ */
+.page-hero {
+  padding: 140px 24px 80px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+.page-hero::before {
+  content: '';
+  position: absolute;
+  top: -200px; left: 50%; transform: translateX(-50%);
+  width: 800px; height: 800px;
+  border-radius: 50%;
+  background: var(--teal);
+  filter: blur(120px);
+  opacity: 0.1;
+  pointer-events: none;
+}
+.page-hero h1 {
+  font-size: 3.5rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin-bottom: 16px;
+  position: relative;
+}
+.page-hero h1 .accent {
+  background: linear-gradient(135deg, var(--teal-light), #1ac5c5, #1a9aba);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.page-hero .subtitle {
+  font-size: 1.2rem;
+  color: var(--text-secondary);
+  max-width: 640px;
+  margin: 0 auto 48px;
+  position: relative;
+}
+.page-hero .tagline {
+  display: inline-block;
+  padding: 8px 20px;
+  background: var(--teal-subtle);
+  border: 1px solid rgba(26, 154, 154, 0.15);
+  border-radius: 100px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--teal-light);
+  position: relative;
+  margin-bottom: 32px;
+}
+
+/* ═══════════════════ SECTIONS ═══════════════════ */
+section {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 80px 24px;
+}
+.section-label {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--teal);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+section h2 {
+  font-size: 2.2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 16px;
+}
+section .section-desc {
+  font-size: 1.05rem;
+  color: var(--text-secondary);
+  max-width: 600px;
+  margin-bottom: 40px;
+}
+.centered { text-align: center; }
+.centered .section-desc { margin-left: auto; margin-right: auto; }
+
+/* ═══════════════════ MEMORY MODEL ═══════════════════ */
+.memory-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-bottom: 32px;
+}
+.mem-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 16px;
+  text-align: center;
+  transition: all 0.3s;
+}
+.mem-card:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-2px);
+}
+.mem-card .mem-binding {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--teal);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.mem-card h4 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--teal-light);
+}
+.mem-card p {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+/* ═══════════════════ CODE BLOCK ═══════════════════ */
+.code-block {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.code-block-header {
+  padding: 12px 20px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--teal-light);
+  background: rgba(26, 154, 154, 0.03);
+  border-bottom: 1px solid var(--border);
+}
+.code-block pre {
+  padding: 24px;
+  overflow-x: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  line-height: 1.7;
+}
+.k { color: #ff7b72; }
+.f { color: #d2a8ff; }
+.s { color: #a5d6ff; }
+.n { color: #79c0ff; }
+.c { color: #6b7685; font-style: italic; }
+.o { color: #ff7b72; }
+
+/* ═══════════════════ FEATURE CARDS ═══════════════════ */
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+.feature-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+  transition: all 0.3s;
+}
+.feature-card:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+  transform: translateY(-2px);
+}
+.feature-card .icon-wrap {
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 16px;
+  background: var(--teal-subtle);
+}
+.feature-card .icon-wrap svg { width: 22px; height: 22px; color: var(--teal-light); }
+.feature-card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 8px; }
+.feature-card p { font-size: 0.88rem; color: var(--text-secondary); line-height: 1.5; }
+
+/* ═══════════════════ WORKLOADS ═══════════════════ */
+.workloads-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+.workload-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  transition: all 0.3s;
+}
+.workload-card:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+}
+.workload-card h4 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--teal-light);
+  margin-bottom: 8px;
+}
+.workload-card p {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+/* ═══════════════════ STATS ROW ═══════════════════ */
+.stats-row {
+  display: flex;
+  justify-content: center;
+  gap: 48px;
+  flex-wrap: wrap;
+  padding: 48px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin: 48px 0;
+}
+.stat-item { text-align: center; }
+.stat-number {
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--teal-light);
+  line-height: 1.2;
+}
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+}
+
+/* ═══════════════════ CTA ═══════════════════ */
+.cta-section {
+  text-align: center;
+  padding: 80px 24px;
+}
+.btn-cta {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 14px 32px;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 600;
+  transition: all 0.25s;
+  background: linear-gradient(135deg, var(--teal), var(--teal-dark));
+  color: #fff;
+  box-shadow: 0 4px 24px var(--teal-glow);
+  margin: 0 8px;
+}
+.btn-cta:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px var(--teal-glow);
+  color: #fff;
+}
+.btn-cta.secondary {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+.btn-cta.secondary:hover {
+  border-color: var(--teal);
+}
+
+/* ═══════════════════ FOOTER ═══════════════════ */
+footer {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 40px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  flex-wrap: wrap;
+  gap: 16px;
+}
+footer .links { display: flex; gap: 24px; }
+footer a { color: var(--text-dim); }
+footer a:hover { color: var(--text); }
+
+/* ═══════════════════ SCROLL REVEAL ═══════════════════ */
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ═══════════════════ RESPONSIVE ═══════════════════ */
+@media (max-width: 768px) {
+  nav .links a:not(.btn-nav) { display: none; }
+  .page-hero h1 { font-size: 2.5rem; }
+  .memory-grid { grid-template-columns: repeat(2, 1fr); }
+  .memory-grid .mem-card:last-child { grid-column: 1 / -1; }
+  .features-grid { grid-template-columns: 1fr; }
+  .workloads-grid { grid-template-columns: 1fr; }
+  section h2 { font-size: 1.8rem; }
+}
+@media (max-width: 480px) {
+  .page-hero h1 { font-size: 2rem; }
+  .memory-grid { grid-template-columns: 1fr; }
+  .stats-row { gap: 24px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav id="nav">
+  <a class="logo" href="index.html">
+    <img src="assets/logo.png" alt="OctoFlow">
+    <span>OctoFlow</span>
+  </a>
+  <div class="links">
+    <a href="index.html">Home</a>
+    <a href="index.html#features">Features</a>
+    <a href="index.html#stdlib">Library</a>
+    <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/gpu-guide.md">GPU Guide</a>
+    <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn-nav">Download</a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<div class="page-hero">
+  <div class="tagline">GPU is the Compute. CPU is the BIOS.</div>
+  <h1>GPU <span class="accent">Virtual Machine</span></h1>
+  <p class="subtitle">5 memory regions. Autonomous dispatch chains. Single vkQueueSubmit. The GPU runs your program while the CPU handles I/O and nothing else.</p>
+</div>
+
+<!-- Memory Model -->
+<section class="reveal">
+  <div class="centered">
+    <span class="section-label">Architecture</span>
+    <h2>5-SSBO Memory Model</h2>
+    <p class="section-desc">Each VM instance has 5 GPU-resident memory regions mapped as Vulkan SSBOs. Data stays in VRAM between dispatches.</p>
+  </div>
+  <div class="memory-grid">
+    <div class="mem-card">
+      <div class="mem-binding">SSBO 0</div>
+      <h4>Registers</h4>
+      <p>General-purpose working memory. Holds intermediate results, loop variables, computation state.</p>
+    </div>
+    <div class="mem-card">
+      <div class="mem-binding">SSBO 1</div>
+      <h4>Metrics</h4>
+      <p>Accumulator for reductions. Sum, min, max, count operations write here for CPU readback.</p>
+    </div>
+    <div class="mem-card">
+      <div class="mem-binding">SSBO 2</div>
+      <h4>Globals</h4>
+      <p>Shared constants and model weights. Loaded once, read by all dispatches in the chain.</p>
+    </div>
+    <div class="mem-card">
+      <div class="mem-binding">SSBO 3</div>
+      <h4>Control</h4>
+      <p>Program counter, dispatch parameters, status flags. Drives indirect dispatch and self-scheduling.</p>
+    </div>
+    <div class="mem-card">
+      <div class="mem-binding">SSBO 4</div>
+      <h4>Heap</h4>
+      <p>Dynamic allocation region. Large tensors, KV caches, variable-length data structures.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Code Example -->
+<section class="reveal">
+  <div class="centered">
+    <span class="section-label">Example</span>
+    <h2>Boot, dispatch, read results.</h2>
+    <p class="section-desc">A complete GPU VM session in 8 lines. Data stays on the GPU between kernel dispatches.</p>
+  </div>
+  <div class="code-block">
+    <div class="code-block-header">gpu_vm_example.flow</div>
+    <pre><span class="c">// Boot a VM with 3 memory region sizes</span>
+<span class="k">let</span> vm = <span class="f">vm_boot</span>(<span class="n">1.0</span>, <span class="n">8.0</span>, <span class="n">16.0</span>)
+
+<span class="c">// Load data into registers (SSBO 0)</span>
+<span class="k">let</span> data = [<span class="n">1.0</span>, <span class="n">2.0</span>, <span class="n">3.0</span>, <span class="n">4.0</span>, <span class="n">5.0</span>, <span class="n">6.0</span>, <span class="n">7.0</span>, <span class="n">8.0</span>]
+<span class="k">let</span> _w = <span class="f">vm_write_register</span>(vm, <span class="n">0.0</span>, <span class="n">0.0</span>, data)
+
+<span class="c">// Dispatch a compute kernel — data stays in VRAM</span>
+<span class="k">let</span> pc = [<span class="n">0.0</span>, <span class="n">3.0</span>, <span class="n">8.0</span>]
+<span class="k">let</span> _d = <span class="f">vm_dispatch</span>(vm, <span class="s">"stdlib/gpu/kernels/vm_scale.spv"</span>, pc, <span class="n">1.0</span>)
+
+<span class="c">// Build and execute the command buffer (single submit)</span>
+<span class="k">let</span> prog = <span class="f">vm_build</span>(vm)
+<span class="k">let</span> _e = <span class="f">vm_execute</span>(prog)
+
+<span class="c">// Read results back — only now does data cross PCIe</span>
+<span class="k">let</span> result = <span class="f">vm_read_register</span>(vm, <span class="n">0.0</span>, <span class="n">0.0</span>, <span class="n">8.0</span>)
+<span class="f">print</span>(<span class="s">"Result: {result}"</span>)
+<span class="c">// [3, 6, 9, 12, 15, 18, 21, 24]</span></pre>
+  </div>
+</section>
+
+<!-- Key Features -->
+<section class="reveal">
+  <div class="centered">
+    <span class="section-label">Capabilities</span>
+    <h2>What makes it different.</h2>
+    <p class="section-desc">Not a shader wrapper. Not a GPGPU library. A complete virtual machine that lives on the GPU.</p>
+  </div>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </div>
+      <h3>Single vkQueueSubmit</h3>
+      <p>Chain multiple kernel dispatches into one Vulkan command buffer. One fence, one submit, zero CPU round-trips between stages.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      </div>
+      <h3>HOST_VISIBLE Polling</h3>
+      <p>CPU reads GPU status in ~1 microsecond via zero-copy mapped memory. No download, no fence wait, no overhead.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg>
+      </div>
+      <h3>Indirect Dispatch</h3>
+      <p>The GPU decides its own workgroup count. Self-scheduling without CPU intervention. True GPU autonomy.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+      <h3>Dormant VMs</h3>
+      <p>Pre-built command buffers with indirect dispatch. Over-provisioned and ready to fire. Wake, dispatch, sleep.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      </div>
+      <h3>Homeostasis</h3>
+      <p>GPU self-regulates via maxnorm + regulator kernels. Activation magnitudes stay bounded without CPU monitoring.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+      </div>
+      <h3>62+ Compute Kernels</h3>
+      <p>Scale, affine, matvec, reduce, WHERE, delta encode/decode, dictionary lookup, sort, scan, histogram, and more.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Workloads -->
+<section class="reveal">
+  <div class="centered">
+    <span class="section-label">Use Cases</span>
+    <h2>GPU-resident workloads.</h2>
+    <p class="section-desc">The VM model enables workloads that were previously impossible without custom GPU programming.</p>
+  </div>
+  <div class="workloads-grid">
+    <div class="workload-card">
+      <h4>LLM Inference</h4>
+      <p>Layer-by-layer transformer execution. Weights in Globals, KV cache in Heap, activations in Registers. Entire forward pass as one dispatch chain.</p>
+    </div>
+    <div class="workload-card">
+      <h4>Image &amp; Video Pipelines</h4>
+      <p>Chain decode, transform, filter, and encode operations. Pixel data never leaves VRAM between stages. Process entire video streams on GPU.</p>
+    </div>
+    <div class="workload-card">
+      <h4>Autonomous Agents</h4>
+      <p>Agent loop runs on GPU. Observe, decide, act — all in VRAM. CPU only handles I/O. Zero orchestration overhead per agent step.</p>
+    </div>
+    <div class="workload-card">
+      <h4>Data Processing</h4>
+      <p>ETL pipelines, columnar analytics, GPU-accelerated queries. Load CSV, filter, aggregate, join — all as GPU dispatch chains.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Stats -->
+<section class="reveal">
+  <div class="stats-row">
+    <div class="stat-item">
+      <div class="stat-number">5</div>
+      <div class="stat-label">Memory Regions</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-number">62+</div>
+      <div class="stat-label">GPU Kernels</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-number">~1 &mu;s</div>
+      <div class="stat-label">Polling Latency</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-number">1</div>
+      <div class="stat-label">Queue Submit</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-number">7/7</div>
+      <div class="stat-label">VM Steps Passing</div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<div class="cta-section reveal">
+  <h2 style="font-size:2rem; font-weight:800; margin-bottom:12px;">Try it now.</h2>
+  <p style="color:var(--text-secondary); margin-bottom:32px; font-size:1.05rem;">2.3 MB download. Zero dependencies. Any GPU.</p>
+  <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn-cta">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    Download v1.0.0
+  </a>
+  <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/gpu-guide.md" class="btn-cta secondary">GPU Guide</a>
+</div>
+
+<!-- Footer -->
+<footer>
+  <div>
+    Stdlib &amp; docs: Apache 2.0 &middot; Binary: Free for any purpose &middot; Your .flow programs: Yours entirely
+  </div>
+  <div class="links">
+    <a href="index.html">Home</a>
+    <a href="https://github.com/octoflow-lang/octoflow">GitHub</a>
+    <a href="https://github.com/octoflow-lang/octoflow/releases">Releases</a>
+  </div>
+</footer>
+
+<script>
+// Nav scroll
+const nav = document.getElementById('nav');
+window.addEventListener('scroll', () => {
+  nav.classList.toggle('scrolled', window.scrollY > 40);
+});
+
+// Scroll reveal
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+}, { threshold: 0.1 });
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+</script>
+
+</body>
+</html>
