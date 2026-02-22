@@ -276,6 +276,32 @@ let selected = gpu_where(cond, a, b)   // a where cond!=0, else b
 let result = gpu_matmul(a, b, rows_a, cols_a, cols_b)
 ```
 
+## GPU Virtual Machine
+
+The GPU VM runs autonomous dispatch chains. The CPU writes input, submits once, reads output. Everything between happens on GPU with zero CPU round-trips.
+
+```
+let vm = vm_boot()
+
+// Write input data to register 0 of instance 0
+let data = [1.0, 2.0, 3.0, 4.0]
+let _w = vm_write_register(vm, 0, 0, data)
+
+// Chain multiple dispatches — all run in one GPU submit
+let _d1 = vm_dispatch(vm, "scale.spv", [0.0, 3.0, 4.0], 1.0)
+let _d2 = vm_dispatch(vm, "relu.spv", [0.0, 4.0], 1.0)
+
+// Build and execute
+let prog = vm_build(vm)
+vm_execute(prog)
+
+// Read result
+let result = vm_read_register(vm, 0, 0)
+vm_shutdown(vm)
+```
+
+5 memory regions: Registers (per-instance I/O), Globals (shared), Heap (weights), Metrics (GPU→CPU polling), Control (CPU→GPU live commands). See [GPU Guide](gpu-guide.md) for full details.
+
 ## File I/O
 
 Requires `--allow-read` and/or `--allow-write`.
@@ -393,10 +419,10 @@ octoflow run script.flow --allow-read --allow-net // file read + network
 `base64_encode(s)` `base64_decode(s)` `hex_encode(s)` `hex_decode(s)`
 
 ### Bitwise
-`bit_and(a, b)` `bit_or(a, b)` `bit_test(n, bit)` `float_to_bits(f)` `bits_to_float(n)`
+`bit_and(a, b)` `bit_or(a, b)` `bit_xor(a, b)` `bit_test(n, bit)` `bit_shl(a, n)` `bit_shr(a, n)` `float_to_bits(f)` `bits_to_float(n)` `float_byte(f, idx)`
 
 ### System
-`os_name()` `env(name)` `random()` `read_line()` `gpu_info()`
+`os_name()` `env(name)` `random()` `read_line()` `sleep(ms)` `print_raw(s)` `gpu_info()`
 
 ### File I/O
 `read_file(path)` `read_lines(path)` `read_bytes(path)` `read_csv(path)` `write_file(path, text)` `append_file(path, text)` `write_csv(path, data)` `write_bytes(path, arr)` `file_exists(path)` `file_size(path)` `is_file(path)` `is_dir(path)` `list_dir(path)` `join_path(parts...)` `dirname(path)` `basename(path)` `file_ext(path)`
@@ -417,7 +443,16 @@ octoflow run script.flow --allow-read --allow-net // file read + network
 `try(expr)` — returns `.value`, `.ok`, `.error`
 
 ### GPU
-`gpu_fill(val, n)` `gpu_range(start, end, step)` `gpu_add(a, b)` `gpu_sub(a, b)` `gpu_mul(a, b)` `gpu_div(a, b)` `gpu_scale(a, s)` `gpu_abs(a)` `gpu_negate(a)` `gpu_sqrt(a)` `gpu_exp(a)` `gpu_log(a)` `gpu_sin(a)` `gpu_cos(a)` `gpu_floor(a)` `gpu_ceil(a)` `gpu_round(a)` `gpu_pow(a, n)` `gpu_clamp(a, lo, hi)` `gpu_reverse(a)` `gpu_sum(a)` `gpu_min(a)` `gpu_max(a)` `gpu_mean(a)` `gpu_cumsum(a)` `gpu_where(cond, a, b)` `gpu_matmul(a, b, m, k, n)` `gpu_compute(spv_path, arr)` `gpu_info()`
+`gpu_fill(val, n)` `gpu_range(start, end, step)` `gpu_random(n)` `gpu_add(a, b)` `gpu_sub(a, b)` `gpu_mul(a, b)` `gpu_div(a, b)` `gpu_scale(a, s)` `gpu_abs(a)` `gpu_negate(a)` `gpu_sqrt(a)` `gpu_exp(a)` `gpu_log(a)` `gpu_sin(a)` `gpu_cos(a)` `gpu_floor(a)` `gpu_ceil(a)` `gpu_round(a)` `gpu_pow(a, n)` `gpu_clamp(a, lo, hi)` `gpu_reverse(a)` `gpu_sum(a)` `gpu_min(a)` `gpu_max(a)` `gpu_mean(a)` `gpu_product(a)` `gpu_variance(a)` `gpu_stddev(a)` `gpu_cumsum(a)` `gpu_where(cond, a, b)` `gpu_concat(a, b)` `gpu_gather(data, idx)` `gpu_scatter(vals, idx, size)` `gpu_ema(a, alpha)` `gpu_matmul(a, b, m, k, n)` `gpu_compute(spv_path, arr)` `gpu_run(spv, arrs..., scalars...)` `gpu_info()`
+
+### GPU VM
+`vm_boot()` `vm_shutdown(vm)` `vm_write_register(vm, inst, reg, data)` `vm_read_register(vm, inst, reg)` `vm_write_globals(vm, data)` `vm_read_globals(vm)` `vm_dispatch(vm, spv, pc, wg)` `vm_dispatch_indirect(vm, spv, pc)` `vm_build(vm)` `vm_execute(prog)` `vm_execute_async(prog)` `vm_poll(prog)` `vm_wait(prog)` `vm_poll_status(vm)` `vm_write_control_live(vm, off, val)`
+
+### Video / Terminal
+`video_open(path)` `video_frame(handle, idx)` `term_image(r, g, b, w, h)` `term_supports_graphics()` `term_clear()`
+
+### Window
+`window_open(title, w, h)` `window_close(h)` `window_alive(h)` `window_draw(h, pixels, w, h)` `window_poll(h)` `window_event_key(h)`
 
 ## Common Patterns
 
@@ -468,14 +503,23 @@ Import with `use <module_name>`:
 
 | Domain | Modules |
 |--------|---------|
+| **ai** | transformer, inference, generate, weight_loader |
 | **collections** | stack, queue, heap, graph, collections |
+| **compiler** | lexer, eval, parser, preflight, codegen, ir |
+| **crypto** | hash, encoding, random |
 | **data** | csv, io, pipeline, transform, validate |
 | **db** | core, query, schema |
+| **formats** | gguf, json |
+| **gpu** | VM, emitters, runtime, kernels |
+| **gui** | widgets, layout, themes, events |
+| **llm** | generate, stream, chat, decompose |
+| **media** | image (PNG/JPEG/GIF/BMP), video (AVI/MP4/H.264), audio (WAV) |
 | **ml** | regression, classify, cluster, nn, tree, ensemble, linalg, metrics, preprocess |
-| **science** | calculus, constants, interpolate, matrix, physics, signal |
+| **science** | calculus, constants, interpolate, matrix, physics, signal, optimize |
 | **stats** | descriptive, correlation, distribution, hypothesis, risk, timeseries, math_ext |
 | **string** | string, regex, format |
 | **sys** | args, env, memory, platform, timer |
+| **terminal** | term_image, colors |
 | **time** | datetime |
 | **web** | http, json_util, url |
 | **core** | math, sort, array_utils, io |

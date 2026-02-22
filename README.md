@@ -133,57 +133,28 @@ stream warm = photo |> brightness(20.0) |> contrast(1.2)
 emit(warm, "output.png")
 ```
 
-## Standard Library — 51 Modules
+## Standard Library — 247 Modules
 
-### collections — Data Structures
-`use stack` `use queue` `use heap` `use graph` `use collections`
-
-Stack, queue, min/max heap, weighted directed graph with Dijkstra shortest path, and unified collection utilities.
-
-### data — Data Processing
-`use csv` `use io` `use pipeline` `use transform` `use validate`
-
-CSV read/write, file I/O helpers, data pipeline composition, column transforms (scale, normalize, encode), and data validation rules.
-
-### db — In-Memory Database
-`use core` `use query` `use schema`
-
-Columnar in-memory database with SQL-like operations. Create tables, insert rows, SELECT/WHERE/JOIN/GROUP BY/ORDER BY. Import from CSV.
-
-### ml — Machine Learning
-`use regression` `use classify` `use cluster` `use nn` `use tree` `use ensemble` `use linalg` `use metrics` `use preprocess`
-
-Linear and ridge regression, KNN and naive Bayes classification, k-means clustering, neural network primitives (dense, relu, sigmoid, softmax, SGD, dropout, batch norm), decision trees, bagging ensembles, matrix algebra, accuracy/precision/recall/F1, and train/test split with scaling.
-
-### science — Scientific Computing
-`use calculus` `use constants` `use interpolate` `use matrix` `use physics` `use signal`
-
-Numerical differentiation and integration, physical constants, linear/bilinear interpolation, matrix operations, Euler/RK4 integrators with spring-damper and projectile dynamics, and DSP (convolution, FIR filters, windowing, peak detection).
-
-### stats — Statistical Analysis
-`use descriptive` `use correlation` `use distribution` `use hypothesis` `use risk` `use timeseries` `use math_ext`
-
-Mean, median, stddev, skewness, kurtosis. Pearson/Spearman correlation. Normal/uniform/exponential distributions. T-test, chi-squared, ANOVA. Sharpe ratio, VaR, drawdown. SMA, EMA, MACD, Bollinger bands. Gamma, beta, erf functions.
-
-### string — Text Processing
-`use string` `use regex` `use format`
-
-String manipulation, regular expression matching and extraction, and string formatting utilities.
-
-### sys — System
-`use args` `use env` `use memory` `use platform` `use timer`
-
-Command-line argument parsing, environment variables, memory tracking, platform detection, and execution timing.
-
-### time — Date and Time
-`use datetime`
-
-Date/time formatting and arithmetic.
-
-### web — Network
-`use http` `use json_util` `use url`
-
-HTTP GET/POST client, JSON parsing and serialization, URL encoding and parsing.
+| Domain | Modules | Coverage |
+|---|---|---|
+| **ai** | transformer, inference, generate, weight_loader | GGUF model loading, tokenization |
+| **collections** | stack, queue, heap, graph | Data structures |
+| **compiler** | lexer, eval, parser, preflight, codegen, ir | Self-hosted compiler |
+| **crypto** | hash, encoding, random | SHA-256, base64, CSPRNG |
+| **data** | csv, io, pipeline, transform, validate | ETL and data processing |
+| **db** | core, query, schema | Database abstractions |
+| **formats** | gguf, json | GGUF tensor files, JSON |
+| **gpu** | VM, emitters, runtime, kernels | 62+ GPU compute kernels |
+| **gui** | widgets, layout, themes, events | Native GUI toolkit |
+| **llm** | generate, stream, chat, decompose | LLM inference (Qwen2.5) |
+| **media** | image (PNG/JPEG/GIF/BMP), video (AVI/MP4/H.264), audio (WAV) | Native codecs |
+| **ml** | nn, regression, classify, cluster, tree, linalg | Machine learning primitives |
+| **science** | calculus, physics, signal, matrix, optimize | Scientific computing |
+| **stats** | descriptive, distribution, correlation, risk | Statistical analysis |
+| **string** | string, regex, format | Text processing |
+| **sys** | args, env, memory, platform, timer | System interfaces |
+| **terminal** | term_image, colors | Kitty/Sixel/halfblock graphics |
+| **web** | http, json_util, url | HTTP client, JSON, URLs |
 
 ### core (top-level)
 `use math` `use sort` `use array_utils` `use io`

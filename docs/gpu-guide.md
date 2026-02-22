@@ -97,18 +97,94 @@ numbers for element-wise operations on warm runs.
 | `gpu_min(a)` | Minimum element |
 | `gpu_max(a)` | Maximum element |
 | `gpu_mean(a)` | Arithmetic mean |
+| `gpu_product(a)` | Product of all elements |
+| `gpu_variance(a)` | Variance |
+| `gpu_stddev(a)` | Standard deviation |
 
-### Conditional
+### Conditional and Reshaping
 
 | Function | Description |
 |----------|-------------|
 | `gpu_where(cond, a, b)` | Select a where cond!=0, else b |
+| `gpu_concat(a, b)` | Concatenate two arrays |
+| `gpu_gather(data, indices)` | Indexed lookup (out-of-bounds returns 0.0) |
+| `gpu_scatter(values, indices, size)` | Scatter values to indexed positions |
+| `gpu_ema(a, alpha)` | Exponential moving average |
 
 ### Matrix
 
 | Function | Description |
 |----------|-------------|
 | `gpu_matmul(a, b, m, k, n)` | Matrix multiply (m x k) * (k x n) |
+
+### Creation and I/O
+
+| Function | Description |
+|----------|-------------|
+| `gpu_random(n)` | Array of n random floats [0.0, 1.0) |
+| `gpu_load_csv(path)` | Load CSV to GPU array |
+| `gpu_load_binary(path)` | Load binary f32 to GPU |
+| `gpu_save_csv(arr, path)` | Save GPU array to CSV |
+| `gpu_save_binary(arr, path)` | Save GPU array as raw f32 |
+
+### Custom Compute
+
+| Function | Description |
+|----------|-------------|
+| `gpu_compute(spv_path, arr)` | Dispatch a custom SPIR-V kernel |
+| `gpu_run(spv_path, arrs..., scalars...)` | Universal dispatch with multiple inputs and push constants |
+
+## GPU Virtual Machine
+
+For workloads that need multiple dispatches without CPU round-trips, OctoFlow provides a GPU-native virtual machine. The CPU submits once; the GPU runs an entire dispatch chain autonomously.
+
+### Architecture
+
+The GPU VM has 5 memory regions (Vulkan SSBOs):
+
+| Buffer | Purpose |
+|--------|---------|
+| **Registers** | Per-instance I/O (input/output data per VM instance) |
+| **Globals** | Shared data visible to all instances |
+| **Heap** | Large read-only data (weights, lookup tables) |
+| **Metrics** | HOST_VISIBLE GPU→CPU status (polled at ~1us, zero-copy) |
+| **Control** | HOST_VISIBLE CPU→GPU commands (live-writable without rebuild) |
+
+### Basic Usage
+
+```
+// Boot VM, load a kernel, execute
+let vm = vm_boot()
+let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let _w = vm_write_register(vm, 0, 0, data)
+
+// Build a dispatch chain — multiple kernels, one submit
+let pc = [0.0, 3.0, 8.0]
+let _d = vm_dispatch(vm, "stdlib/gpu/kernels/vm_scale.spv", pc, 1.0)
+let prog = vm_build(vm)
+let _e = vm_execute(prog)
+
+let result = vm_read_register(vm, 0, 0)
+// result = [3, 6, 9, 12, 15, 18, 21, 24]
+vm_shutdown(vm)
+```
+
+### Key Capabilities
+
+- **Single submit**: Chain N dispatches into one `vkQueueSubmit` — no CPU stalls between stages
+- **CPU polling**: Read GPU status in ~1us via HOST_VISIBLE memory (zero-copy, no fence)
+- **Indirect dispatch**: GPU self-programs workgroup counts — no CPU involvement
+- **Live control**: CPU writes to Control buffer without rebuilding the command buffer
+- **Dormant VMs**: Over-provisioned command buffers activate without rebuild
+- **I/O streaming**: CPU streams data to Globals; GPU processes with reusable command buffers
+- **Homeostasis**: GPU self-regulates via maxnorm + regulator kernels
+
+### Use Cases
+
+- **LLM inference**: Layer-by-layer transformer execution in a single dispatch chain
+- **Database queries**: Decompress → WHERE → aggregate chains on GPU-resident columnar data
+- **Multi-agent**: Independent VM instances communicate via register-based message passing
+- **Real-time pipelines**: CPU feeds batches, GPU processes without restart
 
 ## Checking GPU Status
 

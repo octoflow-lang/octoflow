@@ -64,7 +64,7 @@ ok 12ms
 $ octoflow repl
 OctoFlow v1.0.0 — GPU-native language
 GPU: NVIDIA GeForce GTX 1660 SUPER
-143 stdlib modules | :help | :time
+247 stdlib modules | :help | :time
 
 > 2 + 2
 4
@@ -87,7 +87,7 @@ let last_sma = sma_3[len(sma_3) - 1]
 print("SMA(3): {last_sma}")
 ```
 
-143 modules across 12 domains. Run `octoflow help <domain>` to explore:
+247 modules across 18 domains. Run `octoflow help <domain>` to explore:
 
 ```
 $ octoflow help stats

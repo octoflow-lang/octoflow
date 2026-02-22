@@ -1,6 +1,6 @@
 # Builtins Reference
 
-OctoFlow has 200+ built-in functions available without imports.
+OctoFlow has 250+ built-in functions available without imports.
 
 ## Math
 
@@ -132,7 +132,7 @@ let q75 = quantile(data, 0.75) // 40.0
 ```
 let mut m = map()
 m["name"] = "OctoFlow"
-m["version"] = 0.82
+m["version"] = 1.0
 let has = map_has(m, "name")    // 1.0
 let keys = map_keys(m)          // ["name", "version"]
 ```
@@ -262,6 +262,7 @@ let nums = regex_find_all("a1b2c3", "[0-9]") // ["1", "2", "3"]
 | `bit_xor(a, b)` | Bitwise XOR |
 | `float_to_bits(f)` | Float as 32-bit integer representation |
 | `bits_to_float(n)` | Integer back to float |
+| `float_byte(f, idx)` | Extract byte idx (0-3) from float's u32 representation |
 
 ## System
 
@@ -271,6 +272,9 @@ let nums = regex_find_all("a1b2c3", "[0-9]") // ["1", "2", "3"]
 | `env(name)` | Environment variable |
 | `random()` | Random float [0.0, 1.0) |
 | `type_of(val)` | Type name string |
+| `sleep(ms)` | Sleep for ms milliseconds |
+| `print_raw(s)` | Print without newline |
+| `print_bytes(arr)` | Print byte array as raw output |
 
 ## Network
 
@@ -386,6 +390,9 @@ between operations. See [GPU Guide](gpu-guide.md) for details.
 |----------|-------------|
 | `gpu_fill(val, n)` | Create array of n elements, all val |
 | `gpu_range(start, end, step)` | Create arithmetic sequence |
+| `gpu_random(n)` | Create array of n random floats [0.0, 1.0) |
+| `gpu_load_csv(path)` | Load CSV file directly to GPU array |
+| `gpu_load_binary(path)` | Load binary f32 data directly to GPU |
 
 ### Element-wise Binary
 
@@ -423,13 +430,20 @@ between operations. See [GPU Guide](gpu-guide.md) for details.
 | `gpu_min(a)` | Minimum element |
 | `gpu_max(a)` | Maximum element |
 | `gpu_mean(a)` | Arithmetic mean |
+| `gpu_product(a)` | Product of all elements |
+| `gpu_variance(a)` | Variance |
+| `gpu_stddev(a)` | Standard deviation |
 | `gpu_cumsum(a)` | Cumulative sum (prefix scan) |
 
-### Conditional
+### Conditional and Reshaping
 
 | Function | Description |
 |----------|-------------|
 | `gpu_where(cond, a, b)` | Select a where cond!=0, else b |
+| `gpu_concat(a, b)` | Concatenate two arrays |
+| `gpu_gather(data, indices)` | Indexed lookup (out-of-bounds returns 0.0) |
+| `gpu_scatter(values, indices, dest_size)` | Scatter values to indexed positions |
+| `gpu_ema(a, alpha)` | Exponential moving average |
 
 ### Matrix
 
@@ -437,12 +451,139 @@ between operations. See [GPU Guide](gpu-guide.md) for details.
 |----------|-------------|
 | `gpu_matmul(a, b, m, k, n)` | Matrix multiply (m x k) * (k x n) |
 
+### Persistence
+
+| Function | Description |
+|----------|-------------|
+| `gpu_save_csv(arr, path)` | Save GPU array to CSV file |
+| `gpu_save_binary(arr, path)` | Save GPU array as raw f32 binary |
+
 ### Custom Compute
 
 | Function | Description |
 |----------|-------------|
 | `gpu_compute(spv_path, arr)` | Load and dispatch custom SPIR-V shader |
-| `gpu_info()` | GPU device information string |
+| `gpu_run(spv_path, arr1, ...)` | Universal GPU dispatch with multiple inputs and push constants |
+| `gpu_info()` | GPU device information map |
+
+## GPU Virtual Machine
+
+The GPU VM runs autonomous compute chains on the GPU. The CPU acts as a BIOS — it writes input, submits once, and reads output. Everything between happens on GPU.
+
+### Lifecycle
+
+| Function | Description |
+|----------|-------------|
+| `vm_boot()` | Create a GPU VM instance, returns vm handle |
+| `vm_shutdown(vm)` | Destroy VM and free GPU resources |
+
+### Memory
+
+| Function | Description |
+|----------|-------------|
+| `vm_write_register(vm, instance, register, data)` | Write data to a VM register |
+| `vm_read_register(vm, instance, register)` | Read data from a VM register |
+| `vm_write_globals(vm, data)` | Write to shared Globals buffer |
+| `vm_read_globals(vm)` | Read from shared Globals buffer |
+| `vm_write_metrics(vm, data)` | Write to Metrics buffer |
+| `vm_read_metrics(vm)` | Read from Metrics buffer |
+| `vm_write_control(vm, data)` | Write to Control buffer |
+| `vm_read_control(vm)` | Read from Control buffer |
+| `vm_set_heap(vm, data)` | Write to Heap buffer |
+| `vm_load_weights(vm, data)` | Load weight data into Heap |
+
+### Dispatch
+
+| Function | Description |
+|----------|-------------|
+| `vm_dispatch(vm, spv_path, push_constants, workgroups)` | Add compute dispatch to chain |
+| `vm_dispatch_indirect(vm, spv_path, push_constants)` | Indirect dispatch (GPU sets workgroup count) |
+| `vm_build(vm)` | Build dispatch chain into a VmProgram |
+| `vm_execute(prog)` | Submit and wait for GPU execution |
+| `vm_execute_async(prog)` | Submit without waiting |
+
+### Polling and Control
+
+| Function | Description |
+|----------|-------------|
+| `vm_poll(prog)` | Check if async execution completed |
+| `vm_wait(prog)` | Block until async execution completes |
+| `vm_poll_status(vm)` | Read GPU status via HOST_VISIBLE polling (~1us) |
+| `vm_write_control_live(vm, offset, value)` | Live-write to Control without rebuild |
+| `vm_write_control_u32(vm, offset, value)` | Write u32 to Control buffer |
+
+### Info
+
+| Function | Description |
+|----------|-------------|
+| `vm_gpu_usage(vm)` | GPU memory usage for this VM |
+| `vm_layer_resident(vm)` | Check if current layer weights are in VRAM |
+| `vm_layer_estimate(vm)` | Estimate VRAM needed for layer |
+
+```
+let vm = vm_boot()
+vm_write_register(vm, 0, 0, input_data)
+let _d = vm_dispatch(vm, "kernel.spv", [0.0, 8.0], 1.0)
+let prog = vm_build(vm)
+vm_execute(prog)
+let result = vm_read_register(vm, 0, 0)
+vm_shutdown(vm)
+```
+
+## Video and Media
+
+Returns decomposed struct with `.width`, `.height`, `.frames`, `.fps`.
+
+| Function | Description |
+|----------|-------------|
+| `video_open(path_or_bytes)` | Open image/video (PNG, JPEG, GIF, BMP, AVI, MP4) |
+| `video_frame(handle, index)` | Decode frame, returns `.r`, `.g`, `.b` GPU arrays |
+
+```
+let img = video_open("photo.jpg")
+let f = video_frame(img, 0)
+// f.r, f.g, f.b are GPU arrays of pixel values [0-255]
+```
+
+## Terminal Graphics
+
+| Function | Description |
+|----------|-------------|
+| `term_image(r, g, b, w, h)` | Display image in terminal (Kitty/Sixel/halfblock) |
+| `term_image_at(r, g, b, w, h, x, y)` | Display image at position |
+| `term_supports_graphics()` | 1.0 if terminal supports graphics protocol |
+| `term_move_up(n)` | Move cursor up n lines |
+| `term_clear()` | Clear terminal screen |
+
+## Window / GUI
+
+Requires `--allow-ffi` on some platforms.
+
+| Function | Description |
+|----------|-------------|
+| `window_open(title, w, h)` | Open a native window, returns handle |
+| `window_close(handle)` | Close window |
+| `window_alive(handle)` | 1.0 if window is still open |
+| `window_draw(handle, pixels, w, h)` | Draw pixel buffer to window |
+| `window_poll(handle)` | Poll window events |
+| `window_event_key(handle)` | Get last key event |
+| `window_event_x(handle)` | Get mouse X position |
+| `window_event_y(handle)` | Get mouse Y position |
+| `window_width(handle)` | Current window width |
+| `window_height(handle)` | Current window height |
+| `window_title(handle, title)` | Set window title |
+
+## GGUF Model Loading
+
+Load and run GGUF-format AI models (Qwen2.5, LLaMA, etc.).
+
+| Function | Description |
+|----------|-------------|
+| `gguf_load_tensor(path, model, name)` | Load tensor from GGUF file to GPU |
+| `gguf_load_vocab(path)` | Load vocabulary as string array |
+| `gguf_tokenize(vocab, text)` | Tokenize text using BPE vocabulary |
+| `gguf_matvec(weights, input, M, K)` | Matrix-vector multiply for inference |
+| `gguf_infer_layer(path, model, layer, input)` | Run one transformer layer |
 
 ## Constructors
 
