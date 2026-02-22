@@ -2,16 +2,16 @@
 
 ![License: Compiler Binary - Free Use](https://img.shields.io/badge/compiler-free%20to%20use-blue)
 ![License: Stdlib - Apache 2.0](https://img.shields.io/badge/stdlib-Apache%202.0-green)
-![Tests: 658 passing](https://img.shields.io/badge/tests-658%20passing-brightgreen)
+![Tests: 658 passing](https://img.shields.io/badge/tests-1200%20passing-brightgreen)
 ![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)
-![Binary: 2.3 MB](https://img.shields.io/badge/binary-2.3%20MB-blue)
+![Binary: 2.8 MB](https://img.shields.io/badge/binary-2.3%20MB-blue)
 
 A GPU-native general-purpose programming language.
 Designed for the GPU from scratch. Compiled by itself. Run on any GPU.
 
 **CPU on demand, not GPU on demand.**
 
-2.3 MB binary. Zero dependencies. Any GPU vendor. One file download.
+2.8 MB binary. Zero dependencies. Any GPU vendor. One file download.
 
 ## Install
 
@@ -36,7 +36,7 @@ Download from [Releases](https://github.com/octoflow-lang/octoflow/releases/late
 | Windows x64 | `octoflow-windows-x64.zip` |
 | Linux x64 | `octoflow-linux-x64.tar.gz` |
 
-Unzip. Run. No installer, no SDK, no dependencies. Just a 2.3 MB binary.
+Unzip. Run. No installer, no SDK, no dependencies. Just a 2.8 MB binary.
 
 Requirements: Any GPU with Vulkan driver (NVIDIA, AMD, Intel).
 
@@ -45,7 +45,7 @@ Requirements: Any GPU with Vulkan driver (NVIDIA, AMD, Intel).
 No external libraries. No package manager. No runtime.
 
 The compiler is a single static binary — zero Rust crates, zero C libraries, zero transitive dependencies.
-System links: Vulkan driver only. Binary size: 2.3 MB.
+System links: Vulkan driver only. Binary size: 2.8 MB.
 
 No supply chain risk. Nothing to audit except the binary itself.
 
@@ -133,7 +133,7 @@ stream warm = photo |> brightness(20.0) |> contrast(1.2)
 emit(warm, "output.png")
 ```
 
-## Standard Library — 247 Modules
+## Standard Library — 246 Modules
 
 | Domain | Modules | Coverage |
 |---|---|---|
@@ -144,7 +144,7 @@ emit(warm, "output.png")
 | **data** | csv, io, pipeline, transform, validate | ETL and data processing |
 | **db** | core, query, schema | Database abstractions |
 | **formats** | gguf, json | GGUF tensor files, JSON |
-| **gpu** | VM, emitters, runtime, kernels | 62+ GPU compute kernels |
+| **gpu** | VM, emitters, runtime, kernels | 73+ GPU compute kernels |
 | **gui** | widgets, layout, themes, events | Native GUI toolkit |
 | **llm** | generate, stream, chat, decompose | LLM inference (Qwen2.5) |
 | **media** | image (PNG/JPEG/GIF/BMP), video (AVI/MP4/H.264), audio (WAV) | Native codecs |
