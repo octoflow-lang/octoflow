@@ -328,7 +328,7 @@ section .section-desc {
 /* ═══════════════════════════════════════ FEATURES ═══════════════════════════════════════ */
 .features-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 20px;
 }
 .feature-card {
@@ -657,7 +657,7 @@ footer a:hover { color: var(--text); }
   nav .links a:not(.btn-nav) { display: none; }
   .hero h1 { font-size: 2.5rem; }
   .hero .subtitle { font-size: 1.1rem; }
-  .features-grid { grid-template-columns: 1fr; }
+  .features-grid { grid-template-columns: repeat(2, 1fr); }
   .showcase-grid { grid-template-columns: 1fr; }
   .stdlib-grid { grid-template-columns: 1fr 1fr; }
   .code-tabs { overflow-x: auto; flex-wrap: nowrap; }
@@ -667,6 +667,7 @@ footer a:hover { color: var(--text); }
 @media (max-width: 480px) {
   .hero h1 { font-size: 2rem; }
   .badges { gap: 8px; }
+  .features-grid { grid-template-columns: 1fr; }
   .stdlib-grid { grid-template-columns: 1fr; }
 }
 </style>
@@ -826,6 +827,13 @@ footer a:hover { color: var(--text); }
       </div>
       <h3>AI-Friendly</h3>
       <p>Language guide designed as LLM context. Feed it to Claude, ChatGPT, or Copilot and it writes OctoFlow code — no training needed.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v14a2 2 0 01-2 2z"/><path d="M9 7v10"/><path d="M15 7v4"/><path d="M12 7v7"/><path d="M6 17h12" opacity="0.3"/></svg>
+      </div>
+      <h3>Compressed by Default</h3>
+      <p>Weights, DB columns, embeddings — stored compressed in GPU memory. Delta encoding, dictionary lookup, Q4_K quantization. Decompression is just another kernel in the chain.</p>
     </div>
   </div>
 </section>
