@@ -4,7 +4,7 @@
 ![License: Stdlib - Apache 2.0](https://img.shields.io/badge/stdlib-Apache%202.0-green)
 ![Tests: 658 passing](https://img.shields.io/badge/tests-1200%20passing-brightgreen)
 ![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)
-![Binary: 2.8 MB](https://img.shields.io/badge/binary-2.3%20MB-blue)
+![Binary: 2.8 MB](https://img.shields.io/badge/binary-2.8%20MB-blue)
 
 A GPU-native general-purpose programming language.
 Designed for the GPU from scratch. Compiled by itself. Run on any GPU.
