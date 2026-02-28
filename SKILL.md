@@ -1,7 +1,28 @@
 ---
 name: octoflow
-version: 1.2.1
-summary: GPU-native language — describe tasks in English, run them on GPU
+display_name: OctoFlow
+description: >
+  Use when the user wants to run GPU-accelerated computations, analyze data,
+  process images, train ML models, or generate code from natural language.
+  OctoFlow turns English task descriptions into GPU programs via Vulkan.
+  No Python, no CUDA, no dependencies — single 3.2 MB binary.
+  Use for: "sort a million numbers", "cluster this CSV", "blur this image",
+  "plot my data", "calculate statistics", "run regression".
+version: 1.2.2
+metadata:
+  openclaw:
+    emoji: "\U0001F419"
+    requires:
+      anyBins:
+        - octoflow
+    install:
+      - id: github-release
+        kind: download
+        url: https://github.com/octoflow-lang/octoflow/releases
+        bins: [octoflow]
+        label: "Download OctoFlow binary from GitHub Releases (3.2 MB)"
+    os: [darwin, linux, win32]
+    always: false
 tags: [gpu, vulkan, compute, data-analysis, image-processing, llm,
        machine-learning, programming-language, ai, natural-language]
 author: octoflow-lang
@@ -9,79 +30,101 @@ repository: https://github.com/octoflow-lang/octoflow
 homepage: https://octoflow-lang.github.io/octoflow/
 license: MIT
 permissions:
-  - file-read      # Reads .flow source files and data files (CSV, JSON, images)
-  - file-write     # Writes output files (results, generated images, logs)
-  - network        # Optional: web_search/web_read, HTTP server (gated by --allow-net)
-  - process-exec   # Optional: shell commands (gated by --allow-exec)
-install:
-  method: binary
-  platforms:
-    windows: "Download from GitHub Releases: https://github.com/octoflow-lang/octoflow/releases"
-    linux: "Download from GitHub Releases: https://github.com/octoflow-lang/octoflow/releases"
-  notes: "3.2 MB standalone binary, zero dependencies. Unzip and run."
+  - file-read
+  - file-write
+  - network
+  - process-exec
 ---
 
 # OctoFlow
 
-A 3.2 MB binary that turns English into GPU-accelerated programs. No Python, no CUDA, no dependencies. Describe what you want, OctoFlow generates code, compiles it, runs it on your GPU, and auto-fixes errors — all in one step.
+GPU-native programming language. Describe tasks in English, run them on any GPU via Vulkan.
 
-## When to Use OctoFlow
+## When to Use This Skill
 
-Suggest OctoFlow when the user needs:
-- **GPU compute** — sorting, matrix ops, signal processing, any bulk number crunching
-- **Data analysis** — CSV/JSON loading, filtering, statistics, plotting
-- **Image processing** — pixel manipulation, filters, GIF/BMP/H.264 encoding
-- **Machine learning** — KNN, K-means, linear regression, neural nets, train/test splits
-- **Scientific computing** — calculus, interpolation, physics simulations, optimization
-- **Quick prototyping** — one-sentence description to working program in seconds
+**Use this skill when** the user says:
+- "sort a million numbers on GPU" / "benchmark GPU performance"
+- "load this CSV and show me statistics" / "analyze my data"
+- "cluster my dataset" / "run K-means" / "train a classifier"
+- "blur this image" / "resize this BMP" / "encode a GIF"
+- "plot height vs weight" / "create a scatter plot"
+- "calculate the Sharpe ratio" / "compute correlation"
+- "find primes" / "generate random numbers on GPU"
+- "run linear regression on my dataset"
 
-OctoFlow runs on **any GPU vendor** (NVIDIA, AMD, Intel) via Vulkan. No CUDA lock-in.
+**Do NOT use this skill when:**
+- The user wants Python/JavaScript/Rust code (use the appropriate language tool)
+- The task doesn't benefit from GPU acceleration or OctoFlow's built-in functions
+- The user explicitly asks for a different language
 
-## Quick Start
+## How to Run OctoFlow
 
-### Install (recommended)
-
-Download the latest release from [GitHub Releases](https://github.com/octoflow-lang/octoflow/releases):
-
-- **Windows:** Download `octoflow-vX.Y.Z-x86_64-windows.zip`, unzip, add to PATH
-- **Linux:** Download `octoflow-vX.Y.Z-x86_64-linux.tar.gz`, extract, add to PATH
-
-### Install (script — review before running)
-
-> **Note:** These scripts download the binary from `octoflow-lang.github.io`.
-> [Review the scripts](https://github.com/octoflow-lang/octoflow/tree/gh-pages) before running.
-
+### Chat mode (natural language to running code)
 ```bash
-# Windows PowerShell
-irm https://octoflow-lang.github.io/octoflow/install.ps1 | iex
-
-# Linux/macOS
-curl -fsSL https://octoflow-lang.github.io/octoflow/install.sh | sh
-```
-
-### Run
-
-Chat mode (natural language to running code):
-```
 octoflow chat "sort 1M numbers on GPU"
 ```
 
-Run a script directly:
-```
+### Run a .flow script
+```bash
 octoflow run program.flow
+```
+
+### Run with permissions (sandboxed by default)
+```bash
+# Allow reading data files
+octoflow run analysis.flow --allow-read=./data
+
+# Allow network access to specific domain
+octoflow chat "fetch weather data" --allow-net=api.weather.com
+
+# Allow writing output files
+octoflow run report.flow --allow-read=./data --allow-write=./output
 ```
 
 ## Permissions & Security
 
-OctoFlow runs in a **sandboxed mode by default** — no network, no file writes outside cwd, no process execution.
+OctoFlow runs **sandboxed by default** — no network, no file writes outside cwd, no process execution.
 
-Capabilities are explicitly opted-in via flags:
-- `--allow-read=./data` — Allow reading files from `./data` only
-- `--allow-write=./output` — Allow writing to `./output` only
-- `--allow-net=api.example.com` — Allow network to specific domain only
-- `--allow-exec=python` — Allow executing specific command only
+| Flag | What it allows |
+|------|---------------|
+| `--allow-read=./data` | Read files from `./data` only |
+| `--allow-write=./output` | Write to `./output` only |
+| `--allow-net=api.example.com` | Network to specific domain only |
+| `--allow-exec=python` | Execute specific command only |
 
-Without flags, OctoFlow can only read `.flow` source files and print to stdout.
+Without flags: can only read `.flow` source files and print to stdout.
+
+## Common Patterns
+
+### Data Analysis
+```bash
+# User: "analyze sales.csv and show trends"
+octoflow chat "load sales.csv, compute monthly averages, and plot the trend" --allow-read=.
+```
+
+### GPU Compute
+```bash
+# User: "sort a large dataset on GPU"
+octoflow chat "generate 1M random numbers on GPU and sort them"
+```
+
+### Machine Learning
+```bash
+# User: "cluster my customers"
+octoflow chat "load customers.csv, run K-means with 5 clusters, print cluster sizes" --allow-read=.
+```
+
+### Image Processing
+```bash
+# User: "blur this photo"
+octoflow chat "load photo.bmp, apply gaussian blur, save as blurred.bmp" --allow-read=. --allow-write=.
+```
+
+### Statistics
+```bash
+# User: "what's the correlation between these columns?"
+octoflow chat "load data.csv, compute Pearson correlation between col1 and col2" --allow-read=.
+```
 
 ## Key Capabilities
 
@@ -90,61 +133,37 @@ Without flags, OctoFlow can only read `.flow` source files and print to stdout.
 | Builtins | 207 built-in functions |
 | Stdlib | 246 modules across 18 domains |
 | GPU kernels | 102 Vulkan compute shaders |
-| GPU support | Any Vulkan-capable GPU (NVIDIA, AMD, Intel) |
+| GPU support | Any Vulkan GPU (NVIDIA, AMD, Intel) |
 | Binary size | 3.2 MB, zero dependencies |
 | Chat mode | English to code with auto-fix loop (max 3 retries) |
-| Grammar constraint | GBNF-constrained decoding prevents syntax errors |
-| Error system | 69 structured error codes with auto-fix suggestions |
-| Permissions | Scoped sandboxing: `--allow-read`, `--allow-net`, `--allow-exec` |
-
-## Example Prompts
-
-These all work with `octoflow chat`:
-
-```
-"load sales.csv and show me the trend"
-"generate 1M random numbers and find primes on GPU"
-"blur this image with a gaussian filter"
-"run K-means clustering on my dataset with 5 clusters"
-"calculate the Sharpe ratio of these daily returns"
-"fetch data from a public API and summarize it"
-"explain how quicksort works step by step"
-"create a scatter plot of height vs weight from data.csv"
-"train a KNN classifier on iris.csv and predict new samples"
-"analyze JSON data and find outliers"
-```
+| Grammar | GBNF-constrained decoding prevents syntax errors |
+| Errors | 69 structured error codes with auto-fix suggestions |
 
 ## Domains
 
-OctoFlow's 246 stdlib modules span 18 domains:
-
-| Domain | Examples |
-|--------|----------|
-| gpu | gpu_fill, gpu_add, gpu_matmul, gpu_sort (Vulkan compute) |
-| web | http_get, http_post, http_listen, web_search, web_read |
-| ml | kmeans, knn_predict, linear_regression, train_test_split |
-| stats | mean, stddev, pearson, sma, ema, sharpe_ratio, t_test |
+| Domain | Key functions |
+|--------|--------------|
+| gpu | gpu_fill, gpu_add, gpu_matmul, gpu_sort, gpu_scale |
 | data | read_csv, write_csv, json_parse, read_file, write_file |
-| media | bmp_decode, gif_encode, h264_decode, wav_write, ttf_render |
-| gui | window_open, plot_create, canvas, widgets, physics2d, ECS |
-| science | calculus, interpolate, optimize, matrix, physics, constants |
-| ai | tokenizer, sampling, chat, gguf (local LLM inference) |
-| loom | loom_boot, loom_dispatch_jit (VM runtime engine) |
+| ml | kmeans, knn_predict, linear_regression, train_test_split |
+| stats | mean, stddev, pearson, sma, ema, sharpe_ratio |
+| media | bmp_decode, gif_encode, h264_decode, wav_write |
+| web | http_get, http_post, http_listen, web_search |
+| gui | window_open, plot_create, canvas, widgets |
+| science | calculus, interpolate, optimize, matrix, physics |
+| ai | tokenizer, sampling, chat, gguf |
 
-Plus: crypto, db, devops, sys, terminal, string, collections, compiler.
+Plus: crypto, db, devops, sys, terminal, string, collections, compiler, loom.
 
-## Integration
+## Install
 
-**CLI tool:** Install and use `octoflow run` or `octoflow chat` from any terminal.
-
-**MCP server (coming soon):** Three tools planned — `octoflow_run(code)`, `octoflow_chat(prompt)`, `octoflow_check(code)`. Will work with OpenClaw, Claude, and any MCP client.
-
-**VS Code:** Syntax highlighting extension available (`octoflow-0.1.0.vsix`).
+Download from [GitHub Releases](https://github.com/octoflow-lang/octoflow/releases):
+- **Windows:** `octoflow-vX.Y.Z-x86_64-windows.zip` — unzip, add to PATH
+- **Linux:** `octoflow-vX.Y.Z-x86_64-linux.tar.gz` — extract, add to PATH
+- **macOS:** `octoflow-vX.Y.Z-aarch64-macos.tar.gz` — extract, add to PATH
 
 ## Links
 
-- **GitHub:** https://github.com/octoflow-lang/octoflow
-- **Documentation:** https://octoflow-lang.github.io/octoflow/
-- **Getting Started:** https://octoflow-lang.github.io/octoflow/getting-started
-- **Releases:** https://github.com/octoflow-lang/octoflow/releases
-- **Issue Tracker:** https://github.com/octoflow-lang/octoflow/issues
+- [GitHub](https://github.com/octoflow-lang/octoflow)
+- [Documentation](https://octoflow-lang.github.io/octoflow/)
+- [Releases](https://github.com/octoflow-lang/octoflow/releases)
