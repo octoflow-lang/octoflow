@@ -200,5 +200,5 @@
    - Documentation (docs/)
    - Tests
 
-   The OctoFlow compiler source code (arms/) is NOT covered by this
+   The OctoFlow compiler source code (compiler/) is NOT covered by this
    license. See LICENSE for compiler licensing terms.

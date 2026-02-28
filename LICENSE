@@ -16,7 +16,7 @@ no usage limits.
 
 Compiler Source Code
 
-The compiler source code (all files under arms/) is proprietary and not
+The compiler source code (all files under compiler/) is proprietary and not
 distributed. The compiler binary may not be reverse-engineered, decompiled,
 disassembled, or redistributed without written permission.
 
