@@ -1,19 +1,39 @@
 // stdlib/time/datetime.flow — Date/time utilities (Python datetime equivalent)
 //
-// Functions: unix_now, ms_now, unix_to_date, is_leap_year, format_date,
-//            format_datetime_full, str_zfill, day_of_week, day_name,
-//            days_between, hours_between
+// Functions: unix_now, ms_now, elapsed_ms, unix_to_date, is_leap_year,
+//            format_date, format_datetime_full, str_zfill, day_of_week,
+//            day_name, days_between, hours_between
 
 fn unix_now()
   return now()
 end
 
 fn ms_now()
+  // NOTE: Returns milliseconds since PROCESS START (not Unix epoch).
+  // Use unix_now() for epoch-based timestamps.
+  return now_ms()
+end
+
+fn elapsed_ms()
+  // Milliseconds since process start (alias for ms_now)
   return now_ms()
 end
 
 fn unix_to_date(ts)
   // Convert Unix timestamp to date map {year, month, day, hour, minute, second}
+  // NOTE: f32 precision limits accuracy for timestamps beyond ~2020.
+  // Values are stored as strings in the returned map.
+  if ts < 0.0
+    print("unix_to_date: negative timestamps (pre-1970) not supported")
+    let mut err = map()
+    map_set(err, "year", "1970")
+    map_set(err, "month", "01")
+    map_set(err, "day", "01")
+    map_set(err, "hour", "00")
+    map_set(err, "minute", "00")
+    map_set(err, "second", "00")
+    return err
+  end
   let mut m = map()
   // Days since epoch
   let total_secs = floor(ts)
@@ -115,8 +135,7 @@ fn str_zfill(s, width)
 end
 
 fn day_of_week(ts)
-  // 0=Thursday (epoch), 1=Friday, ..., 6=Wednesday
-  // Returns 0-6 where 0=Monday
+  // Returns 0-6 where 0=Monday, 6=Sunday
   let days = floor(ts / 86400.0)
   let dow = days + 4.0
   let r = dow - floor(dow / 7.0) * 7.0

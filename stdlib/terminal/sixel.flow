@@ -36,6 +36,15 @@ fn sixel_render(w, h, r, g, b)
   let st = esc + chr(92)
   let iw = int(w)
   let ih = int(h)
+  let required = iw * ih
+  if required <= 0
+    print("sixel_render: invalid dimensions")
+    return -1.0
+  end
+  if len(r) < required || len(g) < required || len(b) < required
+    print("sixel_render: pixel array too small (need " + to_str(required) + ")")
+    return -1.0
+  end
 
   // Start DCS sequence: ESC P 0;0;0 q
   // "2" aspect ratio sets 1:1 pixels
@@ -79,7 +88,7 @@ fn sixel_render(w, h, r, g, b)
         if y < ih
           if found == 0.0
             for x in range(0, iw)
-              if qidx[int(y * w + x)] == ci
+              if qidx[y * iw + x] == ci
                 found = 1.0
               end
             end
@@ -101,7 +110,7 @@ fn sixel_render(w, h, r, g, b)
         for dy in range(0, 6)
           let y = y0 + int(dy)
           if y < ih
-            if qidx[int(y * w + x)] == ci
+            if qidx[y * iw + x] == ci
               bits = bit_or(bits, bit_shl(1, int(dy)))
             end
           end

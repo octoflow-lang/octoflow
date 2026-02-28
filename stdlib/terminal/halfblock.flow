@@ -19,6 +19,12 @@ fn _hb_n2s(n)
 end
 
 fn halfblock_render(w, h, r, g, b)
+  let required = int(w) * int(h)
+  if len(r) < required || len(g) < required || len(b) < required
+    print("halfblock_render: pixel array too small (need " + to_str(required) + ")")
+    return -1.0
+  end
+
   let esc = chr(27)
   let block = chr(9600)
   let text_rows = int(h / 2.0)

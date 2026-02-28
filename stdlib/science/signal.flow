@@ -124,7 +124,8 @@ fn bandpass(signal, low_freq, high_freq, sample_rate)
   let mut i = 0.0
   while i < n_taps
     let x = i - center
-    if x == 0.0
+    if x == 0.0 || (x > -0.0001 && x < 0.0001)
+      // sinc(0) = 1.0, so bandpass kernel at center = 2*(fh - fl)
       push(kernel, 2.0 * (fh - fl))
     else
       let hp = sin(2.0 * PI * fh * x) / (PI * x)
