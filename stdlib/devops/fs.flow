@@ -93,6 +93,15 @@ fn glob_files(dir, pattern)
 end
 
 fn copy_file(src, dst)
+  // Reject path traversal attempts
+  if contains(src, "..")
+    print("copy_file: path traversal rejected in source")
+    return 0.0
+  end
+  if contains(dst, "..")
+    print("copy_file: path traversal rejected in destination")
+    return 0.0
+  end
   let content = read_file(src)
   write_file(dst, content)
   return 1.0

@@ -69,8 +69,8 @@ showcase_err.txt
 /tools/
 
 # ── NOT PUBLIC ──
-# Source code
-compiler/
+# Source code (Rust compiler, not stdlib/compiler which is .flow)
+/compiler/
 apps/
 Cargo.toml
 Cargo.lock

@@ -14,7 +14,11 @@ fn linear_interp(x_data, y_data, x)
   let mut i = 0.0
   while i < n - 1.0
     if x >= x_data[i] && x <= x_data[i + 1.0]
-      let t = (x - x_data[i]) / (x_data[i + 1.0] - x_data[i])
+      let dx_span = x_data[i + 1.0] - x_data[i]
+      if dx_span == 0.0
+        return y_data[i]
+      end
+      let t = (x - x_data[i]) / dx_span
       return y_data[i] + t * (y_data[i + 1.0] - y_data[i])
     end
     i = i + 1.0
@@ -32,6 +36,18 @@ end
 
 fn bilinear_interp(x, y, x0, x1, y0, y1, q00, q10, q01, q11)
   // Bilinear interpolation at (x,y) in rectangle [x0,x1] x [y0,y1]
+  // Guard against degenerate rectangles (division by zero)
+  if x1 == x0
+    let ty2 = 0.0
+    if y1 != y0
+      ty2 = (y - y0) / (y1 - y0)
+    end
+    return q00 * (1.0 - ty2) + q01 * ty2
+  end
+  if y1 == y0
+    let tx2 = (x - x0) / (x1 - x0)
+    return q00 * (1.0 - tx2) + q10 * tx2
+  end
   let tx = (x - x0) / (x1 - x0)
   let ty = (y - y0) / (y1 - y0)
   let r1 = q00 * (1.0 - tx) + q10 * tx

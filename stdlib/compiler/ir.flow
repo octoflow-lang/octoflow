@@ -69,6 +69,12 @@ let IR_OP_EXP = 100.0
 let IR_OP_FABS = 101.0
 let IR_OP_FMIN = 102.0
 let IR_OP_FMAX = 103.0
+// Trigonometric (GLSL.std.450)
+let IR_OP_SIN = 104.0
+let IR_OP_COS = 105.0
+let IR_OP_ATAN2 = 106.0
+// Vector operations (SPIR-V native)
+let IR_OP_DOT = 111.0
 // Memory
 let IR_OP_LOAD_GID = 60.0
 // Push constants
@@ -403,6 +409,29 @@ end
 // Extended math: fmax(a, b) → float (GLSL.std.450 FMax = 40)
 fn ir_fmax(block, a, b)
   return _ir_add_inst(block, IR_OP_FMAX, IR_TYPE_FLOAT, a, b)
+end
+
+// Trigonometric: sin(a) → float (GLSL.std.450 Sin = 13)
+fn ir_sin(block, a)
+  return _ir_add_inst(block, IR_OP_SIN, IR_TYPE_FLOAT, a, 0.0)
+end
+
+// Trigonometric: cos(a) → float (GLSL.std.450 Cos = 14)
+fn ir_cos(block, a)
+  return _ir_add_inst(block, IR_OP_COS, IR_TYPE_FLOAT, a, 0.0)
+end
+
+// Trigonometric: atan2(y, x) → float (GLSL.std.450 Atan2 = 25)
+// NOTE: Arguments are (y, x) in GLSL order
+fn ir_atan2(block, y, x)
+  return _ir_add_inst(block, IR_OP_ATAN2, IR_TYPE_FLOAT, y, x)
+end
+
+// Vector: dot(a, b) → float (SPIR-V OpDot = 148)
+// Note: For scalar computation, use ir_fmul + ir_fadd manually.
+// OpDot requires vector operands; this emits the raw opcode.
+fn ir_dot(block, a, b)
+  return _ir_add_inst(block, IR_OP_DOT, IR_TYPE_FLOAT, a, b)
 end
 
 // Memory: load input[gid] → float (binding 0)
@@ -2114,6 +2143,38 @@ fn _ir_emit_block_insts(block_idx, inst_spirv_id, bb_spirv_id)
         emit_word(sid)
         emit_word(SPIR_ID_GLSL_EXT)
         emit_word(40.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_SIN
+        // GLSL.std.450 Sin = 13
+        emit_op(6.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(13.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_COS
+        // GLSL.std.450 Cos = 14
+        emit_op(6.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(14.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_ATAN2
+        // GLSL.std.450 Atan2 = 25 (2 operands: y, x)
+        emit_op(7.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(25.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_DOT
+        // SPIR-V OpDot = 148 (native, not GLSL.std.450)
+        emit_op(5.0, 148.0)
+        emit_word(typ_id)
+        emit_word(sid)
         emit_word(inst_spirv_id[ir_inst_arg1[i]])
         emit_word(inst_spirv_id[ir_inst_arg2[i]])
       elif op == IR_OP_LOAD_GID

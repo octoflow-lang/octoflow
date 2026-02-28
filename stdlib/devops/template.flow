@@ -2,7 +2,10 @@
 //
 // Functions: render, load_template, render_file, escape_html
 
-// WARNING: render() does NO HTML/SQL escaping. Use escape_html() on user input before rendering.
+// WARNING: render() does NO HTML/SQL escaping. For HTML contexts, use
+// render_safe() which auto-escapes values, or call escape_html() on each
+// value before passing to render(). NEVER use render() with untrusted input
+// in HTML, SQL, or shell command contexts without escaping.
 fn render(template, vars)
   // Replace {key} with values from vars map — NO escaping applied
   let mut result = template
@@ -29,5 +32,19 @@ fn escape_html(s)
   result = replace(result, "<", "&lt;")
   result = replace(result, ">", "&gt;")
   result = replace(result, "\"", "&quot;")
+  return result
+end
+
+// Safe render: auto-escapes all values for HTML contexts.
+// Use this instead of render() when output will be served as HTML.
+fn render_safe(template, vars)
+  let mut result = template
+  let keys = split(map_keys(vars), ",")
+  for key in keys
+    let placeholder = "{" + key + "}"
+    let raw_value = map_get(vars, key)
+    let safe_value = escape_html(raw_value)
+    result = replace(result, placeholder, safe_value)
+  end
   return result
 end
