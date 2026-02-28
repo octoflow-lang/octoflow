@@ -1,0 +1,53 @@
+// Agent recipe: Hypothesis Testing
+//
+// Usage: octoflow run stdlib/agent/hypothesis.flow -- <csv_path> <group_col> <value_col>
+// Output: JSON with t-test results, p-value, significance
+//
+// Superpower #3: Scientific Engine — statistical hypothesis testing.
+
+use "data/csv"
+use "stats/hypothesis"
+use "stats/descriptive"
+
+let path = args(0)
+let group_col = args(1)
+let value_col = args(2)
+if path == "" or group_col == "" or value_col == ""
+    print("{\"error\":\"Usage: octoflow run stdlib/agent/hypothesis.flow -- <csv_path> <group_col> <value_col>\"}")
+    exit(1)
+end
+
+// Load and split into two groups
+let data = read_csv(path)
+let groups = {}
+for i in range(0, len(data))
+    let g = str(data[i][group_col])
+    let v = float(data[i][value_col])
+    if groups[g] == nil
+        groups[g] = []
+    end
+    push(groups[g], v)
+end
+
+let group_names = keys(groups)
+if len(group_names) < 2
+    print("{\"error\":\"Need at least 2 groups for hypothesis test\"}")
+    exit(1)
+end
+
+let group_a = groups[group_names[0]]
+let group_b = groups[group_names[1]]
+
+// Run t-test
+let result = t_test(group_a, group_b)
+let mean_a = mean(group_a)
+let mean_b = mean(group_b)
+let std_a = stddev(group_a)
+let std_b = stddev(group_b)
+
+print(format("{\"test\":\"two_sample_t_test\",\"group_a\":\"%s\",\"group_b\":\"%s\",\"n_a\":%d,\"n_b\":%d,\"mean_a\":%.4f,\"mean_b\":%.4f,\"stddev_a\":%.4f,\"stddev_b\":%.4f,\"statistic\":%.6f,\"p_value\":%.6f,\"significant\":%s}",
+    group_names[0], group_names[1],
+    len(group_a), len(group_b),
+    mean_a, mean_b, std_a, std_b,
+    result["statistic"], result["p_value"],
+    if result["p_value"] < 0.05 then "true" else "false" end))

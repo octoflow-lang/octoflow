@@ -1,0 +1,48 @@
+// Agent utilities — shared JSON output helpers for MCP agent scripts.
+//
+// Usage: use "agent/util"
+
+fn to_json_stats(values)
+    let n = len(values)
+    if n == 0
+        return "{}"
+    end
+    let total = 0.0
+    let min_v = values[0]
+    let max_v = values[0]
+    for i in range(0, n)
+        total = total + values[i]
+        if values[i] < min_v
+            min_v = values[i]
+        end
+        if values[i] > max_v
+            max_v = values[i]
+        end
+    end
+    let avg = total / n
+
+    // Median (simple sort)
+    let sorted = sort_array(values)
+    let med = 0.0
+    if n % 2 == 0
+        med = (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    else
+        med = sorted[n / 2]
+    end
+
+    // Stddev
+    let var_sum = 0.0
+    for i in range(0, n)
+        var_sum = var_sum + (values[i] - avg) * (values[i] - avg)
+    end
+    let std = sqrt(var_sum / n)
+
+    return format("{\"count\":%d,\"mean\":%.4f,\"median\":%.4f,\"stddev\":%.4f,\"min\":%.4f,\"max\":%.4f,\"sum\":%.4f}", n, avg, med, std, min_v, max_v, total)
+end
+
+fn to_json_number(val)
+    if val == int(val)
+        return format("%d", int(val))
+    end
+    return format("%.6f", val)
+end

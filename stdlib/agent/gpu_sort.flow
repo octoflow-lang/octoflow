@@ -1,0 +1,43 @@
+// Agent recipe: GPU Sort
+//
+// Usage: echo "[3,1,4,1,5,9]" | octoflow run stdlib/agent/gpu_sort.flow --stdin-as input --output json
+// Or:    octoflow run stdlib/agent/gpu_sort.flow -- "[3,1,4,1,5,9]"
+// Output: JSON with sorted array and timing
+//
+// Superpower #6: GPU Automation — sort millions of numbers instantly.
+
+let input_data = ""
+if argc() > 0
+    input_data = args(0)
+end
+// Also check if injected via --stdin-as
+if input_data == "" and defined("input")
+    input_data = input
+end
+
+if input_data == ""
+    print("{\"error\":\"Usage: provide JSON array as argument or via --stdin-as input\"}")
+    exit(1)
+end
+
+// Parse the array from JSON format
+let values = json_parse(input_data)
+let n = len(values)
+
+let start_t = timer_start()
+
+// Sort using GPU-accelerated sort
+let sorted = sort_array(values)
+
+let elapsed = timer_elapsed(start_t)
+
+// Format output
+let items = ""
+for i in range(0, len(sorted))
+    if i > 0
+        items = items + ","
+    end
+    items = items + to_json_number(sorted[i])
+end
+
+print(format("{\"sorted\":[%s],\"count\":%d,\"time_ms\":%.2f}", items, n, elapsed))

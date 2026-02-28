@@ -1,0 +1,31 @@
+// Agent recipe: LLM Text Processing
+//
+// Usage: octoflow run stdlib/agent/llm_translate.flow -- "<text>" "<instruction>"
+// Output: JSON with LLM response
+//
+// Superpower #5: LLM Chain — local inference for text tasks.
+
+use "ai/inference"
+use "ai/tokenizer"
+
+let text = args(0)
+let instruction = args(1)
+if text == ""
+    print("{\"error\":\"Usage: octoflow run stdlib/agent/llm_translate.flow -- \\\"<text>\\\" \\\"<instruction>\\\"\"}")
+    exit(1)
+end
+
+if instruction == ""
+    instruction = "Process the following text"
+end
+
+let prompt = instruction + ":\n\n" + text
+
+// Try to load default model
+let model = model_load("default")
+let tokens = tokenize(prompt)
+let result = generate(model, tokens, 256)
+let response = detokenize(result)
+
+print(format("{\"instruction\":\"%s\",\"input_length\":%d,\"response\":\"%s\"}",
+    instruction, len(text), response))

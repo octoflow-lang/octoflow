@@ -1,0 +1,64 @@
+// Agent recipe: CSV Data Analyst
+//
+// Usage: octoflow run stdlib/agent/analyze.flow -- <csv_path>
+// Output: JSON with row count, columns, per-column stats
+//
+// Superpower #1: Instant Data Analyst — load any CSV, get structured stats.
+
+use "data/csv"
+use "agent/util"
+
+let path = args(0)
+if path == ""
+    print("{\"error\":\"Usage: octoflow run stdlib/agent/analyze.flow -- <csv_path>\"}")
+    exit(1)
+end
+
+let data = read_csv(path)
+let n = len(data)
+
+if n == 0
+    print("{\"rows\":0,\"columns\":[],\"stats\":{}}")
+    exit(0)
+end
+
+// Get column names from first row
+let first = data[0]
+let cols = keys(first)
+let ncols = len(cols)
+
+// Build column list
+let col_list = ""
+for i in range(0, ncols)
+    if i > 0
+        col_list = col_list + ","
+    end
+    col_list = col_list + "\"" + cols[i] + "\""
+end
+
+// Compute stats for numeric columns
+let stats_parts = ""
+let stat_count = 0
+for c in range(0, ncols)
+    let col_name = cols[c]
+    let values = []
+    let is_num = true
+    for r in range(0, n)
+        let val = data[r][col_name]
+        if type_of(val) == "float" or type_of(val) == "int"
+            push(values, float(val))
+        else
+            is_num = false
+        end
+    end
+    if is_num and len(values) > 0
+        let s = to_json_stats(values)
+        if stat_count > 0
+            stats_parts = stats_parts + ","
+        end
+        stats_parts = stats_parts + "\"" + col_name + "\":" + s
+        stat_count = stat_count + 1
+    end
+end
+
+print(format("{\"rows\":%d,\"columns\":[%s],\"stats\":{%s}}", n, col_list, stats_parts))

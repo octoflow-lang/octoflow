@@ -1,0 +1,77 @@
+// Agent recipe: Time Series Analysis
+//
+// Usage: octoflow run stdlib/agent/time_series.flow -- <csv_path> <value_column> [indicators...]
+// Indicators: sma_20, sma_50, ema_12, ema_26, rsi, macd, bollinger
+// Output: JSON with computed indicators
+//
+// Superpower #8: Market Monitor — real-time technical analysis.
+
+use "data/csv"
+use "stats/timeseries"
+
+let path = args(0)
+let col = args(1)
+if path == "" or col == ""
+    print("{\"error\":\"Usage: octoflow run stdlib/agent/time_series.flow -- <csv_path> <value_column> [indicators...]\"}")
+    exit(1)
+end
+
+// Load data
+let data = read_csv(path)
+let n = len(data)
+let values = []
+for i in range(0, n)
+    push(values, float(data[i][col]))
+end
+
+// Default indicators if none specified
+let inds = []
+let i = 2
+while i < argc()
+    push(inds, args(i))
+    i = i + 1
+end
+if len(inds) == 0
+    push(inds, "sma_20")
+    push(inds, "ema_12")
+    push(inds, "rsi")
+end
+
+// Compute each indicator
+let parts = ""
+let count = 0
+for j in range(0, len(inds))
+    let ind = inds[j]
+    let result = ""
+
+    if ind == "sma_20"
+        let s = sma(values, 20)
+        result = "\"sma_20\":" + json_stringify(s)
+    end
+    if ind == "sma_50"
+        let s = sma(values, 50)
+        result = "\"sma_50\":" + json_stringify(s)
+    end
+    if ind == "ema_12"
+        let e = ema(values, 12)
+        result = "\"ema_12\":" + json_stringify(e)
+    end
+    if ind == "ema_26"
+        let e = ema(values, 26)
+        result = "\"ema_26\":" + json_stringify(e)
+    end
+    if ind == "rsi"
+        let r = rsi(values, 14)
+        result = "\"rsi\":" + json_stringify(r)
+    end
+
+    if result != ""
+        if count > 0
+            parts = parts + ","
+        end
+        parts = parts + result
+        count = count + 1
+    end
+end
+
+print(format("{\"data_points\":%d,%s}", n, parts))

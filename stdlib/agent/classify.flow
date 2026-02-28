@@ -1,0 +1,64 @@
+// Agent recipe: ML Classification / Clustering
+//
+// Usage: octoflow run stdlib/agent/classify.flow -- <csv_path> <k>
+// Output: JSON with cluster assignments, centroids
+//
+// Superpower #4: Self-Improvement — ML analysis on any dataset.
+
+use "data/csv"
+use "ml/cluster"
+use "stats/descriptive"
+
+let path = args(0)
+let k_str = args(1)
+if path == ""
+    print("{\"error\":\"Usage: octoflow run stdlib/agent/classify.flow -- <csv_path> <k>\"}")
+    exit(1)
+end
+let k = 3
+if k_str != ""
+    k = int(k_str)
+end
+
+// Load data
+let data = read_csv(path)
+let n = len(data)
+let cols = keys(data[0])
+
+// Extract numeric columns into feature matrix
+let features = []
+let num_cols = []
+for c in range(0, len(cols))
+    let is_num = true
+    let test_val = data[0][cols[c]]
+    if type_of(test_val) != "float" and type_of(test_val) != "int"
+        is_num = false
+    end
+    if is_num
+        push(num_cols, cols[c])
+    end
+end
+
+// Build feature vectors
+for i in range(0, n)
+    let row = []
+    for j in range(0, len(num_cols))
+        push(row, float(data[i][num_cols[j]]))
+    end
+    push(features, row)
+end
+
+// Run k-means
+let result = kmeans(features, k, 100)
+
+// Format output
+let assignment_str = ""
+for i in range(0, len(result["assignments"]))
+    if i > 0
+        assignment_str = assignment_str + ","
+    end
+    assignment_str = assignment_str + str(result["assignments"][i])
+end
+
+print(format("{\"k\":%d,\"data_points\":%d,\"features\":%d,\"assignments\":[%s],\"iterations\":%d}",
+    k, n, len(num_cols), assignment_str, result["iterations"]))
