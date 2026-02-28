@@ -26,14 +26,19 @@ if [ "$ARCH" != "x86_64" ]; then
     exit 1
 fi
 
-ASSET="octoflow-linux-x64.tar.gz"
-
 # Get latest release URL
 echo "  Fetching latest release..."
 TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
 
 if [ -z "$TAG" ]; then
     echo "  Error: Could not fetch latest release"
+    exit 1
+fi
+
+# Find the Linux asset (matches any naming pattern)
+ASSET=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"name"' | grep -i linux | grep -i tar | head -1 | cut -d'"' -f4)
+if [ -z "$ASSET" ]; then
+    echo "  Error: No Linux binary found in release $TAG"
     exit 1
 fi
 
@@ -45,7 +50,15 @@ TMP=$(mktemp -d)
 curl -fsSL "$URL" -o "$TMP/$ASSET"
 
 mkdir -p "$INSTALL_DIR"
-tar xzf "$TMP/$ASSET" -C "$INSTALL_DIR"
+tar xzf "$TMP/$ASSET" -C "$TMP"
+# Handle both flat and nested layouts
+if [ -f "$TMP/octoflow/octoflow" ]; then
+    cp "$TMP/octoflow/octoflow" "$INSTALL_DIR/"
+elif [ -f "$TMP/octoflow" ]; then
+    cp "$TMP/octoflow" "$INSTALL_DIR/"
+else
+    find "$TMP" -name octoflow -type f -exec cp {} "$INSTALL_DIR/" \;
+fi
 chmod +x "$INSTALL_DIR/octoflow"
 rm -rf "$TMP"
 

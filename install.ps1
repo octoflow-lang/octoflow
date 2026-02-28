@@ -16,7 +16,7 @@ Write-Host ""
 Write-Host "  Fetching latest release..." -ForegroundColor Gray
 $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
 $tag = $release.tag_name
-$asset = $release.assets | Where-Object { $_.name -eq "octoflow-windows-x64.zip" }
+$asset = $release.assets | Where-Object { $_.name -like "*windows*" -and $_.name -like "*.zip" }
 
 if (-not $asset) {
     Write-Host "  Error: No Windows binary found in release $tag" -ForegroundColor Red
@@ -37,8 +37,18 @@ if (-not (Test-Path $installDir)) {
 
 # Extract
 Write-Host "  Installing to $installDir..." -ForegroundColor Gray
-Expand-Archive -Path $tmp -DestinationPath $installDir -Force
+$extractDir = Join-Path $env:TEMP "octoflow-extract"
+if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+Expand-Archive -Path $tmp -DestinationPath $extractDir -Force
 Remove-Item $tmp -Force
+
+# Copy binary (handles both flat and nested layouts)
+$nested = Join-Path $extractDir "octoflow\octoflow.exe"
+$flat = Join-Path $extractDir "octoflow.exe"
+if (Test-Path $nested) { Copy-Item $nested $installDir -Force }
+elseif (Test-Path $flat) { Copy-Item $flat $installDir -Force }
+else { Get-ChildItem $extractDir -Recurse -Filter "octoflow.exe" | Select-Object -First 1 | Copy-Item -Destination $installDir -Force }
+Remove-Item $extractDir -Recurse -Force
 
 # Unblock the exe (removes Mark of the Web if any)
 $exe = Join-Path $installDir "octoflow.exe"
