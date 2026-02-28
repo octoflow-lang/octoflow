@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Loom Engine — OctoFlow</title>
-<meta name="description" content="OctoFlow Loom Engine: 5 memory regions, autonomous dispatch chains, HOST_VISIBLE polling. The GPU is the computer.">
-<meta property="og:title" content="Loom Engine — OctoFlow">
-<meta property="og:description" content="GPU-resident autonomous execution. 5 SSBOs. Single vkQueueSubmit. Zero CPU orchestration.">
+<title>MCP Server — OctoFlow for AI Agents</title>
+<meta name="description" content="OctoFlow MCP Server: 7 structured tools for GPU compute, statistics, ML, and data analysis. Works with OpenClaw, Claude Desktop, Cursor, and any MCP client.">
+<meta property="og:title" content="MCP Server — OctoFlow for AI Agents">
+<meta property="og:description" content="Give your AI agent GPU compute, statistics, ML, and data analysis. 7 tools. Zero dependencies. One config line.">
 <meta property="og:image" content="https://octoflow-lang.github.io/octoflow/assets/logo.png">
 <meta name="theme-color" content="#1a8a8a">
 <link rel="icon" type="image/png" href="assets/logo.png">
@@ -151,42 +151,52 @@ section .section-desc {
 .centered { text-align: center; }
 .centered .section-desc { margin-left: auto; margin-right: auto; }
 
-/* ═══════════════════ MEMORY MODEL ═══════════════════ */
-.memory-grid {
+/* ═══════════════════ TOOLS GRID ═══════════════════ */
+.tools-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
   margin-bottom: 32px;
 }
-.mem-card {
+.tool-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 20px 16px;
-  text-align: center;
+  padding: 24px 20px;
   transition: all 0.3s;
 }
-.mem-card:hover {
+.tool-card:hover {
   border-color: var(--border-hover);
   transform: translateY(-2px);
 }
-.mem-card .mem-binding {
+.tool-card .tool-name {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--teal);
   font-weight: 600;
   margin-bottom: 8px;
 }
-.mem-card h4 {
+.tool-card h4 {
   font-size: 0.95rem;
   font-weight: 700;
   margin-bottom: 6px;
   color: var(--teal-light);
 }
-.mem-card p {
-  font-size: 0.78rem;
+.tool-card p {
+  font-size: 0.82rem;
   color: var(--text-dim);
   line-height: 1.4;
+}
+.tool-card .tool-example {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: var(--code-bg);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  overflow-x: auto;
 }
 
 /* ═══════════════════ CODE BLOCK ═══════════════════ */
@@ -218,63 +228,69 @@ section .section-desc {
 .c { color: #6b7685; font-style: italic; }
 .o { color: #ff7b72; }
 
-/* ═══════════════════ FEATURE CARDS ═══════════════════ */
-.features-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
-}
-.feature-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 28px;
-  transition: all 0.3s;
-}
-.feature-card:hover {
-  border-color: var(--border-hover);
-  background: var(--bg-card-hover);
-  transform: translateY(-2px);
-}
-.feature-card .icon-wrap {
-  width: 44px; height: 44px;
-  border-radius: 10px;
-  display: flex; align-items: center; justify-content: center;
-  margin-bottom: 16px;
-  background: var(--teal-subtle);
-}
-.feature-card .icon-wrap svg { width: 22px; height: 22px; color: var(--teal-light); }
-.feature-card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 8px; }
-.feature-card p { font-size: 0.88rem; color: var(--text-secondary); line-height: 1.5; }
-
-/* ═══════════════════ WORKLOADS ═══════════════════ */
-.workloads-grid {
+/* ═══════════════════ CLIENT CARDS ═══════════════════ */
+.clients-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 16px;
 }
-.workload-card {
+.client-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 24px;
   transition: all 0.3s;
 }
-.workload-card:hover {
+.client-card:hover {
   border-color: var(--border-hover);
   transform: translateY(-1px);
 }
-.workload-card h4 {
+.client-card h4 {
   font-size: 0.95rem;
   font-weight: 700;
   color: var(--teal-light);
   margin-bottom: 8px;
 }
-.workload-card p {
+.client-card p {
   font-size: 0.85rem;
   color: var(--text-dim);
   line-height: 1.5;
 }
+.client-card code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+}
+
+/* ═══════════════════ RECIPE CARDS ═══════════════════ */
+.recipes-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.recipe-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+  transition: all 0.3s;
+}
+.recipe-card:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+  transform: translateY(-2px);
+}
+.recipe-card .icon-wrap {
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 16px;
+  background: var(--teal-subtle);
+}
+.recipe-card .icon-wrap svg { width: 22px; height: 22px; color: var(--teal-light); }
+.recipe-card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 8px; }
+.recipe-card p { font-size: 0.88rem; color: var(--text-secondary); line-height: 1.5; }
 
 /* ═══════════════════ STATS ROW ═══════════════════ */
 .stats-row {
@@ -366,15 +382,14 @@ footer a:hover { color: var(--text); }
 @media (max-width: 768px) {
   nav .links a:not(.btn-nav) { display: none; }
   .page-hero h1 { font-size: 2.5rem; }
-  .memory-grid { grid-template-columns: repeat(2, 1fr); }
-  .memory-grid .mem-card:last-child { grid-column: 1 / -1; }
-  .features-grid { grid-template-columns: 1fr; }
-  .workloads-grid { grid-template-columns: 1fr; }
+  .tools-grid { grid-template-columns: repeat(2, 1fr); }
+  .clients-grid { grid-template-columns: 1fr; }
+  .recipes-grid { grid-template-columns: 1fr; }
   section h2 { font-size: 1.8rem; }
 }
 @media (max-width: 480px) {
   .page-hero h1 { font-size: 2rem; }
-  .memory-grid { grid-template-columns: 1fr; }
+  .tools-grid { grid-template-columns: 1fr; }
   .stats-row { gap: 24px; }
 }
 </style>
@@ -391,161 +406,170 @@ footer a:hover { color: var(--text); }
     <a href="index.html">Home</a>
     <a href="index.html#features">Features</a>
     <a href="index.html#stdlib">Library</a>
-    <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/gpu-guide.md">GPU Guide</a>
+    <a href="loom.html">Loom Engine</a>
     <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn-nav">Download</a>
   </div>
 </nav>
 
 <!-- Hero -->
 <div class="page-hero">
-  <div class="tagline">GPU is the Compute. CPU is the BIOS.</div>
-  <h1>Loom <span class="accent">Engine</span></h1>
-  <p class="subtitle">5 memory regions. Autonomous dispatch chains. Single vkQueueSubmit. The GPU runs your program while the CPU handles I/O and nothing else.</p>
+  <div class="tagline">Your AI agent's GPU compute engine.</div>
+  <h1>MCP <span class="accent">Server</span></h1>
+  <p class="subtitle">7 structured tools via JSON-RPC 2.0. Add one line to your config and your AI agent gets GPU compute, statistics, ML, and data analysis. No API keys. No cloud. Everything local.</p>
 </div>
 
-<!-- Memory Model -->
+<!-- Tools -->
 <section class="reveal">
   <div class="centered">
-    <span class="section-label">Architecture</span>
-    <h2>5-SSBO Memory Model</h2>
-    <p class="section-desc">Each Loom unit has 5 GPU-resident memory regions mapped as Vulkan SSBOs. Data stays in VRAM between dispatches.</p>
+    <span class="section-label">Tools</span>
+    <h2>7 tools. One binary.</h2>
+    <p class="section-desc">Each tool accepts structured JSON input and returns structured JSON output. Your agent calls them like any other MCP tool.</p>
   </div>
-  <div class="memory-grid">
-    <div class="mem-card">
-      <div class="mem-binding">SSBO 0</div>
-      <h4>Registers</h4>
-      <p>General-purpose working memory. Holds intermediate results, loop variables, computation state.</p>
+  <div class="tools-grid">
+    <div class="tool-card">
+      <div class="tool-name">octoflow_run</div>
+      <h4>Execute Code</h4>
+      <p>Run OctoFlow code directly. GPU operations dispatch to Vulkan compute shaders.</p>
+      <div class="tool-example">{"code": "let a = gpu_fill(1.0, 1000000)\nprint(\"Sum: {gpu_sum(a)}\")"}</div>
     </div>
-    <div class="mem-card">
-      <div class="mem-binding">SSBO 1</div>
-      <h4>Metrics</h4>
-      <p>Accumulator for reductions. Sum, min, max, count operations write here for CPU readback.</p>
+    <div class="tool-card">
+      <div class="tool-name">octoflow_chat</div>
+      <h4>Natural Language</h4>
+      <p>Describe what you want in English. Built-in Qwen3-1.7B generates, runs, and auto-fixes code.</p>
+      <div class="tool-example">{"prompt": "sort 1M random numbers on GPU and show the top 10"}</div>
     </div>
-    <div class="mem-card">
-      <div class="mem-binding">SSBO 2</div>
-      <h4>Globals</h4>
-      <p>Shared constants and model weights. Loaded once, read by all dispatches in the chain.</p>
+    <div class="tool-card">
+      <div class="tool-name">octoflow_check</div>
+      <h4>Validate Syntax</h4>
+      <p>Check .flow code for errors without running it. Returns structured diagnostics.</p>
+      <div class="tool-example">{"code": "let x = gpu_fill(1.0, 100)\nprint(\"Done: {x}\")"}</div>
     </div>
-    <div class="mem-card">
-      <div class="mem-binding">SSBO 3</div>
-      <h4>Control</h4>
-      <p>Program counter, dispatch parameters, status flags. Drives indirect dispatch and self-scheduling.</p>
+    <div class="tool-card">
+      <div class="tool-name">octoflow_gpu_sort</div>
+      <h4>GPU Sort</h4>
+      <p>GPU-accelerated sorting. Pass data, get sorted results. Millions of elements in milliseconds.</p>
+      <div class="tool-example">{"data": [3.1, 1.4, 2.7, ...], "descending": false}</div>
     </div>
-    <div class="mem-card">
-      <div class="mem-binding">SSBO 4</div>
-      <h4>Heap</h4>
-      <p>Dynamic allocation region. Large tensors, KV caches, variable-length data structures.</p>
+    <div class="tool-card">
+      <div class="tool-name">octoflow_gpu_stats</div>
+      <h4>GPU Statistics</h4>
+      <p>Mean, stddev, correlation, SMA, EMA, Sharpe ratio. All computed on GPU.</p>
+      <div class="tool-example">{"data": [12.5, 14.2, ...], "operations": ["mean", "stddev", "sharpe"]}</div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">octoflow_image</div>
+      <h4>Image Processing</h4>
+      <p>Load, transform, and save images. Blur, resize, crop, convert. BMP, GIF, PNG support.</p>
+      <div class="tool-example">{"op": "blur", "path": "photo.bmp", "kernel": 5}</div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">octoflow_csv</div>
+      <h4>CSV Analysis</h4>
+      <p>Load a CSV and run queries. Statistics, filtering, aggregation, correlation, trend analysis.</p>
+      <div class="tool-example">{"path": "sales.csv", "query": "mean, median, stddev, trend"}</div>
     </div>
   </div>
 </section>
 
-<!-- Code Example -->
+<!-- Configuration -->
 <section class="reveal">
   <div class="centered">
-    <span class="section-label">Example</span>
-    <h2>Boot, dispatch, read results.</h2>
-    <p class="section-desc">A complete Loom Engine session in 8 lines. Data stays on the GPU between kernel dispatches.</p>
+    <span class="section-label">Setup</span>
+    <h2>One line. That's it.</h2>
+    <p class="section-desc">Add this to your AI assistant's MCP configuration. OctoFlow starts as a server and your agent discovers all 7 tools automatically.</p>
   </div>
   <div class="code-block">
-    <div class="code-block-header">loom_example.flow</div>
-    <pre><span class="c">// Boot a unit with 3 memory region sizes</span>
-<span class="k">let</span> unit = <span class="f">loom_boot</span>(<span class="n">1.0</span>, <span class="n">8.0</span>, <span class="n">16.0</span>)
+    <div class="code-block-header">settings.json / openclaw.json / .cursor/mcp.json</div>
+    <pre><span class="c">// Add to your MCP server configuration</span>
+{
+  <span class="s">"mcpServers"</span>: {
+    <span class="s">"octoflow"</span>: {
+      <span class="s">"command"</span>: <span class="s">"octoflow"</span>,
+      <span class="s">"args"</span>: [<span class="s">"mcp-serve"</span>]
+    }
+  }
+}
 
-<span class="c">// Load data into VRAM (SSBO 0)</span>
-<span class="k">let</span> data = [<span class="n">1.0</span>, <span class="n">2.0</span>, <span class="n">3.0</span>, <span class="n">4.0</span>, <span class="n">5.0</span>, <span class="n">6.0</span>, <span class="n">7.0</span>, <span class="n">8.0</span>]
-<span class="k">let</span> _w = <span class="f">loom_write</span>(unit, <span class="n">0.0</span>, data)
-
-<span class="c">// Dispatch a compute kernel — data stays in VRAM</span>
-<span class="k">let</span> pc = [<span class="n">0.0</span>, <span class="n">3.0</span>, <span class="n">8.0</span>]
-<span class="k">let</span> _d = <span class="f">loom_dispatch</span>(unit, <span class="s">"stdlib/loom/kernels/math/scale.spv"</span>, pc, <span class="n">1.0</span>)
-
-<span class="c">// Build and run the command buffer (single submit)</span>
-<span class="k">let</span> prog = <span class="f">loom_build</span>(unit)
-<span class="k">let</span> _e = <span class="f">loom_run</span>(prog)
-
-<span class="c">// Read results back — only now does data cross PCIe</span>
-<span class="k">let</span> result = <span class="f">loom_read</span>(unit, <span class="n">0.0</span>, <span class="n">0.0</span>, <span class="n">8.0</span>)
-<span class="f">print</span>(<span class="s">"Result: {result}"</span>)
-<span class="c">// [3, 6, 9, 12, 15, 18, 21, 24]</span></pre>
+<span class="c">// That's it. Your agent now has GPU compute.</span></pre>
   </div>
 </section>
 
-<!-- Key Features -->
+<!-- Compatible Clients -->
 <section class="reveal">
   <div class="centered">
-    <span class="section-label">Capabilities</span>
-    <h2>What makes it different.</h2>
-    <p class="section-desc">Not a shader wrapper. Not a GPGPU library. A complete compute engine that lives on the GPU.</p>
+    <span class="section-label">Compatibility</span>
+    <h2>Works with your stack.</h2>
+    <p class="section-desc">Any MCP client that supports stdio transport can use OctoFlow as a tool provider.</p>
   </div>
-  <div class="features-grid">
-    <div class="feature-card">
-      <div class="icon-wrap">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-      </div>
-      <h3>Single vkQueueSubmit</h3>
-      <p>Chain multiple kernel dispatches into one Vulkan command buffer. One fence, one submit, zero CPU round-trips between stages.</p>
+  <div class="clients-grid">
+    <div class="client-card">
+      <h4>OpenClaw</h4>
+      <p>Add to <code>~/.openclaw/settings.json</code> or install as a skill via <code>npx clawhub install octoflow</code>. 220K+ users. The agent automatically suggests OctoFlow for GPU tasks.</p>
     </div>
-    <div class="feature-card">
-      <div class="icon-wrap">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-      </div>
-      <h3>HOST_VISIBLE Polling</h3>
-      <p>CPU reads GPU status in ~1 microsecond via zero-copy mapped memory. No download, no fence wait, no overhead.</p>
+    <div class="client-card">
+      <h4>Claude Desktop</h4>
+      <p>Add to <code>claude_desktop_config.json</code>. Claude discovers all 7 tools and uses them for data analysis, GPU compute, and ML tasks.</p>
     </div>
-    <div class="feature-card">
-      <div class="icon-wrap">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg>
-      </div>
-      <h3>Indirect Dispatch</h3>
-      <p>The GPU decides its own workgroup count. Self-scheduling without CPU intervention. True GPU autonomy.</p>
+    <div class="client-card">
+      <h4>Cursor</h4>
+      <p>Add to <code>.cursor/mcp.json</code> in your project. The AI coding assistant gains GPU compute, statistics, and image processing capabilities.</p>
     </div>
-    <div class="feature-card">
-      <div class="icon-wrap">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-      </div>
-      <h3>Dormant Units</h3>
-      <p>Pre-built command buffers with indirect dispatch. Over-provisioned and ready to fire. Wake, dispatch, sleep.</p>
+    <div class="client-card">
+      <h4>Any MCP Client</h4>
+      <p>OctoFlow speaks JSON-RPC 2.0 over stdio. Any tool that supports the Model Context Protocol can use it. Windsurf, Cline, custom agents &mdash; all work.</p>
     </div>
-    <div class="feature-card">
+  </div>
+</section>
+
+<!-- Agent Recipes -->
+<section class="reveal">
+  <div class="centered">
+    <span class="section-label">Recipes</span>
+    <h2>Common agent workflows.</h2>
+    <p class="section-desc">7 built-in recipe scripts in stdlib/agent/ for the most common agent tasks.</p>
+  </div>
+  <div class="recipes-grid">
+    <div class="recipe-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v14a2 2 0 01-2 2z"/><path d="M9 7v10"/><path d="M15 7v4"/><path d="M12 7v7"/></svg>
+      </div>
+      <h3>Data Analysis</h3>
+      <p>Agent sends CSV, gets a full statistical report. Mean, median, stddev, correlation, trend, outliers.</p>
+    </div>
+    <div class="recipe-card">
       <div class="icon-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
       </div>
-      <h3>Homeostasis</h3>
-      <p>GPU self-regulates via maxnorm + regulator kernels. Activation magnitudes stay bounded without CPU monitoring.</p>
+      <h3>Time Series</h3>
+      <p>SMA, EMA, RSI, MACD, Bollinger bands. GPU-parallel across multiple tickers. Alert on signal alignment.</p>
     </div>
-    <div class="feature-card">
+    <div class="recipe-card">
       <div class="icon-wrap">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
       </div>
-      <h3>102 Compute Kernels</h3>
-      <p>Scale, affine, matvec, reduce, WHERE, delta encode/decode, dictionary lookup, sort, scan, histogram, and more.</p>
+      <h3>GPU Sort</h3>
+      <p>Sort millions of elements on GPU in milliseconds. Returns sorted data with timing metrics.</p>
     </div>
-  </div>
-</section>
-
-<!-- Workloads -->
-<section class="reveal">
-  <div class="centered">
-    <span class="section-label">Use Cases</span>
-    <h2>GPU-resident workloads.</h2>
-    <p class="section-desc">The Loom model enables workloads that were previously impossible without custom GPU programming.</p>
-  </div>
-  <div class="workloads-grid">
-    <div class="workload-card">
-      <h4>LLM Inference</h4>
-      <p>Layer-by-layer transformer execution. Weights in Globals, KV cache in Heap, activations in Registers. Entire forward pass as one dispatch chain.</p>
+    <div class="recipe-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 12l2 2 4-4"/></svg>
+      </div>
+      <h3>Hypothesis Testing</h3>
+      <p>One-sample and two-sample t-tests, chi-squared, ANOVA. Returns test statistic, p-value, significance.</p>
     </div>
-    <div class="workload-card">
-      <h4>Image &amp; Video Pipelines</h4>
-      <p>Chain decode, transform, filter, and encode operations. Pixel data never leaves VRAM between stages. Process entire video streams on GPU.</p>
+    <div class="recipe-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+      <h3>Classification</h3>
+      <p>K-means clustering and KNN classification. Agent sends data, gets cluster assignments or predictions.</p>
     </div>
-    <div class="workload-card">
-      <h4>Autonomous Agents</h4>
-      <p>Agent loop runs on GPU. Observe, decide, act — all in VRAM. CPU only handles I/O. Zero orchestration overhead per agent step.</p>
-    </div>
-    <div class="workload-card">
-      <h4>Data Processing</h4>
-      <p>ETL pipelines, columnar analytics, GPU-accelerated queries. Load CSV, filter, aggregate, join — all as GPU dispatch chains.</p>
+    <div class="recipe-card">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      </div>
+      <h3>LLM Translate</h3>
+      <p>Use OctoFlow's built-in Qwen3-1.7B for code generation, translation, and summarization tasks.</p>
     </div>
   </div>
 </section>
@@ -554,37 +578,37 @@ footer a:hover { color: var(--text); }
 <section class="reveal">
   <div class="stats-row">
     <div class="stat-item">
-      <div class="stat-number">5</div>
-      <div class="stat-label">Memory Regions</div>
+      <div class="stat-number">7</div>
+      <div class="stat-label">MCP Tools</div>
     </div>
     <div class="stat-item">
-      <div class="stat-number">102</div>
-      <div class="stat-label">GPU Kernels</div>
+      <div class="stat-number">7</div>
+      <div class="stat-label">Agent Recipes</div>
     </div>
     <div class="stat-item">
-      <div class="stat-number">~1 &mu;s</div>
-      <div class="stat-label">Polling Latency</div>
+      <div class="stat-number">JSON-RPC</div>
+      <div class="stat-label">2.0 Protocol</div>
     </div>
     <div class="stat-item">
-      <div class="stat-number">1</div>
-      <div class="stat-label">Queue Submit</div>
+      <div class="stat-number">0</div>
+      <div class="stat-label">API Keys Needed</div>
     </div>
     <div class="stat-item">
-      <div class="stat-number">7/7</div>
-      <div class="stat-label">Loom Steps Passing</div>
+      <div class="stat-number">3.2 MB</div>
+      <div class="stat-label">Total Size</div>
     </div>
   </div>
 </section>
 
 <!-- CTA -->
 <div class="cta-section reveal">
-  <h2 style="font-size:2rem; font-weight:800; margin-bottom:12px;">Try it now.</h2>
-  <p style="color:var(--text-secondary); margin-bottom:32px; font-size:1.05rem;">3.2 MB download. Zero dependencies. Any GPU.</p>
+  <h2 style="font-size:2rem; font-weight:800; margin-bottom:12px;">Give your agent GPU compute.</h2>
+  <p style="color:var(--text-secondary); margin-bottom:32px; font-size:1.05rem;">3.2 MB download. Zero dependencies. Windows, Linux, macOS.</p>
   <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn-cta">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
     Download v1.3.0
   </a>
-  <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/gpu-guide.md" class="btn-cta secondary">GPU Guide</a>
+  <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/language-guide.md" class="btn-cta secondary">Documentation</a>
 </div>
 
 <!-- Footer -->
