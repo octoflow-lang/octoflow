@@ -1,0 +1,58 @@
+// file_processor.flow — Read CSV, process data, write output
+// Run: octoflow run file_processor.flow --allow-read=./data --allow-write=./output
+
+// Read input CSV
+let csv = csv_read("./data/sales.csv")
+let headers = csv_headers(csv)
+print("Columns: {headers}")
+print("Rows: {csv_column(csv, \"amount\")}")
+
+// Extract the amount column as numbers
+let amounts = csv_column(csv, "amount")
+let regions = csv_column_str(csv, "region")
+print("Total records: {len(amounts)}")
+
+// Calculate statistics
+let mut total = 0.0
+let mut count = 0
+let mut max_amount = 0.0
+for a in amounts
+    total = total + a
+    if a > max_amount
+        max_amount = a
+    end
+    count = count + 1
+end
+let average = total / count
+
+print("")
+print("--- Sales Summary ---")
+print("Total:   ${total:.2}")
+print("Average: ${average:.2}")
+print("Maximum: ${max_amount:.2}")
+print("Count:   {count}")
+
+// Count sales by region
+let mut region_totals = map()
+for i in range(0, len(amounts))
+    let region = regions[i]
+    let amount = amounts[i]
+    if map_has(region_totals, region)
+        let prev = map_get(region_totals, region)
+        map_set(region_totals, region, prev + amount)
+    else
+        map_set(region_totals, region, amount)
+    end
+end
+
+// Write summary report
+let mut report = "Sales Report\n"
+report = report + "============\n\n"
+report = report + "Total:   ${total:.2}\n"
+report = report + "Average: ${average:.2}\n"
+report = report + "Maximum: ${max_amount:.2}\n"
+report = report + "Count:   {count}\n"
+
+write_file("./output/report.txt", report)
+print("")
+print("Report written to ./output/report.txt")

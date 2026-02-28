@@ -1,0 +1,64 @@
+// data_types.flow — Integer, float, none, and auto-promotion
+// Run: octoflow run data_types.flow
+
+// --- Integer type ---
+let count = 42
+let negative = -7
+let hex = 0xFF
+print("count = {count} (type: {type_of(count)})")
+print("negative = {negative}")
+print("hex = {hex}")
+
+// Integer arithmetic is exact
+let div = 7 / 2
+let mod = 17 % 5
+print("7 / 2 = {div}")       // 3 (integer division)
+print("17 % 5 = {mod}")      // 2
+
+// --- Float type ---
+let pi = 3.14159
+let temp = -40.0
+print("")
+print("pi = {pi:.4} (type: {type_of(pi)})")
+print("temp = {temp}")
+
+// --- Auto-promotion ---
+let mixed = count + pi         // int + float = float
+print("")
+print("42 + 3.14159 = {mixed} (type: {type_of(mixed)})")
+
+// --- None value ---
+let empty = none
+print("")
+print("empty = {empty} (type: {type_of(empty)})")
+print("is_none(empty) = {is_none(empty)}")
+print("is_none(42) = {is_none(42)}")
+
+// None in maps — missing keys return none
+let config = {"name": "OctoFlow", "version": "1.2"}
+let name = map_get(config, "name")
+let missing = map_get(config, "author")
+print("")
+print("name = {name}")
+print("author = {missing}")
+print("author is none? {is_none(missing)}")
+
+// --- JSON interop ---
+let json_str = "{\"value\": none, \"count\": 42, \"pi\": 3.14}"
+let data = json_decode(json_str)
+let val = map_get(data, "value")
+print("")
+print("JSON null -> {val} (is_none: {is_none(val)})")
+
+// --- Type conversions ---
+let as_int = int(3.7)         // 3 (truncates)
+let as_float = float(42)      // 42.0
+print("")
+print("int(3.7) = {as_int}")
+print("float(42) = {as_float}")
+
+// --- Array with mixed types ---
+let items = [1, 2.5, "hello", none]
+for item in items
+    print("  {item} : {type_of(item)}")
+end

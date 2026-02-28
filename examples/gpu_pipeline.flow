@@ -1,0 +1,56 @@
+// gpu_pipeline.flow — GPU data pipeline (works with or without GPU)
+// Run: octoflow run gpu_pipeline.flow
+
+// Generate sample price data
+let n = 1000000
+let prices = gpu_fill(100.0, n)
+let noise = gpu_fill(0.5, n)
+
+// Simulate daily returns: price + small random noise
+let returns = gpu_add(prices, noise)
+
+// Scale returns by a factor
+let scaled = gpu_scale(returns, 1.02)
+
+// Compute statistics — all on GPU
+let total = gpu_sum(scaled)
+let avg = total / n
+print("Portfolio value: {total:.2}")
+print("Average price:   {avg:.4}")
+
+// Moving average (20-period window)
+print("")
+print("Computing 20-period moving average...")
+let sma = gpu_rolling_mean_auto(scaled, 20)
+let sma_last = sma[n - 1]
+print("Last SMA(20): {sma_last:.4}")
+
+// Standard deviation
+let std = gpu_std(scaled)
+print("Std deviation: {std:.4}")
+
+// Normalize to z-scores
+let zscores = gpu_zscore(scaled)
+let z_min = gpu_min(zscores)
+let z_max = gpu_max(zscores)
+print("")
+print("Z-score range: [{z_min:.2}, {z_max:.2}]")
+
+// Filter outliers (|z| > 2)
+let outliers = gpu_filter(zscores, fn(x) x > 2.0 || x < -2.0 end)
+print("Outliers (|z|>2): {len(outliers)}")
+
+// Matrix operations
+print("")
+print("--- Matrix Operations ---")
+let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]  // 2x3
+let b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0]  // 3x2
+let c = gpu_matmul(a, b, 2, 2, 3)
+print("2x3 * 3x2 = [{c[0]}, {c[1]}, {c[2]}, {c[3]}]")
+// Expected: [58, 64, 139, 154]
+
+// Sort a small array
+let unsorted = [5.0, 2.0, 8.0, 1.0, 9.0, 3.0]
+let sorted = sort(unsorted)
+print("")
+print("Sorted: {sorted}")

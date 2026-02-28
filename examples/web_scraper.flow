@@ -1,0 +1,46 @@
+// web_scraper.flow — Search the web and extract information
+// Run: octoflow run web_scraper.flow --allow-net
+
+// Search for a topic
+let query = "Vulkan compute shader tutorial"
+print("Searching: {query}")
+let results = web_search(query)
+
+print("Found {len(results)} results:")
+print("")
+
+// Print top 5 results
+let mut count = 0
+for r in results
+    if count < 5
+        print("{count + 1}. {r.title}")
+        print("   {r.url}")
+        print("   {r.snippet}")
+        print("")
+        count = count + 1
+    end
+end
+
+// Read the first result
+if len(results) > 0
+    let url = results[0].url
+    print("--- Reading top result ---")
+    print("")
+    let page = web_read(url)
+    print("Title: {page.title}")
+    print("")
+
+    // Show headings
+    let headings = page.headings
+    if len(headings) > 0
+        print("Headings:")
+        for h in headings
+            print("  - {h}")
+        end
+    end
+
+    // Count words in the page
+    let words = split(page.text, " ")
+    print("")
+    print("Word count: ~{len(words)}")
+end

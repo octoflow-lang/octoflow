@@ -1,71 +1,131 @@
 # Changelog
 
+All notable changes to OctoFlow are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
 ## [1.2.0] - 2026-02-28
 
+Codename: **"The Ship"**
+
 ### Added
-- **Integer type**: `42` is `int` (i64), `42.0` is `float` (f32), auto-promotion on mixed ops
-- **Modulo operator**: `x % 2` works with both int and float at multiplicative precedence
-- **`none` value**: First-class null representation with `is_none()` builtin
-- **Web builtins**: `web_search(query)` and `web_read(url)` for web-connected programs
-- **ReAct tool-use in chat**: LLM issues SEARCH/READ commands to gather context before generating code
-- **`octoflow build`**: Bundle multi-file projects into a single self-contained `.flow` file
-- **`octoflow new`**: Project scaffolding with 7 built-in templates (dashboard, api, gpu-compute, etc.)
-- **Scoped permissions**: `--allow-read=path`, `--allow-write=path`, `--allow-net=host`, `--allow-exec=path`
-- **VS Code extension**: TextMate grammar with ~90 builtins, string interpolation, folding
-- **CPU fallback**: All GPU operations work on CPU-only machines, including `gpu_matmul`
-- **`sort` / `gpu_sort` builtins**: Array sorting with NaN handling
-- **Structured error output**: `--format json` emits machine-readable errors with 69 error codes (E001-E092)
-- **Error catalog**: Per-code fix suggestions for all 69 error codes
-- **GPU status message**: Startup note when running in CPU-only mode
-- **Improved Loom VM errors**: 16 call sites with clearer diagnostics and recovery suggestions
-- Chat UX: streaming output, 8-message memory, multiline input, `:undo`/`:diff`/`:edit` commands
+
+#### Chat Mode (`octoflow chat`)
+- LLM-powered code generation from natural language descriptions
+- Auto-repair loop: structured errors fed back to LLM, up to 3 fix attempts
+- Multi-turn conversation with 8-message memory window
+- Streaming token output during generation
+- Local GGUF model support and OpenAI-compatible API mode
+- ReAct tool-use: LLM can issue `SEARCH:` and `READ:` commands with `--web-tools`
+- System prompt (CONTRACT.md) covering full syntax, 200+ builtins, 20 patterns
+- Execution sandbox: chat-generated code scoped to cwd, no network by default, 1M iteration limit
+- Chat commands: `:undo`, `:diff`, `:edit`, `:clear`, `:help`
+
+#### Integer Type
+- `42` is now `int` (i64), `42.0` is `float` (f32)
+- Arithmetic auto-promotion: `int + float = float`
+- Integer division is exact: `7 / 2 = 3`
+- `int()` and `float()` conversion builtins
+- `type_of()` returns `"int"`, `"float"`, `"string"`, `"array"`, `"map"`, `"none"`
+
+#### `none` Value
+- `none` keyword for first-class null representation
+- `is_none(x)` builtin
+- JSON `null` converts to `none` and back
+- Map lookups return `none` for missing keys
+
+#### Modulo Operator
+- `%` operator at multiplicative precedence
+- `int % int = int`, `float % float = float`
+
+#### Web Builtins
+- `web_search(query)` — returns array of `{title, url, snippet}` results
+- `web_read(url)` — returns `{title, text, headings, links}` page content
+- Gated on `--allow-net` permission
+- Uses DDG HTML search and curl for HTTPS
+
+#### Scoped Permissions
+- `--allow-read=path` — restrict file reads to specific directory
+- `--allow-write=path` — restrict file writes to specific directory
+- `--allow-net=host` — restrict network access to specific host
+- `--allow-exec=path` — restrict process execution to specific binary
+- Bare flags (`--allow-read`) allow unrestricted access for that category
+
+#### `octoflow build` — Single-File Bundler
+- `octoflow build main.flow -o bundle.flow` bundles all imports
+- Recursive import tracing with topological sort
+- Circular import detection
+- `use` declaration stripping in output
+- `--list` flag shows dependency tree
+
+#### Structured Error Output
+- `--format json` emits machine-readable JSON errors
+- 69 error codes (E001-E092) with per-code fix suggestions
+- Fields: `code`, `message`, `line`, `suggestion`, `context`
+- Preflight errors also emit structured JSON
+
+#### CPU Fallback
+- `gpu_matmul` and all GPU operations fall back to CPU when no GPU is available
+- Startup message: `[note] No GPU detected — using CPU fallback`
+- `sort()` and `gpu_sort()` builtins added
+
+#### VS Code Extension
+- TextMate grammar for `.flow` syntax highlighting
+- 90+ builtin keywords, string interpolation, code folding
+- All operators and control flow keywords
+- Install: `code --install-extension octoflow-0.1.0.vsix`
+
+### Changed
+
+- `print()` parameter validation now reports E011 instead of generic parse error
+- Loom VM error messages improved across 16 call sites with clearer diagnostics
+- GPU matmul validates matrix dimensions before dispatch
+- Chat mode uses `max_tokens=512` (was unbounded)
+- Multiline input support in chat and REPL
+
+### Fixed
+
+- GPU matmul dimension mismatch no longer panics (returns descriptive error)
+- Regex evaluation step limit prevents ReDoS on pathological patterns
+- JSON parser depth limit prevents stack overflow on deeply nested input
+- String escape sequences `\n`, `\t`, `\r`, `\\`, `\"`, `\0` fully validated
 
 ### Security
-- Recursion depth guard: `MAX_RECURSION_DEPTH = 50`
-- Regex ReDoS prevention: step limit on regex evaluation
-- JSON nesting depth limit: prevents stack overflow on deeply nested input
-- String escape sequence validation
-- Execution sandbox: chat mode scopes I/O to cwd, denies network by default
-- FFI warning on `--allow-ffi`
-- GPU memory quota: `--gpu-max-mb` flag
 
-### Stats
-- Builtins: 196 → 201
-- Tests: 926 → 1,017+
-- Error codes: ~20 → 69
+- Recursion depth guard: `MAX_RECURSION_DEPTH = 50` prevents stack overflow
+- Regex ReDoS prevention with step limit on evaluation
+- JSON nesting depth limit on parsed input
+- Execution sandbox for chat-generated code (scoped I/O, no network, iteration limit)
+- 28 hardening tests with 0 failures
 
 ## [1.1.0] - 2026-02-25
 
 ### Added
-- Loom Engine: GPU compute runtime rebrand (vm_* → loom_* aliases)
-- OctoView Browser: GPU-native web browser with Vulkan rendering
-- `octoflow chat`: AI coding assistant with GGUF LLM inference
-- Self-hosted compiler at 69% .flow (24,212 lines in stdlib/compiler/)
+- Loom Engine: GPU compute runtime (40+ kernels, async dispatch, JIT)
+- Self-hosting compiler (69% .flow — lexer, parser, eval, preflight, codegen, IR)
+- GUI toolkit (16 widget types)
+- Media codecs (BMP, GIF, H.264, AVI, MP4, TTF, WAV)
+- LLM inference stack (GGUF parser, transformer, sampling, tokenizer)
+- Terminal graphics (halfblock, kitty, sixel, digits)
 - 246 stdlib modules across 18 domains
 
 ## [1.0.0] - 2026-02-23
 
 ### Added
 - GPU VM: general-purpose virtual machine with 5-SSBO memory model
-- GPU VM: register-based inter-instance message passing (R30→R31)
-- GPU VM: homeostasis regulator (activation stability, throughput tracking)
-- GPU VM: indirect dispatch — GPU self-programs workgroup counts
-- GPU VM: CPU polling with HOST_VISIBLE Metrics/Control for zero-copy reads
-- GPU VM: dormant VM activation without command buffer rebuild
-- GPU VM: I/O streaming — CPU streams data to Globals, GPU processes without restart
-- DB engine: columnar storage in GPU memory with fused query kernels
+- GPU VM: register-based inter-instance message passing
+- GPU VM: homeostasis regulator, indirect dispatch, HOST_VISIBLE polling
+- GPU VM: dormant VM activation, I/O streaming
+- DB engine: columnar storage with fused query kernels
 - DB compression: delta encoding, dictionary lookup, Q4_K dequantization
-- DB compression: compressed query chains (decompress → WHERE → aggregate), bit-exact
-- 51 stdlib modules (collections, data, db, ml, science, stats, string, sys, time, web, core)
+- 51 stdlib modules
 - Security sandbox with --allow-read, --allow-write, --allow-net, --allow-exec
 - REPL with GPU support
-- 658 tests passing (648 Rust + 10 .flow integration)
+- 658 tests passing
 
 ### Fixed
 - Uninitialized vector UB in device.rs (P0)
 - Missing read permission checks in load_file() (P1)
-- 12 manual div_ceil reimplementations replaced with .div_ceil() (P1)
-- Deduplicated video_open/video_frame handlers (-172 lines) (P2)
 
 ## [0.83.1] - 2026-02-19
 - Initial public release
