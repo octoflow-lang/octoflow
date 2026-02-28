@@ -1,5 +1,6 @@
 # OctoFlow language detection
 *.flow linguist-language=OctoFlow
+*.flow linguist-detectable=true
 
 # Documentation
 *.md linguist-documentation
