@@ -179,7 +179,7 @@ Install from releases: `code --install-extension octoflow-0.1.0.vsix`
 | gpu_add | 0.40 ms | 0.46 ms (deferred) | Batched command buffer |
 | gpu_mul | 0.53 ms | 3.27 ms (deferred) | Single fence per chain |
 | 5-step pipeline | 2.57 ms | 75 ms | Upload + compute + reduce |
-| Install size | ~4 GB SDK | **2.8 MB** binary | Zero dependencies |
+| Install size | ~4 GB SDK | **3.3 MB** binary | Zero dependencies |
 
 Deferred dispatch batches chained GPU operations into a single Vulkan command buffer submission.
 
@@ -192,7 +192,7 @@ Deferred dispatch batches chained GPU operations into a single Vulkan command bu
 | **Self-hosting** | No | No | **Yes (69% .flow)** |
 | **External deps** | NVIDIA SDK / vendor SDK | Graphics API | **None** |
 | **CPU fallback** | No | No | **Yes** |
-| **Install** | Multi-GB SDK | Driver-only | **2.8 MB binary** |
+| **Install** | Multi-GB SDK | Driver-only | **3.3 MB binary** |
 
 ## Loom Engine
 

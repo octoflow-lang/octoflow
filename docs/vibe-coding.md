@@ -129,7 +129,7 @@ print(result)
 | **Fix errors** | Copy error to ChatGPT, paste fix | Error has line number, LLM reads directly |
 | **Ship it** | requirements.txt, Docker, deploy | Single binary, zero deps |
 | **Offline** | No (API key required) | Yes (local LLM on your GPU) |
-| **Binary size** | 100MB+ with deps | 2.8 MB total |
+| **Binary size** | 100MB+ with deps | 3.3 MB total |
 
 ### The Token Insight
 
@@ -141,7 +141,7 @@ This means vibe coding works **offline, for free, on your hardware**.
 
 ### What's Already Built In
 
-Every one of these capabilities ships in the 2.8 MB binary:
+Every one of these capabilities ships in the 3.3 MB binary:
 
 | Domain | Capabilities |
 |--------|-------------|
