@@ -1,0 +1,34 @@
+// stdlib/compiler/compile_test_arith.flow
+// Phase 71 Test: End-to-end compile — source text → kparse → lower → ir → SPIR-V
+//
+// Kernel: output[gid] = input[gid] * 3.0 + 1.0
+// Expected: for input value v, output = v * 3.0 + 1.0
+
+use ir
+use lower
+use kparse
+
+let mut out_path = env("SPIRV_OUTPUT")
+if out_path == ""
+  out_path = "spirv_compile_arith.spv"
+end
+
+let nl = chr(10.0)
+let src = "let x = input [ gid ] * 3.0 + 1.0" + nl + "output [ gid ] = x" + nl
+
+let node_count = kparse_source(src)
+print("Parsed {node_count} AST nodes")
+
+// Debug: dump AST
+for i in range(0.0, node_count)
+  let dk = nd_kind[i]
+  let dl = nd_lhs[i]
+  let dop = nd_op[i]
+  let dr = nd_rhs[i]
+  let dc = nd_child[i]
+  let dn = nd_next[i]
+  print("  [{i}] {dk} lhs={dl} op={dop} rhs={dr} child={dc} next={dn}")
+end
+
+lower_to_ir()
+let _e = ir_emit_spirv(out_path)

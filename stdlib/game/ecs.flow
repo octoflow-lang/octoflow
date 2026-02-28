@@ -1,4 +1,9 @@
 // stdlib/game/ecs.flow — Simple Entity Component System
+//
+// Functions: ecs_new, ecs_create, ecs_find, ecs_add_pos, ecs_add_pos_at,
+//            ecs_add_vel, ecs_add_hp, ecs_update_physics, ecs_damage,
+//            ecs_get_pos, ecs_alive_count
+//
 // Data-oriented ECS using parallel arrays for cache-friendly iteration.
 // Entities are integer IDs. Components stored in contiguous arrays.
 // Pattern: comp_eid[i] = entity owner, comp_field[i] = data

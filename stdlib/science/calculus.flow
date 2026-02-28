@@ -1,4 +1,6 @@
 // stdlib/science/calculus.flow — Numerical calculus
+//
+// Functions: derivative, integrate_trapz, cumulative_trapz, second_derivative
 
 fn derivative(arr, dx)
   // Numerical derivative using central differences

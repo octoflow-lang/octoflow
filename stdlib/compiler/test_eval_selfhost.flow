@@ -1,0 +1,203 @@
+// test_eval_selfhost.flow — Patterns from eval.flow itself
+// Tests constructs eval.flow uses in its own implementation
+let mut pass = 0.0
+let mut fail = 0.0
+let SEP = chr(1.0)
+
+// T1: String building with += in while loop (eval.flow lexer pattern)
+let line = "hello world"
+let line_len = len(line)
+let mut lpos = 0.0
+let mut word = ""
+while lpos < line_len && is_match(char_at(line, lpos), "[a-z]")
+  word = word + char_at(line, lpos)
+  lpos = lpos + 1.0
+end
+if word == "hello"
+  pass = pass + 1.0
+  print("T1 string build: PASS")
+else
+  fail = fail + 1.0
+  print("T1 string build: FAIL got {word}")
+end
+
+// T2: SEP-delimited array encoding (eval.flow array storage)
+let mut enc = ""
+let items = split("a|b|c", "|")
+let ni = len(items)
+let mut ei = 0.0
+while ei < ni
+  if ei > 0.0
+    enc = enc + SEP
+  end
+  enc = enc + items[ei]
+  ei = ei + 1.0
+end
+let decoded = split(enc, SEP)
+if len(decoded) == 3.0 && decoded[0] == "a" && decoded[2] == "c"
+  pass = pass + 1.0
+  print("T2 SEP encoding: PASS")
+else
+  fail = fail + 1.0
+  print("T2 SEP encoding: FAIL")
+end
+
+// T3: Map compound key pattern (eval.flow env storage)
+let mut env_num = map()
+let mut env_s = map()
+map_set(env_num, "__map_m.x", 42.0)
+map_set(env_s, "__map_m.x", "42")
+map_set(env_s, "__map_m", "exists")
+let ck = "__map_m.x"
+if map_has(env_num, ck) && map_get(env_num, ck) == 42.0
+  pass = pass + 1.0
+  print("T3 compound key: PASS")
+else
+  fail = fail + 1.0
+  print("T3 compound key: FAIL")
+end
+
+// T4: fn_start map for function lookup (eval.flow fn pre-scan)
+let mut fn_start = map()
+map_set(fn_start, "foo", 10.0)
+map_set(fn_start, "bar", 20.0)
+let mut fn_params = map()
+map_set(fn_params, "foo", "x,y")
+map_set(fn_params, "bar", "a")
+if map_has(fn_start, "foo") && map_get(fn_start, "foo") == 10.0
+  pass = pass + 1.0
+  print("T4 fn_start map: PASS")
+else
+  fail = fail + 1.0
+  print("T4 fn_start map: FAIL")
+end
+
+// T5: Param binding from comma-separated list (eval.flow fn call)
+let param_str = "x,y,z"
+let params = split(param_str, ",")
+if len(params) == 3.0 && params[0] == "x" && params[1] == "y" && params[2] == "z"
+  pass = pass + 1.0
+  print("T5 param split: PASS")
+else
+  fail = fail + 1.0
+  print("T5 param split: FAIL")
+end
+
+// T6: Nested while with break (eval.flow scope scanning)
+let mut depth = 0.0
+let tokens = split("if|then|if|then|end|end|done", "|")
+let nt = len(tokens)
+let mut ti = 0.0
+let mut found = 0.0
+while ti < nt
+  let tok = tokens[ti]
+  if tok == "if"
+    depth = depth + 1.0
+  elif tok == "end"
+    depth = depth - 1.0
+    if depth == 0.0
+      found = ti
+      ti = nt
+    end
+  end
+  ti = ti + 1.0
+end
+if found == 5.0
+  pass = pass + 1.0
+  print("T6 scope scan: PASS")
+else
+  fail = fail + 1.0
+  print("T6 scope scan: FAIL got {found}")
+end
+
+// T7: ord comparison chain (eval.flow lexer digit/alpha detection)
+let mut is_digit = 0.0
+let ch = "5"
+let o = ord(ch)
+if o >= 48.0 && o <= 57.0
+  is_digit = 1.0
+end
+if is_digit == 1.0
+  pass = pass + 1.0
+  print("T7 ord range: PASS")
+else
+  fail = fail + 1.0
+  print("T7 ord range: FAIL")
+end
+
+// T8: Multi-level map with string keys (eval.flow env_s for string vars)
+let mut vars = map()
+map_set(vars, "name", "OctoFlow")
+map_set(vars, "version", "0.73")
+let vn = map_get(vars, "name")
+let vv = map_get(vars, "version")
+if vn == "OctoFlow" && vv == "0.73"
+  pass = pass + 1.0
+  print("T8 string map: PASS")
+else
+  fail = fail + 1.0
+  print("T8 string map: FAIL")
+end
+
+// T9: Function with multiple returns based on condition
+fn classify(n)
+  if n < 0.0
+    return 0.0 - 1.0
+  elif n == 0.0
+    return 0.0
+  else
+    return 1.0
+  end
+end
+
+let r9a = classify(0.0 - 5.0)
+let r9b = classify(0.0)
+let r9c = classify(42.0)
+if r9a == 0.0 - 1.0 && r9b == 0.0 && r9c == 1.0
+  pass = pass + 1.0
+  print("T9 fn classify: PASS")
+else
+  fail = fail + 1.0
+  print("T9 fn classify: FAIL got {r9a} {r9b} {r9c}")
+end
+
+// T10: Array as accumulator with string concat in loop
+fn tokenize(src)
+  let n = len(src)
+  let mut pos = 0.0
+  let mut result = ""
+  while pos < n
+    let c = char_at(src, pos)
+    if is_match(c, "[a-z]")
+      let mut word2 = ""
+      while pos < n && is_match(char_at(src, pos), "[a-z]")
+        word2 = word2 + char_at(src, pos)
+        pos = pos + 1.0
+      end
+      if len(result) > 0.0
+        result = result + "|"
+      end
+      result = result + word2
+    else
+      pos = pos + 1.0
+    end
+  end
+  return result
+end
+
+let t10r = tokenize("abc def ghi")
+if t10r == "abc|def|ghi"
+  pass = pass + 1.0
+  print("T10 tokenize: PASS")
+else
+  fail = fail + 1.0
+  print("T10 tokenize: FAIL got {t10r}")
+end
+
+let total = pass + fail
+print("SELFHOST: {pass}/{total} passed")
+if fail == 0.0
+  print("SELFHOST: ALL PASS ({total}/{total} tests)")
+else
+  print("SELFHOST: {fail} FAILED")
+end

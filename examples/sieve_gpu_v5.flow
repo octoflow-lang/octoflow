@@ -1,0 +1,466 @@
+// ====================================================================
+//  GPU PARALLEL SIEVE v5 — HYBRID: v3 WORD-CENTRIC + v4 CARRY-FORWARD
+//
+//  Best of both worlds:
+//    - Small primes (p < 256): v3 word-centric + shared memory cache
+//    - Large primes (p >= 256): v4 carry-forward (no recompute per segment)
+//    - Bucket sieve: only dispatch primes up to sqrt(seg_end)
+//    - Selective JIT: mark_large kernel JIT-compiled at runtime
+//      (demonstrates runtime SPIR-V for the ONE kernel that benefits)
+//
+//  Memory layout per VM (B0 Registers):
+//    B0[0..NUM_WORDS-1]                     = bitmap (262K bits, 32KB)
+//    B0[NUM_WORDS]                           = segment popcount accumulator
+//    B0[NUM_WORDS + 1]                       = running total accumulator
+//    B0[NUM_WORDS + 2 .. NUM_WORDS+1+NP]    = carry-forward offsets (large primes)
+// ====================================================================
+
+use "../stdlib/compiler/ir"
+
+print("")
+print("====================================================================")
+print("  GPU PARALLEL SIEVE v5 — HYBRID (v3 small + v4 carry-forward)")
+print("  16 worker VMs × word-centric + carry-forward × 32KB segments")
+print("  Selective JIT: mark_large kernel generated at runtime")
+print("====================================================================")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  CONFIGURATION
+// ════════════════════════════════════════════════════════════════════
+
+let N = 1000000000.0
+let CANDS_PER_SEG = 262144.0
+let NUM_VMS = 16.0
+let PRIME_THRESHOLD = 256.0
+
+let SEG_RANGE = CANDS_PER_SEG * 2.0
+let NUM_WORDS = floor(CANDS_PER_SEG / 32.0)
+let WG_BITMAP = floor((NUM_WORDS + 255.0) / 256.0)
+let TOTAL_ODDS = floor((N - 1.0) / 2.0)
+let NUM_SEGS = floor((TOTAL_ODDS + CANDS_PER_SEG - 1.0) / CANDS_PER_SEG)
+
+print("  N = {N:.0}, segments = {NUM_SEGS:.0}, VMs = {NUM_VMS:.0}")
+print("  Small/large threshold = {PRIME_THRESHOLD:.0}")
+print("")
+
+// ── Pre-compiled kernel paths (static kernels) ──
+let SPV_INIT         = "stdlib/loom/kernels/sieve/sieve_v4_init.spv"
+let SPV_INIT_OFFSETS = "stdlib/loom/kernels/sieve/sieve_v4_init_offsets.spv"
+let SPV_MARK_SMALL   = "stdlib/loom/kernels/sieve/sieve_mark_v3_small.spv"
+let SPV_COUNT        = "stdlib/loom/kernels/sieve/sieve_v4_count.spv"
+let SPV_ACCUM        = "stdlib/loom/kernels/sieve/sieve_v4_accum.spv"
+
+// ── JIT: generate mark_large kernel at runtime ──
+let t0_jit = now_ms()
+
+fn v5_emit_mark_large()
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let pre_loop   = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body  = ir_block("loop_body")
+  let loop_cont  = ir_block("loop_cont")
+  let loop_merge = ir_block("loop_merge")
+  let exit_block = ir_block("exit")
+
+  let gid      = ir_load_gid(entry)
+  let pc_seg   = ir_push_const(entry, 0.0)
+  let pc_words = ir_push_const(entry, 1.0)
+  let pc_pst   = ir_push_const(entry, 2.0)
+  let pc_pen   = ir_push_const(entry, 3.0)
+  let pc_obase = ir_push_const(entry, 4.0)
+  let pstart_u = ir_ftou(entry, pc_pst)
+  let pend_u   = ir_ftou(entry, pc_pen)
+  let prime_idx = ir_iadd(entry, gid, pstart_u)
+  let oob      = ir_ugte(entry, prime_idx, pend_u)
+  let _sm      = ir_selection_merge(entry, exit_block)
+  let _br      = ir_term_cond_branch(entry, oob, exit_block, pre_loop)
+
+  let seg_u    = ir_ftou(pre_loop, pc_seg)
+  let obase_u  = ir_ftou(pre_loop, pc_obase)
+  let c0       = ir_const_u(pre_loop, 0.0)
+  let c1       = ir_const_u(pre_loop, 1.0)
+  let c2       = ir_const_u(pre_loop, 2.0)
+  let c32      = ir_const_u(pre_loop, 32.0)
+  let c64      = ir_const_u(pre_loop, 64.0)
+  let words_u   = ir_ftou(pre_loop, pc_words)
+  let seg_range = ir_imul(pre_loop, words_u, c64)
+  let seg_base  = ir_imul(pre_loop, seg_u, seg_range)
+  let seg_start = ir_iadd(pre_loop, seg_base, c1)
+  let words32   = ir_imul(pre_loop, words_u, c32)
+  let w32m1     = ir_isub(pre_loop, words32, c1)
+  let seg_end_off = ir_imul(pre_loop, w32m1, c2)
+  let seg_end_val = ir_iadd(pre_loop, seg_start, seg_end_off)
+  let prime_f   = ir_load_input_at(pre_loop, 2.0, prime_idx)
+  let prime_u   = ir_ftou(pre_loop, prime_f)
+  let step      = ir_imul(pre_loop, prime_u, c2)
+  let off_idx   = ir_iadd(pre_loop, obase_u, prime_idx)
+  let offset    = ir_buf_load_u(pre_loop, 0.0, off_idx)
+  let _bpl      = ir_term_branch(pre_loop, loop_header)
+
+  let phi_m     = ir_phi(loop_header, 2.0)
+  let _pm0      = ir_phi_add(phi_m, offset, pre_loop)
+  let m_past    = ir_ugte(loop_header, phi_m, ir_iadd(loop_header, seg_end_val, c1))
+  let _lm       = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc       = ir_term_cond_branch(loop_header, m_past, loop_merge, loop_body)
+
+  let m_offset  = ir_isub(loop_body, phi_m, seg_start)
+  let half_off  = ir_udiv(loop_body, m_offset, c2)
+  let word_idx  = ir_udiv(loop_body, half_off, c32)
+  let bit_pos   = ir_umod(loop_body, half_off, c32)
+  let one_shl   = ir_shl(loop_body, c1, bit_pos)
+  let mask      = ir_not(loop_body, one_shl)
+  let _atomic   = ir_buf_atomic_and(loop_body, 0.0, word_idx, mask)
+  let _br_lb    = ir_term_branch(loop_body, loop_cont)
+
+  let next_m    = ir_iadd(loop_cont, phi_m, step)
+  let _br_lc    = ir_term_branch(loop_cont, loop_header)
+  let _pm1      = ir_phi_add(phi_m, next_m, loop_cont)
+
+  let _save     = ir_buf_store_u(loop_merge, 0.0, off_idx, phi_m)
+  let _br_lm    = ir_term_branch(loop_merge, exit_block)
+
+  let _ret      = ir_term_return(exit_block)
+  ir_emit_spirv("stdlib/loom/kernels/sieve/_v5_mark_large_jit.spv")
+  return 0.0
+end
+
+let _ej = v5_emit_mark_large()
+let k_mark_large = ir_get_buf()
+let t_jit = now_ms() - t0_jit
+let jit_sz = len(k_mark_large)
+print("  JIT: mark_large kernel generated in {t_jit:.0}ms ({jit_sz:.0} bytes)")
+print("       (4 other kernels: pre-compiled .spv)")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 1: CPU SIEVE
+// ════════════════════════════════════════════════════════════════════
+
+let t0_cpu = now_ms()
+let sqrt_n = floor(sqrt(N)) + 1.0
+
+let mut cpu_sieve = []
+let mut csi = 0.0
+while csi < sqrt_n + 1.0
+  push(cpu_sieve, 1.0)
+  csi = csi + 1.0
+end
+cpu_sieve[0] = 0.0
+cpu_sieve[1] = 0.0
+
+let mut p = 2.0
+while p * p <= sqrt_n
+  if cpu_sieve[p] > 0.5
+    let mut m = p * p
+    while m <= sqrt_n
+      cpu_sieve[m] = 0.0
+      m = m + p
+    end
+  end
+  p = p + 1.0
+end
+
+let mut small_primes = []
+let mut spi = 3.0
+while spi <= sqrt_n
+  if cpu_sieve[spi] > 0.5
+    push(small_primes, spi)
+  end
+  spi = spi + 2.0
+end
+
+let num_primes = len(small_primes)
+
+// Split primes at threshold
+let mut num_small = 0.0
+let mut si_count = 0.0
+while si_count < num_primes
+  if small_primes[si_count] < PRIME_THRESHOLD
+    num_small = num_small + 1.0
+  end
+  si_count = si_count + 1.0
+end
+let num_large = num_primes - num_small
+
+let t_cpu = now_ms() - t0_cpu
+
+print("  STEP 1: CPU sieve ({t_cpu:.0}ms)")
+print("    {num_primes:.0} odd primes: {num_small:.0} small + {num_large:.0} large")
+print("")
+
+let GLOBALS_SIZE = 4096.0
+while len(small_primes) < GLOBALS_SIZE
+  push(small_primes, 0.0)
+end
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 2: BOOT VMs + INIT CARRY-FORWARD OFFSETS
+// ════════════════════════════════════════════════════════════════════
+
+let t0_boot = now_ms()
+
+let COUNT_OFF = NUM_WORDS
+let ACCUM_OFF = NUM_WORDS + 1.0
+let OFFSET_BASE = NUM_WORDS + 2.0
+let REG_SIZE = OFFSET_BASE + num_primes
+
+let mut vms = []
+let mut bi = 0.0
+while bi < NUM_VMS
+  let r = try(vm_boot(1.0, REG_SIZE, GLOBALS_SIZE))
+  if r.ok > 0.5
+    push(vms, r.value)
+    let _w = vm_write_globals(r.value, 0.0, small_primes)
+  else
+    print("    BOOT FAILED at VM #{bi:.0}: {r.error}")
+    bi = NUM_VMS
+  end
+  bi = bi + 1.0
+end
+
+let t_boot = now_ms() - t0_boot
+let booted = len(vms)
+
+let mut active_vms = booted
+if active_vms > NUM_SEGS
+  active_vms = NUM_SEGS
+end
+
+// Initialize carry-forward offsets per VM
+let t0_initoff = now_ms()
+let wg_primes = floor((num_primes + 255.0) / 256.0)
+let segs_per_vm_init = floor((NUM_SEGS + active_vms - 1.0) / active_vms)
+
+let mut ioi = 0.0
+while ioi < active_vms
+  let first_seg = ioi * segs_per_vm_init
+  let pc_initoff = [num_primes, OFFSET_BASE, first_seg, NUM_WORDS]
+  let _d = vm_dispatch(vms[ioi], SPV_INIT_OFFSETS, pc_initoff, wg_primes)
+  let prog_io = vm_build(vms[ioi])
+  let _exec = vm_execute(prog_io)
+  ioi = ioi + 1.0
+end
+
+let t_initoff = now_ms() - t0_initoff
+let mem_kb = booted * REG_SIZE * 4.0 / 1024.0
+print("  STEP 2: Boot {booted:.0} VMs ({t_boot:.0}ms) + init offsets ({t_initoff:.0}ms)")
+print("    REG_SIZE={REG_SIZE:.0} (~{mem_kb:.0}KB VRAM)")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 3: RECORD DISPATCH CHAINS
+// ════════════════════════════════════════════════════════════════════
+
+let t0_chain = now_ms()
+let segs_per_vm = floor((NUM_SEGS + active_vms - 1.0) / active_vms)
+
+let needed_vms = floor((NUM_SEGS + segs_per_vm - 1.0) / segs_per_vm)
+if active_vms > needed_vms
+  active_vms = needed_vms
+end
+
+let mut total_dispatches = 0.0
+let mut vi = 0.0
+
+while vi < active_vms
+  let seg_start_idx = vi * segs_per_vm
+  let mut seg_end_idx = (vi + 1.0) * segs_per_vm
+  if seg_end_idx > NUM_SEGS
+    seg_end_idx = NUM_SEGS
+  end
+
+  let mut pc_init       = [0.0, 0.0, 0.0, 0.0]
+  let mut pc_mark_small = [0.0, 0.0, 0.0, 0.0]
+  let mut pc_mark_large = [0.0, 0.0, 0.0, 0.0, 0.0]
+  let pc_count = [NUM_WORDS, COUNT_OFF]
+  let pc_accum = [COUNT_OFF, ACCUM_OFF]
+
+  // Bucket sieve: prime pointer for large primes
+  let mut prime_ptr = num_small
+
+  let mut si = seg_start_idx
+  while si < seg_end_idx
+    // ── Init bitmap ──
+    pc_init[0] = si
+    pc_init[1] = NUM_WORDS
+    pc_init[2] = N
+    pc_init[3] = 0.0
+    let _d0 = vm_dispatch(vms[vi], SPV_INIT, pc_init, WG_BITMAP)
+    total_dispatches = total_dispatches + 1.0
+
+    // ── Mark small primes: word-centric + shared memory (v3) ──
+    if num_small > 0.5
+      pc_mark_small[0] = si
+      pc_mark_small[1] = NUM_WORDS
+      pc_mark_small[2] = 0.0
+      pc_mark_small[3] = num_small
+      let _dms = vm_dispatch(vms[vi], SPV_MARK_SMALL, pc_mark_small, WG_BITMAP)
+      total_dispatches = total_dispatches + 1.0
+    end
+
+    // ── Bucket sieve: advance prime pointer ──
+    let seg_end_val = (si + 1.0) * SEG_RANGE
+    let seg_sqrt = floor(sqrt(seg_end_val)) + 1.0
+    while prime_ptr < num_primes
+      if small_primes[prime_ptr] > seg_sqrt
+        break
+      end
+      prime_ptr = prime_ptr + 1.0
+    end
+
+    // ── Mark large primes: carry-forward via JIT kernel ──
+    if prime_ptr > num_small
+      pc_mark_large[0] = si
+      pc_mark_large[1] = NUM_WORDS
+      pc_mark_large[2] = num_small
+      pc_mark_large[3] = prime_ptr
+      pc_mark_large[4] = OFFSET_BASE
+      let wg_large = floor((prime_ptr - num_small + 255.0) / 256.0)
+      let _dml = vm_dispatch_mem(vms[vi], k_mark_large, pc_mark_large, wg_large)
+      total_dispatches = total_dispatches + 1.0
+    end
+
+    // ── Count + Accum ──
+    let _dc = vm_dispatch(vms[vi], SPV_COUNT, pc_count, WG_BITMAP)
+    let _da = vm_dispatch(vms[vi], SPV_ACCUM, pc_accum, 1.0)
+    total_dispatches = total_dispatches + 2.0
+
+    si = si + 1.0
+  end
+
+  vi = vi + 1.0
+end
+
+let t_chain = now_ms() - t0_chain
+print("  STEP 3: Recorded {total_dispatches:.0} dispatches in {t_chain:.0}ms")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 4: BUILD + EXECUTE (ASYNC)
+// ════════════════════════════════════════════════════════════════════
+
+let t0_build = now_ms()
+let mut progs = []
+let mut bdi = 0.0
+while bdi < active_vms
+  let prog = vm_build(vms[bdi])
+  push(progs, prog)
+  bdi = bdi + 1.0
+end
+let t_build = now_ms() - t0_build
+
+let t0_exec = now_ms()
+
+let mut ei = 0.0
+while ei < active_vms
+  let _ea = vm_execute_async(progs[ei])
+  ei = ei + 1.0
+end
+
+let mut done_flags = []
+let mut di = 0.0
+while di < active_vms
+  push(done_flags, 0.0)
+  di = di + 1.0
+end
+
+let mut done_count = 0.0
+while done_count < active_vms
+  let mut pi = 0.0
+  while pi < active_vms
+    if done_flags[pi] < 0.5
+      let status = vm_poll(progs[pi])
+      if status > 0.5
+        done_flags[pi] = 1.0
+        done_count = done_count + 1.0
+      end
+    end
+    pi = pi + 1.0
+  end
+end
+
+let t_exec = now_ms() - t0_exec
+
+print("  STEP 4: Build {t_build:.0}ms + Execute {t_exec:.0}ms")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 5: READ RESULTS + AUDIT
+// ════════════════════════════════════════════════════════════════════
+
+let mut total_count = 1.0
+
+let mut ri = 0.0
+while ri < active_vms
+  let result = vm_read_register(vms[ri], 0.0, 0.0, REG_SIZE)
+  let accum_raw = result[ACCUM_OFF]
+  let vm_count = float_to_bits(accum_raw)
+
+  let seg_start_idx = ri * segs_per_vm
+  let mut seg_end_idx_r = (ri + 1.0) * segs_per_vm
+  if seg_end_idx_r > NUM_SEGS
+    seg_end_idx_r = NUM_SEGS
+  end
+  let vm_segs = seg_end_idx_r - seg_start_idx
+  print("    VM {ri:.0}: {vm_count:.0} primes ({vm_segs:.0} segments)")
+
+  total_count = total_count + vm_count
+  ri = ri + 1.0
+end
+
+let t_total = now_ms() - t0_cpu
+
+print("")
+print("  ════════════════════════════════════════════")
+print("  RESULT: pi({N:.0}) = {total_count:.0}")
+print("  ════════════════════════════════════════════")
+
+let mut expected = 0.0
+if N > 999000000.0
+  expected = 50847534.0
+elif N > 99000000.0
+  expected = 5761455.0
+elif N > 9900000.0
+  expected = 664579.0
+elif N > 990000.0
+  expected = 78498.0
+end
+
+if expected > 0.5
+  let diff = total_count - expected
+  if diff > -0.5 && diff < 0.5
+    print("  AUDIT: PASS  (exact match: {total_count:.0})")
+  else
+    print("  AUDIT: FAIL  (expected {expected:.0} got {total_count:.0}, diff={diff:.0})")
+  end
+end
+
+print("")
+print("  TIMING SUMMARY")
+print("  ──────────────────────────────────────────")
+print("    CPU primes:     {t_cpu:.0}ms")
+print("    JIT mark_large: {t_jit:.0}ms ({jit_sz:.0} bytes)")
+print("    Boot + offsets: {t_boot:.0}ms + {t_initoff:.0}ms")
+print("    Record chain:   {t_chain:.0}ms")
+print("    Build + exec:   {t_build:.0}ms + {t_exec:.0}ms")
+print("    TOTAL:          {t_total:.0}ms")
+print("  ──────────────────────────────────────────")
+print("    Dispatches:     {total_dispatches:.0}")
+print("    Small primes:   {num_small:.0} (word-centric, pre-compiled)")
+print("    Large primes:   {num_large:.0} (carry-forward, JIT)")
+print("")
+
+// ── Cleanup ──
+let mut si2 = 0.0
+while si2 < booted
+  let _s = vm_shutdown(vms[si2])
+  si2 = si2 + 1.0
+end
+
+print("====================================================================")
+print("")

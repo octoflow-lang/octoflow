@@ -1,0 +1,198 @@
+// test_set_ops.flow — Tests for set operations in stdlib/collections/collections.flow
+// Functions tested: set_new, set_add, set_has, set_remove, set_size,
+//   set_union, set_intersection, set_difference
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from collections.flow --
+
+fn set_new()
+  let mut s = map()
+  return s
+end
+
+fn set_add(s, val)
+  map_set(s, str(val), "1")
+  return 0.0
+end
+
+fn set_has(s, val)
+  return map_has(s, str(val))
+end
+
+fn set_remove(s, val)
+  map_remove(s, str(val))
+  return 0.0
+end
+
+fn set_size(s)
+  let keys = map_keys(s)
+  return len(keys)
+end
+
+fn set_union(s1, s2)
+  let mut result = map()
+  let k1 = split(map_keys(s1), ",")
+  for k in k1
+    if k != ""
+      map_set(result, k, "1")
+    end
+  end
+  let k2 = split(map_keys(s2), ",")
+  for k in k2
+    if k != ""
+      map_set(result, k, "1")
+    end
+  end
+  return result
+end
+
+fn set_intersection(s1, s2)
+  let mut result = map()
+  let k1 = split(map_keys(s1), ",")
+  for k in k1
+    if k != "" && map_has(s2, k)
+      map_set(result, k, "1")
+    end
+  end
+  return result
+end
+
+fn set_difference(s1, s2)
+  let mut result = map()
+  let k1 = split(map_keys(s1), ",")
+  for k in k1
+    if k != "" && map_has(s2, k) == 0.0
+      map_set(result, k, "1")
+    end
+  end
+  return result
+end
+
+// -- Tests --
+
+print("=== test_set_ops ===")
+
+// Test 1: basic set operations
+let mut s1 = set_new()
+let _a1 = set_add(s1, "a")
+let _a2 = set_add(s1, "b")
+let _a3 = set_add(s1, "c")
+if set_has(s1, "a") == 1.0 && set_has(s1, "b") == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: set_has after add")
+  fail = fail + 1.0
+end
+
+// Test 2: set_has — not present
+if set_has(s1, "z") == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: set_has for absent key")
+  fail = fail + 1.0
+end
+
+// Test 3: set_remove
+let _r1 = set_remove(s1, "b")
+if set_has(s1, "b") == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: set_remove")
+  fail = fail + 1.0
+end
+
+// Re-add b for later tests
+let _a4 = set_add(s1, "b")
+
+// Test 4: set_union
+let mut s2 = set_new()
+let _a5 = set_add(s2, "b")
+let _a6 = set_add(s2, "c")
+let _a7 = set_add(s2, "d")
+let u = set_union(s1, s2)
+// s1={a,b,c}, s2={b,c,d} => union={a,b,c,d}
+if set_has(u, "a") == 1.0 && set_has(u, "b") == 1.0 && set_has(u, "c") == 1.0 && set_has(u, "d") == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: set_union missing elements")
+  fail = fail + 1.0
+end
+
+// Test 5: set_union — no extras
+if set_has(u, "z") == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: set_union has extra elements")
+  fail = fail + 1.0
+end
+
+// Test 6: set_intersection
+let inter = set_intersection(s1, s2)
+// s1={a,b,c}, s2={b,c,d} => intersection={b,c}
+if set_has(inter, "b") == 1.0 && set_has(inter, "c") == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: set_intersection missing elements")
+  fail = fail + 1.0
+end
+
+// Test 7: set_intersection — excludes non-shared
+if set_has(inter, "a") == 0.0 && set_has(inter, "d") == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: set_intersection has extra elements")
+  fail = fail + 1.0
+end
+
+// Test 8: set_difference
+let diff = set_difference(s1, s2)
+// s1={a,b,c} - s2={b,c,d} => {a}
+if set_has(diff, "a") == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: set_difference missing a")
+  fail = fail + 1.0
+end
+
+// Test 9: set_difference — excludes shared
+if set_has(diff, "b") == 0.0 && set_has(diff, "c") == 0.0 && set_has(diff, "d") == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: set_difference has shared elements")
+  fail = fail + 1.0
+end
+
+// Test 10: set_difference other direction — use fresh sets to avoid side effects
+let mut s3 = set_new()
+let _x1 = set_add(s3, "x")
+let _x2 = set_add(s3, "y")
+let _x3 = set_add(s3, "z")
+let mut s4 = set_new()
+let _x4 = set_add(s4, "y")
+let _x5 = set_add(s4, "z")
+let _x6 = set_add(s4, "w")
+// s3={x,y,z} - s4={y,z,w} => {x}
+let diff2 = set_difference(s3, s4)
+let has_x = set_has(diff2, "x")
+let s3_keys = map_keys(s3)
+let s4_keys = map_keys(s4)
+let diff2_keys = map_keys(diff2)
+if has_x == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: set_difference s3-s4 — has_x={has_x} s3_keys={s3_keys} s4_keys={s4_keys} diff2_keys={diff2_keys}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_set_ops ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

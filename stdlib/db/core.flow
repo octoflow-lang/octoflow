@@ -1,5 +1,8 @@
 // stdlib/db/core.flow — In-memory columnar database
 //
+// Functions: db_create, db_table, db_tables, db_insert, db_count,
+//            db_select_column, db_select_row, db_where, db_import_csv
+//
 // Tables stored as map of column_name → array
 // Database stored as map of table_name → table
 

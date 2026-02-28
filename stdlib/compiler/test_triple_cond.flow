@@ -1,0 +1,60 @@
+// test_triple_cond.flow — triple && in while condition + nested if inside while
+// Note: FlowGPU has no escape sequences; use chr(34) for double-quote
+let QT_CH = chr(34)
+let src = "hello " + QT_CH + "world" + QT_CH + " end"
+let n = len(src)
+let mut pos = 0.0
+let NL = 10.0
+let QT = 34.0
+let SP = 32.0
+let mut out = ""
+
+while pos < n
+  let co = ord(char_at(src, pos))
+
+  // skip spaces
+  if co == SP
+    pos = pos + 1.0
+
+  // string: scan until closing quote (triple && while condition)
+  elif co == QT
+    pos = pos + 1.0
+    let mut s = ""
+    while pos < n && ord(char_at(src, pos)) != QT && ord(char_at(src, pos)) != NL
+      s = s + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    if pos < n
+      pos = pos + 1.0
+    end
+    if len(out) > 0.0
+      out = out + "|"
+    end
+    out = out + "str:" + s
+
+  // word
+  elif is_match(char_at(src, pos), "[a-zA-Z]")
+    let mut word = ""
+    while pos < n && is_match(char_at(src, pos), "[a-zA-Z]")
+      word = word + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    if len(out) > 0.0
+      out = out + "|"
+    end
+    out = out + "word:" + word
+
+  else
+    pos = pos + 1.0
+  end
+end
+
+print("out={out}")
+
+// Also test: triple && in if condition
+let a = 3.0
+let b = 5.0
+let c = 7.0
+if a < b && b < c && c > 0.0
+  print("chain_and=yes")
+end

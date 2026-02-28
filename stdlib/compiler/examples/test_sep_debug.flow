@@ -1,0 +1,12 @@
+// Test that SEP works in push
+let mut arr = []
+push(arr, "a")
+push(arr, "b")
+push(arr, "c")
+let n = len(arr)
+print("len={n}")
+print("a0={arr}")
+let v0 = arr[0]
+let v1 = arr[1]
+let v2 = arr[2]
+print("v0={v0} v1={v1} v2={v2}")

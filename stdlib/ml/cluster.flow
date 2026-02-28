@@ -1,4 +1,6 @@
 // stdlib/ml/cluster.flow — Clustering algorithms
+//
+// Functions: kmeans, euclidean_distance, manhattan_distance, silhouette_score
 
 fn kmeans(data, k, max_iter)
   // K-means clustering on flat array (n_samples * n_features)

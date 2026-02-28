@@ -1,0 +1,17 @@
+// Test user-defined functions in self-hosting evaluator
+fn square(x)
+  let result = x * x
+  return result
+end
+
+fn add(a, b)
+  let result = a + b
+  return result
+end
+
+let s = square(5.0)
+let t = add(3.0, 7.0)
+let u = add(s, t)
+print("square(5)={s}")
+print("add(3,7)={t}")
+print("total={u}")

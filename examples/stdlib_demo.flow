@@ -1,0 +1,79 @@
+// Phase 30a: Standard Library Demo
+// Algorithms written in pure .flow — the self-hosting milestone.
+
+use test_math_mod
+use test_array_fn_mod
+
+// ── Math functions ──────────────────────────────────────
+let a = min_of(42.0, 17.0)
+let b = max_of(42.0, 17.0)
+let c = lerp(0.0, 100.0, 0.25)
+print("min_of(42, 17) = {a}")
+print("max_of(42, 17) = {b}")
+print("lerp(0, 100, 0.25) = {c}")
+
+// ── Array search ────────────────────────────────────────
+let prices = [2651.3, 2648.1, 2655.7, 2640.0, 2662.5]
+let total = arr_sum(prices)
+print("Sum of prices: {total}")
+
+let found = arr_contains(prices, 2655.7)
+let missing = arr_contains(prices, 9999.0)
+print("Contains 2655.7: {found}")
+print("Contains 9999.0: {missing}")
+
+let idx = index_of(prices, 2640.0)
+print("Index of 2640.0: {idx}")
+
+// ── Array mutation ──────────────────────────────────────
+let mut data = [50.0, 10.0, 40.0, 20.0, 30.0]
+
+// Swap elements
+let _ = swap(data, 0.0, 4.0)
+let d0 = data[0]
+let d4 = data[4]
+print("After swap(0,4): first={d0}, last={d4}")
+
+// Reverse
+let _ = reverse(data)
+let r0 = data[0]
+let r4 = data[4]
+print("After reverse: first={r0}, last={r4}")
+
+// ── Sorting ─────────────────────────────────────────────
+let mut nums = [5.0, 3.0, 8.0, 1.0, 9.0, 2.0, 7.0, 4.0, 6.0]
+let _ = bubble_sort(nums)
+let s0 = nums[0]
+let s1 = nums[1]
+let s2 = nums[2]
+let s8 = nums[8]
+print("Sorted: {s0}, {s1}, {s2}, ..., {s8}")
+
+// ── Binary search on sorted data ────────────────────────
+let sorted = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0]
+
+fn binary_search(arr, target)
+  let mut lo = 0.0
+  let mut hi = len(arr) - 1.0
+  for i in range(0, 30)
+    if lo > hi
+      return -1.0
+    end
+    let mid = floor((lo + hi) / 2.0)
+    if arr[mid] == target
+      return mid
+    end
+    if arr[mid] < target
+      lo = mid + 1.0
+    end
+    if arr[mid] > target
+      hi = mid - 1.0
+    end
+  end
+  return -1.0
+end
+
+let pos = binary_search(sorted, 9.0)
+let neg = binary_search(sorted, 6.0)
+print("Binary search 9.0: index {pos}")
+print("Binary search 6.0: index {neg}")

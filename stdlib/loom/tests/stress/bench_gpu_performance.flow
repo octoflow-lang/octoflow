@@ -1,0 +1,241 @@
+// stdlib/loom/bench_gpu_performance.flow — GPU Performance Baselines
+//
+// Establishes timing baselines for core GPU operations at various scales.
+// All benchmarks use time() for wall-clock measurement.
+//
+// 7 benchmarks:
+//   1. Element-wise ADD at 1K/10K/100K
+//   2. Reduction SUM at 1K/10K/100K
+//   3. Sort at 1K/10K (reverse-sorted worst case)
+//   4. Matrix multiply at 8x8, 32x32, 64x64
+//   5. Element-wise SQRT at 1K/10K/100K
+//   6. Statistical pipeline (mean+std+median on 10K)
+//   7. Full gpu_analyze on 10K
+//
+// Run: flowgpu-cli run stdlib/loom/bench_gpu_performance.flow --allow-read --allow-ffi
+
+use "../patterns"
+
+let mut passed = 0.0
+let mut failed = 0.0
+
+// ── Array generators ───────────────────────────────────────────────────
+
+fn generate_sequential(n)
+    let mut arr = []
+    let mut idx = 0.0
+    while idx < n
+        push(arr, idx * 1.234 + 0.567)
+        idx = idx + 1.0
+    end
+    return arr
+end
+
+fn generate_reverse(n)
+    let mut arr = []
+    let mut idx = 0.0
+    while idx < n
+        push(arr, n - idx)
+        idx = idx + 1.0
+    end
+    return arr
+end
+
+fn generate_matrix(n)
+    let mut arr = []
+    let mut idx = 0.0
+    let total = n * n
+    while idx < total
+        push(arr, idx * 0.01 + 1.0)
+        idx = idx + 1.0
+    end
+    return arr
+end
+
+print("=== GPU Performance Benchmarks (7 tests) ===")
+print(" ")
+
+// Pre-generate test data
+print("Generating test data...")
+let t_gen_start = time()
+let data_1k = generate_sequential(1000.0)
+let data_10k = generate_sequential(10000.0)
+let data_100k = generate_sequential(100000.0)
+let t_gen_end = time()
+let gen_ms = (t_gen_end - t_gen_start) * 1000.0
+print("  Data generated in {gen_ms:.1} ms")
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Bench 1: Element-wise ADD at 1K/10K/100K
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Bench 1: Element-wise ADD ---")
+
+let t1a = time()
+let _r1a = gpu_add_auto(data_1k, data_1k)
+let t1b = time()
+let add_1k_ms = (t1b - t1a) * 1000.0
+print("  1K:   {add_1k_ms:.1} ms")
+
+let t1c = time()
+let _r1b = gpu_add_auto(data_10k, data_10k)
+let t1d = time()
+let add_10k_ms = (t1d - t1c) * 1000.0
+print("  10K:  {add_10k_ms:.1} ms")
+
+let t1e = time()
+let _r1c = gpu_add_auto(data_100k, data_100k)
+let t1f = time()
+let add_100k_ms = (t1f - t1e) * 1000.0
+print("  100K: {add_100k_ms:.1} ms")
+passed = passed + 1.0
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Bench 2: Reduction SUM at 1K/10K/100K
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Bench 2: Reduction SUM ---")
+
+let t2a = time()
+let _r2a = gpu_sum_auto(data_1k)
+let t2b = time()
+let sum_1k_ms = (t2b - t2a) * 1000.0
+print("  1K:   {sum_1k_ms:.1} ms")
+
+let t2c = time()
+let _r2b = gpu_sum_auto(data_10k)
+let t2d = time()
+let sum_10k_ms = (t2d - t2c) * 1000.0
+print("  10K:  {sum_10k_ms:.1} ms")
+
+let t2e = time()
+let _r2c = gpu_sum_auto(data_100k)
+let t2f = time()
+let sum_100k_ms = (t2f - t2e) * 1000.0
+print("  100K: {sum_100k_ms:.1} ms")
+passed = passed + 1.0
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Bench 3: Sort at 100/500 (reverse-sorted worst case)
+//  NOTE: bubble sort O(n²) — 10K+ is too slow for interpreted code
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Bench 3: Sort (reverse-sorted, bubble sort O(n^2)) ---")
+
+let rev_100 = generate_reverse(100.0)
+let t3a = time()
+let _r3a = gpu_sort_auto(rev_100)
+let t3b = time()
+let sort_100_ms = (t3b - t3a) * 1000.0
+print("  100:  {sort_100_ms:.1} ms")
+
+let rev_500 = generate_reverse(500.0)
+let t3c = time()
+let _r3b = gpu_sort_auto(rev_500)
+let t3d = time()
+let sort_500_ms = (t3d - t3c) * 1000.0
+print("  500:  {sort_500_ms:.1} ms")
+passed = passed + 1.0
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Bench 4: Matrix multiply at 8x8, 32x32, 64x64
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Bench 4: Matrix multiply ---")
+
+let mat8 = generate_matrix(8.0)
+let t4a = time()
+let _r4a = gpu_matmul_auto(mat8, mat8, 8.0, 8.0, 8.0)
+let t4b = time()
+let mm_8_ms = (t4b - t4a) * 1000.0
+print("  8x8:   {mm_8_ms:.1} ms")
+
+let mat32 = generate_matrix(32.0)
+let t4c = time()
+let _r4b = gpu_matmul_auto(mat32, mat32, 32.0, 32.0, 32.0)
+let t4d = time()
+let mm_32_ms = (t4d - t4c) * 1000.0
+print("  32x32: {mm_32_ms:.1} ms")
+
+let mat64 = generate_matrix(64.0)
+let t4e = time()
+let _r4c = gpu_matmul_auto(mat64, mat64, 64.0, 64.0, 64.0)
+let t4f = time()
+let mm_64_ms = (t4f - t4e) * 1000.0
+print("  64x64: {mm_64_ms:.1} ms")
+passed = passed + 1.0
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Bench 5: Element-wise SQRT at 1K/10K/100K
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Bench 5: Element-wise SQRT ---")
+
+let t5a = time()
+let _r5a = gpu_map_auto(data_1k, "sqrt")
+let t5b = time()
+let sqrt_1k_ms = (t5b - t5a) * 1000.0
+print("  1K:   {sqrt_1k_ms:.1} ms")
+
+let t5c = time()
+let _r5b = gpu_map_auto(data_10k, "sqrt")
+let t5d = time()
+let sqrt_10k_ms = (t5d - t5c) * 1000.0
+print("  10K:  {sqrt_10k_ms:.1} ms")
+
+let t5e = time()
+let _r5c = gpu_map_auto(data_100k, "sqrt")
+let t5f = time()
+let sqrt_100k_ms = (t5f - t5e) * 1000.0
+print("  100K: {sqrt_100k_ms:.1} ms")
+passed = passed + 1.0
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Bench 6: Statistical pipeline (mean+std+median on 10K)
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Bench 6: Stats pipeline (mean+std+median) on 10K ---")
+
+let t6a = time()
+let _r6_mean = gpu_mean_auto(data_10k)
+let _r6_std = gpu_std_auto(data_10k)
+let _r6_med = gpu_median_auto(data_10k)
+let t6b = time()
+let stats_ms = (t6b - t6a) * 1000.0
+print("  10K mean+std+median: {stats_ms:.1} ms")
+passed = passed + 1.0
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Bench 7: Full gpu_analyze on 10K
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Bench 7: Full gpu_analyze on 10K ---")
+
+let t7a = time()
+let r7_report = gpu_analyze(data_10k)
+let t7b = time()
+let analyze_ms = (t7b - t7a) * 1000.0
+let r7_mean = r7_report["mean"]
+let r7_count = r7_report["count"]
+print("  10K gpu_analyze: {analyze_ms:.1} ms")
+print("    mean={r7_mean:.2}, count={r7_count}")
+passed = passed + 1.0
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SUMMARY TABLE
+// ═══════════════════════════════════════════════════════════════════════
+print("=== Timing Summary ===")
+print("  Operation           1K        10K       100K")
+print("  -----------------   --------  --------  --------")
+print("  Element ADD         {add_1k_ms:.1}ms   {add_10k_ms:.1}ms   {add_100k_ms:.1}ms")
+print("  Reduction SUM       {sum_1k_ms:.1}ms   {sum_10k_ms:.1}ms   {sum_100k_ms:.1}ms")
+print("  Sort (reverse)      {sort_100_ms:.1}ms(100)  {sort_500_ms:.1}ms(500)  --")
+print("  SQRT                {sqrt_1k_ms:.1}ms   {sqrt_10k_ms:.1}ms   {sqrt_100k_ms:.1}ms")
+print(" ")
+print("  MatMul    8x8={mm_8_ms:.1}ms  32x32={mm_32_ms:.1}ms  64x64={mm_64_ms:.1}ms")
+print("  Stats     mean+std+med(10K)={stats_ms:.1}ms")
+print("  Analyze   full(10K)={analyze_ms:.1}ms")
+print(" ")
+let total = passed + failed
+print("=== {passed}/{total} benchmarks completed ===")

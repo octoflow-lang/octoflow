@@ -1,0 +1,102 @@
+// test_gguf_real.flow — Test GGUF parser with a real model
+// Quick metadata test — no inference, just verify parsing.
+// Run: octoflow run stdlib/ai/test_gguf_real.flow --allow-read
+
+use "gguf"
+use "weight_loader"
+
+let model_path = "G:/ollama_models/blobs/sha256-29d8c98fa6b098e200069bfb88b9508dc3e85586d20cba59f8dda9a808165104"
+
+print("=== Real GGUF Model Test ===")
+print("Loading: qwen2.5-coder 1.5B")
+print(" ")
+
+let model = gguf_load(model_path)
+
+// Architecture
+let arch = map_get(model, "arch")
+print("Architecture: {arch}")
+
+// Model dimensions via gguf_meta
+let n_embd = gguf_meta(model, "embedding_length")
+let n_head = gguf_meta(model, "attention.head_count")
+let n_kv_head = gguf_meta(model, "attention.head_count_kv")
+let n_ff = gguf_meta(model, "feed_forward_length")
+let n_layer = gguf_meta(model, "block_count")
+let vocab_size = gguf_meta(model, "vocab_size")
+let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+
+let head_dim = n_embd / n_head
+let kv_dim = n_kv_head * head_dim
+
+print("  n_embd = {n_embd}")
+print("  n_head = {n_head}")
+print("  n_kv_head = {n_kv_head}")
+print("  head_dim = {head_dim}")
+print("  kv_dim = {kv_dim}")
+print("  n_ff = {n_ff}")
+print("  n_layer = {n_layer}")
+print("  vocab_size = {vocab_size}")
+print("  eps = {eps}")
+
+// Check shorthand aliases
+let n_embd2 = map_get(model, "n_embd")
+let n_head2 = map_get(model, "n_head")
+print(" ")
+print("Shorthand aliases:")
+print("  n_embd = {n_embd2}")
+print("  n_head = {n_head2}")
+
+// Check data_start
+let ds = map_get(model, "data_start")
+let tc = map_get(model, "tensor_count")
+print(" ")
+print("  data_start = {ds}")
+print("  tensor_count = {tc}")
+
+// Check specific tensors exist
+print(" ")
+print("Tensor checks:")
+let has_emb = gguf_has_tensor(model, "token_embd.weight")
+print("  token_embd.weight: {has_emb}")
+let has_l0_norm = gguf_has_tensor(model, "blk.0.attn_norm.weight")
+print("  blk.0.attn_norm.weight: {has_l0_norm}")
+let has_l0_q = gguf_has_tensor(model, "blk.0.attn_q.weight")
+print("  blk.0.attn_q.weight: {has_l0_q}")
+let has_out_norm = gguf_has_tensor(model, "output_norm.weight")
+print("  output_norm.weight: {has_out_norm}")
+
+// Check tensor types
+if has_l0_q == 1.0
+  let q_type = gguf_tensor_type(model, "blk.0.attn_q.weight")
+  let q_count = gguf_tensor_count(model, "blk.0.attn_q.weight")
+  let q_dim0 = gguf_tensor_dim(model, "blk.0.attn_q.weight", 0.0)
+  let q_dim1 = gguf_tensor_dim(model, "blk.0.attn_q.weight", 1.0)
+  print("  blk.0.attn_q.weight: type={q_type} count={q_count} dims=[{q_dim0},{q_dim1}]")
+end
+
+if has_emb == 1.0
+  let emb_type = gguf_tensor_type(model, "token_embd.weight")
+  let emb_count = gguf_tensor_count(model, "token_embd.weight")
+  print("  token_embd.weight: type={emb_type} count={emb_count}")
+end
+
+// Try loading one embedding row (BOS token)
+print(" ")
+print("Loading BOS embedding (token 1)...")
+let file_bytes = read_bytes(model_path)
+let bos_emb = load_embedding_row(file_bytes, model, 1.0, n_embd)
+let bos_len = len(bos_emb)
+print("  Embedding length: {bos_len}")
+print("  First 5 values: {bos_emb[0]} {bos_emb[1]} {bos_emb[2]} {bos_emb[3]} {bos_emb[4]}")
+
+// Try loading one norm weight
+print(" ")
+print("Loading blk.0.attn_norm.weight...")
+let norm_w = read_tensor_by_name(file_bytes, model, "blk.0.attn_norm.weight")
+let norm_len = len(norm_w)
+print("  Length: {norm_len}")
+print("  First 5 values: {norm_w[0]} {norm_w[1]} {norm_w[2]} {norm_w[3]} {norm_w[4]}")
+
+print(" ")
+print("=== DONE ===")

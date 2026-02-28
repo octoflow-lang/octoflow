@@ -1,0 +1,231 @@
+// test_layout.flow — Layout Helper Tests
+//
+// Tests vstack and hstack layout positioning without a GUI window.
+//
+// Usage:
+//   octoflow run stdlib/gui/test_layout.flow
+
+use "layout"
+
+let mut _tcount = [0.0, 0.0]
+
+fn check(name, got, expected)
+  if got == expected
+    _tcount[0] = _tcount[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected {expected}")
+  _tcount[1] = _tcount[1] + 1.0
+  return 0.0
+end
+
+print("=== Layout Helper Tests ===")
+
+// ── Vertical Stack ─────────────────────────────────────────────────
+print("1. VStack creation")
+let vl = vstack(20.0, 30.0, 8.0)
+let _c1 = check("vstack id", vl, 0.0)
+let _c2 = check("vstack cy init", vstack_cursor_y(vl), 30.0)
+
+print("2. VStack label")
+let lbl = vstack_label(vl, "HELLO")
+let _c3 = check("label y", _gui_y[int(lbl)], 30.0)
+// After label (h=20): cursor = 30 + 20 + 8 = 58
+let _c4 = check("cursor after label", vstack_cursor_y(vl), 58.0)
+
+print("3. VStack button")
+let btn = vstack_button(vl, 100.0, 36.0, "BTN")
+let _c5 = check("button y", _gui_y[int(btn)], 58.0)
+// After button (h=36): cursor = 58 + 36 + 8 = 102
+let _c6 = check("cursor after button", vstack_cursor_y(vl), 102.0)
+
+print("4. VStack checkbox")
+let chk = vstack_checkbox(vl, "OPT")
+let _c7 = check("checkbox y", _gui_y[int(chk)], 102.0)
+// After checkbox (h=22): cursor = 102 + 22 + 8 = 132
+let _c8 = check("cursor after checkbox", vstack_cursor_y(vl), 132.0)
+
+print("5. VStack slider")
+let sld = vstack_slider(vl, 200.0, 0.0, 100.0, 50.0)
+let _c9 = check("slider y", _gui_y[int(sld)], 132.0)
+// After slider (h=24): cursor = 132 + 24 + 8 = 164
+let _c10 = check("cursor after slider", vstack_cursor_y(vl), 164.0)
+
+print("6. VStack separator")
+let sep = vstack_separator(vl, 200.0)
+let _c11 = check("separator y", _gui_y[int(sep)], 164.0)
+// After separator (h=2): cursor = 164 + 2 + 8 = 174
+let _c12 = check("cursor after separator", vstack_cursor_y(vl), 174.0)
+
+print("7. VStack progress")
+let prog = vstack_progress(vl, 200.0)
+let _c13 = check("progress y", _gui_y[int(prog)], 174.0)
+// After progress (h=22): cursor = 174 + 22 + 8 = 204
+let _c14 = check("cursor after progress", vstack_cursor_y(vl), 204.0)
+
+print("8. VStack textinput")
+let inp = vstack_textinput(vl, 180.0)
+let _c15 = check("input y", _gui_y[int(inp)], 204.0)
+// After input (h=30): cursor = 204 + 30 + 8 = 242
+let _c16 = check("cursor after input", vstack_cursor_y(vl), 242.0)
+
+print("9. VStack space")
+let _sp = vstack_space(vl, 20.0)
+let _c17 = check("cursor after space", vstack_cursor_y(vl), 262.0)
+
+print("10. VStack radio")
+let rad = vstack_radio(vl, "RADIO", 1.0)
+let _c18 = check("radio y", _gui_y[int(rad)], 262.0)
+// After radio (h=22): cursor = 262 + 22 + 8 = 292
+let _c19 = check("cursor after radio", vstack_cursor_y(vl), 292.0)
+
+print("11. VStack spinbox")
+let spn = vstack_spinbox(vl, 140.0, 0.0, 50.0, 10.0, 1.0)
+let _c20 = check("spinbox y", _gui_y[int(spn)], 292.0)
+// After spinbox (h=30): cursor = 292 + 30 + 8 = 330
+let _c21 = check("cursor after spinbox", vstack_cursor_y(vl), 330.0)
+
+print("12. VStack dropdown")
+let dd = vstack_dropdown(vl, 150.0)
+let _c22 = check("dropdown y", _gui_y[int(dd)], 330.0)
+// After dropdown (h=30): cursor = 330 + 30 + 8 = 368
+let _c23 = check("cursor after dropdown", vstack_cursor_y(vl), 368.0)
+
+print("13. VStack tabs")
+let tabs = vstack_tabs(vl, 300.0, 100.0)
+let _c24 = check("tabs y", _gui_y[int(tabs)], 368.0)
+// After tabs (h=100): cursor = 368 + 100 + 8 = 476
+let _c25 = check("cursor after tabs", vstack_cursor_y(vl), 476.0)
+
+print("14. VStack listbox")
+let lst = vstack_listbox(vl, 200.0, 80.0)
+let _c26 = check("listbox y", _gui_y[int(lst)], 476.0)
+// After listbox (h=80): cursor = 476 + 80 + 8 = 564
+let _c27 = check("cursor after listbox", vstack_cursor_y(vl), 564.0)
+
+print("15. VStack canvas")
+let cvs = vstack_canvas(vl, 250.0, 120.0)
+let _c44 = check("canvas y", _gui_y[int(cvs)], 564.0)
+// After canvas (h=120): cursor = 564 + 120 + 8 = 692
+let _c45 = check("cursor after canvas", vstack_cursor_y(vl), 692.0)
+
+print("16. VStack treeview")
+let tvw = vstack_treeview(vl, 200.0, 100.0)
+let _c46 = check("treeview y", _gui_y[int(tvw)], 692.0)
+// After treeview (h=100): cursor = 692 + 100 + 8 = 800
+let _c47 = check("cursor after treeview", vstack_cursor_y(vl), 800.0)
+
+// All widgets should have x=20.0
+let _c28 = check("all x=20 (label)", _gui_x[int(lbl)], 20.0)
+let _c29 = check("all x=20 (button)", _gui_x[int(btn)], 20.0)
+let _c30 = check("all x=20 (slider)", _gui_x[int(sld)], 20.0)
+
+// ── Horizontal Stack ───────────────────────────────────────────────
+print("15. HStack creation")
+let hl = hstack(10.0, 500.0, 12.0)
+let _c31 = check("hstack id", hl, 1.0)
+let _c32 = check("hstack cx init", hstack_cursor_x(hl), 10.0)
+
+print("16. HStack buttons")
+let hb1 = hstack_button(hl, 80.0, 30.0, "A")
+let _c33 = check("hbtn1 x", _gui_x[int(hb1)], 10.0)
+// After button (w=80): cursor = 10 + 80 + 12 = 102
+let _c34 = check("cursor after hbtn1", hstack_cursor_x(hl), 102.0)
+
+let hb2 = hstack_button(hl, 80.0, 30.0, "B")
+let _c35 = check("hbtn2 x", _gui_x[int(hb2)], 102.0)
+// After button: cursor = 102 + 80 + 12 = 194
+let _c36 = check("cursor after hbtn2", hstack_cursor_x(hl), 194.0)
+
+print("17. HStack label")
+let hl2 = hstack_label(hl, "TEXT")
+// "TEXT" = 4 chars * 10 + 4 = 44 px
+let _c37 = check("hlabel x", _gui_x[int(hl2)], 194.0)
+// After label: cursor = 194 + 44 + 12 = 250
+let _c38 = check("cursor after hlabel", hstack_cursor_x(hl), 250.0)
+
+print("18. HStack space")
+let _hsp = hstack_space(hl, 30.0)
+let _c39 = check("cursor after hspace", hstack_cursor_x(hl), 280.0)
+
+print("19. HStack canvas")
+let hcvs = hstack_canvas(hl, 150.0, 100.0)
+let _c48 = check("hcanvas x", _gui_x[int(hcvs)], 280.0)
+// After canvas (w=150): cursor = 280 + 150 + 12 = 442
+let _c49 = check("cursor after hcanvas", hstack_cursor_x(hl), 442.0)
+
+print("20. HStack treeview")
+let htvw = hstack_treeview(hl, 120.0, 80.0)
+let _c50 = check("htreeview x", _gui_x[int(htvw)], 442.0)
+// After treeview (w=120): cursor = 442 + 120 + 12 = 574
+let _c51 = check("cursor after htreeview", hstack_cursor_x(hl), 574.0)
+
+// All hstack widgets should have y=500.0
+let _c40 = check("all y=500 (hbtn1)", _gui_y[int(hb1)], 500.0)
+let _c41 = check("all y=500 (hbtn2)", _gui_y[int(hb2)], 500.0)
+let _c42 = check("all y=500 (hlabel)", _gui_y[int(hl2)], 500.0)
+
+// ── Grid Layout ──────────────────────────────────────────────────
+print("21. Grid creation")
+let g = grid(50.0, 50.0, 3.0, 100.0, 36.0, 4.0)
+let _g1 = check("grid id", g, 2.0)
+let _g2 = check("grid type", _lay_type[int(g)], LAY_GRID)
+
+print("22. Grid cell positions")
+// Col 0: x = 50
+// Col 1: x = 50 + 1*(100+4) = 154
+// Col 2: x = 50 + 2*(100+4) = 258
+let gx0 = grid_cell_x(g, 0.0, 0.0)
+let _g3 = check("grid x(0,0)", gx0, 50.0)
+let gx1 = grid_cell_x(g, 0.0, 1.0)
+let _g4 = check("grid x(0,1)", gx1, 154.0)
+let gx2 = grid_cell_x(g, 0.0, 2.0)
+let _g5 = check("grid x(0,2)", gx2, 258.0)
+// Row 0: y = 50
+// Row 1: y = 50 + 1*(36+4) = 90
+// Row 2: y = 50 + 2*(36+4) = 130
+let gy0 = grid_cell_y(g, 0.0, 0.0)
+let _g6 = check("grid y(0,0)", gy0, 50.0)
+let gy1 = grid_cell_y(g, 1.0, 0.0)
+let _g7 = check("grid y(1,0)", gy1, 90.0)
+let gy2 = grid_cell_y(g, 2.0, 0.0)
+let _g8 = check("grid y(2,0)", gy2, 130.0)
+
+print("23. Grid button")
+let gb = grid_button(g, 0.0, 0.0, "A")
+let _g9 = check("grid btn x", _gui_x[int(gb)], 50.0)
+let _g10 = check("grid btn y", _gui_y[int(gb)], 50.0)
+let _g11 = check("grid btn w", _gui_w[int(gb)], 100.0)
+let _g12 = check("grid btn h", _gui_h[int(gb)], 36.0)
+
+print("24. Grid button (1,2)")
+let gb2 = grid_button(g, 1.0, 2.0, "F")
+let _g13 = check("grid btn2 x", _gui_x[int(gb2)], 258.0)
+let _g14 = check("grid btn2 y", _gui_y[int(gb2)], 90.0)
+
+print("25. Grid label")
+let gl = grid_label(g, 2.0, 1.0, "HI")
+let _g15 = check("grid lbl x", _gui_x[int(gl)], 154.0)
+let _g16 = check("grid lbl y", _gui_y[int(gl)], 130.0)
+
+print("26. Grid checkbox")
+let gc = grid_checkbox(g, 0.0, 1.0, "CHK")
+let _g17 = check("grid chk x", _gui_x[int(gc)], 154.0)
+let _g18 = check("grid chk y", _gui_y[int(gc)], 50.0)
+
+print("27. Grid canvas")
+let gcv = grid_canvas(g, 1.0, 1.0)
+let _g19 = check("grid cvs x", _gui_x[int(gcv)], 154.0)
+let _g20 = check("grid cvs y", _gui_y[int(gcv)], 90.0)
+let _g21 = check("grid cvs w", _gui_w[int(gcv)], 100.0)
+let _g22 = check("grid cvs h", _gui_h[int(gcv)], 36.0)
+
+// ── Summary ────────────────────────────────────────────────────────
+let total = _tcount[0] + _tcount[1]
+let passed = _tcount[0]
+let failed = _tcount[1]
+print(" ")
+print("=== Results: {passed}/{total} passed ===")
+if failed > 0.0
+  print("FAILURES: {failed}")
+end

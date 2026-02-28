@@ -1,0 +1,158 @@
+// emit_rmsnorm.flow — RMSNorm Kernel Emitter
+//
+// RMSNorm(x, w) = (x / sqrt(mean(x^2) + eps)) * w
+//
+// Used in Llama, Qwen, Mistral instead of LayerNorm.
+// Uses shared memory reduction to compute RMS across the vector.
+//
+// Binding 0: input x (float array, length N)
+// Binding 1: weight w (float array, length N)
+// Binding 2: output (float array, length N)
+//
+// Push constants:
+//   [0]: N (vector dimension, float)
+//
+// Workgroup: 256 threads. Handles vectors up to 256 elements.
+// For larger vectors, dispatch multiple workgroups per vector.
+// MVP: single vector, N <= 256.
+
+use "../compiler/ir"
+
+fn emit_rmsnorm(out_path)
+  ir_new()
+  ir_input_count = 2.0
+  ir_shared_size = 256.0
+  ir_workgroup_size = 256.0
+
+  let entry = ir_block("entry")
+
+  let lid = ir_load_local_id(entry)
+  let n_f = ir_push_const(entry, 0.0)
+  let n = ir_ftou(entry, n_f)
+
+  // Each thread loads its element and computes x^2
+  // Threads beyond N store 0.0
+  let in_bounds = ir_ulte(entry, lid, n)
+
+  let x = ir_load_input_at(entry, 0.0, lid)
+  let c0 = ir_const_f(entry, 0.0)
+  let x_val = ir_select(entry, 1.0, in_bounds, x, c0)
+  let x_sq = ir_fmul(entry, x_val, x_val)
+
+  // Store x^2 to shared memory for reduction
+  ir_shared_store(entry, lid, x_sq)
+  ir_barrier(entry)
+
+  // Parallel reduction for sum of squares (log2 steps)
+  // stride = 128, 64, 32, 16, 8, 4, 2, 1
+  let c128 = ir_const_u(entry, 128.0)
+  let c64 = ir_const_u(entry, 64.0)
+  let c32 = ir_const_u(entry, 32.0)
+  let c16 = ir_const_u(entry, 16.0)
+  let c8 = ir_const_u(entry, 8.0)
+  let c4 = ir_const_u(entry, 4.0)
+  let c2u = ir_const_u(entry, 2.0)
+  let c1u = ir_const_u(entry, 1.0)
+
+  // Unrolled reduction: 8 steps for 256 threads
+  // Step 1: stride 128
+  let partner1 = ir_iadd(entry, lid, c128)
+  let do1 = ir_ulte(entry, lid, c128)
+  let my1 = ir_shared_load(entry, lid)
+  let p1 = ir_shared_load(entry, partner1)
+  let sum1 = ir_fadd(entry, my1, p1)
+  let keep1 = ir_select(entry, 1.0, do1, sum1, my1)
+  ir_shared_store(entry, lid, keep1)
+  ir_barrier(entry)
+
+  // Step 2: stride 64
+  let partner2 = ir_iadd(entry, lid, c64)
+  let do2 = ir_ulte(entry, lid, c64)
+  let my2 = ir_shared_load(entry, lid)
+  let p2 = ir_shared_load(entry, partner2)
+  let sum2 = ir_fadd(entry, my2, p2)
+  let keep2 = ir_select(entry, 1.0, do2, sum2, my2)
+  ir_shared_store(entry, lid, keep2)
+  ir_barrier(entry)
+
+  // Step 3: stride 32
+  let partner3 = ir_iadd(entry, lid, c32)
+  let do3 = ir_ulte(entry, lid, c32)
+  let my3 = ir_shared_load(entry, lid)
+  let p3 = ir_shared_load(entry, partner3)
+  let sum3 = ir_fadd(entry, my3, p3)
+  let keep3 = ir_select(entry, 1.0, do3, sum3, my3)
+  ir_shared_store(entry, lid, keep3)
+  ir_barrier(entry)
+
+  // Step 4: stride 16
+  let partner4 = ir_iadd(entry, lid, c16)
+  let do4 = ir_ulte(entry, lid, c16)
+  let my4 = ir_shared_load(entry, lid)
+  let p4 = ir_shared_load(entry, partner4)
+  let sum4 = ir_fadd(entry, my4, p4)
+  let keep4 = ir_select(entry, 1.0, do4, sum4, my4)
+  ir_shared_store(entry, lid, keep4)
+  ir_barrier(entry)
+
+  // Step 5: stride 8
+  let partner5 = ir_iadd(entry, lid, c8)
+  let do5 = ir_ulte(entry, lid, c8)
+  let my5 = ir_shared_load(entry, lid)
+  let p5 = ir_shared_load(entry, partner5)
+  let sum5 = ir_fadd(entry, my5, p5)
+  let keep5 = ir_select(entry, 1.0, do5, sum5, my5)
+  ir_shared_store(entry, lid, keep5)
+  ir_barrier(entry)
+
+  // Step 6: stride 4
+  let partner6 = ir_iadd(entry, lid, c4)
+  let do6 = ir_ulte(entry, lid, c4)
+  let my6 = ir_shared_load(entry, lid)
+  let p6 = ir_shared_load(entry, partner6)
+  let sum6 = ir_fadd(entry, my6, p6)
+  let keep6 = ir_select(entry, 1.0, do6, sum6, my6)
+  ir_shared_store(entry, lid, keep6)
+  ir_barrier(entry)
+
+  // Step 7: stride 2
+  let partner7 = ir_iadd(entry, lid, c2u)
+  let do7 = ir_ulte(entry, lid, c2u)
+  let my7 = ir_shared_load(entry, lid)
+  let p7 = ir_shared_load(entry, partner7)
+  let sum7 = ir_fadd(entry, my7, p7)
+  let keep7 = ir_select(entry, 1.0, do7, sum7, my7)
+  ir_shared_store(entry, lid, keep7)
+  ir_barrier(entry)
+
+  // Step 8: stride 1
+  let partner8 = ir_iadd(entry, lid, c1u)
+  let do8 = ir_ulte(entry, lid, c1u)
+  let my8 = ir_shared_load(entry, lid)
+  let p8 = ir_shared_load(entry, partner8)
+  let sum8 = ir_fadd(entry, my8, p8)
+  let keep8 = ir_select(entry, 1.0, do8, sum8, my8)
+  ir_shared_store(entry, lid, keep8)
+  ir_barrier(entry)
+
+  // shared[0] now contains sum of squares
+  let c0u = ir_const_u(entry, 0.0)
+  let sum_sq = ir_shared_load(entry, c0u)
+
+  // rms = sqrt(sum_sq / N + eps)
+  let mean_sq = ir_fdiv(entry, sum_sq, n_f)
+  let eps = ir_const_f(entry, 0.00001)
+  let mean_plus_eps = ir_fadd(entry, mean_sq, eps)
+  let rms = ir_sqrt(entry, mean_plus_eps)
+
+  // output = (x / rms) * weight
+  let normed = ir_fdiv(entry, x_val, rms)
+  let w = ir_load_input_at(entry, 1.0, lid)
+  let result = ir_fmul(entry, normed, w)
+
+  ir_store_output_at(entry, lid, result)
+  ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

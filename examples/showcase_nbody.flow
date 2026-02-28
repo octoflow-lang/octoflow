@@ -1,0 +1,238 @@
+// ─── GPU N-Body Simulation ──────────────────────────────────────────
+// 512 particles orbiting 3 massive stars — animated on your GPU
+// Run: octoflow run examples/showcase_nbody.flow
+//
+// Leapfrog integrator with gravitational softening.
+// All force computation runs in parallel on the GPU.
+
+let N = 512
+let TW = 80
+let TH = 36
+let steps = 400
+let dt = 0.004
+let render_every = 20
+let softening = 2.0
+
+// View bounds
+let view_x0 = -100.0
+let view_x1 = 100.0
+let view_y0 = -56.0
+let view_y1 = 56.0
+let view_w = view_x1 - view_x0
+let view_h = view_y1 - view_y0
+
+// Terminal codes
+let esc = chr(27)
+let reset = esc + "[0m"
+let star_ch = chr(9733)
+let dot_ch = chr(183)
+let bright_ch = chr(9679)
+let c_star = esc + "[38;2;255;220;50m"
+let c_bright = esc + "[38;2;180;210;255m"
+let c_dim = esc + "[38;2;80;120;180m"
+let c_status = esc + "[38;2;100;220;200m"
+
+// ─── Stars (gravitational attractors) ───────────────────────────────
+let s1x = 0.0
+let s1y = 0.0
+let s1m = 800.0
+
+let s2x = 50.0
+let s2y = 30.0
+let s2m = 300.0
+
+let s3x = -40.0
+let s3y = -25.0
+let s3m = 400.0
+
+// Star grid positions (pre-computed)
+let s1_gi = int(floor((s1y - view_y0) / view_h * TH) * TW + floor((s1x - view_x0) / view_w * TW))
+let s2_gi = int(floor((s2y - view_y0) / view_h * TH) * TW + floor((s2x - view_x0) / view_w * TW))
+let s3_gi = int(floor((s3y - view_y0) / view_h * TH) * TW + floor((s3x - view_x0) / view_w * TW))
+
+// ─── Initialize particles ───────────────────────────────────────────
+let t0 = now_ms()
+let rand1 = gpu_random(N)
+let rand2 = gpu_random(N)
+let rand3 = gpu_random(N)
+let rand4 = gpu_random(N)
+let half_N = gpu_fill(0.5, N)
+let one_N = gpu_fill(1.0, N)
+
+// Spread particles: [-80, 80] x [-50, 50]
+let off1 = gpu_sub(rand1, half_N)
+let mut px = gpu_scale(off1, 160.0)
+let off2 = gpu_sub(rand2, half_N)
+let mut py = gpu_scale(off2, 100.0)
+
+// Tangential velocity → orbital motion: v ∝ (-y, x) / |r|
+let px_sq = gpu_mul(px, px)
+let py_sq = gpu_mul(py, py)
+let r2_init = gpu_add(px_sq, py_sq)
+let r2_safe = gpu_add(r2_init, one_N)
+let r_init = gpu_sqrt(r2_safe)
+let neg_py = gpu_negate(py)
+let tang_vx = gpu_div(neg_py, r_init)
+let mut vx = gpu_scale(tang_vx, 18.0)
+let tang_vy = gpu_div(px, r_init)
+let mut vy = gpu_scale(tang_vy, 18.0)
+
+// Add velocity scatter
+let vx_noise = gpu_sub(rand3, half_N)
+let vx_jitter = gpu_scale(vx_noise, 4.0)
+let vx = gpu_add(vx, vx_jitter)
+let vy_noise = gpu_sub(rand4, half_N)
+let vy_jitter = gpu_scale(vy_noise, 4.0)
+let vy = gpu_add(vy, vy_jitter)
+
+// GPU constants
+let eps2 = gpu_fill(softening, N)
+
+// Terminal grid (CPU)
+let grid_size = TW * TH
+let mut grid = []
+for gi in range(0, grid_size)
+    push(grid, 0.0)
+end
+
+// Hide cursor, clear screen
+print("{esc}[?25l{esc}[2J")
+
+let mut render_ctr = 0.0
+let mut frame = 0.0
+
+// ─── Simulation loop ────────────────────────────────────────────────
+for step in range(0, steps)
+    let t_frame = now_ms()
+
+    // ─── Gravitational forces from 3 stars (GPU parallel) ───────────
+    // Star 1: F = G*M * (r_star - r) / |r_star - r|^3
+    let s1x_arr = gpu_fill(s1x, N)
+    let s1y_arr = gpu_fill(s1y, N)
+    let dx1 = gpu_sub(s1x_arr, px)
+    let dy1 = gpu_sub(s1y_arr, py)
+    let dx1_sq = gpu_mul(dx1, dx1)
+    let dy1_sq = gpu_mul(dy1, dy1)
+    let rr1_base = gpu_add(dx1_sq, dy1_sq)
+    let rr1 = gpu_add(rr1_base, eps2)
+    let r1s = gpu_sqrt(rr1)
+    let r1s_sq = gpu_mul(r1s, r1s)
+    let r1s_cb = gpu_mul(r1s, r1s_sq)
+    let s1m_arr = gpu_fill(s1m, N)
+    let f1 = gpu_div(s1m_arr, r1s_cb)
+    let mut ax = gpu_mul(f1, dx1)
+    let mut ay = gpu_mul(f1, dy1)
+
+    // Star 2
+    let s2x_arr = gpu_fill(s2x, N)
+    let s2y_arr = gpu_fill(s2y, N)
+    let dx2 = gpu_sub(s2x_arr, px)
+    let dy2 = gpu_sub(s2y_arr, py)
+    let dx2_sq = gpu_mul(dx2, dx2)
+    let dy2_sq = gpu_mul(dy2, dy2)
+    let rr2_base = gpu_add(dx2_sq, dy2_sq)
+    let rr2 = gpu_add(rr2_base, eps2)
+    let r2s = gpu_sqrt(rr2)
+    let r2s_sq = gpu_mul(r2s, r2s)
+    let r2s_cb = gpu_mul(r2s, r2s_sq)
+    let s2m_arr = gpu_fill(s2m, N)
+    let f2 = gpu_div(s2m_arr, r2s_cb)
+    let f2x = gpu_mul(f2, dx2)
+    let f2y = gpu_mul(f2, dy2)
+    let ax = gpu_add(ax, f2x)
+    let ay = gpu_add(ay, f2y)
+
+    // Star 3
+    let s3x_arr = gpu_fill(s3x, N)
+    let s3y_arr = gpu_fill(s3y, N)
+    let dx3 = gpu_sub(s3x_arr, px)
+    let dy3 = gpu_sub(s3y_arr, py)
+    let dx3_sq = gpu_mul(dx3, dx3)
+    let dy3_sq = gpu_mul(dy3, dy3)
+    let rr3_base = gpu_add(dx3_sq, dy3_sq)
+    let rr3 = gpu_add(rr3_base, eps2)
+    let r3s = gpu_sqrt(rr3)
+    let r3s_sq = gpu_mul(r3s, r3s)
+    let r3s_cb = gpu_mul(r3s, r3s_sq)
+    let s3m_arr = gpu_fill(s3m, N)
+    let f3 = gpu_div(s3m_arr, r3s_cb)
+    let f3x = gpu_mul(f3, dx3)
+    let f3y = gpu_mul(f3, dy3)
+    let ax = gpu_add(ax, f3x)
+    let ay = gpu_add(ay, f3y)
+
+    // ─── Leapfrog kick-drift ────────────────────────────────────────
+    let dvx = gpu_scale(ax, dt)
+    let dvy = gpu_scale(ay, dt)
+    let vx = gpu_add(vx, dvx)
+    let vy = gpu_add(vy, dvy)
+    let dpx = gpu_scale(vx, dt)
+    let dpy = gpu_scale(vy, dt)
+    let px = gpu_add(px, dpx)
+    let py = gpu_add(py, dpy)
+
+    // ─── Render every Nth step ──────────────────────────────────────
+    render_ctr = render_ctr + 1.0
+    if render_ctr >= render_every
+        render_ctr = 0.0
+        frame = frame + 1.0
+
+        // Reset grid
+        for gi in range(0, grid_size)
+            grid[int(gi)] = 0.0
+        end
+
+        // Plot particles onto grid
+        for pi in range(0, N)
+            let wx = px[int(pi)]
+            let wy = py[int(pi)]
+            let gx = floor((wx - view_x0) / view_w * TW)
+            let gy = floor((wy - view_y0) / view_h * TH)
+            if gx >= 0.0 && gx < TW && gy >= 0.0 && gy < TH
+                let idx = gy * TW + gx
+                grid[int(idx)] = grid[int(idx)] + 1.0
+            end
+        end
+
+        // Mark stars
+        grid[s1_gi] = -1.0
+        grid[s2_gi] = -1.0
+        grid[s3_gi] = -1.0
+
+        // Render to terminal
+        print("{esc}[H")
+        for row in range(0, TH)
+            let mut line = ""
+            for col in range(0, TW)
+                let val = grid[int(row * TW + col)]
+                if val < 0.0
+                    line = line + c_star + star_ch
+                elif val > 2.0
+                    line = line + c_bright + bright_ch
+                elif val > 0.0
+                    line = line + c_dim + dot_ch
+                else
+                    line = line + " "
+                end
+            end
+            let row_out = line + reset
+            print("{row_out}")
+        end
+
+        // Status bar
+        let elapsed = int(now_ms() - t_frame)
+        let se = str(elapsed)
+        let sf = str(int(frame))
+        let si = str(int(step))
+        let ss = str(int(steps))
+        let status = c_status + "  OctoFlow GPU | 512 particles | 3 stars | Step " + si + "/" + ss + " | Frame " + sf + " | " + se + "ms" + reset
+        print("{status}")
+    end
+end
+
+// ─── Summary ────────────────────────────────────────────────────────
+let total = str(int(now_ms() - t0))
+let ss_final = str(int(steps))
+let summary = c_status + "  Done: 512 particles, " + ss_final + " steps in " + total + " ms" + reset
+print("{summary}")
+print("{esc}[?25h")

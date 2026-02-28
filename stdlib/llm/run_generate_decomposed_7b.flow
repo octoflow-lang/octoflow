@@ -1,0 +1,11 @@
+// Run decomposed streaming text generation — Qwen2.5-7B
+// Prerequisites: decompose the model first with run_decompose_7b.flow
+// Usage: octoflow run stdlib/llm/run_generate_decomposed_7b.flow --allow-read --allow-ffi
+
+use "generate_decomposed"
+
+let model_path = "F:/OctoFlow/models/qwen2.5-7b-instruct-q4_k_m.gguf"
+let decomp_dir = "F:/OctoFlow/models/qwen-7b-decomp"
+let prompt = "Write a Python function to check if a number is prime."
+
+let _r = run_generate_decomposed(model_path, decomp_dir, prompt)

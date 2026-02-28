@@ -1,0 +1,134 @@
+// test_gpu_join.flow — GPU Broadcast Join unit test
+// Two tables joined entirely on GPU. 10 dispatches, 1 submit, 0 CPU row iteration.
+//
+// Table: employees (256 rows)
+//   dept_id[i] = floor(i / 64), salary[i] = i + 1
+//
+// Table: departments (4 rows)
+//   dept_id = [0, 1, 2, 3], bonus = [100, 200, 300, 400]
+//
+// Query: SELECT SUM(salary + bonus) FROM employees e
+//        JOIN departments d ON e.dept_id = d.dept_id
+//
+// GPU broadcast join:
+//   For each dept d: eq_scalar(dept, d) → mask; fma_scalar(mask, bonus_col, bonus_d)
+//   add_ab(salary, bonus_col) → total_comp
+//   reduce_sum(total_comp) → grand_total
+//
+// Expected (bit-exact):
+//   dept 0: 64 employees, bonus=100 → extra = 6400
+//   dept 1: 64 employees, bonus=200 → extra = 12800
+//   dept 2: 64 employees, bonus=300 → extra = 19200
+//   dept 3: 64 employees, bonus=400 → extra = 25600
+//   SUM(salary) = 32896, SUM(bonus) = 64000
+//   Grand total = 96896
+//
+// Run: octoflow run stdlib/tests/test_gpu_join.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+let N = 256.0
+let K = 4.0
+let GROUP_SIZE = N / K
+let BUF_BYTES = N * 4.0
+
+rt_init()
+
+// Load kernels
+let pipe_eq = rt_load_pipeline("tests/gpu_shaders/17_eq_scalar.spv", 2.0, 4.0)
+let pipe_fma = rt_load_pipeline("tests/gpu_shaders/21_fma_scalar.spv", 2.0, 4.0)
+let pipe_add = rt_load_pipeline("tests/gpu_shaders/20_add_ab.spv", 3.0, 0.0)
+let pipe_reduce = rt_load_pipeline("stdlib/loom/kernels/reduce_sum.spv", 2.0, 0.0)
+
+// Create buffers
+let buf_dept = rt_create_buffer(BUF_BYTES)
+let buf_salary = rt_create_buffer(BUF_BYTES)
+let buf_mask = rt_create_buffer(BUF_BYTES)
+let buf_bonus = rt_create_buffer(BUF_BYTES)
+let buf_total = rt_create_buffer(BUF_BYTES)
+let buf_result = rt_create_buffer(1024.0)
+
+// Upload employee data
+let mut depts = []
+let mut salaries = []
+let mut i = 0.0
+while i < N
+  push(depts, floor(i / GROUP_SIZE))
+  push(salaries, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(buf_dept, depts)
+rt_upload(buf_salary, salaries)
+
+// Zero working buffers
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_mask, zeros)
+rt_upload(buf_bonus, zeros)
+rt_upload(buf_total, zeros)
+rt_upload(buf_result, zeros)
+
+// Department dimension table (small table — lives on CPU, drives dispatch loop)
+let mut bonuses = [100.0, 200.0, 300.0, 400.0]
+
+// ── JOIN dispatch chain ────────────────────────────────────────────
+// Phase 1: broadcast join — build bonus column (K × 2 dispatches)
+// Phase 2: combine columns (1 dispatch)
+// Phase 3: reduce (1 dispatch)
+// Total: 4×2 + 1 + 1 = 10 dispatches, 1 submit
+rt_chain_begin(10.0, 3.0)
+
+// Phase 1: broadcast join
+// For each dept d, broadcast bonus_d to matching employees:
+//   bonus_col[i] += mask[i] * bonus_d
+let mut g = 0.0
+while g < K
+  // eq_scalar: dept == g → mask
+  let mut pc_g = [g]
+  rt_chain_push_constants(pipe_eq, pc_g)
+  let mut b1 = [buf_dept, buf_mask]
+  rt_chain_dispatch(pipe_eq, b1, 1.0)
+
+  // fma_scalar: bonus_col[i] += mask[i] * bonus_d
+  let bonus_d = bonuses[int(g)]
+  let mut pc_b = [bonus_d]
+  rt_chain_push_constants(pipe_fma, pc_b)
+  let mut b2 = [buf_mask, buf_bonus]
+  rt_chain_dispatch(pipe_fma, b2, 1.0)
+
+  g = g + 1.0
+end
+
+// Phase 2: combine — total_comp = salary + bonus
+let mut b3 = [buf_salary, buf_bonus, buf_total]
+rt_chain_dispatch(pipe_add, b3, 1.0)
+
+// Phase 3: reduce — SUM(total_comp)
+let mut b4 = [buf_total, buf_result]
+rt_chain_dispatch(pipe_reduce, b4, 1.0)
+
+rt_chain_end()
+rt_chain_submit_wait()
+
+// ── Download and verify ────────────────────────────────────────────
+rt_download(buf_result, 1.0)
+let gpu_total = rt_result[0]
+
+// Expected: SUM(salary) + SUM(bonus) = 32896 + 64000 = 96896
+let expected = 96896.0
+
+print("JOIN: SELECT SUM(salary + bonus) FROM employees JOIN departments")
+print("  GPU result:  {gpu_total}")
+print("  Expected:    {expected}")
+
+if gpu_total == expected
+  print("PASS: gpu_join 10 dispatches, 1 submit, 0 CPU row iterations, BIT EXACT")
+else
+  print("FAIL: gpu_total={gpu_total} expected {expected}")
+end
+
+rt_cleanup()

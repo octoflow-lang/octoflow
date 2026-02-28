@@ -1,0 +1,144 @@
+// gpu_sliding_window.flow — GPU Sliding Window (65536 elements, W=64)
+//
+// "65536 elements. 64-element moving average. 1 dispatch. 0 CPU iterations."
+//
+// Computes both sliding sum and moving average in a single dispatch chain.
+// Each thread sums its own window — simple O(N×W) but fully parallel.
+//
+// Run: octoflow run examples/gpu_sliding_window.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N = 65536.0
+let W = 64.0
+
+rt_init()
+
+let pipe_sum = rt_load_pipeline("tests/gpu_shaders/39_sliding_sum.spv", 2.0, 8.0)
+let pipe_avg = rt_load_pipeline("tests/gpu_shaders/40_sliding_avg.spv", 2.0, 8.0)
+
+// ── Input: [1, 1, 1, ..., 1] — sliding sum = min(W, i+1), avg = 1.0 ──
+let mut input = []
+let mut i = 0.0
+while i < N
+  push(input, 1.0)
+  i = i + 1.0
+end
+
+let buf_in = rt_create_buffer(N * 4.0)
+let buf_sum = rt_create_buffer(N * 4.0)
+let buf_avg = rt_create_buffer(N * 4.0)
+rt_upload(buf_in, input)
+
+let n_wgs = int((N + 255.0) / 256.0)
+let t0 = time()
+
+// 2 dispatches in 1 chain: sliding sum + moving average
+rt_chain_begin(2.0, 2.0)
+let mut pc = [N, W]
+rt_chain_push_constants(pipe_sum, pc)
+let mut bufs1 = [buf_in, buf_sum]
+rt_chain_dispatch(pipe_sum, bufs1, n_wgs)
+rt_chain_push_constants(pipe_avg, pc)
+let mut bufs2 = [buf_in, buf_avg]
+rt_chain_dispatch(pipe_avg, bufs2, n_wgs)
+rt_chain_end()
+rt_chain_submit_wait()
+
+let t1 = time()
+let total_ms = (t1 - t0) * 1000.0
+
+// ── Verify sliding sum ─────────────────────────────────────────────
+rt_download(buf_sum, N)
+
+let mut sum_pass = 1.0
+// For all-ones input: sum[i] = min(i+1, W)
+// i=0: sum=1, i=63: sum=64, i=64: sum=64, i=65535: sum=64
+let s0 = rt_result[0]
+let s63 = rt_result[63]
+let s64 = rt_result[64]
+let slast = rt_result[int(N - 1.0)]
+
+if s0 != 1.0
+  print("FAIL: sum[0] = {s0}, expected 1")
+  sum_pass = 0.0
+end
+if s63 != 64.0
+  print("FAIL: sum[63] = {s63}, expected 64")
+  sum_pass = 0.0
+end
+if s64 != 64.0
+  print("FAIL: sum[64] = {s64}, expected 64")
+  sum_pass = 0.0
+end
+if slast != 64.0
+  print("FAIL: sum[65535] = {slast}, expected 64")
+  sum_pass = 0.0
+end
+
+// ── Verify moving average ──────────────────────────────────────────
+rt_download(buf_avg, N)
+
+let mut avg_pass = 1.0
+// For all-ones input: avg[i] = 1.0 for all i
+let a0 = rt_result[0]
+let a100 = rt_result[100]
+let alast = rt_result[int(N - 1.0)]
+
+if a0 != 1.0
+  print("FAIL: avg[0] = {a0}, expected 1")
+  avg_pass = 0.0
+end
+if a100 != 1.0
+  print("FAIL: avg[100] = {a100}, expected 1")
+  avg_pass = 0.0
+end
+if alast != 1.0
+  print("FAIL: avg[65535] = {alast}, expected 1")
+  avg_pass = 0.0
+end
+
+// Spot check every 1000
+let mut i = 0.0
+while i < N
+  let got = rt_result[int(i)]
+  if got != 1.0
+    avg_pass = 0.0
+  end
+  i = i + 1000.0
+end
+
+// ── Report ─────────────────────────────────────────────────────────
+print("")
+print("OctoFlow GPU Sliding Window")
+print("  Elements: {N}")
+print("  Window size: {W}")
+print("  Workgroups: {n_wgs}")
+print("  Dispatches: 2 (sliding_sum + moving_avg)")
+print("  Submissions: 1")
+print("  CPU iterations: 0")
+print("  Total time: {total_ms} ms")
+print("")
+print("  Sliding sum (all-ones input):")
+print("    sum[0] = {s0} (expected 1)")
+print("    sum[63] = {s63} (expected 64)")
+print("    sum[64] = {s64} (expected 64)")
+print("    sum[65535] = {slast} (expected 64)")
+
+print("  Moving average (all-ones input):")
+print("    avg[0] = {a0} (expected 1)")
+print("    avg[100] = {a100} (expected 1)")
+print("    avg[65535] = {alast} (expected 1)")
+
+if sum_pass == 1.0
+  if avg_pass == 1.0
+    print("  PASS: {N}-element sliding window (W={W}) BIT EXACT")
+  else
+    print("  FAIL: moving average failed")
+  end
+else
+  print("  FAIL: sliding sum failed")
+end
+
+print("")
+rt_cleanup()

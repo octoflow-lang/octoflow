@@ -1,0 +1,175 @@
+// test_vm_regulator.flow — Step 5: Homeostasis Regulator
+//
+// Validates the activation stability loop:
+//
+//   vm_maxnorm:   registers → metrics  (compute max|x|, L∞ norm)
+//   vm_regulator: metrics   → control  (threshold decision → scale factor)
+//
+// Four tests:
+//   TEST 1: maxnorm alone       — known register values → verify metrics output
+//   TEST 2: regulator alone     — injected maxnorm (too high) → verify scale+status
+//   TEST 3: stable region       — injected maxnorm (within bounds) → scale=1 status=1
+//   TEST 4: full chain          — maxnorm + regulator in ONE vm_build (single submit)
+//                                 Proves GPU-autonomous homeostasis with one vkQueueSubmit
+//
+// Decision thresholds (target=10, lo=5, hi=20):
+//   maxnorm < 5     → too_low  → scale = target/maxnorm (upscale),  status=0
+//   5 <= maxnorm <= 20 → stable → scale = 1.0,                      status=1
+//   maxnorm > 20    → too_high → scale = target/maxnorm (downscale), status=0
+//
+// Run: octoflow run stdlib/loom/test_vm_regulator.flow --allow-ffi
+
+// ── 1. Boot VM ────────────────────────────────────────────────────────────────
+let reg_size = 8.0
+let n_inst   = 1.0
+let vm = vm_boot(n_inst, reg_size, 1.0)
+
+// Regulator parameters
+let target_norm = 10.0
+let lo_thresh   = 5.0
+let hi_thresh   = 20.0
+let met_slot    = 0.0
+let ctl_slot    = 0.0
+
+// ── TEST 1: maxnorm alone ─────────────────────────────────────────────────────
+// Write [1, 2, 3, 4, 5, 6, 7, 8] — max abs = 8.0
+let input1 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let _w1    = vm_write_register(vm, 0.0, 0.0, input1)
+
+// Push constants: reg_off=0, count=reg_size, metrics_slot=0
+let pc1 = [0.0, reg_size, met_slot]
+let _d1  = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_maxnorm.spv", pc1, 1.0)
+let p1   = vm_build(vm)
+let _e1  = vm_execute(p1)
+
+let met1   = vm_read_metrics(vm, 0.0, 1.0)
+let norm1  = met1[0]
+
+print("TEST 1: maxnorm([1,2,3,4,5,6,7,8]) = {norm1}  (expected 8.0)")
+let mut pass1 = 1.0
+if abs(norm1 - 8.0) > 0.001
+  pass1 = 0.0
+end
+if pass1 == 1.0
+  print("TEST 1: PASS -- maxnorm correct")
+else
+  print("TEST 1: FAIL")
+end
+
+// ── TEST 2: regulator alone — inject high maxnorm (out-of-bounds high) ────────
+// Inject maxnorm = 30.0 (> hi_thresh=20) → too_high → scale = 10/30 ≈ 0.333
+let inject2 = [30.0]
+let _wm2    = vm_write_metrics(vm, 0.0, inject2)
+
+// Push constants: metrics_slot, control_slot, target, lo, hi
+let pc2 = [met_slot, ctl_slot, target_norm, lo_thresh, hi_thresh]
+let _d2 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_regulator.spv", pc2, 1.0)
+let p2  = vm_build(vm)
+let _e2 = vm_execute(p2)
+
+let ctrl2   = vm_read_control(vm, 0.0, 2.0)
+let scale2  = ctrl2[0]
+let status2 = ctrl2[1]
+let exp2    = target_norm / 30.0
+
+print("TEST 2: regulator(maxnorm=30, target=10, lo=5, hi=20)")
+print("  scale={scale2}  expected ~0.333")
+print("  status={status2}  expected 0.0 (correcting)")
+let mut pass2 = 1.0
+if abs(scale2 - exp2) > 0.001
+  pass2 = 0.0
+  print("  FAIL: scale {scale2} != {exp2}")
+end
+if abs(status2 - 0.0) > 0.001
+  pass2 = 0.0
+  print("  FAIL: status {status2} != 0.0")
+end
+if pass2 == 1.0
+  print("TEST 2: PASS -- too-high detection, scale correct")
+else
+  print("TEST 2: FAIL")
+end
+
+// ── TEST 3: stable region — maxnorm within [lo, hi] ──────────────────────────
+// Inject maxnorm = 12.0 (in [5, 20]) → stable → scale=1.0, status=1.0
+let inject3 = [12.0]
+let _wm3    = vm_write_metrics(vm, 0.0, inject3)
+
+let pc3 = [met_slot, ctl_slot, target_norm, lo_thresh, hi_thresh]
+let _d3 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_regulator.spv", pc3, 1.0)
+let p3  = vm_build(vm)
+let _e3 = vm_execute(p3)
+
+let ctrl3   = vm_read_control(vm, 0.0, 2.0)
+let scale3  = ctrl3[0]
+let status3 = ctrl3[1]
+
+print("TEST 3: regulator(maxnorm=12, target=10, lo=5, hi=20)")
+print("  scale={scale3}  expected 1.0 (no correction)")
+print("  status={status3}  expected 1.0 (stable)")
+let mut pass3 = 1.0
+if abs(scale3 - 1.0) > 0.001
+  pass3 = 0.0
+  print("  FAIL: scale {scale3} != 1.0")
+end
+if abs(status3 - 1.0) > 0.001
+  pass3 = 0.0
+  print("  FAIL: status {status3} != 1.0")
+end
+if pass3 == 1.0
+  print("TEST 3: PASS -- stable region, no correction")
+else
+  print("TEST 3: FAIL")
+end
+
+// ── TEST 4: full homeostasis chain (single submit) ────────────────────────────
+// maxnorm + regulator staged into ONE VkCommandBuffer.
+// GPU executes: measure activation → decide scale → autonomously.
+// No CPU round-trip between measurement and decision.
+//
+// Input: [1,2,3,4,5,6,7,8] → maxnorm=8.0 → within [5,20] → scale=1.0, status=1.0
+let input4 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let _w4    = vm_write_register(vm, 0.0, 0.0, input4)
+
+// Stage maxnorm THEN regulator — vm_build produces ONE command buffer with barrier
+let pc4a = [0.0, reg_size, met_slot]
+let _d4a = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_maxnorm.spv", pc4a, 1.0)
+
+let pc4b = [met_slot, ctl_slot, target_norm, lo_thresh, hi_thresh]
+let _d4b = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_regulator.spv", pc4b, 1.0)
+
+let p4  = vm_build(vm)   // ONE VkCommandBuffer: [maxnorm | BARRIER | regulator]
+let _e4 = vm_execute(p4) // ONE vkQueueSubmit
+
+let met4    = vm_read_metrics(vm, 0.0, 1.0)
+let ctrl4   = vm_read_control(vm, 0.0, 2.0)
+let norm4   = met4[0]
+let scale4  = ctrl4[0]
+let status4 = ctrl4[1]
+
+print("TEST 4: chain (maxnorm | BARRIER | regulator)  single submit")
+print("  Program: {p4}")
+print("  maxnorm={norm4}   expected 8.0")
+print("  scale={scale4}    expected 1.0  (8.0 in [5,20])")
+print("  status={status4}  expected 1.0  (stable)")
+let mut pass4 = 1.0
+if abs(norm4 - 8.0) > 0.001
+  pass4 = 0.0
+  print("  FAIL: maxnorm wrong")
+end
+if abs(scale4 - 1.0) > 0.001
+  pass4 = 0.0
+  print("  FAIL: scale wrong")
+end
+if abs(status4 - 1.0) > 0.001
+  pass4 = 0.0
+  print("  FAIL: status wrong")
+end
+if pass4 == 1.0
+  print("TEST 4: PASS -- GPU-autonomous homeostasis chain, single vkQueueSubmit")
+else
+  print("TEST 4: FAIL")
+end
+
+// ── 5. Cleanup ────────────────────────────────────────────────────────────────
+let _sv = vm_shutdown(vm)

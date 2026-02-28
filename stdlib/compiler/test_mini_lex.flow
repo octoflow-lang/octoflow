@@ -1,0 +1,26 @@
+// Minimal lexer simulation: push chars into an array
+let src = "hello"
+let n = len(src)
+let mut pos = 0.0
+let mut tok_types = []
+let SP = 32.0
+
+while pos < n
+  let c = char_at(src, pos)
+  let co = ord(c)
+  if co == SP
+    pos = pos + 1.0
+  else
+    push(tok_types, c)
+    pos = pos + 1.0
+  end
+end
+push(tok_types, "eof")
+let count = len(tok_types)
+print("count={count}")
+let mut i = 0.0
+while i < count
+  let t = tok_types[i]
+  print("[{i}] {t}")
+  i = i + 1.0
+end

@@ -1,5 +1,6 @@
-// FlowGPU Standard Library: Sorting Algorithms
-// In-place sorting on mutable arrays.
+// stdlib/sort.flow — Sorting algorithms (in-place on mutable arrays)
+//
+// Functions: insertion_sort, bubble_sort
 
 fn insertion_sort(arr)
   let n = len(arr)

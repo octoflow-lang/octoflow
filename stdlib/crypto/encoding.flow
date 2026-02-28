@@ -1,0 +1,25 @@
+// stdlib/crypto/encoding.flow — Encoding utilities
+//
+// PREFERRED: Use builtins directly instead of these wrappers:
+//   base64_encode(s)  — encode string to base64
+//   base64_decode(s)  — decode base64 to string
+//   hex_encode(s)     — encode string to hex
+//   hex_decode(s)     — decode hex to string
+//
+// These aliases are kept for backward compatibility only.
+
+fn to_base64(s)
+  return base64_encode(s)
+end
+
+fn from_base64(s)
+  return base64_decode(s)
+end
+
+fn to_hex(s)
+  return hex_encode(s)
+end
+
+fn from_hex(s)
+  return hex_decode(s)
+end

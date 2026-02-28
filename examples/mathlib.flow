@@ -1,0 +1,20 @@
+// Math utility library — scalar functions, structs, constants
+
+let PI = 3.14159
+let TAU = 6.28318
+
+struct Point(x, y)
+
+fn distance(x1, y1, x2, y2)
+  let dx = x2 - x1
+  let dy = y2 - y1
+  return sqrt(dx * dx + dy * dy)
+end
+
+fn lerp(a, b, t)
+  return a + (b - a) * t
+end
+
+fn clamp_unit(v)
+  return clamp(v, 0.0, 1.0)
+end

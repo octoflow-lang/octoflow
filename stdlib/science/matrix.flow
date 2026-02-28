@@ -1,4 +1,7 @@
 // stdlib/science/matrix.flow — Matrix operations (flat row-major arrays)
+//
+// Functions: mat_norm, mat_diag, mat_from_diag, mat_solve_triangular,
+//            mat_solve_upper, mat_row_norm, mat_col_norm
 
 fn mat_norm(a, n)
   // Frobenius norm: sqrt(sum of squares of all elements)

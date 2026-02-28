@@ -1,0 +1,211 @@
+// test_eval_hardening.flow — Advanced eval.flow capability tests
+// Tests patterns needed for self-hosting: reassignment with fn call,
+// nested fn calls, complex conditions, string concat patterns, etc.
+//
+// Run: EVAL_PROG_PATH=stdlib/compiler/test_eval_hardening.flow octoflow run stdlib/compiler/eval.flow --allow-read --allow-ffi --max-iters 5000000
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// ── Test 1: Reassignment with fn call RHS ────────────────────────
+let mut x = 7.5
+x = floor(x)
+if x == 7.0
+  pass = pass + 1.0
+else
+  print("FAIL T1: x={x}")
+  fail = fail + 1.0
+end
+
+// ── Test 2: Reassignment with fn call + arithmetic ───────────────
+let mut y = 3.7
+y = ceil(y) * 3.0
+if y == 12.0
+  pass = pass + 1.0
+else
+  print("FAIL T2: y={y}")
+  fail = fail + 1.0
+end
+
+// ── Test 3: Multiple map_set then iteration check ────────────────
+let mut m = map()
+map_set(m, "a", 1.0)
+map_set(m, "b", 2.0)
+map_set(m, "c", 3.0)
+let ha = map_has(m, "a")
+let hb = map_has(m, "b")
+let hc = map_has(m, "c")
+let hd = map_has(m, "d")
+if ha == 1.0 && hb == 1.0 && hc == 1.0 && hd == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL T3: ha={ha} hb={hb} hc={hc} hd={hd}")
+  fail = fail + 1.0
+end
+
+// ── Test 4: Array building in a loop ─────────────────────────────
+let mut nums = []
+let mut i = 0.0
+while i < 5.0
+  push(nums, i)
+  i = i + 1.0
+end
+let nlen = len(nums)
+let n0 = nums[0]
+let n4 = nums[4]
+if nlen == 5.0 && n0 == 0.0 && n4 == 4.0
+  pass = pass + 1.0
+else
+  print("FAIL T4: nlen={nlen} n0={n0} n4={n4}")
+  fail = fail + 1.0
+end
+
+// ── Test 5: String concat with variable ──────────────────────────
+let prefix = "hello"
+let suffix = "world"
+let msg = prefix + " " + suffix
+if msg == "hello world"
+  pass = pass + 1.0
+else
+  print("FAIL T5: msg={msg}")
+  fail = fail + 1.0
+end
+
+// ── Test 6: Chained string concat ────────────────────────────────
+let a = "A"
+let b = "B"
+let c = "C"
+let abc = a + b + c
+if abc == "ABC"
+  pass = pass + 1.0
+else
+  print("FAIL T6: abc={abc}")
+  fail = fail + 1.0
+end
+
+// ── Test 7: Function returning string ────────────────────────────
+fn make_tag(name, value)
+  let r = name + "=" + value
+  return r
+end
+
+let tag = make_tag("key", "val")
+if tag == "key=val"
+  pass = pass + 1.0
+else
+  print("FAIL T7: tag={tag}")
+  fail = fail + 1.0
+end
+
+// ── Test 8: Recursive-like fn (fibonacci-style iterative) ────────
+fn fib(n)
+  let mut a = 0.0
+  let mut b = 1.0
+  let mut i = 0.0
+  while i < n
+    let tmp = b
+    b = a + b
+    a = tmp
+    i = i + 1.0
+  end
+  return a
+end
+
+let f10 = fib(10.0)
+if f10 == 55.0
+  pass = pass + 1.0
+else
+  print("FAIL T8: f10={f10}")
+  fail = fail + 1.0
+end
+
+// ── Test 9: Nested if in for-each ────────────────────────────────
+let mut words = []
+push(words, "cat")
+push(words, "dog")
+push(words, "fish")
+let mut long_count = 0.0
+for w in words
+  let wl = len(w)
+  if wl > 3.0
+    long_count = long_count + 1.0
+  end
+end
+if long_count == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL T9: long_count={long_count}")
+  fail = fail + 1.0
+end
+
+// ── Test 10: ord/chr builtins ────────────────────────────────────
+let o = ord("A")
+let ch = chr(65.0)
+if o == 65.0 && ch == "A"
+  pass = pass + 1.0
+else
+  print("FAIL T10: o={o} ch={ch}")
+  fail = fail + 1.0
+end
+
+// ── Test 11: is_match and contains ───────────────────────────────
+let im = is_match("hello123", "[a-z]")
+let cn = contains("abcdef", "cd")
+if im == 1.0 && cn == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL T11: im={im} cn={cn}")
+  fail = fail + 1.0
+end
+
+// ── Test 12: char_at ─────────────────────────────────────────────
+let s = "OctoFlow"
+let c0 = char_at(s, 0.0)
+let c4 = char_at(s, 4.0)
+if c0 == "O" && c4 == "F"
+  pass = pass + 1.0
+else
+  print("FAIL T12: c0={c0} c4={c4}")
+  fail = fail + 1.0
+end
+
+// ── Test 13: While with compound && condition ────────────────────
+let src = "hello world"
+let mut pos = 0.0
+let n = len(src)
+while pos < n && char_at(src, pos) != " "
+  pos = pos + 1.0
+end
+if pos == 5.0
+  pass = pass + 1.0
+else
+  print("FAIL T13: pos={pos}")
+  fail = fail + 1.0
+end
+
+// ── Test 14: min/max ─────────────────────────────────────────────
+let mn = min(3.0, 7.0)
+let mx = max(3.0, 7.0)
+if mn == 3.0 && mx == 7.0
+  pass = pass + 1.0
+else
+  print("FAIL T14: mn={mn} mx={mx}")
+  fail = fail + 1.0
+end
+
+// ── Test 15: sqrt and pow ────────────────────────────────────────
+let sq = sqrt(16.0)
+let pw = pow(2.0, 8.0)
+if sq == 4.0 && pw == 256.0
+  pass = pass + 1.0
+else
+  print("FAIL T15: sq={sq} pw={pw}")
+  fail = fail + 1.0
+end
+
+// ── Summary ──────────────────────────────────────────────────────
+if fail == 0.0
+  print("HARDENING: ALL PASS ({pass}/15 tests)")
+else
+  print("HARDENING: {fail} FAIL / {pass} PASS of 15 tests")
+end

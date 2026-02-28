@@ -1,0 +1,115 @@
+// stdlib/sys/test.flow — Test framework
+//
+// Functions: test_suite, assert_eq, assert_near, assert_true, assert_false,
+//            assert_str_eq, assert_gt, assert_lt, print_summary
+//
+// Usage:
+//   use sys/test
+//   assert_eq(add(2, 3), 5.0, "add works")
+//   assert_near(3.14159, PI, 0.001, "PI precision")
+//   print_summary()
+
+let mut __test_pass = 0.0
+let mut __test_fail = 0.0
+let mut __test_name = ""
+
+fn test_suite(name)
+  __test_name = name
+  __test_pass = 0.0
+  __test_fail = 0.0
+  print("=== {name} ===")
+  return 0.0
+end
+
+fn assert_eq(actual, expected, msg)
+  if actual == expected
+    __test_pass = __test_pass + 1.0
+    return 1.0
+  end
+  __test_fail = __test_fail + 1.0
+  print("  FAIL: {msg}")
+  print("    expected: {expected}")
+  print("    actual:   {actual}")
+  return 0.0
+end
+
+fn assert_near(actual, expected, tol, msg)
+  let mut diff = actual - expected
+  if diff < 0.0
+    diff = diff * -1.0
+  end
+  if diff <= tol
+    __test_pass = __test_pass + 1.0
+    return 1.0
+  end
+  __test_fail = __test_fail + 1.0
+  print("  FAIL: {msg}")
+  print("    expected: {expected} +/- {tol}")
+  print("    actual:   {actual} (diff={diff})")
+  return 0.0
+end
+
+fn assert_true(val, msg)
+  if val == 1.0
+    __test_pass = __test_pass + 1.0
+    return 1.0
+  end
+  __test_fail = __test_fail + 1.0
+  print("  FAIL: {msg} (expected true, got {val})")
+  return 0.0
+end
+
+fn assert_false(val, msg)
+  if val == 0.0
+    __test_pass = __test_pass + 1.0
+    return 1.0
+  end
+  __test_fail = __test_fail + 1.0
+  print("  FAIL: {msg} (expected false, got {val})")
+  return 0.0
+end
+
+fn assert_str_eq(actual, expected, msg)
+  if actual == expected
+    __test_pass = __test_pass + 1.0
+    return 1.0
+  end
+  __test_fail = __test_fail + 1.0
+  print("  FAIL: {msg}")
+  print("    expected: {expected}")
+  print("    actual:   {actual}")
+  return 0.0
+end
+
+fn assert_gt(actual, threshold, msg)
+  if actual > threshold
+    __test_pass = __test_pass + 1.0
+    return 1.0
+  end
+  __test_fail = __test_fail + 1.0
+  print("  FAIL: {msg} ({actual} not > {threshold})")
+  return 0.0
+end
+
+fn assert_lt(actual, threshold, msg)
+  if actual < threshold
+    __test_pass = __test_pass + 1.0
+    return 1.0
+  end
+  __test_fail = __test_fail + 1.0
+  print("  FAIL: {msg} ({actual} not < {threshold})")
+  return 0.0
+end
+
+fn print_summary()
+  let total = __test_pass + __test_fail
+  print("")
+  print("--- {__test_name} ---")
+  print("  pass: {__test_pass}/{total}")
+  if __test_fail > 0.0
+    print("  FAIL: {__test_fail} failures")
+  else
+    print("  ALL PASS")
+  end
+  return __test_fail
+end

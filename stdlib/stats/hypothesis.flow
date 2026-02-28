@@ -1,4 +1,7 @@
 // stdlib/stats/hypothesis.flow — Hypothesis tests
+//
+// Functions: t_test_one_sample, t_test_two_sample, paired_t_test,
+//            chi_squared, z_test
 
 fn t_test_one_sample(arr, mu0)
   // One-sample t-test: H0: mean = mu0

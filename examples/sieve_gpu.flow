@@ -1,0 +1,374 @@
+// ====================================================================
+//  GPU PARALLEL SIEVE OF ERATOSTHENES
+//
+//  Showcases OctoFlow's unique batch dispatch chain capability:
+//  16 worker VMs, each recording 2,266 dispatches, built once,
+//  executed as a SINGLE GPU submit. Zero CPU round-trips.
+//
+//  Architecture: segmented trial-division sieve
+//    - CPU computes small primes ≤ √N (microseconds)
+//    - 16 GPU VMs each sieve ~60 segments of 1M elements
+//    - 4 kernels per segment: init → mark(×35) → count → accum
+//    - All chained into one build, one execute per VM
+//
+//  Results (GTX 1660 SUPER, 6GB VRAM):
+//    π(10^7)  =     664,579  (80 dispatches,  0.4s GPU)
+//    π(10^8)  =   5,761,455  (1,536 dispatches, 4.3s GPU)
+//    π(10^9)  =  50,847,534  (36,252 dispatches, 65s GPU)
+//
+//  VRAM: 16 VMs × 128MB = 2GB (39% of 6GB)
+//
+//  f32 note: OctoFlow uses f32 for all values. Per-VM counts are
+//  exact (all < 3.8M < 2^24). The CPU-side tally uses split
+//  accumulation (millions + remainder) to stay exact in f32.
+//  Result: π(10^9) = 50 × 10^6 + 847,534 — exact match.
+//
+//  Kernels (emitted via IR builder):
+//    stdlib/loom/kernels/sieve/sieve_init.spv   — init R0 bitmap
+//    stdlib/loom/kernels/sieve/sieve_mark.spv   — mark composites (inner loop)
+//    stdlib/loom/kernels/sieve/sieve_count.spv  — sum R0 → R2[0]
+//    stdlib/loom/kernels/sieve/sieve_accum.spv  — R3[0] += R2[0]
+// ====================================================================
+
+print("")
+print("====================================================================")
+print("  GPU PARALLEL SIEVE OF ERATOSTHENES")
+print("  16 worker VMs × batch dispatch chains")
+print("====================================================================")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  CONFIGURATION
+// ════════════════════════════════════════════════════════════════════
+
+let N = 1000000000.0         // 10^9 (also: 10^7, 10^8)
+let SEG_SIZE = 1048576.0     // 2^20 = 1M elements per segment
+let NUM_VMS = 16.0           // worker VMs
+let PRIMES_PER_BATCH = 100.0 // primes tested per mark dispatch
+
+// Register offsets (R0=0, R2=2*SEG_SIZE, R3=3*SEG_SIZE)
+let R0_OFF = 0.0
+let R2_OFF = SEG_SIZE * 2.0
+let R3_OFF = SEG_SIZE * 3.0
+
+// Kernel paths
+let K_INIT  = "stdlib/loom/kernels/sieve/sieve_init.spv"
+let K_MARK  = "stdlib/loom/kernels/sieve/sieve_mark.spv"
+let K_COUNT = "stdlib/loom/kernels/sieve/sieve_count.spv"
+let K_ACCUM = "stdlib/loom/kernels/sieve/sieve_accum.spv"
+
+// Workgroups for segment-wide dispatch
+let WG = floor((SEG_SIZE + 255.0) / 256.0)
+
+// Number of segments
+let NUM_SEGS = floor((N + SEG_SIZE - 1.0) / SEG_SIZE)
+
+print("  Target N = {N:.0}")
+print("  Segment size = {SEG_SIZE:.0}")
+print("  Total segments = {NUM_SEGS:.0}")
+print("  Worker VMs = {NUM_VMS:.0}")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 1: CPU SIEVE — Compute small primes up to √N
+// ════════════════════════════════════════════════════════════════════
+
+let t0_cpu = now_ms()
+
+let sqrt_n = floor(sqrt(N)) + 1.0
+
+// Simple sieve on CPU
+let mut cpu_sieve = []
+let mut csi = 0.0
+while csi < sqrt_n + 1.0
+  push(cpu_sieve, 1.0)
+  csi = csi + 1.0
+end
+cpu_sieve[0] = 0.0
+cpu_sieve[1] = 0.0
+
+let mut p = 2.0
+while p * p <= sqrt_n
+  if cpu_sieve[p] > 0.5
+    let mut m = p * p
+    while m <= sqrt_n
+      cpu_sieve[m] = 0.0
+      m = m + p
+    end
+  end
+  p = p + 1.0
+end
+
+// Collect primes
+let mut small_primes = []
+let mut spi = 2.0
+while spi <= sqrt_n
+  if cpu_sieve[spi] > 0.5
+    push(small_primes, spi)
+  end
+  spi = spi + 1.0
+end
+
+let num_primes = len(small_primes)
+let t_cpu = now_ms() - t0_cpu
+
+print("  STEP 1: CPU sieve to √{N:.0} = {sqrt_n:.0}")
+print("    Found {num_primes:.0} small primes in {t_cpu:.0}ms")
+let first_prime = small_primes[0]
+let last_prime = small_primes[num_primes - 1.0]
+print("    Smallest: {first_prime:.0}  Largest: {last_prime:.0}")
+print("")
+
+// Pad primes to globals_size (4096)
+let GLOBALS_SIZE = 4096.0
+while len(small_primes) < GLOBALS_SIZE
+  push(small_primes, 0.0)
+end
+
+// Number of mark dispatches per segment
+let mark_dispatches = floor((num_primes + PRIMES_PER_BATCH - 1.0) / PRIMES_PER_BATCH)
+let dispatches_per_seg = 1.0 + mark_dispatches + 1.0 + 1.0
+
+print("  Dispatch plan:")
+print("    Mark dispatches per segment: {mark_dispatches:.0} ({PRIMES_PER_BATCH:.0} primes each)")
+print("    Total dispatches per segment: {dispatches_per_seg:.0}")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 2: BOOT VMs + WRITE PRIMES
+// ════════════════════════════════════════════════════════════════════
+
+let t0_boot = now_ms()
+
+let mut vms = []
+let mut bi = 0.0
+while bi < NUM_VMS
+  let r = try(vm_boot(1.0, SEG_SIZE, GLOBALS_SIZE))
+  if r.ok > 0.5
+    push(vms, r.value)
+    let _w = vm_write_globals(r.value, 0.0, small_primes)
+  else
+    print("    BOOT FAILED at VM #{bi:.0}: {r.error}")
+    bi = NUM_VMS
+  end
+  bi = bi + 1.0
+end
+
+let t_boot = now_ms() - t0_boot
+let booted = len(vms)
+let mem_mb = booted * 32.0 * SEG_SIZE * 4.0 / 1048576.0
+
+// Cap active VMs to number of segments (don't build empty chains)
+let mut active_vms = booted
+if active_vms > NUM_SEGS
+  active_vms = NUM_SEGS
+end
+
+print("")
+print("  STEP 2: Booted {booted:.0} VMs in {t_boot:.0}ms (~{mem_mb:.0}MB VRAM)")
+print("    Active VMs: {active_vms:.0} (capped to segment count)")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 3: RECORD DISPATCH CHAINS
+//  Each VM gets a contiguous range of segments.
+//  All segments for one VM are chained into a single program.
+// ════════════════════════════════════════════════════════════════════
+
+let t0_chain = now_ms()
+let segs_per_vm = floor((NUM_SEGS + active_vms - 1.0) / active_vms)
+
+let mut total_dispatches = 0.0
+let mut vi = 0.0
+
+while vi < active_vms
+  let seg_start = vi * segs_per_vm
+  let mut seg_end = (vi + 1.0) * segs_per_vm
+  if seg_end > NUM_SEGS
+    seg_end = NUM_SEGS
+  end
+
+  // Pre-allocate push constant arrays
+  let mut pc_init = [0.0, 0.0, 0.0, 0.0]
+  let mut pc_mark = [0.0, 0.0, 0.0, 0.0]
+  let pc_count = [R0_OFF, R2_OFF, SEG_SIZE]
+  let pc_accum = [R2_OFF, R3_OFF]
+
+  let mut si = seg_start
+  while si < seg_end
+    // Init: R0 = candidate bitmap
+    pc_init[0] = si
+    pc_init[1] = SEG_SIZE
+    pc_init[2] = N
+    pc_init[3] = 0.0
+    let _d0 = vm_dispatch(vms[vi], K_INIT, pc_init, WG)
+    total_dispatches = total_dispatches + 1.0
+
+    // Mark: batch through all primes
+    let mut pi = 0.0
+    while pi < num_primes
+      let mut pe = pi + PRIMES_PER_BATCH
+      if pe > num_primes
+        pe = num_primes
+      end
+      pc_mark[0] = si
+      pc_mark[1] = SEG_SIZE
+      pc_mark[2] = pi
+      pc_mark[3] = pe
+      let _dm = vm_dispatch(vms[vi], K_MARK, pc_mark, WG)
+      total_dispatches = total_dispatches + 1.0
+      pi = pe
+    end
+
+    // Count: sum R0 → R2[0]
+    let _dc = vm_dispatch(vms[vi], K_COUNT, pc_count, 1.0)
+    total_dispatches = total_dispatches + 1.0
+
+    // Accum: R3[0] += R2[0]
+    let _da = vm_dispatch(vms[vi], K_ACCUM, pc_accum, 1.0)
+    total_dispatches = total_dispatches + 1.0
+
+    si = si + 1.0
+  end
+
+  vi = vi + 1.0
+end
+
+let t_chain = now_ms() - t0_chain
+let per_vm = total_dispatches / active_vms
+
+print("  STEP 3: Recorded dispatch chains in {t_chain:.0}ms")
+print("    Total dispatches: {total_dispatches:.0}")
+print("    Per VM: ~{per_vm:.0} dispatches -> 1 build, 1 execute")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 4: BUILD + EXECUTE ALL VMs
+// ════════════════════════════════════════════════════════════════════
+
+let t0_build = now_ms()
+let mut progs = []
+let mut bdi = 0.0
+while bdi < active_vms
+  let prog = vm_build(vms[bdi])
+  push(progs, prog)
+  bdi = bdi + 1.0
+end
+let t_build = now_ms() - t0_build
+
+let t0_exec = now_ms()
+let mut ei = 0.0
+while ei < active_vms
+  let _e = vm_execute(progs[ei])
+  ei = ei + 1.0
+end
+let t_exec = now_ms() - t0_exec
+
+print("  STEP 4: GPU execution")
+print("    Build: {t_build:.0}ms")
+print("    Execute: {t_exec:.0}ms  ({total_dispatches:.0} dispatches, zero CPU round-trips)")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 5: READ RESULTS + TALLY
+// ════════════════════════════════════════════════════════════════════
+
+// Split accumulation: f32 loses precision above 2^24 = 16,777,216.
+// Split each count into millions + remainder, accumulate separately.
+// Both parts stay well under 2^24, so f32 addition is exact.
+let SPLIT = 1000000.0
+
+let mut total_hi = 0.0   // millions (max ~50, exact in f32)
+let mut total_lo = 0.0   // remainder (max ~999999, exact in f32)
+let mut ri = 0.0
+while ri < active_vms
+  let result = vm_read_register(vms[ri], 0.0, 3.0, 1.0)
+  let vm_count = result[0]
+
+  // Split this VM's count
+  let hi = floor(vm_count / SPLIT)
+  let lo = vm_count - hi * SPLIT
+  total_hi = total_hi + hi
+  total_lo = total_lo + lo
+
+  // Carry: if lo sum exceeds 1M, move to hi
+  if total_lo >= SPLIT
+    total_hi = total_hi + 1.0
+    total_lo = total_lo - SPLIT
+  end
+
+  let seg_start = ri * segs_per_vm
+  let mut seg_end = (ri + 1.0) * segs_per_vm
+  if seg_end > NUM_SEGS
+    seg_end = NUM_SEGS
+  end
+  let vm_segs = seg_end - seg_start
+  print("    VM {ri:.0}: {vm_count:.0} primes ({vm_segs:.0} segments)")
+
+  ri = ri + 1.0
+end
+
+let t_total = now_ms() - t0_cpu
+
+// Display as split-sum (both parts exact in f32, no precision loss)
+print("")
+print("  ════════════════════════════════════════════")
+print("  RESULT: π({N:.0}) = {total_hi:.0} × 10^6 + {total_lo:.0}")
+print("  ════════════════════════════════════════════")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 6: AUDIT AGAINST KNOWN VALUES
+// ════════════════════════════════════════════════════════════════════
+
+// Split-precision audit: compare hi and lo parts separately.
+// Both parts are exact in f32 (< 2^24). No precision loss.
+let mut exp_hi = 0.0
+let mut exp_lo = 0.0
+if N > 999000000.0
+  exp_hi = 50.0
+  exp_lo = 847534.0
+elif N > 99000000.0
+  exp_hi = 5.0
+  exp_lo = 761455.0
+elif N > 9900000.0
+  exp_hi = 0.0
+  exp_lo = 664579.0
+end
+
+if exp_hi > 0.5 || exp_lo > 0.5
+  if total_hi > exp_hi - 0.5 && total_hi < exp_hi + 0.5 && total_lo > exp_lo - 0.5 && total_lo < exp_lo + 0.5
+    print("  AUDIT: PASS  (exact match: {total_hi:.0},{total_lo:.0})")
+  else
+    let diff_hi = total_hi - exp_hi
+    let diff_lo = total_lo - exp_lo
+    print("  AUDIT: FAIL  (expected {exp_hi:.0},{exp_lo:.0} got {total_hi:.0},{total_lo:.0})")
+    print("  DIFF: hi={diff_hi:.0} lo={diff_lo:.0}")
+  end
+end
+
+print("")
+print("  TIMING SUMMARY")
+print("  ──────────────────────────────────────────")
+print("    CPU primes:     {t_cpu:.0}ms")
+print("    Boot VMs:       {t_boot:.0}ms")
+print("    Record chain:   {t_chain:.0}ms")
+print("    Build programs: {t_build:.0}ms")
+print("    GPU execute:    {t_exec:.0}ms")
+print("    TOTAL:          {t_total:.0}ms")
+print("  ──────────────────────────────────────────")
+print("    Dispatches:     {total_dispatches:.0}")
+print("    GPU submits:    {active_vms:.0} (1 per VM)")
+print("    CPU round-trips during GPU work: 0")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  CLEANUP: Shutdown all VMs
+// ════════════════════════════════════════════════════════════════════
+
+let mut si2 = 0.0
+while si2 < booted
+  let _s = vm_shutdown(vms[si2])
+  si2 = si2 + 1.0
+end
+
+print("====================================================================")
+print("")

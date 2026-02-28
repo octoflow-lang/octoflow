@@ -1,0 +1,147 @@
+// test_json.flow — Tests for stdlib/data/json.flow (pure .flow JSON parser)
+// Run: octoflow run stdlib/data/test_json.flow
+
+use "json"
+
+let mut pass = 0.0
+let mut fail = 0.0
+let dq = chr(34.0)
+
+print("=== test_json ===")
+
+// ── Test 1: json_decode — simple object with string and number ─────
+let json1 = "{" + dq + "name" + dq + ":" + dq + "Alice" + dq + "," + dq + "age" + dq + ":30}"
+let m1 = json_decode(json1)
+if map_has(m1, "name") && map_get(m1, "name") == "Alice"
+  pass = pass + 1.0
+  print("  PASS: json_decode string value")
+else
+  fail = fail + 1.0
+  print("  FAIL: json_decode string value")
+end
+
+// ── Test 2: json_decode — number value ─────────────────────────────
+if map_has(m1, "age") && float(map_get(m1, "age")) == 30.0
+  pass = pass + 1.0
+  print("  PASS: json_decode number value")
+else
+  fail = fail + 1.0
+  let age_val = map_get(m1, "age")
+  print("  FAIL: json_decode number value, got {age_val}")
+end
+
+// ── Test 3: json_decode — boolean and null ──────────────────────────
+let json3 = "{" + dq + "active" + dq + ":true," + dq + "deleted" + dq + ":false," + dq + "notes" + dq + ":null}"
+let m3 = json_decode(json3)
+if map_get(m3, "active") == "true" && map_get(m3, "deleted") == "false" && map_get(m3, "notes") == "null"
+  pass = pass + 1.0
+  print("  PASS: json_decode bool/null")
+else
+  fail = fail + 1.0
+  print("  FAIL: json_decode bool/null")
+end
+
+// ── Test 4: json_decode — nested object (dot-notation) ─────────────
+let json4 = "{" + dq + "user" + dq + ":{" + dq + "name" + dq + ":" + dq + "Bob" + dq + "," + dq + "id" + dq + ":7}}"
+let m4 = json_decode(json4)
+if map_has(m4, "user.name") && map_get(m4, "user.name") == "Bob"
+  pass = pass + 1.0
+  print("  PASS: json_decode nested object")
+else
+  fail = fail + 1.0
+  print("  FAIL: json_decode nested object")
+end
+
+// ── Test 5: json_decode — nested number ────────────────────────────
+if map_has(m4, "user.id") && float(map_get(m4, "user.id")) == 7.0
+  pass = pass + 1.0
+  print("  PASS: json_decode nested number")
+else
+  fail = fail + 1.0
+  print("  FAIL: json_decode nested number")
+end
+
+// ── Test 6: json_decode — negative number ──────────────────────────
+let json6 = "{" + dq + "temp" + dq + ":-3.5}"
+let m6 = json_decode(json6)
+if map_has(m6, "temp") && float(map_get(m6, "temp")) == -3.5
+  pass = pass + 1.0
+  print("  PASS: json_decode negative number")
+else
+  fail = fail + 1.0
+  let t6 = map_get(m6, "temp")
+  print("  FAIL: json_decode negative number, got {t6}")
+end
+
+// ── Test 7: json_encode — simple map ───────────────────────────────
+let mut m7 = map()
+map_set(m7, "x", "10")
+map_set(m7, "label", "hello")
+let encoded7 = json_encode(m7)
+// Should contain "x":10 (unquoted number) and "label":"hello" (quoted string)
+if contains(encoded7, dq + "x" + dq + ":10") && contains(encoded7, dq + "label" + dq + ":" + dq + "hello" + dq)
+  pass = pass + 1.0
+  print("  PASS: json_encode basic")
+else
+  fail = fail + 1.0
+  print("  FAIL: json_encode basic, got {encoded7}")
+end
+
+// ── Test 8: json_encode — boolean keyword unquoted ─────────────────
+let mut m8 = map()
+map_set(m8, "ok", "true")
+map_set(m8, "err", "null")
+let encoded8 = json_encode(m8)
+if contains(encoded8, dq + "ok" + dq + ":true") && contains(encoded8, dq + "err" + dq + ":null")
+  pass = pass + 1.0
+  print("  PASS: json_encode keywords unquoted")
+else
+  fail = fail + 1.0
+  print("  FAIL: json_encode keywords, got {encoded8}")
+end
+
+// ── Test 9: json_decode — array value (indexed keys) ─────────────
+let json9 = "{" + dq + "tags" + dq + ":[" + dq + "a" + dq + "," + dq + "b" + dq + "," + dq + "c" + dq + "]}"
+let m9 = json_decode(json9)
+let tags9 = json_get_array(m9, "tags")
+if len(tags9) == 3.0 && tags9[0] == "a" && tags9[1] == "b" && tags9[2] == "c"
+  pass = pass + 1.0
+  print("  PASS: json_decode array")
+else
+  fail = fail + 1.0
+  print("  FAIL: json_decode array")
+end
+
+// ── Test 9b: json_has_array ──────────────────────────────────────
+if json_has_array(m9, "tags") == 1.0 && json_has_array(m9, "name") == 0.0
+  pass = pass + 1.0
+  print("  PASS: json_has_array")
+else
+  fail = fail + 1.0
+  print("  FAIL: json_has_array")
+end
+
+// ── Test 10: roundtrip encode/decode ───────────────────────────────
+let mut m10 = map()
+map_set(m10, "pi", "3.14")
+map_set(m10, "msg", "hi there")
+let json10 = json_encode(m10)
+let m10b = json_decode(json10)
+if map_get(m10b, "pi") == "3.14" && map_get(m10b, "msg") == "hi there"
+  pass = pass + 1.0
+  print("  PASS: json roundtrip")
+else
+  fail = fail + 1.0
+  print("  FAIL: json roundtrip")
+end
+
+// ── Summary ────────────────────────────────────────────────────────
+let total = pass + fail
+print(" ")
+print("--- test_json ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

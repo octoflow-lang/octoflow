@@ -1,0 +1,256 @@
+// test_vm_layer.flow — Step 6: GPU-Resident Layer Ops
+//
+// Validates the three new VM kernels that move transformer layer
+// computation from CPU to GPU:
+//
+//   vm_add      : registers[dst] = registers[a] + registers[b]  (elementwise)
+//   vm_silu_mul : registers[dst] = SiLU(registers[gate]) * registers[up]
+//   vm_rmsnorm  : registers[out] = RMSNorm(registers[in], globals[wgt], eps)
+//
+// Register addressing (reg_size=8, n_regs=32 per instance):
+//   flat_offset = (instance * 32 + reg_id) * reg_size
+//   reg0 = flat [0:8], reg1 = flat [8:16], reg2 = flat [16:24], ...
+//
+// Four tests:
+//   TEST 1: vm_add          — reg0[0:4]+reg1[0:4] = reg2[0:4]  ([1..4]+[5..8]=[6,8,10,12])
+//   TEST 2: vm_silu_mul     — SiLU(reg0[0:4]) * reg1[0:4] -> reg2[0:4]
+//   TEST 3: vm_rmsnorm      — RMSNorm(reg0[0:8], globals[0:8], eps) -> reg1[0:8]  (sum_sq_b1 + apply_b1)
+//   TEST 4: chain (sum_sq_b1 | BARRIER | apply_b1 | BARRIER | add) — GPU-autonomous residual, one vkQueueSubmit
+//
+// Run: octoflow run stdlib/loom/test_vm_layer.flow --allow-ffi
+
+// ── Boot VM ─────────────────────────────────────────────────────────────────
+// reg_size=8 per register, 32 registers per instance (standard VM layout).
+// Flat offset for (instance, reg_id) = (instance*32 + reg_id) * 8.
+let reg_size = 8.0
+let n_regs   = 32.0
+let n_inst   = 1.0
+let vm = vm_boot(n_inst, reg_size, reg_size)
+
+let eps = 0.00001
+
+// Helper: flat float offset for (instance=0, reg_id)
+// flat0(r) = r * reg_size  =  r * 8
+
+// ── TEST 1: vm_add ──────────────────────────────────────────────────────────
+// a in reg0 (flat 0),  b in reg1 (flat 8),  result in reg2 (flat 16)
+// count=4  (use first 4 of 8 floats per register)
+let a1   = [1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0]
+let b1   = [5.0, 6.0, 7.0, 8.0, 0.0, 0.0, 0.0, 0.0]
+let _wa1 = vm_write_register(vm, 0.0, 0.0, a1)   // reg0 = a
+let _wb1 = vm_write_register(vm, 0.0, 1.0, b1)   // reg1 = b
+
+// a_off=0, b_off=8, dst_off=16, count=4
+let pc1 = [0.0, 8.0, 16.0, 4.0]
+let _d1 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_add.spv", pc1, 1.0)
+let p1  = vm_build(vm)
+let _e1 = vm_execute(p1)
+
+// Read 4 floats from reg2 (flat offset 16)
+let add_out = vm_read_register(vm, 0.0, 2.0, 4.0)
+let add0 = add_out[0]
+let add1 = add_out[1]
+let add2 = add_out[2]
+let add3 = add_out[3]
+
+print("TEST 1: vm_add([1,2,3,4] + [5,6,7,8])")
+print("  result = [{add0}, {add1}, {add2}, {add3}]  (expected [6,8,10,12])")
+let mut pass1 = 1.0
+if abs(add0 - 6.0) > 0.001
+  pass1 = 0.0
+end
+if abs(add1 - 8.0) > 0.001
+  pass1 = 0.0
+end
+if abs(add2 - 10.0) > 0.001
+  pass1 = 0.0
+end
+if abs(add3 - 12.0) > 0.001
+  pass1 = 0.0
+end
+if pass1 == 1.0
+  print("TEST 1: PASS -- elementwise add correct")
+else
+  print("TEST 1: FAIL")
+end
+
+// ── TEST 2: vm_silu_mul ─────────────────────────────────────────────────────
+// gate in reg0 (flat 0),  up in reg1 (flat 8),  result in reg2 (flat 16)
+// SiLU(x) = x / (1 + exp(-x))
+let gate2  = [0.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0]
+let up2    = [1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0]
+let _wg2   = vm_write_register(vm, 0.0, 0.0, gate2)   // reg0 = gate
+let _wu2   = vm_write_register(vm, 0.0, 1.0, up2)     // reg1 = up
+
+// gate_off=0, up_off=8, dst_off=16, count=4
+let pc2 = [0.0, 8.0, 16.0, 4.0]
+let _d2 = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_silu_mul.spv", pc2, 1.0)
+let p2  = vm_build(vm)
+let _e2 = vm_execute(p2)
+
+// Read 4 floats from reg2 (flat offset 16)
+let silu_out = vm_read_register(vm, 0.0, 2.0, 4.0)
+let s0 = silu_out[0]
+let s1 = silu_out[1]
+let s2 = silu_out[2]
+let s3 = silu_out[3]
+
+// CPU reference: SiLU(x) = x / (1 + e^-x), using pow(e, -x)
+let e_c    = 2.71828182845
+let exp_n1 = pow(e_c, -1.0)
+let exp_n2 = pow(e_c, -2.0)
+let exp_n3 = pow(e_c, -3.0)
+let ref_s0 = 0.0                                   // SiLU(0)*1 = 0.0
+let ref_s1 = (1.0 / (1.0 + exp_n1)) * 2.0         // SiLU(1)*2
+let ref_s2 = (2.0 / (1.0 + exp_n2)) * 3.0         // SiLU(2)*3
+let ref_s3 = (3.0 / (1.0 + exp_n3)) * 4.0         // SiLU(3)*4
+
+print("TEST 2: vm_silu_mul(gate=[0,1,2,3], up=[1,2,3,4])")
+print("  GPU result : [{s0}, {s1}, {s2}, {s3}]")
+print("  CPU ref    : [{ref_s0}, {ref_s1}, {ref_s2}, {ref_s3}]")
+let mut pass2 = 1.0
+if abs(s0 - ref_s0) > 0.001
+  pass2 = 0.0
+  print("  FAIL: s0 {s0} != {ref_s0}")
+end
+if abs(s1 - ref_s1) > 0.01
+  pass2 = 0.0
+  print("  FAIL: s1 {s1} != {ref_s1}")
+end
+if abs(s2 - ref_s2) > 0.01
+  pass2 = 0.0
+  print("  FAIL: s2 {s2} != {ref_s2}")
+end
+if abs(s3 - ref_s3) > 0.01
+  pass2 = 0.0
+  print("  FAIL: s3 {s3} != {ref_s3}")
+end
+if pass2 == 1.0
+  print("TEST 2: PASS -- SiLU-gated multiply correct")
+else
+  print("TEST 2: FAIL")
+end
+
+// ── TEST 3: vm_rmsnorm (2-pass: vm_sum_sq_b1 → vm_rmsnorm_apply_b1) ─────────
+// Input  : reg0 (flat 0..7)  = [1,2,3,4,5,6,7,8]
+// Weights: globals[0:8]      = [1,1,1,1,1,1,1,1]
+// Output : reg1 (flat 8..15) = RMSNorm(input, weights, eps)
+//
+// Two-kernel design using binding1 (metrics) as scratch to avoid NVVM bug:
+//   vm_sum_sq_b1.spv     — pass 1: sequential, writes sum(x²) to metrics[0]
+//   vm_rmsnorm_apply_b1.spv — pass 2: reads metrics[0], all binding0 accesses
+//                              are gid-indexed only (same pattern as vm_add)
+//
+// Root cause of previous failures: original apply kernel read binding0 at a
+// CONSTANT index (scratch slot). NVVM cannot prove no-alias with the
+// gid-indexed store on the same binding → only gid=0 store survives.
+// Fix: scratch in binding1. Binding0 has gid-indexed reads+writes only.
+let input3   = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let weights3 = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+let _wi3 = vm_write_register(vm, 0.0, 0.0, input3)    // reg0 = x
+let _wg3 = vm_write_globals(vm, 0.0, weights3)         // globals[0:8] = weights
+
+// Pass 1: sum_sq into metrics[0]  — in_off=0, scratch_off=0, count=8
+let pc3a = [0.0, 0.0, 8.0]
+let _d3a = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_sum_sq_b1.spv", pc3a, 1.0)
+let p3a  = vm_build(vm)
+let _e3a = vm_execute(p3a)
+
+// Pass 2: apply — in_off=0, out_off=8, wgt_off=0, scratch_off=0, count=8, eps
+let pc3b = [0.0, 8.0, 0.0, 0.0, 8.0, eps]
+let _d3b = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_rmsnorm_apply_b1.spv", pc3b, 1.0)
+let p3b  = vm_build(vm)
+let _e3b = vm_execute(p3b)
+
+let norm_out = vm_read_register(vm, 0.0, 1.0, 8.0)
+let n0 = norm_out[0]
+let n7 = norm_out[7]
+
+// CPU reference: out[i] = x[i] / sqrt(mean(x^2) + eps)  * w[i]
+//   sum_sq = 1+4+9+16+25+36+49+64 = 204,  mean_sq = 25.5
+let sum_sq3  = 1.0*1.0 + 2.0*2.0 + 3.0*3.0 + 4.0*4.0 + 5.0*5.0 + 6.0*6.0 + 7.0*7.0 + 8.0*8.0
+let mean_sq3 = sum_sq3 / 8.0
+let rms3     = sqrt(mean_sq3 + eps)
+let scale3   = 1.0 / rms3
+let ref_n0   = 1.0 * scale3
+let ref_n7   = 8.0 * scale3
+
+print("TEST 3: vm_rmsnorm([1..8], w=[1..1], eps=1e-5)")
+print("  rms={rms3}  scale={scale3}")
+print("  GPU: n[0]={n0}  n[7]={n7}")
+print("  CPU: n[0]={ref_n0}  n[7]={ref_n7}")
+let mut pass3 = 1.0
+if abs(n0 - ref_n0) > 0.001
+  pass3 = 0.0
+  print("  FAIL: n[0] {n0} != {ref_n0}")
+end
+if abs(n7 - ref_n7) > 0.001
+  pass3 = 0.0
+  print("  FAIL: n[7] {n7} != {ref_n7}")
+end
+if pass3 == 1.0
+  print("TEST 3: PASS -- RMSNorm correct")
+else
+  print("TEST 3: FAIL")
+end
+
+// ── TEST 4: chain (sum_sq_b1 | BARRIER | rmsnorm_apply_b1 | BARRIER | add) ───
+// GPU-resident pre-norm + residual add in one vkQueueSubmit:
+//   metrics[0] = sum(x²)          (vm_sum_sq_b1 — writes to binding1)
+//   reg1 = normed(x) × w          (vm_rmsnorm_apply_b1 — reads binding1, gid-parallel)
+//   reg2 = reg0 + reg1             (vm_add — residual connection)
+// Three dispatches, one VkCommandBuffer, one vkQueueSubmit.
+//
+// Register layout:
+//   reg0 (flat  0..7)  = x (input)
+//   reg1 (flat  8..15) = normed(x)     written by vm_rmsnorm_apply_b1
+//   reg2 (flat 16..23) = x + normed(x) written by vm_add (residual)
+let input4   = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let weights4 = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+let _wi4 = vm_write_register(vm, 0.0, 0.0, input4)
+let _wg4 = vm_write_globals(vm, 0.0, weights4)
+
+// Stage 1: sum_sq into metrics[0]  — in_off=0, scratch_off=0, count=8
+let pc4a = [0.0, 0.0, 8.0]
+let _d4a = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_sum_sq_b1.spv", pc4a, 1.0)
+
+// Stage 2: apply — in_off=0, out_off=8, wgt_off=0, scratch_off=0, count=8, eps
+let pc4b = [0.0, 8.0, 0.0, 0.0, 8.0, eps]
+let _d4b = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_rmsnorm_apply_b1.spv", pc4b, 1.0)
+
+// Stage 3: add(a=0, b=8, dst=16, count=8) — residual: x + normed(x)
+let pc4c = [0.0, 8.0, 16.0, 8.0]
+let _d4c = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_add.spv", pc4c, 1.0)
+
+let p4  = vm_build(vm)    // ONE VkCommandBuffer: [sum_sq_b1 | BARRIER | apply_b1 | BARRIER | add]
+let _e4 = vm_execute(p4)  // ONE vkQueueSubmit
+
+// Read 8 floats from reg2 (flat offset 16)
+let chain_out = vm_read_register(vm, 0.0, 2.0, 8.0)
+let c0 = chain_out[0]
+let c7 = chain_out[7]
+
+// Expected: x + normed(x) = x[i] * (1 + scale3)
+let ref_c0 = 1.0 + ref_n0    // 1 + 1*scale3
+let ref_c7 = 8.0 + ref_n7    // 8 + 8*scale3
+
+print("TEST 4: chain (sum_sq_b1 | BARRIER | apply_b1 | BARRIER | add) — single vkQueueSubmit")
+print("  GPU: c[0]={c0}  c[7]={c7}")
+print("  CPU: c[0]={ref_c0}  c[7]={ref_c7}")
+let mut pass4 = 1.0
+if abs(c0 - ref_c0) > 0.001
+  pass4 = 0.0
+  print("  FAIL: c[0] {c0} != {ref_c0}")
+end
+if abs(c7 - ref_c7) > 0.001
+  pass4 = 0.0
+  print("  FAIL: c[7] {c7} != {ref_c7}")
+end
+if pass4 == 1.0
+  print("TEST 4: PASS -- GPU-autonomous pre-norm + residual add (3-dispatch chain), single vkQueueSubmit")
+else
+  print("TEST 4: FAIL")
+end
+
+// ── Cleanup ─────────────────────────────────────────────────────────────────
+let _sv = vm_shutdown(vm)

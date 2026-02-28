@@ -1,0 +1,46 @@
+// raytrace_bench.flow — Benchmark GPU dispatch time only
+use "../stdlib/loom/raytrace_emit"
+
+let w = 400.0
+let h = 300.0
+let total = int(w * h)
+
+// Ensure kernels are compiled
+if file_exists("raytrace.spv") == 0.0
+  emit_raytrace_kernel()
+end
+if file_exists("unpack_rgb.spv") == 0.0
+  emit_unpack_rgb_kernel()
+end
+
+// Allocate input
+let mut input = []
+for i in range(0, total)
+  push(input, 0.0)
+end
+print("Input ready: {total} pixels")
+
+// Time GPU ray trace dispatch
+let t0 = now_ms()
+let result = gpu_run("raytrace.spv", input, w, h, 1.5, -2.0)
+let t1 = now_ms()
+let dt_rt = t1 - t0
+print("GPU raytrace: {dt_rt} ms")
+
+// Time GPU RGB unpack (3 dispatches)
+let t2 = now_ms()
+let r = gpu_run("unpack_rgb.spv", result, 0.0)
+let g = gpu_run("unpack_rgb.spv", result, 1.0)
+let b = gpu_run("unpack_rgb.spv", result, 2.0)
+let t3 = now_ms()
+let dt_unpack = t3 - t2
+print("GPU unpack (3x): {dt_unpack} ms")
+
+let dt_total = t3 - t0
+print("Total GPU pipeline: {dt_total} ms")
+
+// Verify output sizes
+let rlen = len(r)
+let glen = len(g)
+let blen = len(b)
+print("Output: R={rlen} G={glen} B={blen} elements")

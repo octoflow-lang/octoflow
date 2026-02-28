@@ -1,0 +1,168 @@
+// test_vm_dequant.flow — Step 5.5: GPU Dequantization in VM Dispatch Chain
+//
+// Proves that quantized data in Heap (binding 4) can be dequantized by a GPU
+// kernel and the result stored in Globals (binding 2) for downstream compute.
+// This is the critical capability for GPU-autonomous inference: quantized
+// weights never leave VRAM, and dequant is part of the dispatch chain.
+//
+// Pipeline:
+//   CPU: load Q4_K test data into Heap → GPU: vm_dequant_q4k (Heap→Globals)
+//   → GPU: vm_matvec (Globals weights × Registers input → Registers output)
+//   (2 dispatches, 1 vkQueueSubmit when chained)
+//
+// TEST 1: Dequant 256 weights (1 Q4_K block), verify known values
+//   - qs bytes: controlled pattern → predictable nibbles
+//   - params: known d*scale and dmin*min values
+//   - Verify dequantized output = d*scale * nibble - dmin*min
+//
+// TEST 2: Dequant → matvec chain (full pipeline)
+//   - Dequant Q4_K block → 256 fp32 weights in Globals
+//   - matvec: 1×256 matrix × 256 input vector → 1 output value
+//   - Verify output matches CPU reference
+//
+// Run: octoflow run stdlib/loom/test_vm_dequant.flow --allow-ffi
+
+// ── TEST 1: Dequant correctness ────────────────────────────────────────
+
+// Build 1 Q4_K block of test data:
+// Heap layout: [qs_bytes (128 floats)] [params (16 floats)]
+// Total: 144 floats
+
+// qs bytes: all 0x53 (byte=83) → lo_nib = 83 - floor(83/16)*16 = 83-80=3, hi_nib = floor(83/16) = 5
+// So: lo 32 weights of each group get nibble=3, hi 32 get nibble=5
+let mut heap_data = []
+let mut qi = 0.0
+while qi < 128.0
+  push(heap_data, 83.0)
+  qi = qi + 1.0
+end
+
+// params: 8 sub-blocks, each with [d*scale, dmin*min]
+// Use d*scale=2.0, dmin*min=0.5 for all sub-blocks
+let mut pi = 0.0
+while pi < 8.0
+  push(heap_data, 2.0)
+  push(heap_data, 0.5)
+  pi = pi + 1.0
+end
+
+// Expected dequant values:
+// lo weights (nibble=3): 2.0 * 3 - 0.5 = 5.5
+// hi weights (nibble=5): 2.0 * 5 - 0.5 = 9.5
+// Layout: [lo32, hi32, lo32, hi32, lo32, hi32, lo32, hi32] = 8 groups of 32
+
+// Boot VM with reg_size=256 (to hold matvec input), globals=256 (dequant output)
+let reg_size = 256.0
+let globals_size = 256.0
+let vm = vm_boot(1.0, reg_size, globals_size)
+
+// Load Q4_K data into Heap (binding 4)
+let _sh = vm_set_heap(vm, heap_data)
+
+// Dispatch dequant: qs at heap[0], params at heap[128], output at globals[0], n=256
+let pc_dq = [0.0, 128.0, 0.0, 256.0]
+let _d1 = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_dequant_q4k.spv", pc_dq, 1.0)
+
+let prog1 = vm_build(vm)
+let _e1 = vm_execute(prog1)
+
+// Read dequantized weights from globals
+let globals_out = vm_read_globals(vm, 0.0, 256.0)
+
+// Verify: first 32 should be 5.5 (lo nibble=3), next 32 should be 9.5 (hi nibble=5)
+let g0 = globals_out[0]
+let g31 = globals_out[31]
+let g32 = globals_out[32]
+let g63 = globals_out[63]
+let g64 = globals_out[64]
+let g255 = globals_out[255]
+
+print("TEST 1: Dequant Q4_K (1 block, 256 weights, Heap→Globals)")
+print("  qs byte=83 → lo_nib=3, hi_nib=5")
+print("  d*scale=2.0, dmin*min=0.5")
+print("  Expected lo: 2*3-0.5=5.5, hi: 2*5-0.5=9.5")
+print("  GPU: g[0]={g0} g[31]={g31} g[32]={g32} g[63]={g63} g[64]={g64} g[255]={g255}")
+
+let mut pass1 = 1.0
+if abs(g0 - 5.5) > 0.001
+  pass1 = 0.0
+  print("  FAIL: g[0]={g0} expected 5.5")
+end
+if abs(g31 - 5.5) > 0.001
+  pass1 = 0.0
+  print("  FAIL: g[31]={g31} expected 5.5")
+end
+if abs(g32 - 9.5) > 0.001
+  pass1 = 0.0
+  print("  FAIL: g[32]={g32} expected 9.5")
+end
+if abs(g63 - 9.5) > 0.001
+  pass1 = 0.0
+  print("  FAIL: g[63]={g63} expected 9.5")
+end
+if abs(g64 - 5.5) > 0.001
+  pass1 = 0.0
+  print("  FAIL: g[64]={g64} expected 5.5 (group 1 lo)")
+end
+// g[255] is in group 3 hi → nibble=5 → 9.5
+if abs(g255 - 9.5) > 0.001
+  pass1 = 0.0
+  print("  FAIL: g[255]={g255} expected 9.5")
+end
+if pass1 == 1.0
+  print("TEST 1: PASS -- Q4_K dequant Heap→Globals, nibble extraction correct")
+else
+  print("TEST 1: FAIL")
+end
+
+// ── TEST 2: Dequant → Matvec chain (2 dispatches, 1 submit) ───────────
+// Dequant the same Q4_K block, then use the 256 weights as a 1×256 matrix
+// Input vector: all 1.0 → dot product = sum of all 256 weights
+// Expected: 128 * 5.5 + 128 * 9.5 = 704 + 1216 = 1920
+
+let vm2 = vm_boot(1.0, reg_size, globals_size)
+let _sh2 = vm_set_heap(vm2, heap_data)
+
+// Write input vector to R0: 256 ones
+let mut input_vec = []
+let mut ii = 0.0
+while ii < 256.0
+  push(input_vec, 1.0)
+  ii = ii + 1.0
+end
+let _wr = vm_write_register(vm2, 0.0, 0.0, input_vec)
+
+// Stage 1: dequant (Heap→Globals)
+let pc_dq2 = [0.0, 128.0, 0.0, 256.0]
+let _d2a = vm_dispatch(vm2, "stdlib/loom/kernels/nn/vm_dequant_q4k.spv", pc_dq2, 1.0)
+
+// Stage 2: matvec (Globals[0] × R0 → R1), M=1, K=256
+// push constants: [M, K, weight_off, input_off, output_off]
+let pc_mv = [1.0, 256.0, 0.0, 0.0, reg_size]
+let _d2b = vm_dispatch(vm2, "stdlib/loom/kernels/nn/vm_matvec.spv", pc_mv, 1.0)
+
+let prog2 = vm_build(vm2)
+let _e2 = vm_execute(prog2)
+
+let out2 = vm_read_register(vm2, 0.0, 1.0, 1.0)
+let result = out2[0]
+
+// Expected: sum of 256 dequantized weights × 1.0 each
+// 4 groups × (32 lo × 5.5 + 32 hi × 9.5) = 4 × (176 + 304) = 4 × 480 = 1920
+print("TEST 2: Dequant→Matvec chain (2 dispatches, 1 vkQueueSubmit)")
+print("  Q4_K block → 256 weights in Globals → matvec with all-ones input")
+print("  GPU result: {result}  expected: 1920")
+
+let mut pass2 = 1.0
+if abs(result - 1920.0) > 0.1
+  pass2 = 0.0
+  print("  FAIL: result={result} expected 1920")
+end
+if pass2 == 1.0
+  print("TEST 2: PASS -- Dequant→Matvec chain, quantized Heap → compute result, single submit")
+else
+  print("TEST 2: FAIL")
+end
+
+let _sv1 = vm_shutdown(vm)
+let _sv2 = vm_shutdown(vm2)

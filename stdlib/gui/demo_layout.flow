@@ -1,0 +1,244 @@
+// demo_layout.flow — Layout Helper Demo
+//
+// Same 13-widget demo as demo_gui.flow, but using vstack/hstack
+// for automatic positioning instead of manual x,y coordinates.
+//
+// Usage:
+//   octoflow run stdlib/gui/demo_layout.flow
+
+use "layout"
+
+// ── Initialize window ────────────────────────────────────────────
+let app = gui_init(720.0, 960.0, "OctoFlow Layout Demo")
+
+// ── Main panel ───────────────────────────────────────────────────
+let panel = gui_panel(10.0, 10.0, 700.0, 940.0)
+
+// ── Title section (vstack) ───────────────────────────────────────
+let vs = vstack(30.0, 22.0, 6.0)
+let title = vstack_label(vs, "OCTOFLOW LAYOUT DEMO")
+let sep1 = vstack_separator(vs, 660.0)
+
+// ── Buttons (hstack) ─────────────────────────────────────────────
+let cur_y = vstack_cursor_y(vs)
+let hb = hstack(30.0, cur_y, 10.0)
+let btn_hello = hstack_button(hb, 130.0, 34.0, "HELLO")
+let btn_count = hstack_button(hb, 130.0, 34.0, "COUNT")
+let btn_reset = hstack_button(hb, 130.0, 34.0, "RESET")
+
+// Advance vstack past the button row
+let _sp1 = vstack_space(vs, 40.0)
+let status = vstack_label(vs, "CLICK A BUTTON...")
+let sep2 = vstack_separator(vs, 660.0)
+
+// ── Checkbox + Radio row ─────────────────────────────────────────
+let cur_y2 = vstack_cursor_y(vs)
+let hr = hstack(30.0, cur_y2, 10.0)
+let chk_show = hstack_checkbox(hr, "SHOW SLIDER")
+let _ss = gui_set_checked(chk_show, 1.0)
+let _hsp1 = hstack_space(hr, 60.0)
+let theme_lbl = hstack_label(hr, "THEME:")
+let rad_dark = hstack_radio(hr, "DARK", 1.0)
+let _rsd = gui_set_checked(rad_dark, 1.0)
+let rad_light = hstack_radio(hr, "LIGHT", 1.0)
+let rad_ocean = hstack_radio(hr, "OCEAN", 1.0)
+let _sp2 = vstack_space(vs, 28.0)
+let sep3 = vstack_separator(vs, 660.0)
+
+// ── Slider + Progress ────────────────────────────────────────────
+let cur_y3 = vstack_cursor_y(vs)
+let hs = hstack(30.0, cur_y3, 10.0)
+let sl_label = hstack_label(hs, "SLIDER:")
+let slider1 = hstack_slider(hs, 280.0, 0.0, 100.0, 50.0)
+let slider_val = hstack_label(hs, "VALUE: 50")
+let _sp3 = vstack_space(vs, 30.0)
+
+let cur_y4 = vstack_cursor_y(vs)
+let hp = hstack(30.0, cur_y4, 10.0)
+let pg_label = hstack_label(hp, "PROGRESS:")
+let _hsp2 = hstack_space(hp, 10.0)
+let prog1 = gui_progress(hstack_cursor_x(hp), cur_y4, 280.0)
+let _spr = gui_set_progress(prog1, 50.0)
+let _sp4 = vstack_space(vs, 30.0)
+let sep4 = vstack_separator(vs, 660.0)
+
+// ── Spinbox + Dropdown ───────────────────────────────────────────
+let cur_y5 = vstack_cursor_y(vs)
+let hsd = hstack(30.0, cur_y5, 10.0)
+let spn_label = hstack_label(hsd, "SPINBOX:")
+let spin1 = hstack_spinbox(hsd, 160.0, 0.0, 50.0, 10.0, 1.0)
+let spn_val = hstack_label(hsd, "COUNT: 10")
+let _hsp3 = hstack_space(hsd, 40.0)
+let dd_label = hstack_label(hsd, "COLOR:")
+let drop1 = hstack_dropdown(hsd, 140.0)
+let _d1 = gui_dropdown_add(drop1, "RED")
+let _d2 = gui_dropdown_add(drop1, "GREEN")
+let _d3 = gui_dropdown_add(drop1, "BLUE")
+let _d4 = gui_dropdown_add(drop1, "YELLOW")
+let _sp5 = vstack_space(vs, 36.0)
+
+let dd_val = vstack_label(vs, "PICKED: RED")
+let sep5 = vstack_separator(vs, 660.0)
+
+// ── Listbox ──────────────────────────────────────────────────────
+let cur_y6 = vstack_cursor_y(vs)
+let hlb = hstack(30.0, cur_y6, 10.0)
+let lb_label = hstack_label(hlb, "LISTBOX:")
+let list1 = gui_listbox(hstack_cursor_x(hlb), cur_y6, 250.0, 100.0)
+let _l1 = gui_listbox_add(list1, "OCTOFLOW")
+let _l2 = gui_listbox_add(list1, "GPU NATIVE")
+let _l3 = gui_listbox_add(list1, "ZERO DEPS")
+let _l4 = gui_listbox_add(list1, "SELF HOSTED")
+let _l5 = gui_listbox_add(list1, "13 WIDGETS")
+let lb_sel = gui_label(400.0, cur_y6, "SELECTED: NONE")
+let _sp6 = vstack_space(vs, 110.0)
+let sep6 = vstack_separator(vs, 660.0)
+
+// ── Tab Panel + Text Input ───────────────────────────────────────
+let cur_y7 = vstack_cursor_y(vs)
+let tab1 = gui_tabs(30.0, cur_y7, 340.0, 100.0)
+let _t1 = gui_tab_add(tab1, "INFO")
+let _t2 = gui_tab_add(tab1, "INPUT")
+let _t3 = gui_tab_add(tab1, "ABOUT")
+let tab_content = gui_label(40.0, cur_y7 + 38.0, "TAB: INFO")
+
+let input_label = gui_label(400.0, cur_y7 + 6.0, "INPUT:")
+let input1 = gui_textinput(470.0, cur_y7, 210.0)
+let _sp7 = vstack_space(vs, 110.0)
+
+// ── Canvas ──────────────────────────────────────────────────────
+let cur_y8 = vstack_cursor_y(vs)
+let hcv = hstack(30.0, cur_y8, 10.0)
+let cv_label = hstack_label(hcv, "CANVAS:")
+let canvas1 = hstack_canvas(hcv, 200.0, 100.0)
+// Draw some shapes
+let _cvl1 = gui_canvas_line(canvas1, 0.0, 0.0, 199.0, 99.0, 255.0, 80.0, 80.0)
+let _cvl2 = gui_canvas_line(canvas1, 199.0, 0.0, 0.0, 99.0, 80.0, 80.0, 255.0)
+let _cvr1 = gui_canvas_rect(canvas1, 5.0, 5.0, 190.0, 90.0, 100.0, 200.0, 100.0)
+let _cvfc = gui_canvas_fill_circle(canvas1, 100.0, 50.0, 20.0, 255.0, 200.0, 50.0)
+let _cvc1 = gui_canvas_circle(canvas1, 100.0, 50.0, 30.0, 200.0, 200.0, 200.0)
+
+let cv_sel = gui_label(hstack_cursor_x(hcv) + 20.0, cur_y8, "CLICK CANVAS...")
+let _sp8 = vstack_space(vs, 110.0)
+let sep8 = vstack_separator(vs, 660.0)
+
+// ── Treeview ────────────────────────────────────────────────────
+let cur_y9 = vstack_cursor_y(vs)
+let htv = hstack(30.0, cur_y9, 10.0)
+let tv_label = hstack_label(htv, "TREE:")
+let tree1 = hstack_treeview(htv, 250.0, 100.0)
+let tr0 = gui_tree_add(tree1, "OCTOFLOW", -1.0)
+let tr1 = gui_tree_add(tree1, "COMPILER", 0.0)
+let tr2 = gui_tree_add(tree1, "STDLIB", 0.0)
+let tr3 = gui_tree_add(tree1, "LEXER", 1.0)
+let tr4 = gui_tree_add(tree1, "PARSER", 1.0)
+let tr5 = gui_tree_add(tree1, "GPU", 2.0)
+let tr6 = gui_tree_add(tree1, "DATA", 2.0)
+let tr7 = gui_tree_add(tree1, "TOOLS", -1.0)
+let tv_sel = gui_label(hstack_cursor_x(htv) + 20.0, cur_y9, "SELECT A NODE...")
+let _sp9 = vstack_space(vs, 110.0)
+let sep9 = vstack_separator(vs, 660.0)
+
+// ── Tooltips ────────────────────────────────────────────────────
+let _tt1 = gui_tooltip(btn_hello, "SAY HELLO")
+let _tt2 = gui_tooltip(btn_count, "INCREMENT COUNTER")
+let _tt3 = gui_tooltip(btn_reset, "RESET TO ZERO")
+
+// ── Footer ───────────────────────────────────────────────────────
+let sep7 = vstack_separator(vs, 660.0)
+let footer = vstack_label(vs, "LAYOUT DEMO - 16 WIDGETS - PURE .FLOW")
+
+// ── State ────────────────────────────────────────────────────────
+let mut click_count = 0.0
+
+// ── Main loop ────────────────────────────────────────────────────
+while gui_running() == 1.0
+  let _u = gui_update()
+
+  if gui_clicked(btn_hello) == 1.0
+    let _s = gui_set_text(status, "HELLO FROM LAYOUT!")
+  end
+  if gui_clicked(btn_count) == 1.0
+    click_count = click_count + 1.0
+    let count_text = "CLICKED " + str(click_count) + " TIMES"
+    let _s2 = gui_set_text(status, count_text)
+  end
+  if gui_clicked(btn_reset) == 1.0
+    click_count = 0.0
+    let _s3 = gui_set_text(status, "COUNTER RESET")
+  end
+
+  if gui_clicked(chk_show) == 1.0
+    if gui_checked(chk_show) == 1.0
+      let _sv = gui_set_visible(slider1, 1.0)
+      let _sl = gui_set_visible(slider_val, 1.0)
+    else
+      let _sv2 = gui_set_visible(slider1, 0.0)
+      let _sl2 = gui_set_visible(slider_val, 0.0)
+    end
+  end
+
+  if gui_clicked(rad_dark) == 1.0
+    let _td = gui_theme_dark()
+  end
+  if gui_clicked(rad_light) == 1.0
+    let _tl = gui_theme_light()
+  end
+  if gui_clicked(rad_ocean) == 1.0
+    let _to = gui_theme_ocean()
+  end
+
+  let sv = gui_slider_value(slider1)
+  let sv_int = floor(sv)
+  let sv_text = "VALUE: " + str(sv_int)
+  let _slt = gui_set_text(slider_val, sv_text)
+  let _sp2x = gui_set_progress(prog1, sv)
+
+  let spv = gui_spinbox_value(spin1)
+  let spv_text = "COUNT: " + str(spv)
+  let _spvt = gui_set_text(spn_val, spv_text)
+
+  if gui_clicked(drop1) == 1.0
+    let dd_idx = gui_dropdown_selected(drop1)
+    if dd_idx >= 0.0
+      let dd_text = gui_dropdown_text(drop1, dd_idx)
+      let dd_msg = "PICKED: " + dd_text
+      let _ddm = gui_set_text(dd_val, dd_msg)
+    end
+  end
+
+  if gui_clicked(list1) == 1.0
+    let sel_idx = gui_listbox_selected(list1)
+    if sel_idx >= 0.0
+      let sel_text = gui_listbox_text(list1, sel_idx)
+      let sel_msg = "SELECTED: " + sel_text
+      let _slm = gui_set_text(lb_sel, sel_msg)
+    end
+  end
+
+  if gui_clicked(tab1) == 1.0
+    let tab_idx = gui_tab_active(tab1)
+    if tab_idx == 0.0
+      let _tc1 = gui_set_text(tab_content, "TAB: INFO - OCTOFLOW GPU LANG")
+    elif tab_idx == 1.0
+      let _tc2 = gui_set_text(tab_content, "TAB: INPUT - TYPE SOMETHING")
+    elif tab_idx == 2.0
+      let _tc3 = gui_set_text(tab_content, "TAB: ABOUT - LAYOUT HELPERS")
+    end
+  end
+
+  if gui_clicked(canvas1) == 1.0
+    let _cvs = gui_set_text(cv_sel, "CANVAS CLICKED!")
+  end
+
+  if gui_clicked(tree1) == 1.0
+    let t_sel = gui_tree_selected(tree1)
+    if t_sel >= 0.0
+      let t_text = gui_tree_text(tree1, t_sel)
+      let t_msg = "NODE: " + t_text
+      let _tsm = gui_set_text(tv_sel, t_msg)
+    end
+  end
+end
+
+print("Layout demo closed.")

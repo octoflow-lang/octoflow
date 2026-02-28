@@ -1,0 +1,447 @@
+// ====================================================================
+//  GPU PARALLEL SIEVE v7 — CARRY-FORWARD + UINT64 ADDRESSING
+//
+//  Merges v6 uint64 addressing with v5 carry-forward offsets:
+//    - Init kernel: v6 uint64 (N split as N_lo/N_hi)
+//    - Mark small:  v6 uint64 word-centric + shared memory
+//    - Mark large:  v7 PURE UINT32 carry-forward (no uint64 per segment!)
+//    - Init offsets: v7 one-time uint64 per VM (computes initial half_off)
+//
+//  Key optimization: v6 recomputes first-multiple from scratch every segment
+//  (~15 uint64 ops × num_large_primes × num_segments). v7 computes once in
+//  uint64, then carries forward a uint32 residual. Expected 30-40% mark_large
+//  speedup.
+//
+//  Memory layout per VM (B0 Registers):
+//    B0[0 .. NUM_WORDS-1]                   = bitmap (8192 words, 32KB)
+//    B0[NUM_WORDS]                           = COUNT_OFF (segment popcount)
+//    B0[NUM_WORDS + 1]                       = ACCUM_OFF (running total)
+//    B0[NUM_WORDS+2 .. NUM_WORDS+1+NP]      = carry-forward residuals
+//
+//  Same architecture as v6: bucket sieve, L1-sized segments, 16 async VMs,
+//  small/large prime split, shared memory cache, tree reduction count.
+//  Tested: N = 10^7, 10^8, 10^9, 10^10+
+// ====================================================================
+
+print("")
+print("====================================================================")
+print("  GPU PARALLEL SIEVE v7 — CARRY-FORWARD + UINT64")
+print("  v6 addressing + v5 carry-forward = no per-segment uint64")
+print("====================================================================")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  CONFIGURATION (partial — REG_SIZE set after CPU sieve)
+// ════════════════════════════════════════════════════════════════════
+
+let N = 10000000000.0           // 10^10 (past the uint32 wall!)
+let CANDS_PER_SEG = 262144.0    // 2^18 odd candidates → 32KB bitmap (L1 cache)
+let NUM_VMS = 16.0
+let PRIME_THRESHOLD = 256.0     // primes < this use word-centric kernel
+
+let SEG_RANGE = CANDS_PER_SEG * 2.0    // numerical range per segment (524288)
+let NUM_WORDS = floor(CANDS_PER_SEG / 32.0)  // 8192 words = 32KB
+
+let COUNT_OFF = NUM_WORDS        // 8192
+let ACCUM_OFF = NUM_WORDS + 1.0  // 8193
+let OFFSET_BASE = NUM_WORDS + 2.0  // 8194 (start of carry-forward area)
+
+let TOTAL_ODDS = floor((N - 1.0) / 2.0)
+let NUM_SEGS = floor((TOTAL_ODDS + CANDS_PER_SEG - 1.0) / CANDS_PER_SEG)
+
+let WG_BITMAP = floor((NUM_WORDS + 255.0) / 256.0)
+
+// N split for f32 push constants: N = N_hi * 2^24 + N_lo
+let SPLIT = 16777216.0          // 2^24
+let N_HI = floor(N / SPLIT)
+let N_LO = N - N_HI * SPLIT
+
+// Kernel paths (v6 init+mark_small, v7 init_offsets+mark_large, v3 count, v2 accum)
+let K_INIT            = "stdlib/loom/kernels/sieve/sieve_init_v6.spv"
+let K_MARK_SMALL      = "stdlib/loom/kernels/sieve/sieve_mark_v6_small.spv"
+let K_INIT_OFFSETS_V7 = "stdlib/loom/kernels/sieve/sieve_init_offsets_v7.spv"
+let K_MARK_V7_LARGE   = "stdlib/loom/kernels/sieve/sieve_mark_v7_large.spv"
+let K_COUNT           = "stdlib/loom/kernels/sieve/sieve_count_v3.spv"
+let K_ACCUM           = "stdlib/loom/kernels/sieve/sieve_accum_v2.spv"
+
+print("  Target N = {N:.0}")
+print("  N split: N_hi={N_HI:.0} x 2^24 + N_lo={N_LO:.0}")
+print("  Candidates per segment = {CANDS_PER_SEG:.0}")
+print("  Segment range = {SEG_RANGE:.0}")
+print("  Bitmap words = {NUM_WORDS:.0}")
+print("  Total segments = {NUM_SEGS:.0}")
+print("  Worker VMs = {NUM_VMS:.0}")
+print("  Prime threshold = {PRIME_THRESHOLD:.0}")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 1: CPU SIEVE — Compute small primes up to sqrt(N)
+// ════════════════════════════════════════════════════════════════════
+
+let t0_cpu = now_ms()
+let sqrt_n = floor(sqrt(N)) + 1.0
+
+let mut cpu_sieve = []
+let mut csi = 0.0
+while csi < sqrt_n + 1.0
+  push(cpu_sieve, 1.0)
+  csi = csi + 1.0
+end
+cpu_sieve[0] = 0.0
+cpu_sieve[1] = 0.0
+
+let mut p = 2.0
+while p * p <= sqrt_n
+  if cpu_sieve[p] > 0.5
+    let mut m = p * p
+    while m <= sqrt_n
+      cpu_sieve[m] = 0.0
+      m = m + p
+    end
+  end
+  p = p + 1.0
+end
+
+// Collect ODD primes only (skip 2)
+let mut small_primes = []
+let mut spi = 3.0
+while spi <= sqrt_n
+  if cpu_sieve[spi] > 0.5
+    push(small_primes, spi)
+  end
+  spi = spi + 2.0
+end
+
+let num_primes = len(small_primes)
+
+// Split primes into small (word-centric) and large (carry-forward)
+let mut num_small = 0.0
+let mut si_count = 0.0
+while si_count < num_primes
+  if small_primes[si_count] < PRIME_THRESHOLD
+    num_small = num_small + 1.0
+  end
+  si_count = si_count + 1.0
+end
+let num_large = num_primes - num_small
+
+let t_cpu = now_ms() - t0_cpu
+
+print("  STEP 1: CPU sieve to sqrt({N:.0}) = {sqrt_n:.0}")
+print("    Found {num_primes:.0} odd primes (excluding 2)")
+print("    Small primes (p < {PRIME_THRESHOLD:.0}): {num_small:.0}")
+print("    Large primes (p >= {PRIME_THRESHOLD:.0}): {num_large:.0}")
+if num_primes > 0.5
+  let first_prime = small_primes[0]
+  let last_prime = small_primes[num_primes - 1.0]
+  print("    Range: {first_prime:.0} .. {last_prime:.0}")
+end
+print("    Time: {t_cpu:.0}ms")
+print("")
+
+// ── REG_SIZE (dynamic — depends on num_primes for carry-forward) ──
+let REG_SIZE = OFFSET_BASE + num_primes
+
+// Dynamic globals sizing: pad to next multiple of 256, minimum 4096
+let mut GLOBALS_SIZE = floor((num_primes + 255.0) / 256.0) * 256.0
+if GLOBALS_SIZE < 4096.0
+  GLOBALS_SIZE = 4096.0
+end
+
+// Pad primes array to globals_size
+while len(small_primes) < GLOBALS_SIZE
+  push(small_primes, 0.0)
+end
+
+print("  Globals buffer: {GLOBALS_SIZE:.0} floats ({num_primes:.0} primes + padding)")
+print("  REG_SIZE: {REG_SIZE:.0} (bitmap {NUM_WORDS:.0} + count + accum + {num_primes:.0} carry-forward)")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 2: BOOT VMs + WRITE PRIMES + INIT CARRY-FORWARD OFFSETS
+// ════════════════════════════════════════════════════════════════════
+
+let t0_boot = now_ms()
+
+let mut vms = []
+let mut bi = 0.0
+while bi < NUM_VMS
+  let r = try(vm_boot(1.0, REG_SIZE, GLOBALS_SIZE))
+  if r.ok > 0.5
+    push(vms, r.value)
+    let _w = vm_write_globals(r.value, 0.0, small_primes)
+  else
+    print("    BOOT FAILED at VM #{bi:.0}: {r.error}")
+    bi = NUM_VMS
+  end
+  bi = bi + 1.0
+end
+
+let t_boot = now_ms() - t0_boot
+let booted = len(vms)
+let mem_kb = booted * (REG_SIZE + GLOBALS_SIZE) * 4.0 / 1024.0
+
+let mut active_vms = booted
+if active_vms > NUM_SEGS
+  active_vms = NUM_SEGS
+end
+
+print("  STEP 2a: Booted {booted:.0} VMs in {t_boot:.0}ms (~{mem_kb:.0}KB VRAM)")
+print("    Active VMs: {active_vms:.0}")
+
+// ── Initialize carry-forward offsets per VM (synchronous) ──────
+let t0_initoff = now_ms()
+let wg_initoff = floor((num_primes + 255.0) / 256.0)
+
+let mut ioi = 0.0
+while ioi < active_vms
+  let pc_initoff = [num_primes, OFFSET_BASE]
+  let _d = vm_dispatch(vms[ioi], K_INIT_OFFSETS_V7, pc_initoff, wg_initoff)
+  let prog_io = vm_build(vms[ioi])
+  let _exec = vm_execute(prog_io)
+  ioi = ioi + 1.0
+end
+
+let t_initoff = now_ms() - t0_initoff
+print("  STEP 2b: Init carry-forward offsets in {t_initoff:.0}ms ({num_large:.0} large primes x {active_vms:.0} VMs)")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 3: RECORD DISPATCH CHAINS
+// ════════════════════════════════════════════════════════════════════
+
+let t0_chain = now_ms()
+let segs_per_vm = floor((NUM_SEGS + active_vms - 1.0) / active_vms)
+
+let needed_vms = floor((NUM_SEGS + segs_per_vm - 1.0) / segs_per_vm)
+if active_vms > needed_vms
+  active_vms = needed_vms
+end
+
+let mut total_dispatches = 0.0
+let mut vi = 0.0
+
+while vi < active_vms
+  let seg_start_idx = vi * segs_per_vm
+  let mut seg_end_idx = (vi + 1.0) * segs_per_vm
+  if seg_end_idx > NUM_SEGS
+    seg_end_idx = NUM_SEGS
+  end
+
+  // Push constant arrays (separate for small/large — different sizes)
+  let mut pc_init        = [0.0, 0.0, 0.0, 0.0]
+  let mut pc_mark_small  = [0.0, 0.0, 0.0, 0.0]
+  let mut pc_mark_large  = [0.0, 0.0, 0.0, 0.0, 0.0]
+  let pc_count = [NUM_WORDS, COUNT_OFF]
+  let pc_accum = [COUNT_OFF, ACCUM_OFF]
+
+  // Bucket sieve: running prime pointer advances monotonically
+  let mut prime_ptr = num_small
+
+  let mut si = seg_start_idx
+  while si < seg_end_idx
+    // ── Init: set bitmap bits (v6: N_lo/N_hi split) ──
+    pc_init[0] = si              // seg_idx
+    pc_init[1] = NUM_WORDS       // num_words
+    pc_init[2] = N_LO            // N mod 2^24
+    pc_init[3] = N_HI            // floor(N / 2^24)
+    let _d0 = vm_dispatch(vms[vi], K_INIT, pc_init, WG_BITMAP)
+    total_dispatches = total_dispatches + 1.0
+
+    // ── Mark small primes (word-centric, shared memory cache) ──
+    if num_small > 0.5
+      pc_mark_small[0] = si          // seg_idx
+      pc_mark_small[1] = NUM_WORDS
+      pc_mark_small[2] = 0.0         // prime_start = 0
+      pc_mark_small[3] = num_small   // prime_end = num_small
+      let _dms = vm_dispatch(vms[vi], K_MARK_SMALL, pc_mark_small, WG_BITMAP)
+      total_dispatches = total_dispatches + 1.0
+    end
+
+    // ── Bucket sieve: advance prime pointer to sqrt(seg_end) ──
+    // Conservative +1 is safe with sentinel: if a prime is included one
+    // segment early, the kernel self-initializes via uint64 and finds
+    // no work (half_off >= max_bits). Never misses a prime.
+    let seg_end_val = (si + 1.0) * SEG_RANGE
+    let seg_sqrt = floor(sqrt(seg_end_val)) + 1.0
+    while prime_ptr < num_primes
+      if small_primes[prime_ptr] > seg_sqrt
+        break
+      end
+      prime_ptr = prime_ptr + 1.0
+    end
+
+    // ── Mark large primes (v7 carry-forward, 5 push constants) ──
+    if prime_ptr > num_small
+      pc_mark_large[0] = si            // seg_idx
+      pc_mark_large[1] = NUM_WORDS
+      pc_mark_large[2] = num_small     // prime_start
+      pc_mark_large[3] = prime_ptr     // prime_end (bucket boundary)
+      pc_mark_large[4] = OFFSET_BASE   // carry-forward base
+      let wg_large_si = floor((prime_ptr - num_small + 255.0) / 256.0)
+      let _dml = vm_dispatch(vms[vi], K_MARK_V7_LARGE, pc_mark_large, wg_large_si)
+      total_dispatches = total_dispatches + 1.0
+    end
+
+    // ── Count: parallel popcount + tree reduction ──
+    let _dc = vm_dispatch(vms[vi], K_COUNT, pc_count, WG_BITMAP)
+    total_dispatches = total_dispatches + 1.0
+
+    // ── Accum: total += seg_count, reset ──
+    let _da = vm_dispatch(vms[vi], K_ACCUM, pc_accum, 1.0)
+    total_dispatches = total_dispatches + 1.0
+
+    si = si + 1.0
+  end
+
+  vi = vi + 1.0
+end
+
+let t_chain = now_ms() - t0_chain
+let per_vm = total_dispatches / active_vms
+
+print("  STEP 3: Recorded dispatch chains in {t_chain:.0}ms")
+print("    Total dispatches: {total_dispatches:.0}")
+print("    Per VM: ~{per_vm:.0}")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 4: BUILD + EXECUTE (ASYNC)
+// ════════════════════════════════════════════════════════════════════
+
+let t0_build = now_ms()
+let mut progs = []
+let mut bdi = 0.0
+while bdi < active_vms
+  let prog = vm_build(vms[bdi])
+  push(progs, prog)
+  bdi = bdi + 1.0
+end
+let t_build = now_ms() - t0_build
+
+let t0_exec = now_ms()
+
+let mut ei = 0.0
+while ei < active_vms
+  let _ea = vm_execute_async(progs[ei])
+  ei = ei + 1.0
+end
+
+// Poll loop
+let mut done_flags = []
+let mut di = 0.0
+while di < active_vms
+  push(done_flags, 0.0)
+  di = di + 1.0
+end
+
+let mut done_count = 0.0
+while done_count < active_vms
+  let mut pi = 0.0
+  while pi < active_vms
+    if done_flags[pi] < 0.5
+      let status = vm_poll(progs[pi])
+      if status > 0.5
+        done_flags[pi] = 1.0
+        done_count = done_count + 1.0
+      end
+    end
+    pi = pi + 1.0
+  end
+end
+
+let t_exec = now_ms() - t0_exec
+
+print("  STEP 4: GPU execution (async)")
+print("    Build: {t_build:.0}ms")
+print("    Execute: {t_exec:.0}ms  ({total_dispatches:.0} dispatches)")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 5: READ RESULTS + TALLY
+// ════════════════════════════════════════════════════════════════════
+
+let mut total_count = 1.0    // count prime 2 (not in GPU sieve)
+
+let mut ri = 0.0
+while ri < active_vms
+  let result = vm_read_register(vms[ri], 0.0, 0.0, REG_SIZE)
+  let accum_raw = result[ACCUM_OFF]
+  let vm_count = float_to_bits(accum_raw)
+
+  let seg_start_idx = ri * segs_per_vm
+  let mut seg_end_idx = (ri + 1.0) * segs_per_vm
+  if seg_end_idx > NUM_SEGS
+    seg_end_idx = NUM_SEGS
+  end
+  let vm_segs = seg_end_idx - seg_start_idx
+  print("    VM {ri:.0}: {vm_count:.0} primes ({vm_segs:.0} segments)")
+
+  total_count = total_count + vm_count
+  ri = ri + 1.0
+end
+
+let t_total = now_ms() - t0_cpu
+
+print("")
+print("  ════════════════════════════════════════════")
+print("  RESULT: pi({N:.0}) = {total_count:.0}")
+print("  ════════════════════════════════════════════")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 6: AUDIT AGAINST KNOWN VALUES
+// ════════════════════════════════════════════════════════════════════
+
+let mut expected = 0.0
+if N > 9999000000.0
+  expected = 455052511.0       // pi(10^10) = 455,052,511
+elif N > 999000000.0
+  expected = 50847534.0        // pi(10^9)  = 50,847,534
+elif N > 99000000.0
+  expected = 5761455.0         // pi(10^8)  = 5,761,455
+elif N > 9900000.0
+  expected = 664579.0          // pi(10^7)  = 664,579
+elif N > 990000.0
+  expected = 78498.0           // pi(10^6)  = 78,498
+end
+
+if expected > 0.5
+  let diff = total_count - expected
+  if diff > -0.5 && diff < 0.5
+    print("  AUDIT: PASS  (exact match: {total_count:.0})")
+  else
+    print("  AUDIT: FAIL  (expected {expected:.0} got {total_count:.0}, diff={diff:.0})")
+  end
+end
+
+print("")
+print("  TIMING SUMMARY")
+print("  ──────────────────────────────────────────")
+print("    CPU primes:     {t_cpu:.0}ms")
+print("    Boot VMs:       {t_boot:.0}ms")
+print("    Init offsets:   {t_initoff:.0}ms")
+print("    Record chain:   {t_chain:.0}ms")
+print("    Build programs: {t_build:.0}ms")
+print("    GPU execute:    {t_exec:.0}ms (async)")
+print("    TOTAL:          {t_total:.0}ms")
+print("  ──────────────────────────────────────────")
+print("    Dispatches:     {total_dispatches:.0}")
+print("    GPU submits:    {active_vms:.0} (all async)")
+print("    Segments:       {NUM_SEGS:.0} (32KB L1-sized)")
+print("    Small primes:   {num_small:.0} (word-centric, v6 uint64)")
+print("    Large primes:   {num_large:.0} (carry-forward, v7 uint32)")
+print("    REG_SIZE:       {REG_SIZE:.0}")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  CLEANUP
+// ════════════════════════════════════════════════════════════════════
+
+let mut si2 = 0.0
+while si2 < booted
+  let _s = vm_shutdown(vms[si2])
+  si2 = si2 + 1.0
+end
+
+print("====================================================================")
+print("")

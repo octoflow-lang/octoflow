@@ -1,4 +1,6 @@
 // stdlib/data/pipeline.flow — Data pipeline utilities
+//
+// Functions: chain_apply, batch_process, parallel_merge
 
 fn chain_apply(arr, fn_names)
   // Apply a sequence of transforms to each element

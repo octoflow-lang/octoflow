@@ -1,0 +1,256 @@
+// stdlib/loom/test_vm_multi.flow -- Multi-VM + Async Execution + CPU Polling Test
+//
+// Demonstrates:
+//   1. Two VMs running the SAME task (parallel workers)
+//   2. Two VMs running DIFFERENT tasks (heterogeneous workloads)
+//   3. Async execution with CPU polling (GPU runs autonomously)
+//   4. CPU reads results only when GPU signals completion
+//
+// Kernels used:
+//   vm_affine.spv — registers[dst+gid] = registers[src+gid] * scale + bias  (pc[0..4]=src,dst,scale,bias,count)
+//   vm_relu.spv   — registers[dst+gid] = max(registers[src+gid], 0.0)        (pc[0..2]=src,dst,count)
+//   vm_scale.spv  — registers[off+gid] *= scale                              (pc[0..2]=off,scale,count)
+//   vm_copy.spv   — registers[dst+gid] = registers[src+gid]                  (pc[0..2]=src,dst,count)
+//
+// Dispatch: ceil(count / 256) workgroups — bounds guard in kernel
+//
+// Pre-req: run emit_vm_affine.flow, emit_vm_relu.flow, emit_vm_scale.flow, emit_vm_copy.flow
+
+print("=== Multi-VM + Async Execution Test ===")
+print(" ")
+
+let reg_size = 8.0
+let wg = floor((reg_size + 255.0) / 256.0)
+
+// ── Test 1: Two VMs, SAME task (parallel workers) ──────────────────
+// Both VMs compute affine transform: y = x * 2.0 + 1.0
+// VM-A processes dataset A, VM-B processes dataset B
+print("--- Test 1: Same task, two VMs (parallel affine workers) ---")
+
+let vm_a = vm_boot(1.0, reg_size, 1.0)
+let vm_b = vm_boot(1.0, reg_size, 1.0)
+print("  Booted VM-A={vm_a}, VM-B={vm_b}")
+
+// Write different data to each VM's R0
+let data_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let data_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+let _wa = vm_write_register(vm_a, 0.0, 0.0, data_a)
+let _wb = vm_write_register(vm_b, 0.0, 0.0, data_b)
+print("  VM-A R0: [1..8], VM-B R0: [10..80]")
+
+// Same task: affine y = x * 2.0 + 1.0, read from R0 (offset 0), write to R1 (offset reg_size)
+let r0_off = 0.0
+let r1_off = reg_size
+let affine_pc = [r0_off, r1_off, 2.0, 1.0, reg_size]
+
+// Build programs for both VMs
+let _da = vm_dispatch(vm_a, "stdlib/loom/kernels/ops/vm_affine.spv", affine_pc, wg)
+let prog_a = vm_build(vm_a)
+let _db = vm_dispatch(vm_b, "stdlib/loom/kernels/ops/vm_affine.spv", affine_pc, wg)
+let prog_b = vm_build(vm_b)
+print("  Built program A={prog_a}, B={prog_b}")
+
+// Execute both (blocking for now — async tested in Test 3)
+let _ea = vm_execute(prog_a)
+let _eb = vm_execute(prog_b)
+
+// Read results from R1
+let result_a = vm_read_register(vm_a, 0.0, 1.0, reg_size)
+let result_b = vm_read_register(vm_b, 0.0, 1.0, reg_size)
+
+// Verify VM-A: R1[i] = data_a[i] * 2.0 + 1.0 = [3, 5, 7, 9, 11, 13, 15, 17]
+let mut pass1 = 1.0
+let mut i = 0.0
+while i < reg_size
+  let exp_a = data_a[int(i)] * 2.0 + 1.0
+  let act_a = result_a[int(i)]
+  if act_a != exp_a
+    print("  FAIL: VM-A R1[{i}] = {act_a}, expected {exp_a}")
+    pass1 = 0.0
+  end
+  let exp_b = data_b[int(i)] * 2.0 + 1.0
+  let act_b = result_b[int(i)]
+  if act_b != exp_b
+    print("  FAIL: VM-B R1[{i}] = {act_b}, expected {exp_b}")
+    pass1 = 0.0
+  end
+  i = i + 1.0
+end
+
+if pass1 == 1.0
+  print("  PASS: Both VMs computed y = 2x + 1 correctly")
+  print("    VM-A R1: [3, 5, 7, 9, 11, 13, 15, 17]")
+  print("    VM-B R1: [21, 41, 61, 81, 101, 121, 141, 161]")
+end
+
+// ── Test 2: Two VMs, DIFFERENT tasks ───────────────────────────────
+// VM-A: "data pipeline" — normalize data with affine y = (x - min) / (max - min)
+// VM-B: "neural net"    — ReLU activation on data with negative values
+print(" ")
+print("--- Test 2: Different tasks (pipeline vs neural net) ---")
+
+// VM-A: normalize [0, 25, 50, 75, 100, 50, 25, 0] to [0..1]
+// affine: y = x * (1/100) + 0 = x * 0.01
+let norm_data = [0.0, 25.0, 50.0, 75.0, 100.0, 50.0, 25.0, 0.0]
+let _wn = vm_write_register(vm_a, 0.0, 0.0, norm_data)
+let norm_pc = [r0_off, r1_off, 0.01, 0.0, reg_size]
+let _dn = vm_dispatch(vm_a, "stdlib/loom/kernels/ops/vm_affine.spv", norm_pc, wg)
+let prog_norm = vm_build(vm_a)
+
+// VM-B: ReLU on [-3, -1, 0, 1, 3, -5, 2, -0.5]
+let relu_data = [-3.0, -1.0, 0.0, 1.0, 3.0, -5.0, 2.0, -0.5]
+let _wr = vm_write_register(vm_b, 0.0, 0.0, relu_data)
+let relu_pc = [r0_off, r1_off, reg_size]
+let _dr = vm_dispatch(vm_b, "stdlib/loom/kernels/ops/vm_relu.spv", relu_pc, wg)
+let prog_relu = vm_build(vm_b)
+
+// Execute both
+let _en = vm_execute(prog_norm)
+let _er = vm_execute(prog_relu)
+
+// Read results
+let norm_result = vm_read_register(vm_a, 0.0, 1.0, reg_size)
+let relu_result = vm_read_register(vm_b, 0.0, 1.0, reg_size)
+
+// Verify normalize: [0, 0.25, 0.5, 0.75, 1.0, 0.5, 0.25, 0]
+let norm_expected = [0.0, 0.25, 0.5, 0.75, 1.0, 0.5, 0.25, 0.0]
+let mut pass2a = 1.0
+i = 0.0
+while i < reg_size
+  let ne = norm_expected[int(i)]
+  let na = norm_result[int(i)]
+  if na != ne
+    print("  FAIL: VM-A norm[{i}] = {na}, expected {ne}")
+    pass2a = 0.0
+  end
+  i = i + 1.0
+end
+if pass2a == 1.0
+  print("  PASS: VM-A normalize [0..100] → [0..1]")
+end
+
+// Verify ReLU: [0, 0, 0, 1, 3, 0, 2, 0]
+let relu_expected = [0.0, 0.0, 0.0, 1.0, 3.0, 0.0, 2.0, 0.0]
+let mut pass2b = 1.0
+i = 0.0
+while i < reg_size
+  let re = relu_expected[int(i)]
+  let ra = relu_result[int(i)]
+  if ra != re
+    print("  FAIL: VM-B relu[{i}] = {ra}, expected {re}")
+    pass2b = 0.0
+  end
+  i = i + 1.0
+end
+if pass2b == 1.0
+  print("  PASS: VM-B ReLU [-3,-1,0,1,3,-5,2,-0.5] → [0,0,0,1,3,0,2,0]")
+end
+
+// ── Test 3: Async execution + CPU polling ──────────────────────────
+// Submit GPU work, don't wait. Poll until done. Read results.
+print(" ")
+print("--- Test 3: Async execution + CPU polling ---")
+
+// Load fresh data into VM-A R0
+let async_data = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0]
+let _was = vm_write_register(vm_a, 0.0, 0.0, async_data)
+
+// Build a multi-op chain: scale by 0.1, then ReLU (noop since all positive), then copy to R2
+let r2_off = reg_size * 2.0
+let affine_pc2 = [r0_off, r1_off, 0.1, 0.0, reg_size]
+let _d3a = vm_dispatch(vm_a, "stdlib/loom/kernels/ops/vm_affine.spv", affine_pc2, wg)
+let relu_pc2 = [r1_off, r2_off, reg_size]
+let _d3b = vm_dispatch(vm_a, "stdlib/loom/kernels/ops/vm_relu.spv", relu_pc2, wg)
+let prog_async = vm_build(vm_a)
+print("  Built async program={prog_async} (affine → relu → R2)")
+
+// Submit WITHOUT waiting — GPU runs autonomously
+let _submit = vm_execute_async(prog_async)
+print("  Submitted async (GPU running autonomously)")
+
+// CPU polls until GPU is done
+let mut poll_count = 0.0
+let mut gpu_done = 0.0
+while gpu_done < 1.0
+  gpu_done = vm_poll(prog_async)
+  poll_count = poll_count + 1.0
+end
+print("  GPU done after {poll_count} poll(s)")
+
+// NOW read results — safe because GPU fence is signaled
+let async_result = vm_read_register(vm_a, 0.0, 2.0, reg_size)
+let mut pass3 = 1.0
+i = 0.0
+while i < reg_size
+  // async_data[i] * 0.1 = [10, 20, 30, 40, 50, 60, 70, 80], all positive → ReLU is noop
+  let exp3 = async_data[int(i)] * 0.1
+  let act3 = async_result[int(i)]
+  if act3 != exp3
+    print("  FAIL: R2[{i}] = {act3}, expected {exp3}")
+    pass3 = 0.0
+  end
+  i = i + 1.0
+end
+if pass3 == 1.0
+  print("  PASS: Async pipeline correct R2=[10, 20, 30, 40, 50, 60, 70, 80]")
+end
+
+// ── Test 4: Multi-VM async (both VMs fire simultaneously) ──────────
+print(" ")
+print("--- Test 4: Two VMs async + poll both ---")
+
+// Reuse existing programs: prog_a (affine on VM-A), prog_b (affine on VM-B)
+// Both already have data loaded from Test 1
+// Re-execute them both async
+let _sa = vm_execute_async(prog_a)
+let _sb = vm_execute_async(prog_b)
+print("  Both VMs submitted async")
+
+// Poll both until done
+let mut done_a = 0.0
+let mut done_b = 0.0
+let mut total_polls = 0.0
+while done_a < 1.0
+  done_a = vm_poll(prog_a)
+  total_polls = total_polls + 1.0
+end
+while done_b < 1.0
+  done_b = vm_poll(prog_b)
+  total_polls = total_polls + 1.0
+end
+print("  Both VMs complete after {total_polls} total poll(s)")
+
+// Verify same results as Test 1
+let recheck_a = vm_read_register(vm_a, 0.0, 1.0, reg_size)
+let recheck_b = vm_read_register(vm_b, 0.0, 1.0, reg_size)
+let mut pass4 = 1.0
+// VM-A still has async_data [100..800] from Test 3 in R0, so affine = 100*2+1=201, etc.
+// Actually... Test 1's prog_a reads from R0 and R0 was overwritten in Test 3
+// So we verify the new values: [100*2+1=201, 200*2+1=401, ...]
+i = 0.0
+while i < reg_size
+  let exp4a = async_data[int(i)] * 2.0 + 1.0
+  let act4a = recheck_a[int(i)]
+  if act4a != exp4a
+    print("  FAIL: VM-A R1[{i}] = {act4a}, expected {exp4a}")
+    pass4 = 0.0
+  end
+  // VM-B R0 was overwritten in Test 2 with relu_data [-3..2]
+  // So affine: relu_data[i] * 2.0 + 1.0
+  let exp4b = relu_data[int(i)] * 2.0 + 1.0
+  let act4b = recheck_b[int(i)]
+  if act4b != exp4b
+    print("  FAIL: VM-B R1[{i}] = {act4b}, expected {exp4b}")
+    pass4 = 0.0
+  end
+  i = i + 1.0
+end
+if pass4 == 1.0
+  print("  PASS: Both VMs re-executed correctly via async")
+end
+
+// ── Cleanup ────────────────────────────────────────────────────────
+let _sa2 = vm_shutdown(vm_a)
+let _sb2 = vm_shutdown(vm_b)
+print(" ")
+print("=== ALL TESTS DONE ===")

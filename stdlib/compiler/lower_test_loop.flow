@@ -1,0 +1,90 @@
+// stdlib/compiler/lower_test_loop.flow
+// Phase 70/71 Test: AST lowering with while loop → OpLoopMerge + OpPhi
+//
+// Kernel: sum = 0; i = 0; while i < 10: sum = sum + i; i = i + 1; output[gid] = sum
+// Expected: output[gid] = 45.0 (sum of 0..9)
+
+use ir
+use lower
+
+let mut out_path = env("SPIRV_OUTPUT")
+if out_path == ""
+  out_path = "spirv_lower_loop.spv"
+end
+
+ir_new()
+
+// AST: 7 nodes
+// [0] Let sum = 0.0
+push(nd_kind, "Let")
+push(nd_lhs, "sum")
+push(nd_op, "=")
+push(nd_rhs, "0.0")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "1")
+push(nd_line, "1")
+push(nd_mut, "1")
+
+// [1] Let i = 0.0
+push(nd_kind, "Let")
+push(nd_lhs, "i")
+push(nd_op, "=")
+push(nd_rhs, "0.0")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "2")
+push(nd_line, "2")
+push(nd_mut, "1")
+
+// [2] While i < 10.0 → child=3
+push(nd_kind, "While")
+push(nd_lhs, "i < 10.0")
+push(nd_op, "")
+push(nd_rhs, "")
+push(nd_rhs2, "")
+push(nd_child, "3")
+push(nd_next, "5")
+push(nd_line, "3")
+push(nd_mut, "")
+
+// [3] Assign sum = sum + i (loop body)
+push(nd_kind, "Assign")
+push(nd_lhs, "sum")
+push(nd_op, "=")
+push(nd_rhs, "sum + i")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "4")
+push(nd_line, "4")
+push(nd_mut, "")
+
+// [4] Assign i = i + 1.0 (loop body)
+push(nd_kind, "Assign")
+push(nd_lhs, "i")
+push(nd_op, "=")
+push(nd_rhs, "i + 1.0")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "-1")
+push(nd_line, "5")
+push(nd_mut, "")
+
+// [5] ArrSet output[gid] = sum
+push(nd_kind, "ArrSet")
+push(nd_lhs, "output")
+push(nd_op, "gid")
+push(nd_rhs, "sum")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "-1")
+push(nd_line, "6")
+push(nd_mut, "")
+
+// Block tracking
+push(cur_block_first, 0.0)
+push(cur_block_last, 5.0)
+
+// Lower and emit
+lower_to_ir()
+let _e = ir_emit_spirv(out_path)

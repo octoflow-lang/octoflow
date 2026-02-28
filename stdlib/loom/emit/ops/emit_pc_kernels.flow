@@ -1,0 +1,195 @@
+// emit_pc_kernels.flow — Generate push-constant SPIR-V kernels for pipeline ops
+//
+// These replace the Rust flowgpu-spirv emitter. Each kernel reads parameters
+// from push constants instead of baking them into the SPIR-V binary.
+//
+// Run: octoflow run stdlib/loom/emit_pc_kernels.flow --allow-read --allow-write --allow-exec
+//
+// Generates:
+//   kernels/multiply_pc.spv  — out[i] = in[i] * pc[0]
+//   kernels/add_pc.spv       — out[i] = in[i] + pc[0]
+//   kernels/subtract_pc.spv  — out[i] = in[i] - pc[0]
+//   kernels/divide_pc.spv    — out[i] = in[i] / pc[0]
+//   kernels/mod_pc.spv       — out[i] = in[i] mod pc[0]
+//   kernels/pow_pc.spv       — out[i] = pow(in[i], pc[0])
+//   kernels/min_pc.spv       — out[i] = min(in[i], pc[0])
+//   kernels/max_pc.spv       — out[i] = max(in[i], pc[0])
+//   kernels/clamp_pc.spv     — out[i] = clamp(in[i], pc[0], pc[1])
+//   kernels/normalize_pc.spv — out[i] = (in[i] - pc[0]) / (pc[1] - pc[0])
+//   kernels/scale_shift_pc.spv — out[i] = in[i] * pc[0] + pc[1]
+
+use "../compiler/ir"
+
+let kernel_dir = "stdlib/loom/kernels/math/"
+
+// ── Helper: basic unary-with-one-push-constant kernel ──────────────────
+
+fn emit_simple_unary(path, op_type)
+  ir_new()
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+  let val = ir_load_input(entry)
+  let pc = ir_push_const(entry, 0.0)
+
+  let mut result = 0.0
+  if op_type == 1.0
+    // multiply
+    result = ir_fmul(entry, val, pc)
+  end
+  if op_type == 2.0
+    // add
+    result = ir_fadd(entry, val, pc)
+  end
+  if op_type == 3.0
+    // subtract
+    result = ir_fsub(entry, val, pc)
+  end
+  if op_type == 4.0
+    // divide
+    result = ir_fdiv(entry, val, pc)
+  end
+  if op_type == 5.0
+    // mod: x - floor(x/s) * s
+    let ratio = ir_fdiv(entry, val, pc)
+    let floored = ir_floor(entry, ratio)
+    let prod = ir_fmul(entry, floored, pc)
+    result = ir_fsub(entry, val, prod)
+  end
+  if op_type == 6.0
+    // pow
+    result = ir_pow(entry, val, pc)
+  end
+  if op_type == 7.0
+    // min: select(val < pc, val, pc)
+    let cmp = ir_folt(entry, val, pc)
+    result = ir_select(entry, IR_TYPE_FLOAT, cmp, val, pc)
+  end
+  if op_type == 8.0
+    // max: select(val > pc, val, pc)
+    let cmp = ir_fogt(entry, val, pc)
+    result = ir_select(entry, IR_TYPE_FLOAT, cmp, val, pc)
+  end
+
+  ir_store_output(entry, result)
+  ir_term_return(entry)
+  ir_emit_spirv(path)
+  return 0.0
+end
+
+// ── Clamp: 2 push constants ────────────────────────────────────────────
+
+fn emit_clamp(path)
+  ir_new()
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+  let val = ir_load_input(entry)
+  let lo = ir_push_const(entry, 0.0)
+  let hi = ir_push_const(entry, 1.0)
+
+  // max(val, lo)
+  let cmp_lo = ir_folt(entry, val, lo)
+  let clamped_lo = ir_select(entry, IR_TYPE_FLOAT, cmp_lo, lo, val)
+  // min(clamped_lo, hi)
+  let cmp_hi = ir_fogt(entry, clamped_lo, hi)
+  let result = ir_select(entry, IR_TYPE_FLOAT, cmp_hi, hi, clamped_lo)
+
+  ir_store_output(entry, result)
+  ir_term_return(entry)
+  ir_emit_spirv(path)
+  return 0.0
+end
+
+// ── Normalize: (x - min) / (max - min), 2 push constants ──────────────
+
+fn emit_normalize(path)
+  ir_new()
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+  let val = ir_load_input(entry)
+  let min_val = ir_push_const(entry, 0.0)
+  let max_val = ir_push_const(entry, 1.0)
+
+  let shifted = ir_fsub(entry, val, min_val)
+  let range = ir_fsub(entry, max_val, min_val)
+  let result = ir_fdiv(entry, shifted, range)
+
+  ir_store_output(entry, result)
+  ir_term_return(entry)
+  ir_emit_spirv(path)
+  return 0.0
+end
+
+// ── Scale-Shift: x * scale + bias, 2 push constants ───────────────────
+
+fn emit_scale_shift(path)
+  ir_new()
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+  let val = ir_load_input(entry)
+  let scale = ir_push_const(entry, 0.0)
+  let bias = ir_push_const(entry, 1.0)
+
+  let scaled = ir_fmul(entry, val, scale)
+  let result = ir_fadd(entry, scaled, bias)
+
+  ir_store_output(entry, result)
+  ir_term_return(entry)
+  ir_emit_spirv(path)
+  return 0.0
+end
+
+// ── Generate all kernels ───────────────────────────────────────────────
+
+print("=== Generating push-constant SPIR-V kernels ===")
+print(" ")
+
+let p1 = kernel_dir + "multiply_pc.spv"
+emit_simple_unary(p1, 1.0)
+print("  multiply_pc.spv  DONE")
+
+let p2 = kernel_dir + "add_pc.spv"
+emit_simple_unary(p2, 2.0)
+print("  add_pc.spv       DONE")
+
+let p3 = kernel_dir + "subtract_pc.spv"
+emit_simple_unary(p3, 3.0)
+print("  subtract_pc.spv  DONE")
+
+let p4 = kernel_dir + "divide_pc.spv"
+emit_simple_unary(p4, 4.0)
+print("  divide_pc.spv    DONE")
+
+let p5 = kernel_dir + "mod_pc.spv"
+emit_simple_unary(p5, 5.0)
+print("  mod_pc.spv       DONE")
+
+let p6 = kernel_dir + "pow_pc.spv"
+emit_simple_unary(p6, 6.0)
+print("  pow_pc.spv       DONE")
+
+let p7 = kernel_dir + "min_pc.spv"
+emit_simple_unary(p7, 7.0)
+print("  min_pc.spv       DONE")
+
+let p8 = kernel_dir + "max_pc.spv"
+emit_simple_unary(p8, 8.0)
+print("  max_pc.spv       DONE")
+
+let p9 = kernel_dir + "clamp_pc.spv"
+emit_clamp(p9)
+print("  clamp_pc.spv     DONE")
+
+let p10 = kernel_dir + "normalize_pc.spv"
+emit_normalize(p10)
+print("  normalize_pc.spv DONE")
+
+let p11 = kernel_dir + "scale_shift_pc.spv"
+emit_scale_shift(p11)
+print("  scale_shift_pc.spv DONE")
+
+print(" ")
+print("=== All 11 kernels generated ===")

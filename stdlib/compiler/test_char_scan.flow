@@ -1,0 +1,56 @@
+// test_char_scan.flow — char_at/ord in while + && compound while conditions
+let src = "let x = 42"
+let n = len(src)
+let mut pos = 0.0
+let mut tok_count = 0.0
+let mut tok_out = ""
+let NL = 10.0
+let SP = 32.0
+
+while pos < n
+  let c = char_at(src, pos)
+  let co = ord(c)
+
+  // skip spaces
+  if co == SP
+    pos = pos + 1.0
+
+  // digit: scan while digit or dot
+  elif co >= 48.0 && co <= 57.0
+    let mut num = ""
+    while pos < n && contains("0123456789.", char_at(src, pos))
+      num = num + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    if len(tok_out) > 0.0
+      tok_out = tok_out + ","
+    end
+    tok_out = tok_out + "num:" + num
+    tok_count = tok_count + 1.0
+
+  // letter: scan identifier
+  elif is_match(c, "[a-zA-Z_]")
+    let mut word = ""
+    while pos < n && is_match(char_at(src, pos), "[a-zA-Z_0-9]")
+      word = word + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    if len(tok_out) > 0.0
+      tok_out = tok_out + ","
+    end
+    tok_out = tok_out + "id:" + word
+    tok_count = tok_count + 1.0
+
+  // operator
+  else
+    if len(tok_out) > 0.0
+      tok_out = tok_out + ","
+    end
+    tok_out = tok_out + "op:" + c
+    tok_count = tok_count + 1.0
+    pos = pos + 1.0
+  end
+end
+
+print("tokens={tok_count}")
+print("out={tok_out}")

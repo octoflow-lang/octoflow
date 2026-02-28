@@ -1,0 +1,93 @@
+// emit_vm_where_mul.flow — VM Predicate Filter + Multiply Kernel
+//
+// Combines WHERE predicate evaluation with value extraction in one kernel.
+// For each row, if the predicate column matches the target value,
+// writes the value column to the output register. Otherwise writes 0.
+//
+//   result[gid] = (pred_col[gid] == pred_val) ? val_col[gid] : 0.0
+//
+// This is the GPU equivalent of: SELECT val_col WHERE pred_col = pred_val
+//
+// Data lives in globals (binding 2) — columnar table storage.
+// Results go to registers (binding 0) — working memory.
+//
+// Push constants:
+//   pc[0] = val_col_off   (float -> uint, column A start index in globals)
+//   pc[1] = pred_col_off  (float -> uint, column B start index in globals)
+//   pc[2] = pred_val      (float, predicate value to match)
+//   pc[3] = dst_off       (float -> uint, output start in registers)
+//   pc[4] = count         (float, number of rows)
+//
+// Binding layout (ir_input_count=3):
+//   Binding 0: registers (write output)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (read columns)
+//   Binding 3: control   (unused)
+//
+// Dispatch: ceil(count / 256)
+//
+// Run: octoflow run stdlib/loom/emit_vm_where_mul.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_where_mul(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let match_blk  = ir_block("match")
+  let nomatch    = ir_block("nomatch")
+  let merge      = ir_block("merge")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: load gid, push constants, bounds check ───────────────────
+  let gid         = ir_load_gid(entry)
+  let pc_val_off  = ir_push_const(entry, 0.0)
+  let pc_pred_off = ir_push_const(entry, 1.0)
+  let pc_pred_val = ir_push_const(entry, 2.0)
+  let pc_dst      = ir_push_const(entry, 3.0)
+  let pc_cnt      = ir_push_const(entry, 4.0)
+  let cnt_u       = ir_ftou(entry, pc_cnt)
+  let oob         = ir_ugte(entry, gid, cnt_u)
+  let _sm         = ir_selection_merge(entry, exit_block)
+  let _br         = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: load predicate column value, compare ──────────────────────
+  let pred_off_u = ir_ftou(body, pc_pred_off)
+  let pred_idx   = ir_iadd(body, pred_off_u, gid)
+  let pred_v     = ir_load_input_at(body, 2.0, pred_idx)   // globals[pred_col_off + gid]
+  let diff       = ir_fsub(body, pred_v, pc_pred_val)
+  let abs_diff   = ir_fabs(body, diff)
+  let threshold  = ir_const_f(body, 0.001)
+  let no_match   = ir_fogt(body, abs_diff, threshold)       // abs(pred - val) > 0.001
+  let _sm2       = ir_selection_merge(body, merge)
+  let _br2       = ir_term_cond_branch(body, no_match, nomatch, match_blk)
+
+  // ── Match: write value column to output ─────────────────────────────
+  let val_off_u  = ir_ftou(match_blk, pc_val_off)
+  let val_idx    = ir_iadd(match_blk, val_off_u, gid)
+  let val_v      = ir_load_input_at(match_blk, 2.0, val_idx) // globals[val_col_off + gid]
+  let dst_off_u  = ir_ftou(match_blk, pc_dst)
+  let dst_idx    = ir_iadd(match_blk, dst_off_u, gid)
+  let _s1        = ir_buf_store_f(match_blk, 0.0, dst_idx, val_v) // registers[dst_off + gid]
+  let _br3       = ir_term_branch(match_blk, merge)
+
+  // ── No match: write 0.0 ─────────────────────────────────────────────
+  let zero       = ir_const_f(nomatch, 0.0)
+  let dst_off_u2 = ir_ftou(nomatch, pc_dst)
+  let dst_idx2   = ir_iadd(nomatch, dst_off_u2, gid)
+  let _s2        = ir_buf_store_f(nomatch, 0.0, dst_idx2, zero) // registers[dst_off + gid] = 0
+  let _br4       = ir_term_branch(nomatch, merge)
+
+  // ── Merge + Exit ────────────────────────────────────────────────────
+  let _br5 = ir_term_branch(merge, exit_block)
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/ops/vm_where_mul.spv"
+let _r = emit_vm_where_mul(out)
+print("Emitted: {out}")

@@ -1,0 +1,224 @@
+// ─── GPU Image Pipeline ─────────────────────────────────────────────
+// Julia set fractal → 6-stage GPU processing → PPM output
+// Run:    octoflow run examples/showcase_image.flow --allow-write
+// Output: pipeline.ppm (open with any image viewer)
+//
+// Every pixel processed in parallel on your GPU.
+// Each pipeline stage timed independently.
+
+let W = 320
+let H = 180
+let N = W * H
+let max_iter = 150
+
+let esc = chr(27)
+let bold = esc + "[1m"
+let cyan = esc + "[36m"
+let green = esc + "[32m"
+let reset = esc + "[0m"
+
+let title = bold + cyan + "GPU Image Pipeline" + reset
+print("{title}")
+print("────────────────────────────────────────")
+let sn = str(int(N))
+let sw_d = str(int(W))
+let sh_d = str(int(H))
+let dims = sn + " pixels (" + sw_d + "x" + sh_d + "), 6 GPU stages"
+print("{dims}")
+print("")
+
+let t0 = now_ms()
+let gpu_one = gpu_fill(1.0, N)
+let gpu_W = gpu_fill(W, N)
+let gpu_H = gpu_fill(H, N)
+
+// ═══ Stage 1: Generate Julia Set ════════════════════════════════════
+let t1 = now_ms()
+
+// Julia set c = -0.7269 + 0.1889i (spiral pattern)
+let jcr = -0.7269
+let jci = 0.1889
+
+// Map pixel → complex plane [-2, 2]
+let idx = gpu_range(0.0, N, 1.0)
+let div_tmp = gpu_div(idx, gpu_W)
+let row = gpu_floor(div_tmp)
+let row_w = gpu_mul(row, gpu_W)
+let col = gpu_sub(idx, row_w)
+
+let col_norm = gpu_div(col, gpu_W)
+let col_scaled = gpu_scale(col_norm, 4.0)
+let two_N = gpu_fill(2.0, N)
+let u = gpu_sub(col_scaled, two_N)
+
+let row_norm = gpu_div(row, gpu_H)
+let row_scaled = gpu_scale(row_norm, 4.0)
+let v = gpu_sub(row_scaled, two_N)
+
+// Julia iteration: z = z^2 + c
+let gpu_four = gpu_fill(4.0, N)
+let jcr_N = gpu_fill(jcr, N)
+let jci_N = gpu_fill(jci, N)
+let mut zr = u
+let mut zi = v
+let mut count = gpu_fill(0.0, N)
+
+for k in range(0, max_iter)
+    let zr2 = gpu_mul(zr, zr)
+    let zi2 = gpu_mul(zi, zi)
+    let mag = gpu_add(zr2, zi2)
+    let diff = gpu_sub(gpu_four, mag)
+    let clamped = gpu_clamp(diff, 0.0, 1.0)
+    let mask = gpu_ceil(clamped)
+    let inv = gpu_sub(gpu_one, mask)
+    let zr_diff = gpu_sub(zr2, zi2)
+    let nr = gpu_add(zr_diff, jcr_N)
+    let zr_zi = gpu_mul(zr, zi)
+    let zr_zi2 = gpu_scale(zr_zi, 2.0)
+    let ni = gpu_add(zr_zi2, jci_N)
+    let nr_masked = gpu_mul(nr, mask)
+    let zr_kept = gpu_mul(zr, inv)
+    let zr = gpu_add(nr_masked, zr_kept)
+    let ni_masked = gpu_mul(ni, mask)
+    let zi_kept = gpu_mul(zi, inv)
+    let zi = gpu_add(ni_masked, zi_kept)
+    let count = gpu_add(count, mask)
+end
+
+let st1 = str(int(now_ms() - t1))
+let msg1 = "  " + green + "[1]" + reset + " Generate Julia set:  " + bold + st1 + " ms" + reset
+print("{msg1}")
+
+// ═══ Stage 2: Bernstein Color Mapping ═══════════════════════════════
+let t2 = now_ms()
+
+let t_norm = gpu_scale(count, 1.0 / max_iter)
+let omt = gpu_sub(gpu_one, t_norm)
+let t2_ = gpu_mul(t_norm, t_norm)
+let t3_ = gpu_mul(t2_, t_norm)
+let omt2 = gpu_mul(omt, omt)
+let omt3 = gpu_mul(omt2, omt)
+
+let r_raw = gpu_mul(omt, t3_)
+let r_sc = gpu_scale(r_raw, 2295.0)
+let r_fl = gpu_floor(r_sc)
+let mut r = gpu_clamp(r_fl, 0.0, 255.0)
+
+let g_raw = gpu_mul(omt2, t2_)
+let g_sc = gpu_scale(g_raw, 3825.0)
+let g_fl = gpu_floor(g_sc)
+let mut g = gpu_clamp(g_fl, 0.0, 255.0)
+
+let b_raw = gpu_mul(omt3, t_norm)
+let b_sc = gpu_scale(b_raw, 2167.5)
+let b_fl = gpu_floor(b_sc)
+let mut b = gpu_clamp(b_fl, 0.0, 255.0)
+
+let st2 = str(int(now_ms() - t2))
+let msg2 = "  " + green + "[2]" + reset + " Color mapping:       " + bold + st2 + " ms" + reset
+print("{msg2}")
+
+// ═══ Stage 3: Brightness Boost (+25) ════════════════════════════════
+let t3 = now_ms()
+
+let bright = gpu_fill(25.0, N)
+let r_b = gpu_add(r, bright)
+let r = gpu_clamp(r_b, 0.0, 255.0)
+let g_b = gpu_add(g, bright)
+let g = gpu_clamp(g_b, 0.0, 255.0)
+let b_b = gpu_add(b, bright)
+let b = gpu_clamp(b_b, 0.0, 255.0)
+
+let st3 = str(int(now_ms() - t3))
+let msg3 = "  " + green + "[3]" + reset + " Brightness (+25):    " + bold + st3 + " ms" + reset
+print("{msg3}")
+
+// ═══ Stage 4: Contrast Enhancement (1.3x) ═══════════════════════════
+let t4 = now_ms()
+
+let half = gpu_fill(128.0, N)
+let contrast = 1.3
+let r_c = gpu_sub(r, half)
+let r_cs = gpu_scale(r_c, contrast)
+let r_ca = gpu_add(r_cs, half)
+let r = gpu_clamp(r_ca, 0.0, 255.0)
+let g_c = gpu_sub(g, half)
+let g_cs = gpu_scale(g_c, contrast)
+let g_ca = gpu_add(g_cs, half)
+let g = gpu_clamp(g_ca, 0.0, 255.0)
+let b_c = gpu_sub(b, half)
+let b_cs = gpu_scale(b_c, contrast)
+let b_ca = gpu_add(b_cs, half)
+let b = gpu_clamp(b_ca, 0.0, 255.0)
+
+let st4 = str(int(now_ms() - t4))
+let msg4 = "  " + green + "[4]" + reset + " Contrast (1.3x):     " + bold + st4 + " ms" + reset
+print("{msg4}")
+
+// ═══ Stage 5: Radial Vignette ═══════════════════════════════════════
+let t5 = now_ms()
+
+let half_pt = gpu_fill(0.5, N)
+let col_frac = gpu_div(col, gpu_W)
+let cu = gpu_sub(col_frac, half_pt)
+let row_frac = gpu_div(row, gpu_H)
+let cv = gpu_sub(row_frac, half_pt)
+let cu_sq = gpu_mul(cu, cu)
+let cv_sq = gpu_mul(cv, cv)
+let dist2 = gpu_add(cu_sq, cv_sq)
+let dist = gpu_sqrt(dist2)
+let vig_raw = gpu_scale(dist, 1.4)
+let vig_sub = gpu_sub(gpu_one, vig_raw)
+let vig = gpu_clamp(vig_sub, 0.2, 1.0)
+let r = gpu_mul(r, vig)
+let g = gpu_mul(g, vig)
+let b = gpu_mul(b, vig)
+
+let st5 = str(int(now_ms() - t5))
+let msg5 = "  " + green + "[5]" + reset + " Radial vignette:     " + bold + st5 + " ms" + reset
+print("{msg5}")
+
+// ═══ Stage 6: Warm Color Grade ══════════════════════════════════════
+let t6 = now_ms()
+
+let r_w = gpu_scale(r, 1.12)
+let r = gpu_clamp(r_w, 0.0, 255.0)
+let g_w = gpu_scale(g, 1.02)
+let g = gpu_clamp(g_w, 0.0, 255.0)
+let b_w = gpu_scale(b, 0.82)
+let b = gpu_clamp(b_w, 0.0, 255.0)
+
+let st6 = str(int(now_ms() - t6))
+let msg6 = "  " + green + "[6]" + reset + " Warm color grade:    " + bold + st6 + " ms" + reset
+print("{msg6}")
+
+// ═══ Write PPM ══════════════════════════════════════════════════════
+print("")
+print("Writing PPM...")
+let nl = chr(10)
+let sw = str(int(W))
+let sh = str(int(H))
+let mut ppm = "P3" + nl + sw + " " + sh + nl + "255" + nl
+
+for y in range(0, H)
+    let mut row_str = ""
+    for x in range(0, W)
+        let i = y * W + x
+        let ri = str(int(r[i]))
+        let gi = str(int(g[i]))
+        let bi = str(int(b[i]))
+        row_str = row_str + ri + " " + gi + " " + bi + " "
+    end
+    ppm = ppm + row_str + nl
+end
+
+write_file("pipeline.ppm", ppm)
+
+let total = str(int(now_ms() - t0))
+print("")
+let done_msg = bold + "Pipeline complete" + reset
+print("{done_msg}")
+let sum_msg = sn + " pixels, 6 GPU stages in " + bold + total + " ms" + reset
+print("{sum_msg}")
+let save_msg = "Saved: pipeline.ppm (" + sw + "x" + sh + ")"
+print("{save_msg}")

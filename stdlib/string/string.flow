@@ -1,4 +1,12 @@
-// stdlib/string/string.flow — String utilities (Python str equivalents)
+// stdlib/string/string.flow — String utilities beyond builtins
+//
+// These complement the built-in string functions (len, split, join, trim,
+// replace, contains, starts_with, ends_with, substr, index_of, to_upper,
+// to_lower, char_at, repeat, ord, chr). Use builtins directly for those.
+//
+// Functions: str_center, str_ljust, str_rjust, str_count, str_reverse,
+//            str_is_digit, str_is_alpha, str_is_empty, str_lstrip, str_rstrip,
+//            str_title, str_zfill
 
 fn str_center(s, width, fill)
   let n = len(s)
@@ -69,10 +77,6 @@ fn str_count(s, sub)
     end
   end
   return count
-end
-
-fn str_repeat(s, n)
-  return repeat(s, n)
 end
 
 fn str_reverse(s)
@@ -190,10 +194,5 @@ fn str_zfill(s, width)
   return result + s
 end
 
-fn str_join(arr, sep)
-  return join(arr, sep)
-end
-
-fn str_split(s, sep)
-  return split(s, sep)
-end
+// Note: str_split, str_join, str_repeat were removed — use the builtins
+// split(s, sep), join(arr, sep), repeat(s, n) directly.

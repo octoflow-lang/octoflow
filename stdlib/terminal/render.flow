@@ -1,0 +1,35 @@
+// stdlib/terminal/render.flow — Unified terminal image renderer
+// Pure .flow implementations of all 4 terminal rendering protocols
+//
+// Usage:
+//   use "stdlib/terminal/render"
+//   term_render(w, h, r, g, b, "halfblock")  // ANSI truecolor
+//   term_render(w, h, r, g, b, "kitty")      // Kitty Graphics Protocol
+//   term_render(w, h, r, g, b, "sixel")      // Sixel graphics
+//   term_render(w, h, r, g, b, "digits")     // ASCII digit art
+
+use "halfblock"
+use "kitty"
+use "sixel"
+use "digits"
+
+fn term_render(w, h, r, g, b, mode)
+  if mode == "kitty"
+    kitty_render(w, h, r, g, b)
+  elif mode == "sixel"
+    sixel_render(w, h, r, g, b)
+  elif mode == "digits"
+    digits_render(w, h, r, g, b)
+  else
+    halfblock_render(w, h, r, g, b)
+  end
+  return 0.0
+end
+
+// Move cursor up N lines (for animation frame overwrite)
+fn term_up(n)
+  if n > 0.0
+    print_raw(chr(27) + "[" + to_str(int(n)) + "A")
+  end
+  return 0.0
+end

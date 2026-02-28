@@ -1,0 +1,9 @@
+// Decompose Qwen2.5-7B GGUF model into per-layer .bin files
+// Usage: octoflow run stdlib/llm/run_decompose_7b.flow --allow-read --allow-write --allow-ffi
+
+use "decompose_gguf"
+
+let gguf_path = "F:/OctoFlow/models/qwen2.5-7b-instruct-q4_k_m.gguf"
+let output_dir = "F:/OctoFlow/models/qwen-7b-decomp"
+
+let _r = decompose_model(gguf_path, output_dir)

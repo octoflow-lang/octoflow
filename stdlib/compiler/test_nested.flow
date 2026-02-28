@@ -1,0 +1,19 @@
+let mut pos = 0.0
+let n = 10.0
+while pos < n
+  let c = "a"
+  let co = 65.0
+  if co == 32.0
+    pos = pos + 1.0
+  elif co == 10.0
+    let t = "nl"
+    pos = pos + 1.0
+  elif co == 47.0
+    let t2 = "op"
+    pos = pos + 1.0
+  else
+    let t3 = "ident"
+    pos = pos + 1.0
+  end
+end
+let done = "ok"

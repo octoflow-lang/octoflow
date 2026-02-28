@@ -1,0 +1,173 @@
+// emit_sieve_mark_v2.flow — Sieve Mark v2 Kernel Emitter (Bit-Clear)
+//
+// Marks composite numbers in bit-packed segment bitmap.
+// Each thread handles one uint32 word (32 odd candidates).
+// For each prime in globals[prime_start..prime_end):
+//   - Compute which multiples of prime fall in this word's range
+//   - Clear corresponding bits
+//
+// Bit j of word i represents odd candidate: seg_start + (i * 32 + j) * 2
+// where seg_start = seg_idx * SEG_RANGE + 1 (computed on GPU, no f32 precision loss)
+//
+// Push constants:
+//   pc[0] = seg_idx      (segment index, small — exact in f32)
+//   pc[1] = num_words    (bitmap words)
+//   pc[2] = prime_start  (index in globals array)
+//   pc[3] = prime_end    (index in globals array)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read+write R0 bitmap as uint32)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (read primes list as float)
+//   Binding 3: control   (unused)
+//
+// Dispatch: wg = ceil(num_words / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_mark_v2.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_mark_v2(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry       = ir_block("entry")
+  let pre_loop    = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body   = ir_block("loop_body")
+  let inner_hdr   = ir_block("inner_hdr")
+  let inner_body  = ir_block("inner_body")
+  let inner_cont  = ir_block("inner_cont")
+  let inner_merge = ir_block("inner_merge")
+  let loop_cont   = ir_block("loop_cont")
+  let loop_merge  = ir_block("loop_merge")
+  let exit_block  = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────
+  let gid      = ir_load_gid(entry)
+  let pc_seg   = ir_push_const(entry, 0.0)   // seg_idx
+  let pc_words = ir_push_const(entry, 1.0)   // num_words
+  let pc_pst   = ir_push_const(entry, 2.0)   // prime_start
+  let pc_pen   = ir_push_const(entry, 3.0)   // prime_end
+  let words_u  = ir_ftou(entry, pc_words)
+  let oob      = ir_ugte(entry, gid, words_u)
+  let _sm_e    = ir_selection_merge(entry, exit_block)
+  let _br_e    = ir_term_cond_branch(entry, oob, exit_block, pre_loop)
+
+  // ── pre_loop: compute word base, load initial bitmap ──────
+  let seg_u    = ir_ftou(pre_loop, pc_seg)
+  let pstart_u = ir_ftou(pre_loop, pc_pst)
+  let pend_u   = ir_ftou(pre_loop, pc_pen)
+
+  let c0       = ir_const_u(pre_loop, 0.0)
+  let c1       = ir_const_u(pre_loop, 1.0)
+  let c2       = ir_const_u(pre_loop, 2.0)
+  let c64      = ir_const_u(pre_loop, 64.0)
+  let c62      = ir_const_u(pre_loop, 62.0)
+
+  // SEG_RANGE = 2000000 (hardcoded)
+  let seg_range = ir_const_u(pre_loop, 2000000.0)
+
+  // Compute seg_start = seg_idx * SEG_RANGE + 1 (uint32, exact)
+  let seg_base  = ir_imul(pre_loop, seg_u, seg_range)
+  let seg_start = ir_iadd(pre_loop, seg_base, c1)
+
+  // word_base = seg_start + gid * 64 (first odd candidate in this word)
+  let gid64    = ir_imul(pre_loop, gid, c64)
+  let word_base = ir_iadd(pre_loop, seg_start, gid64)
+  // word_end = word_base + 62 (last odd candidate in this word)
+  let word_end = ir_iadd(pre_loop, word_base, c62)
+
+  // Load current bitmap
+  let bm_init  = ir_buf_load_u(pre_loop, 0.0, gid)
+  let _bpl     = ir_term_branch(pre_loop, loop_header)
+
+  // ── Outer loop: iterate over primes ───────────────────────
+  let phi_j    = ir_phi(loop_header, 2.0)      // uint: prime index
+  let phi_bm   = ir_phi(loop_header, 2.0)      // uint: bitmap word
+  let _pj0     = ir_phi_add(phi_j,  pstart_u, pre_loop)
+  let _pb0     = ir_phi_add(phi_bm, bm_init, pre_loop)
+  let j_done   = ir_ugte(loop_header, phi_j, pend_u)
+  let _lm      = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc      = ir_term_cond_branch(loop_header, j_done, loop_merge, loop_body)
+
+  // ── loop_body: load prime, compute first multiple in word ──
+  let prime_f  = ir_load_input_at(loop_body, 2.0, phi_j)
+  let prime_u  = ir_ftou(loop_body, prime_f)
+
+  // Step = 2 * prime (distance between consecutive odd multiples)
+  let step     = ir_imul(loop_body, prime_u, c2)
+
+  // p_sq = prime * prime (smallest composite for this prime)
+  let p_sq     = ir_imul(loop_body, prime_u, prime_u)
+
+  // start_pt = max(p_sq, word_base)
+  let use_psq  = ir_ugte(loop_body, p_sq, word_base)
+  let start_pt = ir_select(loop_body, IR_TYPE_UINT, use_psq, p_sq, word_base)
+
+  // Find first multiple of prime >= start_pt
+  let rem      = ir_umod(loop_body, start_pt, prime_u)
+  let gap      = ir_isub(loop_body, prime_u, rem)
+  let gap_mod  = ir_umod(loop_body, gap, prime_u)  // handle rem==0
+  let first_m  = ir_iadd(loop_body, start_pt, gap_mod)
+
+  // If first_m is even, add prime to get odd multiple
+  let is_even  = ir_uequ(loop_body, ir_bit_and(loop_body, first_m, c1), c0)
+  let first_m_adj = ir_iadd(loop_body, first_m, prime_u)
+  let mult     = ir_select(loop_body, IR_TYPE_UINT, is_even, first_m_adj, first_m)
+
+  let _br_lb = ir_term_branch(loop_body, inner_hdr)
+
+  // ── Inner loop: clear bits for this prime ─────────────────
+  let phi_m    = ir_phi(inner_hdr, 2.0)    // uint: current multiple
+  let phi_bm2  = ir_phi(inner_hdr, 2.0)    // uint: bitmap being modified
+  let _pm0     = ir_phi_add(phi_m, mult, loop_body)
+  let _pb2_0   = ir_phi_add(phi_bm2, phi_bm, loop_body)
+
+  // Check: mult > word_end → done
+  let m_past   = ir_ugte(inner_hdr, phi_m, ir_iadd(inner_hdr, word_end, c1))
+  let _lm2     = ir_loop_merge(inner_hdr, inner_merge, inner_cont)
+  let _bc2     = ir_term_cond_branch(inner_hdr, m_past, inner_merge, inner_body)
+
+  // ── inner_body: compute bit position, clear bit ───────────
+  // bit_pos = (mult - word_base) / 2
+  let offset   = ir_isub(inner_body, phi_m, word_base)
+  let bit_pos  = ir_udiv(inner_body, offset, c2)
+
+  // mask = ~(1 << bit_pos) — clear exactly this bit
+  let one_shl  = ir_shl(inner_body, c1, bit_pos)
+  let mask     = ir_not(inner_body, one_shl)
+  let new_bm   = ir_bit_and(inner_body, phi_bm2, mask)
+
+  let _br_ib   = ir_term_branch(inner_body, inner_cont)
+
+  // ── inner_cont: advance mult by 2p ───────────────────────
+  let next_m   = ir_iadd(inner_cont, phi_m, step)
+  let _br_ic   = ir_term_branch(inner_cont, inner_hdr)
+  let _pm1     = ir_phi_add(phi_m, next_m, inner_cont)
+  let _pb2_1   = ir_phi_add(phi_bm2, new_bm, inner_cont)
+
+  // ── inner_merge: bitmap after all bits cleared for this prime ──
+  let _br_im   = ir_term_branch(inner_merge, loop_cont)
+
+  // ── loop_cont: advance to next prime ──────────────────────
+  let new_j    = ir_iadd(loop_cont, phi_j, c1)
+  let _br_lc   = ir_term_branch(loop_cont, loop_header)
+  let _pj1     = ir_phi_add(phi_j,  new_j, loop_cont)
+  let _pb1     = ir_phi_add(phi_bm, phi_bm2, loop_cont)
+
+  // ── loop_merge: write final bitmap back to R0[gid] ────────
+  let _store   = ir_buf_store_u(loop_merge, 0.0, gid, phi_bm)
+  let _blm     = ir_term_branch(loop_merge, exit_block)
+
+  // ── exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_mark_v2.spv"
+let _r = emit_sieve_mark_v2(out)
+print("Emitted: {out}")

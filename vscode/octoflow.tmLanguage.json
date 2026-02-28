@@ -1,0 +1,361 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "OctoFlow",
+  "scopeName": "source.flow",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#declarations" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#builtins" },
+    { "include": "#type-constructor" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.flow",
+          "begin": "//",
+          "end": "$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.flow" }
+          },
+          "patterns": [
+            {
+              "name": "keyword.other.permission.flow",
+              "match": "--allow-(read|write|net|exec)(=[^\\s]*)?"
+            }
+          ]
+        }
+      ]
+    },
+
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.flow",
+          "begin": "\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.flow" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.flow" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.flow",
+              "match": "\\\\[ntr\\\\\"0]"
+            },
+            {
+              "comment": "String interpolation {var} or {var:.N}",
+              "name": "meta.interpolation.flow",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": { "name": "punctuation.section.interpolation.begin.flow" }
+              },
+              "endCaptures": {
+                "0": { "name": "punctuation.section.interpolation.end.flow" }
+              },
+              "patterns": [
+                {
+                  "name": "variable.other.interpolation.flow",
+                  "match": "[a-zA-Z_][a-zA-Z0-9_]*"
+                },
+                {
+                  "name": "punctuation.separator.format.flow",
+                  "match": ":\\.[0-9]+"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "struct Name(fields)",
+          "match": "\\b(struct)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.struct.flow" },
+            "2": { "name": "entity.name.type.flow" }
+          }
+        },
+        {
+          "comment": "fn name(...) — named function",
+          "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "keyword.declaration.function.flow" },
+            "2": { "name": "entity.name.function.flow" }
+          }
+        },
+        {
+          "comment": "let [mut] name = ...",
+          "match": "\\b(let)\\s+(mut\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.variable.flow" },
+            "2": { "name": "storage.modifier.mutable.flow" },
+            "3": { "name": "variable.other.flow" }
+          }
+        },
+        {
+          "comment": "stream name = ...",
+          "match": "\\b(stream)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.stream.flow" },
+            "2": { "name": "variable.other.stream.flow" }
+          }
+        },
+        {
+          "comment": "use module or use \"path\"",
+          "match": "\\b(use)\\s+(?:\"([^\"]*)\"|([a-zA-Z_][a-zA-Z0-9_/]*))",
+          "captures": {
+            "1": { "name": "keyword.control.import.flow" },
+            "2": { "name": "string.quoted.double.module.flow" },
+            "3": { "name": "entity.name.module.flow" }
+          }
+        },
+        {
+          "comment": "extern \"lib\" { ... }",
+          "begin": "\\b(extern)\\s+(\"[^\"]*\")\\s*\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.extern.flow" },
+            "2": { "name": "string.quoted.double.library.flow" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.block.end.flow" }
+          },
+          "patterns": [
+            { "include": "#comments" },
+            {
+              "comment": "extern fn declaration with optional types",
+              "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(([^)]*)\\)(?:\\s*(->)\\s*([a-zA-Z_][a-zA-Z0-9_]*))?",
+              "captures": {
+                "1": { "name": "keyword.declaration.function.flow" },
+                "2": { "name": "entity.name.function.extern.flow" },
+                "3": { "name": "variable.parameter.flow" },
+                "4": { "name": "keyword.operator.arrow.flow" },
+                "5": { "name": "entity.name.type.return.flow" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.flow",
+          "match": "\\b0x[0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.flow",
+          "match": "\\b[0-9]+\\.[0-9]*\\b"
+        },
+        {
+          "name": "constant.numeric.integer.flow",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.flow",
+          "match": "\\b(if|elif|else|then|for|while|in|end|break|continue|return)\\b"
+        },
+        {
+          "comment": "Remaining declaration keywords not captured by declarations section",
+          "name": "keyword.declaration.flow",
+          "match": "\\b(let|mut|fn|struct|use|extern)\\b"
+        },
+        {
+          "name": "keyword.other.stream.flow",
+          "match": "\\b(stream|tap|random_stream|cache|emit)\\b"
+        },
+        {
+          "name": "constant.language.boolean.flow",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+
+    "builtins": {
+      "patterns": [
+        {
+          "comment": "print() is special — string-literal-only argument",
+          "name": "support.function.io.flow",
+          "match": "\\b(print)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.math.flow",
+          "match": "\\b(abs|sqrt|pow|round|floor|ceil|random)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.string.flow",
+          "match": "\\b(len|trim|split|join|replace|contains|index_of|substring|to_upper|to_lower|str|ord|chr)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.array.flow",
+          "match": "\\b(push|pop|slice|sort_array|reverse|range_array|filter|map_each|reduce|sort_by|range)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.map.flow",
+          "match": "\\b(map|map_has|map_get|map_keys|map_remove|map_set)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.io.flow",
+          "match": "\\b(read_file|write_file|append_file|read_lines|file_exists|read_csv|write_csv|write_bytes|list_dir|save_data)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.json.flow",
+          "match": "\\b(json_parse|json_stringify|json_parse_array)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.http.client.flow",
+          "match": "\\b(http_get|http_post)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.http.server.flow",
+          "match": "\\b(http_listen|http_accept|http_method|http_path|http_body|http_respond|http_respond_json|tcp_close)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.error.flow",
+          "match": "\\b(try)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.stats.flow",
+          "match": "\\b(mean|median|stddev|variance|min_val|max_val)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.time.flow",
+          "match": "\\b(now|now_ms|sleep)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.gpu.flow",
+          "match": "\\b(gpu_fill|gpu_range|gpu_random|gpu_add|gpu_sub|gpu_mul|gpu_div|gpu_scale|gpu_sqrt|gpu_exp|gpu_log|gpu_sum|gpu_min|gpu_max|gpu_mean|gpu_matmul|gpu_where)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.gui.flow",
+          "match": "\\b(window_open|window_close|window_alive|window_poll|window_draw|window_event_x|window_event_y|window_event_key)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.encoding.flow",
+          "match": "\\b(base64_encode|base64_decode|hex_encode|hex_decode)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.conversion.flow",
+          "match": "\\b(int|float|type_of)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.exec.flow",
+          "match": "\\b(exec)\\b(?=\\s*\\()"
+        }
+      ]
+    },
+
+    "type-constructor": {
+      "patterns": [
+        {
+          "comment": "Struct constructor: CapitalName(...)",
+          "name": "entity.name.type.constructor.flow",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b(?=\\s*\\()"
+        },
+        {
+          "comment": "Field access: .field_name",
+          "match": "(?<=\\.)([a-zA-Z_][a-zA-Z0-9_]*)\\b(?!\\s*\\()",
+          "captures": {
+            "1": { "name": "variable.other.property.flow" }
+          }
+        },
+        {
+          "comment": "Method call: .method_name(...)",
+          "match": "(?<=\\.)([a-zA-Z_][a-zA-Z0-9_]*)\\b(?=\\s*\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.method.flow" }
+          }
+        }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.pipeline.flow",
+          "match": "\\|>"
+        },
+        {
+          "name": "keyword.operator.logical.flow",
+          "match": "&&|\\|\\|"
+        },
+        {
+          "name": "keyword.operator.comparison.flow",
+          "match": "==|!=|<=|>="
+        },
+        {
+          "name": "keyword.operator.bitshift.flow",
+          "match": "<<|>>"
+        },
+        {
+          "name": "keyword.operator.arrow.flow",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.comparison.flow",
+          "match": "<|>"
+        },
+        {
+          "name": "keyword.operator.assignment.flow",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.arithmetic.flow",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "name": "keyword.operator.bitwise.flow",
+          "match": "[&^|]"
+        },
+        {
+          "name": "keyword.operator.logical.not.flow",
+          "match": "!"
+        }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.comma.flow",
+          "match": ","
+        },
+        {
+          "name": "punctuation.section.parens.begin.flow",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.section.parens.end.flow",
+          "match": "\\)"
+        },
+        {
+          "name": "punctuation.section.brackets.begin.flow",
+          "match": "\\["
+        },
+        {
+          "name": "punctuation.section.brackets.end.flow",
+          "match": "\\]"
+        }
+      ]
+    }
+  }
+}

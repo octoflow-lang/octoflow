@@ -1,0 +1,512 @@
+// debug.flow — GPU Dispatch Chain Debugging Primitives
+//
+// Chain-native debugging: assertion functions + buffer inspection.
+// CPU-based for now (GPU assertion kernels are future enhancement).
+//
+// Usage:
+//   use "../stdlib/loom/debug"
+//   chain_assert_sorted(buf, count, "after_sort")
+//   chain_assert_range(buf, count, min, max, "bounds_check")
+//
+// Requirements: --allow-ffi --allow-read
+
+use "runtime"
+
+// ── Assertion Functions: Inline validation ──────────────────────────
+//
+// Insert after dispatches to validate invariants.
+// Downloads buffer and checks conditions on CPU.
+
+fn chain_assert_range(buf, count, min_val, max_val, label)
+  rt_download(buf, count)
+
+  let mut pass = 1.0
+  let mut failures = 0.0
+  let mut i = 0.0
+  while i < count
+    let val = rt_result[int(i)]
+    if val < min_val
+      if failures < 3.0
+        print("ASSERT FAIL [{label}]: element {i} = {val} < min {min_val}")
+      end
+      failures = failures + 1.0
+      pass = 0.0
+    end
+    if val > max_val
+      if failures < 3.0
+        print("ASSERT FAIL [{label}]: element {i} = {val} > max {max_val}")
+      end
+      failures = failures + 1.0
+      pass = 0.0
+    end
+    i = i + 1.0
+  end
+
+  if pass == 1.0
+    print("ASSERT PASS [{label}]: all {count} elements in [{min_val}, {max_val}]")
+  else
+    if failures > 3.0
+      print("  ... and {failures - 3.0} more failures")
+    end
+  end
+
+  return pass
+end
+
+fn chain_assert_sorted(buf, count, label)
+  rt_download(buf, count)
+
+  let mut pass = 1.0
+  let mut i = 1.0
+  while i < count
+    let prev = rt_result[int(i - 1.0)]
+    let curr = rt_result[int(i)]
+    if prev > curr
+      print("ASSERT FAIL [{label}]: not sorted at index {i} ({prev} > {curr})")
+      pass = 0.0
+      i = count
+    end
+    i = i + 1.0
+  end
+
+  if pass == 1.0
+    print("ASSERT PASS [{label}]: {count} elements sorted")
+  end
+
+  return pass
+end
+
+fn chain_assert_sum(buf, count, expected, tolerance, label)
+  rt_download(buf, count)
+
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < count
+    sum = sum + rt_result[int(i)]
+    i = i + 1.0
+  end
+
+  let diff = abs(sum - expected)
+  if diff > tolerance
+    print("ASSERT FAIL [{label}]: sum={sum}, expected={expected}, diff={diff}")
+    return 0.0
+  end
+
+  print("ASSERT PASS [{label}]: sum={sum} (expected {expected}, tolerance {tolerance})")
+  return 1.0
+end
+
+fn chain_assert_nonzero(buf, count, label)
+  rt_download(buf, count)
+
+  let mut zeros = 0.0
+  let mut i = 0.0
+  while i < count
+    if rt_result[int(i)] == 0.0
+      zeros = zeros + 1.0
+    end
+    i = i + 1.0
+  end
+
+  if zeros > 0.0
+    print("ASSERT FAIL [{label}]: {zeros} zero elements found")
+    return 0.0
+  end
+
+  print("ASSERT PASS [{label}]: all {count} elements nonzero")
+  return 1.0
+end
+
+fn chain_assert_all_equal(buf, count, expected, label)
+  rt_download(buf, count)
+
+  let mut pass = 1.0
+  let mut failures = 0.0
+  let mut i = 0.0
+  while i < count
+    let val = rt_result[int(i)]
+    if val != expected
+      if failures < 3.0
+        print("ASSERT FAIL [{label}]: element {i} = {val}, expected {expected}")
+      end
+      failures = failures + 1.0
+      pass = 0.0
+    end
+    i = i + 1.0
+  end
+
+  if pass == 1.0
+    print("ASSERT PASS [{label}]: all {count} elements = {expected}")
+  else
+    if failures > 3.0
+      print("  ... and {failures - 3.0} more failures")
+    end
+  end
+
+  return pass
+end
+
+// ── SPIR-V Debug Tools ──────────────────────────────────────────────
+//
+// Disassemble and validate .spv files for debugging IR emission.
+
+fn spv_validate(spv_path)
+  let vr = exec("spirv-val", spv_path)
+  if vr.ok == 1.0
+    print("spirv-val [{spv_path}]: PASS")
+    return 1.0
+  end
+  let ve = vr.error
+  print("spirv-val [{spv_path}]: FAIL")
+  print("{ve}")
+  return 0.0
+end
+
+fn spv_disassemble(spv_path)
+  let dr = exec("spirv-dis", spv_path)
+  if dr.ok == 1.0
+    let out = dr.output
+    print("{out}")
+    return 1.0
+  end
+  let de = dr.error
+  print("spirv-dis [{spv_path}]: FAIL")
+  print("{de}")
+  return 0.0
+end
+
+// ── Debug Buffer Inspection ──────────────────────────────────────────
+//
+// Read and display buffer contents for manual inspection.
+
+fn chain_debug_inspect(buf, count, label)
+  rt_download(buf, count)
+
+  print("Debug inspect [{label}]:")
+
+  let display_count = count
+  if display_count > 16.0
+    display_count = 16.0
+  end
+
+  let mut i = 0.0
+  while i < display_count
+    let val = rt_result[int(i)]
+    print("  [{i}] = {val}")
+    i = i + 1.0
+  end
+
+  if count > 16.0
+    print("  ... and {count - 16.0} more elements")
+  end
+
+  return count
+end
+
+fn chain_debug_stats(buf, count, label)
+  rt_download(buf, count)
+
+  let mut sum = 0.0
+  let mut min_val = rt_result[0]
+  let mut max_val = rt_result[0]
+
+  let mut i = 0.0
+  while i < count
+    let val = rt_result[int(i)]
+    sum = sum + val
+    if val < min_val
+      min_val = val
+    end
+    if val > max_val
+      max_val = val
+    end
+    i = i + 1.0
+  end
+
+  let mean = sum / count
+
+  print("Debug stats [{label}]:")
+  print("  count = {count}")
+  print("  min   = {min_val}")
+  print("  max   = {max_val}")
+  print("  mean  = {mean}")
+  print("  sum   = {sum}")
+
+  return mean
+end
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Array-Based Debug Functions (no GPU runtime required)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//
+// Work on regular .flow arrays. Useful for CPU-side debugging,
+// validating inputs before GPU dispatch, or testing without FFI.
+
+fn debug_assert_range(arr, min_val, max_val, label)
+  let n = len(arr)
+  let mut pass = 1.0
+  let mut failures = 0.0
+  let mut i = 0.0
+  while i < n
+    let val = arr[int(i)]
+    if val < min_val
+      if failures < 3.0
+        print("ASSERT FAIL [{label}]: element {i} = {val} < min {min_val}")
+      end
+      failures = failures + 1.0
+      pass = 0.0
+    end
+    if val > max_val
+      if failures < 3.0
+        print("ASSERT FAIL [{label}]: element {i} = {val} > max {max_val}")
+      end
+      failures = failures + 1.0
+      pass = 0.0
+    end
+    i = i + 1.0
+  end
+  if pass == 1.0
+    print("ASSERT PASS [{label}]: all {n} elements in [{min_val}, {max_val}]")
+  else
+    if failures > 3.0
+      let extra = failures - 3.0
+      print("  ... and {extra} more failures")
+    end
+  end
+  return pass
+end
+
+fn debug_assert_sorted(arr, label)
+  let n = len(arr)
+  let mut pass = 1.0
+  let mut i = 1.0
+  while i < n
+    let prev = arr[int(i - 1.0)]
+    let curr = arr[int(i)]
+    if prev > curr
+      print("ASSERT FAIL [{label}]: not sorted at index {i} ({prev} > {curr})")
+      pass = 0.0
+      i = n
+    end
+    i = i + 1.0
+  end
+  if pass == 1.0
+    print("ASSERT PASS [{label}]: {n} elements sorted")
+  end
+  return pass
+end
+
+fn debug_assert_sum(arr, expected, tolerance, label)
+  let n = len(arr)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n
+    sum = sum + arr[int(i)]
+    i = i + 1.0
+  end
+  let diff = abs(sum - expected)
+  if diff > tolerance
+    print("ASSERT FAIL [{label}]: sum={sum}, expected={expected}, diff={diff}")
+    return 0.0
+  end
+  print("ASSERT PASS [{label}]: sum={sum} (expected {expected}, tolerance {tolerance})")
+  return 1.0
+end
+
+fn debug_assert_nonzero(arr, label)
+  let n = len(arr)
+  let mut zeros = 0.0
+  let mut i = 0.0
+  while i < n
+    if arr[int(i)] == 0.0
+      zeros = zeros + 1.0
+    end
+    i = i + 1.0
+  end
+  if zeros > 0.0
+    print("ASSERT FAIL [{label}]: {zeros} zero elements found")
+    return 0.0
+  end
+  print("ASSERT PASS [{label}]: all {n} elements nonzero")
+  return 1.0
+end
+
+fn debug_assert_all_equal(arr, expected, label)
+  let n = len(arr)
+  let mut pass = 1.0
+  let mut failures = 0.0
+  let mut i = 0.0
+  while i < n
+    let val = arr[int(i)]
+    if val != expected
+      if failures < 3.0
+        print("ASSERT FAIL [{label}]: element {i} = {val}, expected {expected}")
+      end
+      failures = failures + 1.0
+      pass = 0.0
+    end
+    i = i + 1.0
+  end
+  if pass == 1.0
+    print("ASSERT PASS [{label}]: all {n} elements = {expected}")
+  else
+    if failures > 3.0
+      let extra = failures - 3.0
+      print("  ... and {extra} more failures")
+    end
+  end
+  return pass
+end
+
+fn debug_assert_monotonic(arr, label)
+  let n = len(arr)
+  let mut pass = 1.0
+  let mut i = 1.0
+  while i < n
+    let prev = arr[int(i - 1.0)]
+    let curr = arr[int(i)]
+    if prev >= curr
+      print("ASSERT FAIL [{label}]: not strictly increasing at index {i} ({prev} >= {curr})")
+      pass = 0.0
+      i = n
+    end
+    i = i + 1.0
+  end
+  if pass == 1.0
+    print("ASSERT PASS [{label}]: {n} elements strictly increasing")
+  end
+  return pass
+end
+
+fn debug_assert_no_nan(arr, label)
+  let n = len(arr)
+  let mut nans = 0.0
+  let mut i = 0.0
+  while i < n
+    let val = arr[int(i)]
+    if val != val
+      nans = nans + 1.0
+    end
+    i = i + 1.0
+  end
+  if nans > 0.0
+    print("ASSERT FAIL [{label}]: {nans} NaN elements found")
+    return 0.0
+  end
+  print("ASSERT PASS [{label}]: no NaN in {n} elements")
+  return 1.0
+end
+
+fn debug_assert_pairwise_equal(arr_a, arr_b, tolerance, label)
+  let na = len(arr_a)
+  let nb = len(arr_b)
+  if na != nb
+    print("ASSERT FAIL [{label}]: length mismatch {na} vs {nb}")
+    return 0.0
+  end
+  let mut pass = 1.0
+  let mut failures = 0.0
+  let mut max_diff = 0.0
+  let mut i = 0.0
+  while i < na
+    let a = arr_a[int(i)]
+    let b = arr_b[int(i)]
+    let diff = abs(a - b)
+    if diff > max_diff
+      max_diff = diff
+    end
+    if diff > tolerance
+      if failures < 3.0
+        print("ASSERT FAIL [{label}]: element {i} differs: {a} vs {b} (diff={diff})")
+      end
+      failures = failures + 1.0
+      pass = 0.0
+    end
+    i = i + 1.0
+  end
+  if pass == 1.0
+    print("ASSERT PASS [{label}]: {na} elements match (max diff={max_diff}, tolerance={tolerance})")
+  else
+    if failures > 3.0
+      let extra = failures - 3.0
+      print("  ... and {extra} more failures")
+    end
+  end
+  return pass
+end
+
+// ── Debug Inspection (array-based) ─────────────────────────────────
+
+fn debug_inspect(arr, label)
+  let n = len(arr)
+  print("Debug inspect [{label}]:")
+  let mut display_count = n
+  if display_count > 16.0
+    display_count = 16.0
+  end
+  let mut i = 0.0
+  while i < display_count
+    let val = arr[int(i)]
+    print("  [{i}] = {val}")
+    i = i + 1.0
+  end
+  if n > 16.0
+    let extra = n - 16.0
+    print("  ... and {extra} more elements")
+  end
+  return n
+end
+
+fn debug_stats(arr, label)
+  let n = len(arr)
+  if n == 0.0
+    print("Debug stats [{label}]: empty array")
+    return 0.0
+  end
+  let mut sum = 0.0
+  let mut min_val = arr[0]
+  let mut max_val = arr[0]
+  let mut i = 0.0
+  while i < n
+    let val = arr[int(i)]
+    sum = sum + val
+    if val < min_val
+      min_val = val
+    end
+    if val > max_val
+      max_val = val
+    end
+    i = i + 1.0
+  end
+  let mean = sum / n
+  print("Debug stats [{label}]:")
+  print("  count = {n}")
+  print("  min   = {min_val}")
+  print("  max   = {max_val}")
+  print("  mean  = {mean}")
+  print("  sum   = {sum}")
+  return mean
+end
+
+// ── Profiling Helpers ──────────────────────────────────────────────
+//
+// Simple wall-clock timing using time() builtin.
+// Usage:
+//   let t0 = debug_timer_start()
+//   ... work ...
+//   debug_timer_end(t0, "my_operation")
+
+fn debug_timer_start()
+  return time()
+end
+
+fn debug_timer_end(start_time, label)
+  let elapsed = time() - start_time
+  let ms = elapsed * 1000.0
+  print("TIMER [{label}]: {ms} ms")
+  return elapsed
+end
+
+fn debug_timer_end_silent(start_time)
+  return time() - start_time
+end

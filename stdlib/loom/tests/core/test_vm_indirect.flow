@@ -1,0 +1,127 @@
+// test_vm_indirect.flow — Step 7: GPU Indirect Dispatch (GPU Self-Scheduling)
+//
+// Proves that the GPU can determine its own dispatch size at runtime.
+// A scheduler kernel computes workgroup count and writes it to the
+// control SSBO, then the next dispatch reads that count via
+// vkCmdDispatchIndirect. The GPU programs itself.
+//
+// Pipeline (2 dispatches, 1 vkQueueSubmit):
+//   [vm_scheduler] → BARRIER (with INDIRECT_COMMAND_READ) → [vm_scale] (indirect)
+//
+// TEST 1: Fixed-size indirect dispatch
+//   - 8 elements, scheduler writes {1, 1, 1} to control
+//   - vm_scale doubles each element
+//   - Verify: [2, 4, 6, 8, 10, 12, 14, 16]
+//
+// TEST 2: Variable-size indirect dispatch (GPU decides dispatch size)
+//   - 512 elements, scheduler computes ceil(512/256)=2 workgroups
+//   - vm_scale triples each element
+//   - Verify first and last elements
+//
+// Run: octoflow run stdlib/loom/test_vm_indirect.flow --allow-ffi
+
+let reg_size = 8.0
+let vm = vm_boot(1.0, reg_size, 1.0)
+
+// ── TEST 1: Fixed-size indirect dispatch (8 elements) ───────────────────
+let data1 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let _w1 = vm_write_register(vm, 0.0, 0.0, data1)
+
+// Stage 1: scheduler writes {ceil(8/256)=1, 1, 1} to control[0:2]
+//   push constants: [count=8, control_off=0]
+let pc_sched1 = [8.0, 0.0]
+let _ds1 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_scheduler.spv", pc_sched1, 1.0)
+
+// Stage 2: vm_scale (indirect) — registers[0..7] *= 2.0
+//   push constants: [offset=0, scale=2.0, count=8]
+//   indirect: reads workgroups from control[0] (float offset 0 = byte offset 0)
+let pc_scale1 = [0.0, 2.0, 8.0]
+let _di1 = vm_dispatch_indirect(vm, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale1, 0.0)
+
+let prog1 = vm_build(vm)
+let _e1 = vm_execute(prog1)
+
+let out1 = vm_read_register(vm, 0.0, 0.0, 8.0)
+let o0 = out1[0]
+let o1 = out1[1]
+let o6 = out1[6]
+let o7 = out1[7]
+
+print("TEST 1: Fixed-size indirect dispatch (8 elements, scale=2)")
+print("  Pipeline: vm_scheduler → BARRIER(INDIRECT) → vm_scale(indirect)")
+print("  GPU result: [{o0}, {o1}, ..., {o6}, {o7}]  (expected [2,4,...,14,16])")
+
+let mut pass1 = 1.0
+if abs(o0 - 2.0) > 0.001
+  pass1 = 0.0
+  print("  FAIL: [0]={o0} expected 2")
+end
+if abs(o1 - 4.0) > 0.001
+  pass1 = 0.0
+  print("  FAIL: [1]={o1} expected 4")
+end
+if abs(o6 - 14.0) > 0.001
+  pass1 = 0.0
+  print("  FAIL: [6]={o6} expected 14")
+end
+if abs(o7 - 16.0) > 0.001
+  pass1 = 0.0
+  print("  FAIL: [7]={o7} expected 16")
+end
+if pass1 == 1.0
+  print("TEST 1: PASS -- GPU self-scheduled dispatch, 1 workgroup")
+else
+  print("TEST 1: FAIL")
+end
+
+// ── TEST 2: Variable-size indirect dispatch (512 elements) ──────────────
+// reg_size=512 so one register holds all data. vm_write_register caps at reg_size.
+// Total buffer: 1 × 32 × 512 = 16384 floats, but we only use 512.
+let vm2 = vm_boot(1.0, 512.0, 1.0)
+
+// Write 512 elements [1, 2, 3, ..., 512] to register 0
+let mut data2 = []
+let mut i = 0.0
+while i < 512.0
+  push(data2, i + 1.0)
+  i = i + 1.0
+end
+let _w2 = vm_write_register(vm2, 0.0, 0.0, data2)
+
+// Stage 1: scheduler writes {ceil(512/256)=2, 1, 1} to control[0:2]
+let pc_sched2 = [512.0, 0.0]
+let _ds2 = vm_dispatch(vm2, "stdlib/loom/kernels/ops/vm_scheduler.spv", pc_sched2, 1.0)
+
+// Stage 2: vm_scale (indirect) — registers[0..511] *= 3.0
+let pc_scale2 = [0.0, 3.0, 512.0]
+let _di2 = vm_dispatch_indirect(vm2, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale2, 0.0)
+
+let prog2 = vm_build(vm2)
+let _e2 = vm_execute(prog2)
+
+// Read first and last elements from register 0 (all 512 floats)
+let out2 = vm_read_register(vm2, 0.0, 0.0, 512.0)
+let f0 = out2[0]
+let f511 = out2[511]
+
+print("TEST 2: Variable-size indirect dispatch (512 elements, scale=3)")
+print("  Scheduler computed ceil(512/256) = 2 workgroups")
+print("  GPU result: first={f0}  last={f511}  (expected first=3, last=1536)")
+
+let mut pass2 = 1.0
+if abs(f0 - 3.0) > 0.001
+  pass2 = 0.0
+  print("  FAIL: first={f0} expected 3")
+end
+if abs(f511 - 1536.0) > 0.001
+  pass2 = 0.0
+  print("  FAIL: last={f511} expected 1536")
+end
+if pass2 == 1.0
+  print("TEST 2: PASS -- GPU self-scheduled dispatch, 2 workgroups, GPU determined dispatch size")
+else
+  print("TEST 2: FAIL")
+end
+
+let _sv1 = vm_shutdown(vm)
+let _sv2 = vm_shutdown(vm2)

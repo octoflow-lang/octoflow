@@ -1,0 +1,30 @@
+// Bitwise operators demo — Phase 43
+// Demonstrates shifts, AND, OR, XOR for byte manipulation
+
+// Shift operations
+let one = 1 << 0
+let two = 1 << 1
+let four = 1 << 2
+let eight = 1 << 3
+print("Shift left:  1<<0={one:.0}  1<<1={two:.0}  1<<2={four:.0}  1<<3={eight:.0}")
+
+// Build a value from bits and extract with mask
+let packed = 0xAB << 8 | 0xCD
+let hi = (packed >> 8) & 0xFF
+let lo = packed & 0xFF
+print("Packed: {packed:.0}  hi=0x{hi:.0}  lo=0x{lo:.0}")
+
+// Flag manipulation
+let flags = 1 | 4 | 16
+let has_read = flags & 1
+let has_write = flags & 2
+let has_exec = flags & 4
+print("Flags={flags:.0}  read={has_read:.0}  write={has_write:.0}  exec={has_exec:.0}")
+
+// XOR swap trick
+let mut x = 42
+let mut y = 99
+x = x ^ y
+y = x ^ y
+x = x ^ y
+print("After XOR swap: x={x:.0}  y={y:.0}")

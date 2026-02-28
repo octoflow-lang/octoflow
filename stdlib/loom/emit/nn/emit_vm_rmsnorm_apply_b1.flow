@@ -1,0 +1,103 @@
+// emit_vm_rmsnorm_apply_b1.flow — VM RMSNorm Apply Kernel (reads sum_sq from binding 1)
+//
+// Reads the precomputed sum-of-squares from METRICS binding 1 (not binding 0),
+// then normalizes and weight-scales each element in parallel:
+//   scale = 1 / sqrt(sum_sq / count + eps)
+//   out[i] = x[i] * scale * w[i]
+//
+// This is the corrected pass 2 of the split RMSNorm two-kernel design.
+//
+// WHY BINDING 1 FOR SCRATCH (root-cause explanation):
+//   vm_rmsnorm_apply (original) reads sum_sq from binding0[scratch_off] where
+//   scratch_off is a CONSTANT index. NVIDIA NVVM's alias analysis sees:
+//     - constant-index read  binding0[scratch_off]   e.g. scratch_off = 0
+//     - gid-indexed write    binding0[out_off + gid]
+//   NVVM cannot prove at compile time that scratch_off != out_off+gid for ALL gid
+//   (it does not know the dispatch bound). Conservative aliasing triggers →
+//   only gid=0's store is compiled correctly; gid > 0 stores are silently dropped.
+//
+//   Moving sum_sq to binding1 (metrics) eliminates the constant-index read on
+//   binding0. The apply kernel then has ONLY gid-indexed accesses on binding0:
+//     Load  binding0[in_off  + gid]   (gid-indexed read)
+//     Store binding0[out_off + gid]   (gid-indexed write)
+//   This is structurally identical to vm_add / vm_silu_mul, which work for all gid.
+//
+// Each thread (gid < count):
+//   sum_sq = metrics[scratch_off]              (binding1, constant index)
+//   scale  = 1 / sqrt(sum_sq / count + eps)
+//   out[out_off + gid] = registers[in_off + gid] * scale * globals[wgt_off + gid]
+//
+// Push constants:
+//   pc[0] = in_off      (float -> uint, start index in registers SSBO, input)
+//   pc[1] = out_off     (float -> uint, start index in registers SSBO, output)
+//   pc[2] = wgt_off     (float -> uint, start index in globals SSBO, weights)
+//   pc[3] = scratch_off (float -> uint, index in METRICS SSBO for sum_sq)
+//   pc[4] = count       (float, bounds guard)
+//   pc[5] = eps         (float, epsilon for numerical stability)
+//
+// Binding layout (ir_input_count=3):
+//   Binding 0: registers (read x[in_off+gid], write out[out_off+gid] — gid-indexed ONLY)
+//   Binding 1: metrics   (read sum_sq[scratch_off] — constant index, no writes here)
+//   Binding 2: globals   (read weight vector at wgt_off+gid)
+//   Binding 3: control   (unused)
+//
+// Dispatch: workgroups = ceil(count / 256)
+//
+// Run: octoflow run stdlib/loom/emit_vm_rmsnorm_apply_b1.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_rmsnorm_apply_b1(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: load gid, push constants, bounds check ───────────────────────
+  let gid        = ir_load_gid(entry)
+  let pc_in      = ir_push_const(entry, 0.0)
+  let pc_out     = ir_push_const(entry, 1.0)
+  let pc_wgt     = ir_push_const(entry, 2.0)
+  let pc_scratch = ir_push_const(entry, 3.0)
+  let pc_cnt     = ir_push_const(entry, 4.0)
+  let pc_eps     = ir_push_const(entry, 5.0)
+  let cnt_u      = ir_ftou(entry, pc_cnt)
+  let oob        = ir_ugte(entry, gid, cnt_u)
+  let _sm        = ir_selection_merge(entry, exit_block)
+  let _br        = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: load sum_sq from binding1, compute scale, normalize × weight ──
+  // KEY: sum_sq is read from METRICS binding 1, not binding 0.
+  // ALL binding0 accesses use gid-indexed addresses — same as vm_add pattern.
+  let scratch_u  = ir_ftou(body, pc_scratch)
+  let sum_sq     = ir_load_input_at(body, 1.0, scratch_u)    // metrics[scratch_off]
+  let mean_sq    = ir_fdiv(body, sum_sq, pc_cnt)
+  let var_eps    = ir_fadd(body, mean_sq, pc_eps)
+  let var_sqrt   = ir_sqrt(body, var_eps)
+  let f_one      = ir_const_f(body, 1.0)
+  let rms_scale  = ir_fdiv(body, f_one, var_sqrt)
+  let in_off_u   = ir_ftou(body, pc_in)
+  let out_off_u  = ir_ftou(body, pc_out)
+  let wgt_off_u  = ir_ftou(body, pc_wgt)
+  let in_idx     = ir_iadd(body, in_off_u, gid)              // gid-indexed
+  let out_idx    = ir_iadd(body, out_off_u, gid)             // gid-indexed
+  let wgt_idx    = ir_iadd(body, wgt_off_u, gid)             // gid-indexed
+  let x_val      = ir_load_input_at(body, 0.0, in_idx)       // registers[in_off + gid]
+  let w_val      = ir_load_input_at(body, 2.0, wgt_idx)      // globals[wgt_off + gid]
+  let normed     = ir_fmul(body, x_val, rms_scale)
+  let out_val    = ir_fmul(body, normed, w_val)
+  let _s         = ir_buf_store_f(body, 0.0, out_idx, out_val)  // binding0[out_off+gid]
+  let _br2       = ir_term_branch(body, exit_block)
+
+  // ── Exit ─────────────────────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/nn/vm_rmsnorm_apply_b1.spv"
+let _r = emit_vm_rmsnorm_apply_b1(out)
+print("Emitted: {out}")

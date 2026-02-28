@@ -1,0 +1,132 @@
+use "ttf"
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+let _r = ttf_parse_all_ascii("octoui/fonts/Inter.ttf")
+
+// Test 1: units_per_em > 0
+let upm = ttf_font_info[3.0]
+if upm > 0.0
+  pass = pass + 1.0
+  print("PASS: units_per_em > 0 (got {upm})")
+else
+  fail = fail + 1.0
+  print("FAIL: units_per_em > 0 (got {upm})")
+end
+
+// Test 2: ascent > 0
+let asc = ttf_font_info[0.0]
+if asc > 0.0
+  pass = pass + 1.0
+  print("PASS: ascent > 0 (got {asc})")
+else
+  fail = fail + 1.0
+  print("FAIL: ascent > 0 (got {asc})")
+end
+
+// Test 3: descent < 0
+let dsc = ttf_font_info[1.0]
+if dsc < 0.0
+  pass = pass + 1.0
+  print("PASS: descent < 0 (got {dsc})")
+else
+  fail = fail + 1.0
+  print("FAIL: descent < 0 (got {dsc})")
+end
+
+// Test 4: 95 glyph metrics => len(ttf_metrics) == 570
+let metrics_len = len(ttf_metrics)
+if metrics_len == 570.0
+  pass = pass + 1.0
+  print("PASS: len(ttf_metrics) == 570 (95 * 6)")
+else
+  fail = fail + 1.0
+  print("FAIL: len(ttf_metrics) == 570 (got {metrics_len})")
+end
+
+// Test 5: 95 segment counts
+let seg_counts_len = len(ttf_seg_counts)
+if seg_counts_len == 95.0
+  pass = pass + 1.0
+  print("PASS: len(ttf_seg_counts) == 95")
+else
+  fail = fail + 1.0
+  print("FAIL: len(ttf_seg_counts) == 95 (got {seg_counts_len})")
+end
+
+// Test 6: 95 segment offsets
+let seg_offsets_len = len(ttf_seg_offsets)
+if seg_offsets_len == 95.0
+  pass = pass + 1.0
+  print("PASS: len(ttf_seg_offsets) == 95")
+else
+  fail = fail + 1.0
+  print("FAIL: len(ttf_seg_offsets) == 95 (got {seg_offsets_len})")
+end
+
+// Test 7: non-zero segments for 'A' (ASCII 65, index 65-32=33)
+let a_segs = ttf_seg_counts[33.0]
+if a_segs > 0.0
+  pass = pass + 1.0
+  print("PASS: ttf_seg_counts[33] > 0 for 'A' (got {a_segs})")
+else
+  fail = fail + 1.0
+  print("FAIL: ttf_seg_counts[33] > 0 for 'A' (got {a_segs})")
+end
+
+// Test 8: non-zero advance for 'A' (metrics index 33*6=198)
+let a_idx = 33.0 * 6.0
+let a_adv = ttf_metrics[int(a_idx)]
+if a_adv > 0.0
+  pass = pass + 1.0
+  print("PASS: advance_w for 'A' > 0 (got {a_adv})")
+else
+  fail = fail + 1.0
+  print("FAIL: advance_w for 'A' > 0 (got {a_adv})")
+end
+
+// Test 9: space has 0 segments (ASCII 32, index 0)
+let space_segs = ttf_seg_counts[0.0]
+if space_segs == 0.0
+  pass = pass + 1.0
+  print("PASS: ttf_seg_counts[0] == 0 (space has no outlines)")
+else
+  fail = fail + 1.0
+  print("FAIL: ttf_seg_counts[0] == 0 (got {space_segs})")
+end
+
+// Test 10: space has non-zero advance width (metrics index 0)
+let space_adv = ttf_metrics[0.0]
+if space_adv > 0.0
+  pass = pass + 1.0
+  print("PASS: advance_w for space > 0 (got {space_adv})")
+else
+  fail = fail + 1.0
+  print("FAIL: advance_w for space > 0 (got {space_adv})")
+end
+
+// Test 11: total segment data populated (> 0 floats)
+let seg_data_len = len(ttf_seg_data)
+if seg_data_len > 0.0
+  pass = pass + 1.0
+  print("PASS: len(ttf_seg_data) > 0 (got {seg_data_len})")
+else
+  fail = fail + 1.0
+  print("FAIL: len(ttf_seg_data) > 0 (got {seg_data_len})")
+end
+
+// Test 12: segment data divisible by 6 (6-float tuples)
+let div6 = floor(seg_data_len / 6.0) * 6.0
+let remainder = seg_data_len - div6
+if remainder == 0.0
+  pass = pass + 1.0
+  print("PASS: len(ttf_seg_data) divisible by 6")
+else
+  fail = fail + 1.0
+  print("FAIL: len(ttf_seg_data) not divisible by 6 (remainder {remainder})")
+end
+
+print(" ")
+let total = pass + fail
+print("{pass}/{total} TTF parser tests passed")

@@ -1,4 +1,6 @@
 // stdlib/ml/tree.flow — Decision tree primitives
+//
+// Functions: gini_impurity, decision_stump, find_best_split
 
 fn gini_impurity(labels, n_classes)
   // Compute Gini impurity: 1 - sum(p_i^2)

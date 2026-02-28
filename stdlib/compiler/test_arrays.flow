@@ -1,0 +1,45 @@
+// Test arrays and maps in self-hosting evaluator (Phase 53)
+
+// Array: accumulate squares
+let mut nums = []
+let mut i = 0.0
+while i < 5.0
+  let sq = i * i
+  push(nums, sq)
+  i = i + 1.0
+end
+let n0 = nums[0]
+let n4 = nums[4]
+print("nums[0]={n0}  nums[4]={n4}")
+
+// len of array
+let nlen = len(nums)
+print("len={nlen}")
+
+// Map: word frequency
+let mut freq = map()
+map_set(freq, "hello", 1.0)
+map_set(freq, "world", 2.0)
+if map_has(freq, "hello")
+  let v = map_get(freq, "hello")
+  print("freq[hello]={v}")
+end
+if map_has(freq, "world")
+  let v = map_get(freq, "world")
+  print("freq[world]={v}")
+end
+
+// Builtin: ord + chr
+let c = chr(65.0)
+let n = ord(c)
+print("chr(65)={c}  ord(A)={n}")
+
+// Builtin: len of string
+let word = "OctoFlow"
+let wlen = len(word)
+print("len(OctoFlow)={wlen}")
+
+// Builtin: contains
+let haystack = "hello world"
+let found = contains(haystack, "world")
+print("contains={found}")

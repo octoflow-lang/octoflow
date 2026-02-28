@@ -1,0 +1,109 @@
+// OctoFlow Phase 43: Bitwise Operators + Regex
+// Self-hosting foundation: enables SPIR-V byte building, encoding, text processing
+
+print("=== Bitwise Operations ===")
+
+// Flag manipulation (systems programming)
+let READ = 1.0
+let WRITE = 2.0
+let EXEC = 4.0
+
+let perms = READ | WRITE
+print("Read+Write permissions: {perms}")
+
+let has_write = (perms & WRITE) == WRITE
+print("Has write permission: {has_write}")
+
+// SPIR-V version encoding
+let major = 1.0
+let minor = 6.0
+let version = (major << 16) | minor
+print("SPIR-V version (1.6): {version}")
+
+// Hex literals (Phase 43 bonus)
+let color = 0xFF8800AA
+let red = (color >> 24) & 0xFF
+let green = (color >> 16) & 0xFF
+let blue = (color >> 8) & 0xFF
+let alpha = color & 0xFF
+print("RGBA extraction: R={red} G={green} B={blue} A={alpha}")
+
+// XOR swap trick
+let mut x = 42.0
+let mut y = 99.0
+x = x ^ y
+y = x ^ y
+x = x ^ y
+print("After XOR swap: x={x} y={y}")
+
+print("")
+print("=== Regex Operations ===")
+
+// Log parsing
+let log1 = "2024-02-17 14:30:00 ERROR Database connection failed"
+let log2 = "2024-02-17 14:31:15 INFO Request processed successfully"
+
+let has_error = regex_match(log1, "ERROR")
+let has_info = regex_match(log2, "INFO")
+print("Log1 has ERROR: {has_error}")
+print("Log2 has INFO: {has_info}")
+
+// Extract data
+let timestamp = regex_find(log1, "2024-02-17")
+print("Timestamp: {timestamp}")
+
+// Data cleaning
+let phone = "(555) 123-4567"
+let clean_phone = regex_replace(phone, "[^0-9]", "")
+print("Clean phone: {clean_phone}")
+
+// Text splitting
+let csv_line = "Alice,30,NYC"
+let fields = regex_split(csv_line, ",")
+let num_fields = len(fields)
+let name = fields[0.0]
+let city = fields[2.0]
+print("CSV fields: {num_fields}, Name: {name}, City: {city}")
+
+// Capture groups
+let email_line = "Contact: alice@example.com"
+let groups = capture_groups(email_line, "Contact: ([a-zA-Z]+)@([a-z.]+)")
+let num_groups = len(groups)
+if num_groups > 0.0
+    let username = groups[0.0]
+    let domain = groups[1.0]
+    print("Email parts: {username} at {domain}")
+end
+
+print("")
+print("=== Combined: DevOps Log Analysis ===")
+
+// Bitwise flags for log severity + regex for pattern matching
+let ERROR_LEVEL = 4.0
+let WARN_LEVEL = 2.0
+let INFO_LEVEL = 1.0
+
+let log1_text = "2024-02-17 10:00:00 INFO Server started"
+let log2_text = "2024-02-17 10:05:23 WARN High memory usage"
+let log3_text = "2024-02-17 10:10:15 ERROR Database timeout"
+let logs = [log1_text, log2_text, log3_text]
+
+let mut severity_flags = 0.0
+let mut error_count = 0.0
+
+for log in logs
+    if regex_match(log, "ERROR")
+        severity_flags = severity_flags | ERROR_LEVEL
+        error_count = error_count + 1.0
+    end
+
+    if regex_match(log, "WARN")
+        severity_flags = severity_flags | WARN_LEVEL
+    end
+end
+
+print("Error count: {error_count}")
+print("Severity flags: {severity_flags}")
+
+let has_critical = (severity_flags & ERROR_LEVEL) == ERROR_LEVEL
+print("Has critical errors: {has_critical}")

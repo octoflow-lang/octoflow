@@ -1,0 +1,116 @@
+// test_gpu_db.flow — GPU Database Engine unit test
+// Query plan as dispatch chain. 4 dispatches, 1 submit, 0 CPU row iteration.
+//
+// Data: salary[i] = i + 1 for i=0..255 → [1, 2, 3, ..., 256]
+// Query: SELECT SUM(salary), COUNT(*) WHERE salary > 128
+//
+// Expected: 128 matches (salaries 129-256)
+//   SUM = (129+256)*128/2 = 24640.0  — exact in f32
+//   COUNT = 128.0                     — exact in f32
+//
+// Run: octoflow run stdlib/tests/test_gpu_db.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+let N = 256.0
+let BUF_BYTES = N * 4.0
+let THRESHOLD = 128.0
+
+rt_init()
+
+// Load kernels
+let pipe_gt = rt_load_pipeline("tests/gpu_shaders/15_gt_scalar.spv", 2.0, 4.0)
+let pipe_mul = rt_load_pipeline("tests/gpu_shaders/18_mul_ab.spv", 3.0, 0.0)
+let pipe_reduce = rt_load_pipeline("stdlib/loom/kernels/reduce_sum.spv", 2.0, 0.0)
+
+// Create buffers
+let buf_salary = rt_create_buffer(BUF_BYTES)
+let buf_mask = rt_create_buffer(BUF_BYTES)
+let buf_masked = rt_create_buffer(BUF_BYTES)
+let buf_sum = rt_create_buffer(1024.0)
+let buf_count = rt_create_buffer(1024.0)
+
+// Upload salary data: [1, 2, 3, ..., 256]
+let mut salaries = []
+let mut i = 0.0
+while i < N
+  push(salaries, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(buf_salary, salaries)
+
+// Zero working buffers
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_mask, zeros)
+rt_upload(buf_masked, zeros)
+
+// Zero result buffers
+let mut rz = []
+let mut i = 0.0
+while i < N
+  push(rz, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_sum, rz)
+rt_upload(buf_count, rz)
+
+// ── Query: SUM(salary), COUNT(*) WHERE salary > 128 ──────────────────
+// 4 dispatches, 1 submit, 0 CPU row iteration
+rt_chain_begin(4.0, 3.0)
+
+// Stage 1: filter — salary > 128 → boolean mask
+let mut pc_thresh = [THRESHOLD]
+rt_chain_push_constants(pipe_gt, pc_thresh)
+let mut bufs1 = [buf_salary, buf_mask]
+rt_chain_dispatch(pipe_gt, bufs1, 1.0)
+
+// Stage 2: mask multiply — salary * mask → masked_salary
+let mut bufs2 = [buf_salary, buf_mask, buf_masked]
+rt_chain_dispatch(pipe_mul, bufs2, 1.0)
+
+// Stage 3: reduce — sum(masked_salary) → 1 value
+let mut bufs3 = [buf_masked, buf_sum]
+rt_chain_dispatch(pipe_reduce, bufs3, 1.0)
+
+// Stage 4: reduce — sum(mask) → count
+let mut bufs4 = [buf_mask, buf_count]
+rt_chain_dispatch(pipe_reduce, bufs4, 1.0)
+
+rt_chain_end()
+rt_chain_submit_wait()
+
+// ── Download and verify ──────────────────────────────────────────────
+rt_download(buf_sum, 1.0)
+let gpu_sum = rt_result[0]
+
+rt_download(buf_count, 1.0)
+let gpu_count = rt_result[0]
+
+// Expected: SUM = (129+256)*128/2 = 24640, COUNT = 128
+let expected_sum = 24640.0
+let expected_count = 128.0
+
+print("Query: SELECT SUM(salary), COUNT(*) WHERE salary > {THRESHOLD}")
+print("Result:   SUM={gpu_sum}  COUNT={gpu_count}")
+print("Expected: SUM={expected_sum}  COUNT={expected_count}")
+
+let mut pass = 1.0
+if gpu_sum != expected_sum
+  print("FAIL: SUM={gpu_sum} expected {expected_sum}")
+  pass = 0.0
+end
+if gpu_count != expected_count
+  print("FAIL: COUNT={gpu_count} expected {expected_count}")
+  pass = 0.0
+end
+
+if pass == 1.0
+  print("PASS: gpu_db 4 dispatches, 1 submit, 0 CPU row iterations, BIT EXACT")
+end
+
+rt_cleanup()

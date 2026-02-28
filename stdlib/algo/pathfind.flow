@@ -1,4 +1,7 @@
 // stdlib/algo/pathfind.flow — A* pathfinding on a 2D grid
+//
+// Functions: manhattan, astar
+//
 // Grid is a flat array: grid[y * width + x], 0.0=passable, 1.0=wall
 // Returns path as [x1,y1,x2,y2,...] from start to goal, empty if no path
 

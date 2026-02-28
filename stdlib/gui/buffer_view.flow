@@ -1,0 +1,287 @@
+// buffer_view.flow — GPU Array Visualization
+//
+// Display GPU/CPU arrays as images, heatmaps, waveforms, and histograms
+// on a canvas widget. Essential for debugging GPU compute results.
+//
+// Usage:
+//   use "gui"
+//   use "buffer_view"
+//   let cvs = gui_canvas(10.0, 10.0, 400.0, 300.0)
+//   let _v = buffer_view_waveform(cvs, my_data, 255.0, 128.0, 0.0)
+
+use "gui_core"
+use "canvas"
+
+// ── Image Display ───────────────────────────────────────────────────
+// Display RGB arrays as a scaled image on canvas.
+// Pixels are scaled to fit canvas dimensions.
+
+fn buffer_view_image(canvas_id, r_arr, g_arr, b_arr, img_w, img_h)
+  let cid = int(canvas_id)
+  let cw = _gui_w[cid]
+  let ch = _gui_h[cid]
+  let _clr = gui_canvas_clear(canvas_id)
+  // Scale factors
+  let sx = cw / img_w
+  let sy = ch / img_h
+  // Use smaller scale to maintain aspect ratio
+  let mut scale = sx
+  if sy < sx
+    scale = sy
+  end
+  let dst_w = img_w * scale
+  let dst_h = img_h * scale
+  let off_x = (cw - dst_w) / 2.0
+  let off_y = (ch - dst_h) / 2.0
+  // Render each source pixel as a scaled rect
+  let mut py = 0.0
+  while py < img_h
+    let mut px = 0.0
+    while px < img_w
+      let si = int(py * img_w + px)
+      let mut cr = r_arr[si]
+      let mut cg = g_arr[si]
+      let mut cb = b_arr[si]
+      // Clamp to 0-255
+      if cr < 0.0
+        cr = 0.0
+      end
+      if cr > 255.0
+        cr = 255.0
+      end
+      if cg < 0.0
+        cg = 0.0
+      end
+      if cg > 255.0
+        cg = 255.0
+      end
+      if cb < 0.0
+        cb = 0.0
+      end
+      if cb > 255.0
+        cb = 255.0
+      end
+      let dx = off_x + px * scale
+      let dy = off_y + py * scale
+      let rw = scale
+      let rh = scale
+      if rw >= 1.0
+        if rh >= 1.0
+          let _f = gui_canvas_fill(canvas_id, dx, dy, rw, rh, cr, cg, cb)
+        end
+      end
+      px = px + 1.0
+    end
+    py = py + 1.0
+  end
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// ── Heatmap ─────────────────────────────────────────────────────────
+// Display a single array as a blue-to-red heatmap on canvas.
+// Values are mapped from [min_val, max_val] to the color gradient.
+
+fn buffer_view_heatmap(canvas_id, arr, data_w, data_h, min_val, max_val)
+  let cid = int(canvas_id)
+  let cw = _gui_w[cid]
+  let ch = _gui_h[cid]
+  let _clr = gui_canvas_clear(canvas_id)
+  let range = max_val - min_val
+  if range <= 0.0
+    return 0.0
+  end
+  let sx = cw / data_w
+  let sy = ch / data_h
+  let mut scale = sx
+  if sy < sx
+    scale = sy
+  end
+  let off_x = (cw - data_w * scale) / 2.0
+  let off_y = (ch - data_h * scale) / 2.0
+  let mut py = 0.0
+  while py < data_h
+    let mut px = 0.0
+    while px < data_w
+      let si = int(py * data_w + px)
+      let v = arr[si]
+      // Normalize to 0..1
+      let mut t = (v - min_val) / range
+      if t < 0.0
+        t = 0.0
+      end
+      if t > 1.0
+        t = 1.0
+      end
+      // Blue (0) → Green (0.5) → Red (1.0) gradient
+      let mut cr = 0.0
+      let mut cg = 0.0
+      let mut cb = 0.0
+      if t < 0.5
+        let t2 = t * 2.0
+        cb = 255.0 * (1.0 - t2)
+        cg = 255.0 * t2
+      else
+        let t2 = (t - 0.5) * 2.0
+        cg = 255.0 * (1.0 - t2)
+        cr = 255.0 * t2
+      end
+      let dx = off_x + px * scale
+      let dy = off_y + py * scale
+      if scale >= 1.0
+        let _f = gui_canvas_fill(canvas_id, dx, dy, scale, scale, cr, cg, cb)
+      end
+      px = px + 1.0
+    end
+    py = py + 1.0
+  end
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// ── Waveform ────────────────────────────────────────────────────────
+// Display an array as an auto-scaled line chart on canvas.
+// Y axis is auto-scaled from data min/max.
+
+fn buffer_view_waveform(canvas_id, arr, r, g, b)
+  let cid = int(canvas_id)
+  let cw = _gui_w[cid]
+  let ch = _gui_h[cid]
+  let _clr = gui_canvas_clear(canvas_id)
+  let n = len(arr)
+  if n < 2.0
+    return 0.0
+  end
+  // Find min/max
+  let mut vmin = arr[0]
+  let mut vmax = arr[0]
+  let mut j = 1.0
+  while j < n
+    let v = arr[int(j)]
+    if v < vmin
+      vmin = v
+    end
+    if v > vmax
+      vmax = v
+    end
+    j = j + 1.0
+  end
+  let range = vmax - vmin
+  if range <= 0.0
+    // Flat line at center
+    let _l = gui_canvas_line(canvas_id, 0.0, ch / 2.0, cw, ch / 2.0, r, g, b)
+    return 0.0
+  end
+  // Padding (5% top/bottom)
+  let pad = range * 0.05
+  let dmin = vmin - pad
+  let drange = range + 2.0 * pad
+  // Draw connected line segments
+  let x_step = cw / (n - 1.0)
+  let mut i = 0.0
+  while i < n - 1.0
+    let ii = int(i)
+    let x1 = i * x_step
+    let v1 = arr[ii]
+    let y1 = ch - (v1 - dmin) / drange * ch
+    let x2 = (i + 1.0) * x_step
+    let v2 = arr[ii + 1]
+    let y2 = ch - (v2 - dmin) / drange * ch
+    let _l = gui_canvas_line(canvas_id, x1, y1, x2, y2, r, g, b)
+    i = i + 1.0
+  end
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// ── Histogram ───────────────────────────────────────────────────────
+// Display an array as a bar chart of value distribution on canvas.
+// Values are binned into num_bins equal-width bins.
+
+fn buffer_view_histogram(canvas_id, arr, num_bins, r, g, b)
+  let cid = int(canvas_id)
+  let cw = _gui_w[cid]
+  let ch = _gui_h[cid]
+  let _clr = gui_canvas_clear(canvas_id)
+  let n = len(arr)
+  if n < 1.0
+    return 0.0
+  end
+  if num_bins < 1.0
+    return 0.0
+  end
+  // Find min/max
+  let mut vmin = arr[0]
+  let mut vmax = arr[0]
+  let mut j = 1.0
+  while j < n
+    let v = arr[int(j)]
+    if v < vmin
+      vmin = v
+    end
+    if v > vmax
+      vmax = v
+    end
+    j = j + 1.0
+  end
+  let range = vmax - vmin
+  if range <= 0.0
+    // All same value — single bar
+    let _f = gui_canvas_fill(canvas_id, 0.0, 0.0, cw, ch, r, g, b)
+    return 0.0
+  end
+  // Count per bin using parallel arrays
+  let mut bin_counts = []
+  let mut bi = 0.0
+  while bi < num_bins
+    push(bin_counts, 0.0)
+    bi = bi + 1.0
+  end
+  // Bin each value
+  let mut i = 0.0
+  while i < n
+    let v = arr[int(i)]
+    let mut bin = floor((v - vmin) / range * num_bins)
+    if bin >= num_bins
+      bin = num_bins - 1.0
+    end
+    if bin < 0.0
+      bin = 0.0
+    end
+    let bii = int(bin)
+    bin_counts[bii] = bin_counts[bii] + 1.0
+    i = i + 1.0
+  end
+  // Find max count for scaling
+  let mut max_count = 0.0
+  bi = 0.0
+  while bi < num_bins
+    let cnt = bin_counts[int(bi)]
+    if cnt > max_count
+      max_count = cnt
+    end
+    bi = bi + 1.0
+  end
+  if max_count <= 0.0
+    return 0.0
+  end
+  // Draw bars
+  let bar_w = cw / num_bins
+  let pad = 1.0
+  bi = 0.0
+  while bi < num_bins
+    let cnt = bin_counts[int(bi)]
+    let bar_h = cnt / max_count * (ch - 4.0)
+    let bx = bi * bar_w + pad
+    let by = ch - bar_h - 2.0
+    let bw = bar_w - 2.0 * pad
+    if bw > 0.0
+      if bar_h > 0.0
+        let _f = gui_canvas_fill(canvas_id, bx, by, bw, bar_h, r, g, b)
+      end
+    end
+    bi = bi + 1.0
+  end
+  _gs[9] = 1.0
+  return 0.0
+end

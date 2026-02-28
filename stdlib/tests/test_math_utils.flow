@@ -1,0 +1,246 @@
+// test_math_utils.flow — Tests for stdlib/math.flow
+// Functions tested: min_of, max_of, clamp_val, lerp, map_range, sign,
+//   deg_to_rad, rad_to_deg, gcd, lcm
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from math.flow --
+
+fn min_of(a, b)
+  if a < b
+    return a
+  end
+  return b
+end
+
+fn max_of(a, b)
+  if a > b
+    return a
+  end
+  return b
+end
+
+fn clamp_val(val, lo, hi)
+  if val < lo
+    return lo
+  end
+  if val > hi
+    return hi
+  end
+  return val
+end
+
+fn lerp(a, b, t)
+  return a + (b - a) * t
+end
+
+fn map_range(val, in_lo, in_hi, out_lo, out_hi)
+  let t = (val - in_lo) / (in_hi - in_lo)
+  return out_lo + (out_hi - out_lo) * t
+end
+
+fn sign(x)
+  if x > 0.0
+    return 1.0
+  end
+  if x < 0.0
+    return -1.0
+  end
+  return 0.0
+end
+
+fn deg_to_rad(deg)
+  return deg * 3.14159265 / 180.0
+end
+
+fn rad_to_deg(rad)
+  return rad * 180.0 / 3.14159265
+end
+
+fn gcd(a, b)
+  let mut x = abs(a)
+  let mut y = abs(b)
+  while y > 0.0
+    let tmp = y
+    y = x - floor(x / y) * y
+    x = tmp
+  end
+  return x
+end
+
+fn lcm(a, b)
+  if a == 0.0 || b == 0.0
+    return 0.0
+  end
+  return abs(a * b) / gcd(a, b)
+end
+
+// -- Tests --
+
+print("=== test_math_utils ===")
+
+// Test 1: min_of
+if min_of(3.0, 7.0) == 3.0
+  pass = pass + 1.0
+else
+  print("  FAIL: min_of(3,7)")
+  fail = fail + 1.0
+end
+
+// Test 2: max_of
+if max_of(3.0, 7.0) == 7.0
+  pass = pass + 1.0
+else
+  print("  FAIL: max_of(3,7)")
+  fail = fail + 1.0
+end
+
+// Test 3: clamp_val — below
+if clamp_val(-5.0, 0.0, 10.0) == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: clamp_val below")
+  fail = fail + 1.0
+end
+
+// Test 4: clamp_val — above
+if clamp_val(15.0, 0.0, 10.0) == 10.0
+  pass = pass + 1.0
+else
+  print("  FAIL: clamp_val above")
+  fail = fail + 1.0
+end
+
+// Test 5: clamp_val — within
+if clamp_val(5.0, 0.0, 10.0) == 5.0
+  pass = pass + 1.0
+else
+  print("  FAIL: clamp_val within")
+  fail = fail + 1.0
+end
+
+// Test 6: lerp — midpoint
+if lerp(0.0, 10.0, 0.5) == 5.0
+  pass = pass + 1.0
+else
+  print("  FAIL: lerp midpoint")
+  fail = fail + 1.0
+end
+
+// Test 7: lerp — endpoints
+if lerp(0.0, 10.0, 0.0) == 0.0 && lerp(0.0, 10.0, 1.0) == 10.0
+  pass = pass + 1.0
+else
+  print("  FAIL: lerp endpoints")
+  fail = fail + 1.0
+end
+
+// Test 8: map_range
+let mr = map_range(5.0, 0.0, 10.0, 0.0, 100.0)
+if mr == 50.0
+  pass = pass + 1.0
+else
+  print("  FAIL: map_range expected 50 got {mr}")
+  fail = fail + 1.0
+end
+
+// Test 9: sign
+if sign(5.0) == 1.0 && sign(-3.0) == -1.0 && sign(0.0) == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: sign")
+  fail = fail + 1.0
+end
+
+// Test 10: deg_to_rad — 180 degrees ≈ pi
+let rad = deg_to_rad(180.0)
+if rad > 3.14 && rad < 3.15
+  pass = pass + 1.0
+else
+  print("  FAIL: deg_to_rad(180) expected ~3.14159 got {rad}")
+  fail = fail + 1.0
+end
+
+// Test 11: rad_to_deg — pi ≈ 180 degrees
+let deg = rad_to_deg(3.14159265)
+if deg > 179.9 && deg < 180.1
+  pass = pass + 1.0
+else
+  print("  FAIL: rad_to_deg(pi) expected ~180 got {deg}")
+  fail = fail + 1.0
+end
+
+// Test 12: gcd — basic
+let g1 = gcd(12.0, 8.0)
+if g1 == 4.0
+  pass = pass + 1.0
+else
+  print("  FAIL: gcd(12,8) expected 4 got {g1}")
+  fail = fail + 1.0
+end
+
+// Test 13: gcd — coprime
+let g2 = gcd(7.0, 13.0)
+if g2 == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: gcd(7,13) expected 1 got {g2}")
+  fail = fail + 1.0
+end
+
+// Test 14: gcd — one is zero
+let g3 = gcd(0.0, 5.0)
+if g3 == 5.0
+  pass = pass + 1.0
+else
+  print("  FAIL: gcd(0,5) expected 5 got {g3}")
+  fail = fail + 1.0
+end
+
+// Test 15: gcd — larger numbers
+let g4 = gcd(48.0, 36.0)
+if g4 == 12.0
+  pass = pass + 1.0
+else
+  print("  FAIL: gcd(48,36) expected 12 got {g4}")
+  fail = fail + 1.0
+end
+
+// Test 16: lcm — basic
+let l1 = lcm(4.0, 6.0)
+if l1 == 12.0
+  pass = pass + 1.0
+else
+  print("  FAIL: lcm(4,6) expected 12 got {l1}")
+  fail = fail + 1.0
+end
+
+// Test 17: lcm — coprime
+let l2 = lcm(3.0, 5.0)
+if l2 == 15.0
+  pass = pass + 1.0
+else
+  print("  FAIL: lcm(3,5) expected 15 got {l2}")
+  fail = fail + 1.0
+end
+
+// Test 18: lcm — one is zero
+let l3 = lcm(0.0, 5.0)
+if l3 == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: lcm(0,5) expected 0 got {l3}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_math_utils ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

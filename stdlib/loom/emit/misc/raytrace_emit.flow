@@ -1,0 +1,518 @@
+// stdlib/loom/raytrace_emit.flow
+// GPU Ray Tracing SPIR-V Kernel Emitter — 100% Pure OctoFlow
+//
+// Generates a compute shader that ray-traces a scene with:
+//   3 colored spheres, checkered ground plane
+//   Diffuse + Blinn-Phong specular lighting
+//   Hard shadows (branchless shadow rays)
+//   Single-bounce reflections on spheres
+//   Sky gradient background
+//
+// Output: packed RGB float per pixel (R*65536 + G*256 + B)
+//
+// Self-hosted: .flow code -> IR -> SPIR-V binary -> GPU dispatch
+
+use "../compiler/ir"
+
+fn emit_raytrace_kernel()
+  print("Generating ray tracing kernel (push constants: w, h, cam_y, cam_z)...")
+  ir_new()
+
+  let bb = ir_block("entry")
+
+  // ===================== Push constants =====================
+  // PC[0]=width, PC[1]=height, PC[2]=cam_y, PC[3]=cam_z
+  let pc_w = ir_push_const(bb, 0.0)
+  let pc_h = ir_push_const(bb, 1.0)
+  let pc_cam_y = ir_push_const(bb, 2.0)
+  let pc_cam_z = ir_push_const(bb, 3.0)
+
+  // ===================== Pixel coordinates =====================
+  let gid = ir_load_gid(bb)
+  let W_U = ir_ftou(bb, pc_w)
+  let px_u = ir_umod(bb, gid, W_U)
+  let py_u = ir_udiv(bb, gid, W_U)
+  let px = ir_utof(bb, px_u)
+  let py = ir_utof(bb, py_u)
+
+  // ===================== Constants =====================
+  let c0 = ir_const_f(bb, 0.0)
+  let c1 = ir_const_f(bb, 1.0)
+  let c2 = ir_const_f(bb, 2.0)
+  let c_half = ir_const_f(bb, 0.5)
+  let c_eps = ir_const_f(bb, 0.001)
+  let c_big = ir_const_f(bb, 99999.0)
+  let c_255 = ir_const_f(bb, 255.0)
+  let c_65536 = ir_const_f(bb, 65536.0)
+  let c_256 = ir_const_f(bb, 256.0)
+  let c_half_w = ir_fmul(bb, pc_w, c_half)
+  let c_half_h = ir_fmul(bb, pc_h, c_half)
+  let c_norm = pc_w
+  let c_shad_eps = ir_const_f(bb, 0.02)
+  let c_1000 = ir_const_f(bb, 1000.0)
+  let c_2u = ir_const_u(bb, 2.0)
+
+  // Lighting
+  let c_amb = ir_const_f(bb, 0.18)
+  let c_dif = ir_const_f(bb, 0.72)
+  let c_spec_str = ir_const_f(bb, 0.6)
+  let c_shine = ir_const_f(bb, 32.0)
+  let c_refl = ir_const_f(bb, 0.35)
+  let c_1mrefl = ir_const_f(bb, 0.65)
+
+  // ===================== Camera =====================
+  let cam_oy = pc_cam_y
+  let cam_oz = pc_cam_z
+
+  let u = ir_fdiv(bb, ir_fsub(bb, px, c_half_w), c_norm)
+  let v = ir_fdiv(bb, ir_fsub(bb, c_half_h, py), c_norm)
+  let uu = ir_fmul(bb, u, u)
+  let vv = ir_fmul(bb, v, v)
+  let len2 = ir_fadd(bb, ir_fadd(bb, uu, vv), c1)
+  let inv_len = ir_invsqrt(bb, len2)
+  let dx = ir_fmul(bb, u, inv_len)
+  let dy = ir_fmul(bb, v, inv_len)
+  let dz = ir_fmul(bb, c1, inv_len)
+
+  // ===================== Light direction =====================
+  // Normalized: from upper-left, angled toward camera for vivid front-lighting
+  let lx = ir_const_f(bb, -0.408)
+  let ly = ir_const_f(bb, 0.816)
+  let lz = ir_const_f(bb, -0.408)
+
+  // ===================== Sphere parameters =====================
+  let s1cx = c0
+  let s1cy = ir_const_f(bb, 0.6)
+  let s1cz = ir_const_f(bb, 3.0)
+  let s1r = ir_const_f(bb, 0.8)
+
+  let s2cx = ir_const_f(bb, -1.3)
+  let s2cy = ir_const_f(bb, 0.3)
+  let s2cz = ir_const_f(bb, 4.0)
+  let s2r = ir_const_f(bb, 0.5)
+
+  let s3cx = ir_const_f(bb, 1.1)
+  let s3cy = s2cy
+  let s3cz = ir_const_f(bb, 3.5)
+  let s3r = s2r
+
+  // Sphere colors
+  let c_200 = ir_const_f(bb, 200.0)
+  let c_40 = ir_const_f(bb, 40.0)
+  let c_50 = ir_const_f(bb, 50.0)
+  let c_80 = ir_const_f(bb, 80.0)
+  let c_90 = ir_const_f(bb, 90.0)
+  let c_170 = ir_const_f(bb, 170.0)
+  let c_230 = ir_const_f(bb, 230.0)
+  let c_100 = ir_const_f(bb, 100.0)
+  let c_135 = ir_const_f(bb, 135.0)
+  let c_180 = ir_const_f(bb, 180.0)
+
+  // ===================== PRIMARY RAY: Sphere intersections =====================
+  // Sphere 1 (cx=0)
+  let oc1y = ir_fsub(bb, cam_oy, s1cy)
+  let oc1z = ir_fsub(bb, cam_oz, s1cz)
+  let b1 = ir_fadd(bb, ir_fmul(bb, dy, oc1y), ir_fmul(bb, dz, oc1z))
+  let oc1d = ir_fadd(bb, ir_fmul(bb, oc1y, oc1y), ir_fmul(bb, oc1z, oc1z))
+  let c1v = ir_fsub(bb, oc1d, ir_fmul(bb, s1r, s1r))
+  let disc1 = ir_fsub(bb, ir_fmul(bb, b1, b1), c1v)
+  let d1s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, disc1, c0), disc1, c0)
+  let t1r = ir_fsub(bb, ir_fneg(bb, b1), ir_sqrt(bb, d1s))
+  let v1 = ir_land(bb, ir_fogt(bb, disc1, c0), ir_fogt(bb, t1r, c_eps))
+  let t1 = ir_select(bb, IR_TYPE_FLOAT, v1, t1r, c_big)
+
+  // Sphere 2
+  let oc2x = ir_fsub(bb, c0, s2cx)
+  let oc2y = ir_fsub(bb, cam_oy, s2cy)
+  let oc2z = ir_fsub(bb, cam_oz, s2cz)
+  let b2 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, dx, oc2x), ir_fmul(bb, dy, oc2y)), ir_fmul(bb, dz, oc2z))
+  let oc2d = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, oc2x, oc2x), ir_fmul(bb, oc2y, oc2y)), ir_fmul(bb, oc2z, oc2z))
+  let c2v = ir_fsub(bb, oc2d, ir_fmul(bb, s2r, s2r))
+  let disc2 = ir_fsub(bb, ir_fmul(bb, b2, b2), c2v)
+  let d2s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, disc2, c0), disc2, c0)
+  let t2r = ir_fsub(bb, ir_fneg(bb, b2), ir_sqrt(bb, d2s))
+  let v2 = ir_land(bb, ir_fogt(bb, disc2, c0), ir_fogt(bb, t2r, c_eps))
+  let t2 = ir_select(bb, IR_TYPE_FLOAT, v2, t2r, c_big)
+
+  // Sphere 3
+  let oc3x = ir_fsub(bb, c0, s3cx)
+  let oc3y = ir_fsub(bb, cam_oy, s3cy)
+  let oc3z = ir_fsub(bb, cam_oz, s3cz)
+  let b3 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, dx, oc3x), ir_fmul(bb, dy, oc3y)), ir_fmul(bb, dz, oc3z))
+  let oc3d = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, oc3x, oc3x), ir_fmul(bb, oc3y, oc3y)), ir_fmul(bb, oc3z, oc3z))
+  let c3v = ir_fsub(bb, oc3d, ir_fmul(bb, s3r, s3r))
+  let disc3 = ir_fsub(bb, ir_fmul(bb, b3, b3), c3v)
+  let d3s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, disc3, c0), disc3, c0)
+  let t3r = ir_fsub(bb, ir_fneg(bb, b3), ir_sqrt(bb, d3s))
+  let v3 = ir_land(bb, ir_fogt(bb, disc3, c0), ir_fogt(bb, t3r, c_eps))
+  let t3 = ir_select(bb, IR_TYPE_FLOAT, v3, t3r, c_big)
+
+  // ===================== Find closest sphere =====================
+  let cmp12 = ir_folt(bb, t2, t1)
+  let bt = ir_select(bb, IR_TYPE_FLOAT, cmp12, t2, t1)
+  let bcx = ir_select(bb, IR_TYPE_FLOAT, cmp12, s2cx, s1cx)
+  let bcy = ir_select(bb, IR_TYPE_FLOAT, cmp12, s2cy, s1cy)
+  let bcz = ir_select(bb, IR_TYPE_FLOAT, cmp12, s2cz, s1cz)
+  let br = ir_select(bb, IR_TYPE_FLOAT, cmp12, s2r, s1r)
+  let bsr = ir_select(bb, IR_TYPE_FLOAT, cmp12, c_40, c_230)
+  let bsg = ir_select(bb, IR_TYPE_FLOAT, cmp12, c_200, c_50)
+  let bsb = ir_select(bb, IR_TYPE_FLOAT, cmp12, c_50, c_40)
+
+  let cmp3 = ir_folt(bb, t3, bt)
+  let bt2 = ir_select(bb, IR_TYPE_FLOAT, cmp3, t3, bt)
+  let bcx2 = ir_select(bb, IR_TYPE_FLOAT, cmp3, s3cx, bcx)
+  let bcy2 = ir_select(bb, IR_TYPE_FLOAT, cmp3, s3cy, bcy)
+  let bcz2 = ir_select(bb, IR_TYPE_FLOAT, cmp3, s3cz, bcz)
+  let br2 = ir_select(bb, IR_TYPE_FLOAT, cmp3, s3r, br)
+  let bsr2 = ir_select(bb, IR_TYPE_FLOAT, cmp3, c_40, bsr)
+  let bsg2 = ir_select(bb, IR_TYPE_FLOAT, cmp3, c_80, bsg)
+  let bsb2 = ir_select(bb, IR_TYPE_FLOAT, cmp3, c_230, bsb)
+
+  // ===================== Sphere hit point + normal =====================
+  let hx = ir_fmul(bb, bt2, dx)
+  let hy = ir_fadd(bb, cam_oy, ir_fmul(bb, bt2, dy))
+  let hz = ir_fadd(bb, cam_oz, ir_fmul(bb, bt2, dz))
+  let inv_r = ir_fdiv(bb, c1, br2)
+  let nx = ir_fmul(bb, ir_fsub(bb, hx, bcx2), inv_r)
+  let ny = ir_fmul(bb, ir_fsub(bb, hy, bcy2), inv_r)
+  let nz = ir_fmul(bb, ir_fsub(bb, hz, bcz2), inv_r)
+
+  // Shadow origin (reused for reflection origin)
+  let sox = ir_fadd(bb, hx, ir_fmul(bb, nx, c_shad_eps))
+  let soy = ir_fadd(bb, hy, ir_fmul(bb, ny, c_shad_eps))
+  let soz = ir_fadd(bb, hz, ir_fmul(bb, nz, c_shad_eps))
+
+  // ===================== SPHERE SHADOW RAY =====================
+  // Shadow vs sphere 1
+  let soc1x = ir_fsub(bb, sox, s1cx)
+  let soc1y = ir_fsub(bb, soy, s1cy)
+  let soc1z = ir_fsub(bb, soz, s1cz)
+  let sb1 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, lx, soc1x), ir_fmul(bb, ly, soc1y)), ir_fmul(bb, lz, soc1z))
+  let soc1d = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, soc1x, soc1x), ir_fmul(bb, soc1y, soc1y)), ir_fmul(bb, soc1z, soc1z))
+  let sc1v = ir_fsub(bb, soc1d, ir_fmul(bb, s1r, s1r))
+  let sdisc1 = ir_fsub(bb, ir_fmul(bb, sb1, sb1), sc1v)
+  let sd1s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, sdisc1, c0), sdisc1, c0)
+  let st1 = ir_fsub(bb, ir_fneg(bb, sb1), ir_sqrt(bb, sd1s))
+  let sv1 = ir_land(bb, ir_fogt(bb, sdisc1, c0), ir_fogt(bb, st1, c_shad_eps))
+
+  // Shadow vs sphere 2
+  let soc2x = ir_fsub(bb, sox, s2cx)
+  let soc2y = ir_fsub(bb, soy, s2cy)
+  let soc2z = ir_fsub(bb, soz, s2cz)
+  let sb2 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, lx, soc2x), ir_fmul(bb, ly, soc2y)), ir_fmul(bb, lz, soc2z))
+  let soc2d = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, soc2x, soc2x), ir_fmul(bb, soc2y, soc2y)), ir_fmul(bb, soc2z, soc2z))
+  let sc2v = ir_fsub(bb, soc2d, ir_fmul(bb, s2r, s2r))
+  let sdisc2 = ir_fsub(bb, ir_fmul(bb, sb2, sb2), sc2v)
+  let sd2s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, sdisc2, c0), sdisc2, c0)
+  let st2 = ir_fsub(bb, ir_fneg(bb, sb2), ir_sqrt(bb, sd2s))
+  let sv2 = ir_land(bb, ir_fogt(bb, sdisc2, c0), ir_fogt(bb, st2, c_shad_eps))
+
+  // Shadow vs sphere 3
+  let soc3x = ir_fsub(bb, sox, s3cx)
+  let soc3y = ir_fsub(bb, soy, s3cy)
+  let soc3z = ir_fsub(bb, soz, s3cz)
+  let sb3 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, lx, soc3x), ir_fmul(bb, ly, soc3y)), ir_fmul(bb, lz, soc3z))
+  let soc3d = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, soc3x, soc3x), ir_fmul(bb, soc3y, soc3y)), ir_fmul(bb, soc3z, soc3z))
+  let sc3v = ir_fsub(bb, soc3d, ir_fmul(bb, s3r, s3r))
+  let sdisc3 = ir_fsub(bb, ir_fmul(bb, sb3, sb3), sc3v)
+  let sd3s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, sdisc3, c0), sdisc3, c0)
+  let st3 = ir_fsub(bb, ir_fneg(bb, sb3), ir_sqrt(bb, sd3s))
+  let sv3 = ir_land(bb, ir_fogt(bb, sdisc3, c0), ir_fogt(bb, st3, c_shad_eps))
+
+  let s_shadow = ir_lor(bb, ir_lor(bb, sv1, sv2), sv3)
+  let s_shad_f = ir_select(bb, IR_TYPE_FLOAT, s_shadow, c0, c1)
+
+  // ===================== SPHERE DIFFUSE + SPECULAR =====================
+  let ndl = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, nx, lx), ir_fmul(bb, ny, ly)), ir_fmul(bb, nz, lz))
+  let diff_raw = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, ndl, c0), ndl, c0)
+  let sph_diff = ir_fadd(bb, c_amb, ir_fmul(bb, ir_fmul(bb, diff_raw, c_dif), s_shad_f))
+
+  // Blinn-Phong: H = normalize(L - D)
+  let hvx = ir_fsub(bb, lx, dx)
+  let hvy = ir_fsub(bb, ly, dy)
+  let hvz = ir_fsub(bb, lz, dz)
+  let hlen2 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, hvx, hvx), ir_fmul(bb, hvy, hvy)), ir_fmul(bb, hvz, hvz))
+  let hinv = ir_invsqrt(bb, hlen2)
+  let hhx = ir_fmul(bb, hvx, hinv)
+  let hhy = ir_fmul(bb, hvy, hinv)
+  let hhz = ir_fmul(bb, hvz, hinv)
+  let ndh = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, nx, hhx), ir_fmul(bb, ny, hhy)), ir_fmul(bb, nz, hhz))
+  let ndh_pos = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, ndh, c0), ndh, c0)
+  let spec_pow = ir_pow(bb, ndh_pos, c_shine)
+  let spec_term = ir_fmul(bb, ir_fmul(bb, spec_pow, c_spec_str), s_shad_f)
+  let spec_255 = ir_fmul(bb, spec_term, c_255)
+
+  // Direct sphere color (before reflection blend)
+  let dir_r = ir_fadd(bb, ir_fmul(bb, bsr2, sph_diff), spec_255)
+  let dir_g = ir_fadd(bb, ir_fmul(bb, bsg2, sph_diff), spec_255)
+  let dir_b = ir_fadd(bb, ir_fmul(bb, bsb2, sph_diff), spec_255)
+
+  // ===================== REFLECTION RAY =====================
+  // R = D - 2*dot(D,N)*N
+  let ddn = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, dx, nx), ir_fmul(bb, dy, ny)), ir_fmul(bb, dz, nz))
+  let ddn2 = ir_fmul(bb, c2, ddn)
+  let rdx = ir_fsub(bb, dx, ir_fmul(bb, ddn2, nx))
+  let rdy = ir_fsub(bb, dy, ir_fmul(bb, ddn2, ny))
+  let rdz = ir_fsub(bb, dz, ir_fmul(bb, ddn2, nz))
+
+  // Reflection origin = shadow origin (already offset along normal)
+  // sox, soy, soz
+
+  // ===================== REFLECTED RAY: Sphere intersections =====================
+  // Refl vs sphere 1
+  let roc1x = ir_fsub(bb, sox, s1cx)
+  let roc1y = ir_fsub(bb, soy, s1cy)
+  let roc1z = ir_fsub(bb, soz, s1cz)
+  let rb1 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, rdx, roc1x), ir_fmul(bb, rdy, roc1y)), ir_fmul(bb, rdz, roc1z))
+  let roc1d = ir_fadd(bb, ir_fmul(bb, roc1x, roc1x), ir_fadd(bb, ir_fmul(bb, roc1y, roc1y), ir_fmul(bb, roc1z, roc1z)))
+  let rc1v = ir_fsub(bb, roc1d, ir_fmul(bb, s1r, s1r))
+  let rdisc1 = ir_fsub(bb, ir_fmul(bb, rb1, rb1), rc1v)
+  let rd1s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, rdisc1, c0), rdisc1, c0)
+  let rt1r = ir_fsub(bb, ir_fneg(bb, rb1), ir_sqrt(bb, rd1s))
+  let rv1 = ir_land(bb, ir_fogt(bb, rdisc1, c0), ir_fogt(bb, rt1r, c_eps))
+  let rt1 = ir_select(bb, IR_TYPE_FLOAT, rv1, rt1r, c_big)
+
+  // Refl vs sphere 2
+  let roc2x = ir_fsub(bb, sox, s2cx)
+  let roc2y = ir_fsub(bb, soy, s2cy)
+  let roc2z = ir_fsub(bb, soz, s2cz)
+  let rb2 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, rdx, roc2x), ir_fmul(bb, rdy, roc2y)), ir_fmul(bb, rdz, roc2z))
+  let roc2d = ir_fadd(bb, ir_fmul(bb, roc2x, roc2x), ir_fadd(bb, ir_fmul(bb, roc2y, roc2y), ir_fmul(bb, roc2z, roc2z)))
+  let rc2v = ir_fsub(bb, roc2d, ir_fmul(bb, s2r, s2r))
+  let rdisc2 = ir_fsub(bb, ir_fmul(bb, rb2, rb2), rc2v)
+  let rd2s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, rdisc2, c0), rdisc2, c0)
+  let rt2r = ir_fsub(bb, ir_fneg(bb, rb2), ir_sqrt(bb, rd2s))
+  let rv2 = ir_land(bb, ir_fogt(bb, rdisc2, c0), ir_fogt(bb, rt2r, c_eps))
+  let rt2 = ir_select(bb, IR_TYPE_FLOAT, rv2, rt2r, c_big)
+
+  // Refl vs sphere 3
+  let roc3x = ir_fsub(bb, sox, s3cx)
+  let roc3y = ir_fsub(bb, soy, s3cy)
+  let roc3z = ir_fsub(bb, soz, s3cz)
+  let rb3 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, rdx, roc3x), ir_fmul(bb, rdy, roc3y)), ir_fmul(bb, rdz, roc3z))
+  let roc3d = ir_fadd(bb, ir_fmul(bb, roc3x, roc3x), ir_fadd(bb, ir_fmul(bb, roc3y, roc3y), ir_fmul(bb, roc3z, roc3z)))
+  let rc3v = ir_fsub(bb, roc3d, ir_fmul(bb, s3r, s3r))
+  let rdisc3 = ir_fsub(bb, ir_fmul(bb, rb3, rb3), rc3v)
+  let rd3s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, rdisc3, c0), rdisc3, c0)
+  let rt3r = ir_fsub(bb, ir_fneg(bb, rb3), ir_sqrt(bb, rd3s))
+  let rv3 = ir_land(bb, ir_fogt(bb, rdisc3, c0), ir_fogt(bb, rt3r, c_eps))
+  let rt3 = ir_select(bb, IR_TYPE_FLOAT, rv3, rt3r, c_big)
+
+  // ===================== REFLECTED: Find closest sphere =====================
+  let rcmp12 = ir_folt(bb, rt2, rt1)
+  let rbt = ir_select(bb, IR_TYPE_FLOAT, rcmp12, rt2, rt1)
+  let rbcx = ir_select(bb, IR_TYPE_FLOAT, rcmp12, s2cx, s1cx)
+  let rbcy = ir_select(bb, IR_TYPE_FLOAT, rcmp12, s2cy, s1cy)
+  let rbcz = ir_select(bb, IR_TYPE_FLOAT, rcmp12, s2cz, s1cz)
+  let rbr = ir_select(bb, IR_TYPE_FLOAT, rcmp12, s2r, s1r)
+  let rbsr = ir_select(bb, IR_TYPE_FLOAT, rcmp12, c_40, c_230)
+  let rbsg = ir_select(bb, IR_TYPE_FLOAT, rcmp12, c_200, c_50)
+  let rbsb = ir_select(bb, IR_TYPE_FLOAT, rcmp12, c_50, c_40)
+
+  let rcmp3 = ir_folt(bb, rt3, rbt)
+  let rbt2 = ir_select(bb, IR_TYPE_FLOAT, rcmp3, rt3, rbt)
+  let rbcx2 = ir_select(bb, IR_TYPE_FLOAT, rcmp3, s3cx, rbcx)
+  let rbcy2 = ir_select(bb, IR_TYPE_FLOAT, rcmp3, s3cy, rbcy)
+  let rbcz2 = ir_select(bb, IR_TYPE_FLOAT, rcmp3, s3cz, rbcz)
+  let rbr2 = ir_select(bb, IR_TYPE_FLOAT, rcmp3, s3r, rbr)
+  let rbsr2 = ir_select(bb, IR_TYPE_FLOAT, rcmp3, c_40, rbsr)
+  let rbsg2 = ir_select(bb, IR_TYPE_FLOAT, rcmp3, c_80, rbsg)
+  let rbsb2 = ir_select(bb, IR_TYPE_FLOAT, rcmp3, c_230, rbsb)
+
+  // ===================== REFLECTED: Sphere shading (diffuse only) =====================
+  let rhx = ir_fadd(bb, sox, ir_fmul(bb, rbt2, rdx))
+  let rhy = ir_fadd(bb, soy, ir_fmul(bb, rbt2, rdy))
+  let rhz = ir_fadd(bb, soz, ir_fmul(bb, rbt2, rdz))
+  let rinv_r = ir_fdiv(bb, c1, rbr2)
+  let rnx = ir_fmul(bb, ir_fsub(bb, rhx, rbcx2), rinv_r)
+  let rny = ir_fmul(bb, ir_fsub(bb, rhy, rbcy2), rinv_r)
+  let rnz = ir_fmul(bb, ir_fsub(bb, rhz, rbcz2), rinv_r)
+  let rndl = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, rnx, lx), ir_fmul(bb, rny, ly)), ir_fmul(bb, rnz, lz))
+  let rdiff = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, rndl, c0), rndl, c0)
+  let rshade = ir_fadd(bb, c_amb, ir_fmul(bb, rdiff, c_dif))
+  let rsph_r = ir_fmul(bb, rbsr2, rshade)
+  let rsph_g = ir_fmul(bb, rbsg2, rshade)
+  let rsph_b = ir_fmul(bb, rbsb2, rshade)
+
+  // ===================== REFLECTED: Ground plane + checker =====================
+  let rdy_neg = ir_folt(bb, rdy, c0)
+  let rt_gnd_raw = ir_fdiv(bb, ir_fneg(bb, soy), rdy)
+  let rt_gnd = ir_select(bb, IR_TYPE_FLOAT, rdy_neg, rt_gnd_raw, c_big)
+  let rt_gnd_v = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, rt_gnd, c_eps), rt_gnd, c_big)
+
+  let rghx = ir_fadd(bb, sox, ir_fmul(bb, rt_gnd_v, rdx))
+  let rghz = ir_fadd(bb, soz, ir_fmul(bb, rt_gnd_v, rdz))
+  let rfx_u = ir_ftou(bb, ir_floor(bb, ir_fadd(bb, rghx, c_1000)))
+  let rfz_u = ir_ftou(bb, ir_floor(bb, ir_fadd(bb, rghz, c_1000)))
+  let rrem_u = ir_umod(bb, ir_iadd(bb, rfx_u, rfz_u), c_2u)
+  let rchecker = ir_utof(bb, rrem_u)
+  let rgnd_col = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, rchecker, c_half), c_90, c_170)
+  let rgnd_shade = ir_fadd(bb, c_amb, ir_fmul(bb, ly, c_dif))
+  let rgnd_c = ir_fmul(bb, rgnd_col, rgnd_shade)
+
+  // ===================== REFLECTED: Select sphere vs ground vs sky =====================
+  let rg_closer = ir_folt(bb, rt_gnd_v, rbt2)
+  let robj_r = ir_select(bb, IR_TYPE_FLOAT, rg_closer, rgnd_c, rsph_r)
+  let robj_g = ir_select(bb, IR_TYPE_FLOAT, rg_closer, rgnd_c, rsph_g)
+  let robj_b = ir_select(bb, IR_TYPE_FLOAT, rg_closer, rgnd_c, rsph_b)
+  let rfinal_t = ir_select(bb, IR_TYPE_FLOAT, rg_closer, rt_gnd_v, rbt2)
+
+  // Reflected sky gradient
+  let rsky_t = ir_fadd(bb, ir_fmul(bb, rdy, c_half), c_half)
+  let rot = ir_fsub(bb, c1, rsky_t)
+  let rbg_r = ir_fadd(bb, ir_fmul(bb, c_100, rot), ir_fmul(bb, c_135, rsky_t))
+  let rbg_g = ir_fadd(bb, ir_fmul(bb, c_100, rot), ir_fmul(bb, c_180, rsky_t))
+  let rbg_b = ir_fadd(bb, ir_fmul(bb, c_100, rot), ir_fmul(bb, c_255, rsky_t))
+
+  let rany_hit = ir_folt(bb, rfinal_t, c_big)
+  let refl_r = ir_select(bb, IR_TYPE_FLOAT, rany_hit, robj_r, rbg_r)
+  let refl_g = ir_select(bb, IR_TYPE_FLOAT, rany_hit, robj_g, rbg_g)
+  let refl_b = ir_select(bb, IR_TYPE_FLOAT, rany_hit, robj_b, rbg_b)
+
+  // ===================== BLEND: direct + reflection =====================
+  // sph_color = 0.65 * direct + 0.35 * reflected
+  let sph_r = ir_fadd(bb, ir_fmul(bb, c_1mrefl, dir_r), ir_fmul(bb, c_refl, refl_r))
+  let sph_g = ir_fadd(bb, ir_fmul(bb, c_1mrefl, dir_g), ir_fmul(bb, c_refl, refl_g))
+  let sph_b = ir_fadd(bb, ir_fmul(bb, c_1mrefl, dir_b), ir_fmul(bb, c_refl, refl_b))
+
+  // ===================== GROUND PLANE (y=0, checker) =====================
+  let dy_neg = ir_folt(bb, dy, c0)
+  let t_gnd_raw = ir_fdiv(bb, ir_fneg(bb, cam_oy), dy)
+  let t_gnd = ir_select(bb, IR_TYPE_FLOAT, dy_neg, t_gnd_raw, c_big)
+  let t_gnd_v = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, t_gnd, c_eps), t_gnd, c_big)
+
+  let ghx = ir_fmul(bb, t_gnd_v, dx)
+  let ghz = ir_fadd(bb, cam_oz, ir_fmul(bb, t_gnd_v, dz))
+  let fx_u = ir_ftou(bb, ir_floor(bb, ir_fadd(bb, ghx, c_1000)))
+  let fz_u = ir_ftou(bb, ir_floor(bb, ir_fadd(bb, ghz, c_1000)))
+  let rem_u = ir_umod(bb, ir_iadd(bb, fx_u, fz_u), c_2u)
+  let checker = ir_utof(bb, rem_u)
+  let gnd_col = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, checker, c_half), c_90, c_170)
+
+  // ===================== GROUND SHADOW RAY =====================
+  let g_sox = ghx
+  let g_soy = c_shad_eps
+  let g_soz = ghz
+
+  // Shadow vs sphere 1
+  let gsoc1x = ir_fsub(bb, g_sox, s1cx)
+  let gsoc1y = ir_fsub(bb, g_soy, s1cy)
+  let gsoc1z = ir_fsub(bb, g_soz, s1cz)
+  let gsb1 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, lx, gsoc1x), ir_fmul(bb, ly, gsoc1y)), ir_fmul(bb, lz, gsoc1z))
+  let gsoc1d = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, gsoc1x, gsoc1x), ir_fmul(bb, gsoc1y, gsoc1y)), ir_fmul(bb, gsoc1z, gsoc1z))
+  let gsc1v = ir_fsub(bb, gsoc1d, ir_fmul(bb, s1r, s1r))
+  let gsdisc1 = ir_fsub(bb, ir_fmul(bb, gsb1, gsb1), gsc1v)
+  let gsd1s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, gsdisc1, c0), gsdisc1, c0)
+  let gst1 = ir_fsub(bb, ir_fneg(bb, gsb1), ir_sqrt(bb, gsd1s))
+  let gsv1 = ir_land(bb, ir_fogt(bb, gsdisc1, c0), ir_fogt(bb, gst1, c_shad_eps))
+
+  // Shadow vs sphere 2
+  let gsoc2x = ir_fsub(bb, g_sox, s2cx)
+  let gsoc2y = ir_fsub(bb, g_soy, s2cy)
+  let gsoc2z = ir_fsub(bb, g_soz, s2cz)
+  let gsb2 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, lx, gsoc2x), ir_fmul(bb, ly, gsoc2y)), ir_fmul(bb, lz, gsoc2z))
+  let gsoc2d = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, gsoc2x, gsoc2x), ir_fmul(bb, gsoc2y, gsoc2y)), ir_fmul(bb, gsoc2z, gsoc2z))
+  let gsc2v = ir_fsub(bb, gsoc2d, ir_fmul(bb, s2r, s2r))
+  let gsdisc2 = ir_fsub(bb, ir_fmul(bb, gsb2, gsb2), gsc2v)
+  let gsd2s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, gsdisc2, c0), gsdisc2, c0)
+  let gst2 = ir_fsub(bb, ir_fneg(bb, gsb2), ir_sqrt(bb, gsd2s))
+  let gsv2 = ir_land(bb, ir_fogt(bb, gsdisc2, c0), ir_fogt(bb, gst2, c_shad_eps))
+
+  // Shadow vs sphere 3
+  let gsoc3x = ir_fsub(bb, g_sox, s3cx)
+  let gsoc3y = ir_fsub(bb, g_soy, s3cy)
+  let gsoc3z = ir_fsub(bb, g_soz, s3cz)
+  let gsb3 = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, lx, gsoc3x), ir_fmul(bb, ly, gsoc3y)), ir_fmul(bb, lz, gsoc3z))
+  let gsoc3d = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, gsoc3x, gsoc3x), ir_fmul(bb, gsoc3y, gsoc3y)), ir_fmul(bb, gsoc3z, gsoc3z))
+  let gsc3v = ir_fsub(bb, gsoc3d, ir_fmul(bb, s3r, s3r))
+  let gsdisc3 = ir_fsub(bb, ir_fmul(bb, gsb3, gsb3), gsc3v)
+  let gsd3s = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, gsdisc3, c0), gsdisc3, c0)
+  let gst3 = ir_fsub(bb, ir_fneg(bb, gsb3), ir_sqrt(bb, gsd3s))
+  let gsv3 = ir_land(bb, ir_fogt(bb, gsdisc3, c0), ir_fogt(bb, gst3, c_shad_eps))
+
+  let g_shadow = ir_lor(bb, ir_lor(bb, gsv1, gsv2), gsv3)
+  let g_shad_f = ir_select(bb, IR_TYPE_FLOAT, g_shadow, c0, c1)
+
+  // ===================== GROUND SHADING =====================
+  let gnd_shade = ir_fadd(bb, c_amb, ir_fmul(bb, ir_fmul(bb, ly, c_dif), g_shad_f))
+  let gnd_c = ir_fmul(bb, gnd_col, gnd_shade)
+
+  // ===================== Select sphere vs ground =====================
+  let g_closer = ir_folt(bb, t_gnd_v, bt2)
+  let obj_r = ir_select(bb, IR_TYPE_FLOAT, g_closer, gnd_c, sph_r)
+  let obj_g = ir_select(bb, IR_TYPE_FLOAT, g_closer, gnd_c, sph_g)
+  let obj_b = ir_select(bb, IR_TYPE_FLOAT, g_closer, gnd_c, sph_b)
+  let final_t = ir_select(bb, IR_TYPE_FLOAT, g_closer, t_gnd_v, bt2)
+
+  // ===================== Sky gradient =====================
+  let sky_t = ir_fadd(bb, ir_fmul(bb, dy, c_half), c_half)
+  let ot = ir_fsub(bb, c1, sky_t)
+  let bg_r = ir_fadd(bb, ir_fmul(bb, c_100, ot), ir_fmul(bb, c_135, sky_t))
+  let bg_g = ir_fadd(bb, ir_fmul(bb, c_100, ot), ir_fmul(bb, c_180, sky_t))
+  let bg_b = ir_fadd(bb, ir_fmul(bb, c_100, ot), ir_fmul(bb, c_255, sky_t))
+
+  // ===================== Select object vs background =====================
+  let any_hit = ir_folt(bb, final_t, c_big)
+  let fr = ir_select(bb, IR_TYPE_FLOAT, any_hit, obj_r, bg_r)
+  let fg = ir_select(bb, IR_TYPE_FLOAT, any_hit, obj_g, bg_g)
+  let fb = ir_select(bb, IR_TYPE_FLOAT, any_hit, obj_b, bg_b)
+
+  // ===================== Clamp 0-255 =====================
+  let cr = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, fr, c_255), c_255, fr)
+  let cg = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, fg, c_255), c_255, fg)
+  let cb = ir_select(bb, IR_TYPE_FLOAT, ir_fogt(bb, fb, c_255), c_255, fb)
+  let cr2 = ir_select(bb, IR_TYPE_FLOAT, ir_folt(bb, cr, c0), c0, cr)
+  let cg2 = ir_select(bb, IR_TYPE_FLOAT, ir_folt(bb, cg, c0), c0, cg)
+  let cb2 = ir_select(bb, IR_TYPE_FLOAT, ir_folt(bb, cb, c0), c0, cb)
+
+  // ===================== Pack RGB =====================
+  let ri = ir_floor(bb, cr2)
+  let gi = ir_floor(bb, cg2)
+  let bi = ir_floor(bb, cb2)
+  let packed = ir_fadd(bb, ir_fadd(bb, ir_fmul(bb, ri, c_65536), ir_fmul(bb, gi, c_256)), bi)
+
+  ir_store_output(bb, packed)
+  ir_term_return(bb)
+
+  ir_emit_spirv("raytrace.spv")
+  print("Ray tracing kernel ready (push constants: w, h, cam_y, cam_z)")
+  return 0.0
+end
+
+// GPU RGB unpack kernel — extracts one channel from packed RGB float
+// Push constant[0] = channel: 0.0=R, 1.0=G, 2.0=B
+// Input: packed floats (R*65536 + G*256 + B)
+// Output: single channel values [0-255]
+fn emit_unpack_rgb_kernel()
+  ir_new()
+  let bb = ir_block("entry")
+
+  let pc_ch = ir_push_const(bb, 0.0)
+  let val = ir_load_input(bb)
+
+  let c0 = ir_const_f(bb, 0.0)
+  let c1 = ir_const_f(bb, 1.0)
+  let c2 = ir_const_f(bb, 2.0)
+  let c256 = ir_const_f(bb, 256.0)
+  let c65536 = ir_const_f(bb, 65536.0)
+
+  // r = floor(packed / 65536)
+  let rv = ir_floor(bb, ir_fdiv(bb, val, c65536))
+  // g = floor((packed - r*65536) / 256)
+  let gv = ir_floor(bb, ir_fdiv(bb, ir_fsub(bb, val, ir_fmul(bb, rv, c65536)), c256))
+  // b = packed - r*65536 - g*256
+  let bv = ir_fsub(bb, ir_fsub(bb, val, ir_fmul(bb, rv, c65536)), ir_fmul(bb, gv, c256))
+
+  // Select channel: ch<1 → R, ch<2 → G, else → B
+  let is_r = ir_folt(bb, pc_ch, c1)
+  let is_g = ir_folt(bb, pc_ch, c2)
+  let gb = ir_select(bb, IR_TYPE_FLOAT, is_g, gv, bv)
+  let out = ir_select(bb, IR_TYPE_FLOAT, is_r, rv, gb)
+
+  ir_store_output(bb, out)
+  ir_term_return(bb)
+
+  ir_emit_spirv("unpack_rgb.spv")
+  print("Unpack RGB kernel ready")
+  return 0.0
+end

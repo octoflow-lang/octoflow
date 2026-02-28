@@ -1,0 +1,106 @@
+// emit_vm_delta_decode.flow — VM Delta Decode (Prefix-Sum Decompression)
+//
+// Reads delta-encoded data from Globals (binding 2) at src_off,
+// computes inclusive prefix sum, writes decoded values to Globals
+// (binding 2) at dst_off. src and dst MUST be non-overlapping regions.
+//
+// This allows vm_where_gt (which reads Globals) to chain directly
+// after decompression without an intermediate copy step.
+//
+// Delta encoding: deltas = [v0, v1-v0, v2-v1, v3-v2, ...]
+// Decode (prefix sum): out[0]=d[0], out[i]=out[i-1]+d[i] → original values
+//
+// Thread 0 sequential — same pattern as vm_reduce_sum.
+//
+// Push constants:
+//   pc[0] = src_off   (float→uint, start of deltas in Globals)
+//   pc[1] = dst_off   (float→uint, start of decoded output in Globals)
+//   pc[2] = count     (float→uint, number of elements)
+//
+// Binding layout (ir_input_count=3):
+//   Binding 0: registers (unused)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (read deltas + write decoded output)
+//   Binding 3: control   (unused)
+//
+// Dispatch: ALWAYS wg=1 (single workgroup, thread 0 only)
+//
+// Globals must be allocated with at least max(src_off+count, dst_off+count)
+// floats at vm_boot time.
+//
+// Validated edge cases:
+//   N=1 (single element), negative deltas, descending sequences,
+//   all-identical values, non-integer floats, N=512 (large dataset)
+//
+// Performance: O(N) sequential. Suitable for columns up to ~64K.
+// For larger columns, upgrade to DLB scan (dlb_scan.spv).
+//
+// Run: octoflow run stdlib/loom/emit_vm_delta_decode.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_delta_decode(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry       = ir_block("entry")
+  let pre_loop    = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body   = ir_block("loop_body")
+  let loop_cont   = ir_block("loop_cont")
+  let loop_merge  = ir_block("loop_merge")
+  let exit_block  = ir_block("exit")
+
+  // ── Entry: gid guard (only thread 0) + push constants ─────────────
+  let gid        = ir_load_gid(entry)
+  let pc_src     = ir_push_const(entry, 0.0)
+  let pc_dst     = ir_push_const(entry, 1.0)
+  let pc_cnt     = ir_push_const(entry, 2.0)
+  let src_off_u  = ir_ftou(entry, pc_src)
+  let dst_off_u  = ir_ftou(entry, pc_dst)
+  let count_u    = ir_ftou(entry, pc_cnt)
+  let one_u      = ir_const_u(entry, 1.0)
+  let not_t0     = ir_ugte(entry, gid, one_u)
+  let _sm_e      = ir_selection_merge(entry, exit_block)
+  let _br_e      = ir_term_cond_branch(entry, not_t0, exit_block, pre_loop)
+
+  // ── pre_loop: init i=0, acc=0.0 ──────────────────────────────────
+  let zero_u     = ir_const_u(pre_loop, 0.0)
+  let zero_f     = ir_const_f(pre_loop, 0.0)
+  let _bpl       = ir_term_branch(pre_loop, loop_header)
+
+  // ── loop_header: phi(i, acc) ─────────────────────────────────────
+  let phi_i      = ir_phi(loop_header, 2.0)
+  let phi_acc    = ir_phi(loop_header, 1.0)
+  let _pi0       = ir_phi_add(phi_i,   zero_u, pre_loop)
+  let _pa0       = ir_phi_add(phi_acc, zero_f, pre_loop)
+  let i_done     = ir_ugte(loop_header, phi_i, count_u)
+  let _lm        = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc        = ir_term_cond_branch(loop_header, i_done, loop_merge, loop_body)
+
+  // ── loop_body: acc += globals[src_off+i], store to globals[dst_off+i]
+  let src_idx    = ir_iadd(loop_body, src_off_u, phi_i)
+  let delta      = ir_load_input_at(loop_body, 2.0, src_idx)
+  let new_acc    = ir_fadd(loop_body, phi_acc, delta)
+  let dst_idx    = ir_iadd(loop_body, dst_off_u, phi_i)
+  let _store     = ir_buf_store_f(loop_body, 2.0, dst_idx, new_acc)
+  let _blb       = ir_term_branch(loop_body, loop_cont)
+
+  // ── loop_cont: i++, back-edge phis ───────────────────────────────
+  let one_u2     = ir_const_u(loop_cont, 1.0)
+  let new_i      = ir_iadd(loop_cont, phi_i, one_u2)
+  let _blc       = ir_term_branch(loop_cont, loop_header)
+  let _pi1       = ir_phi_add(phi_i,   new_i,   loop_cont)
+  let _pa1       = ir_phi_add(phi_acc, new_acc, loop_cont)
+
+  // ── loop_merge + exit ────────────────────────────────────────────
+  let _blm       = ir_term_branch(loop_merge, exit_block)
+  let _ret       = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/ops/vm_delta_decode.spv"
+let _r = emit_vm_delta_decode(out)
+print("Emitted: {out}")

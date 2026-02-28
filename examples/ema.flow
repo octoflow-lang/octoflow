@@ -1,0 +1,3 @@
+stream data = tap("test_data/input_10.csv")
+stream smoothed = data |> ema(0.3)
+emit(smoothed, "test_data/output_ema.csv")

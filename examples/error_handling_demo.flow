@@ -1,0 +1,53 @@
+// Phase 34: Error Handling Demo
+// Run with: flowgpu-cli run examples/error_handling_demo.flow --allow-read
+
+// ── Safe file read ───────────────────────────────────────────────
+let r = try(read_file("nonexistent_file_xyz.txt"))
+if r.ok == 0.0
+  print("Caught error: {r.error}")
+end
+
+// ── Successful operation ─────────────────────────────────────────
+let s = try(str(42))
+print("str(42) → value: {s.value}, ok: {s.ok}")
+
+// ── Math with try ────────────────────────────────────────────────
+let m = try(3.0 + 4.0)
+print("3 + 4 → value: {m.value}, ok: {m.ok}")
+
+// ── Undefined variable caught ────────────────────────────────────
+let u = try(some_undefined_var)
+print("undefined → ok: {u.ok}, error: {u.error}")
+
+// ── Multiple try in sequence ─────────────────────────────────────
+let a = try(to_upper("hello"))
+let b = try(missing_var)
+let c = try(42.0 * 2.0)
+print("a.ok={a.ok} b.ok={b.ok} c.ok={c.ok}")
+print("a.value={a.value}, c.value={c.value}")
+
+// ── try() inside a loop ──────────────────────────────────────────
+let files = ["config.json", "data.csv", "missing.txt"]
+let mut found = 0.0
+for f in files
+  let attempt = try(read_file(f))
+  if attempt.ok == 1.0
+    found = found + 1.0
+  else
+    print("Skip {f}: {attempt.error}")
+  end
+end
+print("Found {found} of {len(files)} files")
+
+// ── try() inside a function ──────────────────────────────────────
+fn safe_double(x)
+  let r = try(x * 2.0)
+  return r.value
+end
+
+let d = safe_double(21.0)
+print("safe_double(21) = {d}")
+
+// ── Nested try catches inner error ───────────────────────────────
+let nested = try(try(42.0))
+print("nested try → ok: {nested.ok} (inner bare try() caught)")

@@ -1,0 +1,137 @@
+// stdlib/compiler/rust_audit.flow
+// Phase 51: Rust OS-Boundary Audit
+//
+// Analyzes Rust source files to show what can be replaced with OctoFlow.
+// Categorizes each module as:
+//   KEEP   - OS boundary (file I/O, GPU dispatch, process spawn, socket)
+//   FLOW   - Already implemented in .flow OR replaceable by .flow
+//   THIN   - Thin wrapper needed (minimal Rust glue)
+//
+// Usage:
+//   octoflow run stdlib/compiler/rust_audit.flow --allow-read --allow-exec
+
+let NL = chr(10)
+
+// ---- Rust source files to audit ------------------------------------
+let mut rs_files = []
+push(rs_files, "arms/flowgpu-cli/src/compiler.rs")
+push(rs_files, "arms/flowgpu-cli/src/preflight.rs")
+push(rs_files, "arms/flowgpu-cli/src/lint.rs")
+push(rs_files, "arms/flowgpu-cli/src/main.rs")
+push(rs_files, "arms/flowgpu-cli/src/lib.rs")
+push(rs_files, "arms/flowgpu-cli/src/image_io.rs")
+push(rs_files, "arms/flowgpu-cli/src/csv_io.rs")
+push(rs_files, "arms/flowgpu-cli/src/json_io.rs")
+push(rs_files, "arms/flowgpu-cli/src/http_io.rs")
+push(rs_files, "arms/flowgpu-cli/src/net_io.rs")
+push(rs_files, "arms/flowgpu-cli/src/octo_io.rs")
+push(rs_files, "arms/flowgpu-cli/src/octo_media.rs")
+push(rs_files, "arms/flowgpu-cli/src/regex_io.rs")
+push(rs_files, "arms/flowgpu-cli/src/repl.rs")
+push(rs_files, "arms/flowgpu-cli/src/range_tracker.rs")
+push(rs_files, "arms/flowgpu-spirv/src/lib.rs")
+push(rs_files, "arms/flowgpu-spirv/src/opcodes.rs")
+push(rs_files, "arms/flowgpu-spirv/src/types.rs")
+push(rs_files, "arms/flowgpu-vulkan/src/lib.rs")
+push(rs_files, "arms/flowgpu-vulkan/src/device.rs")
+push(rs_files, "arms/flowgpu-vulkan/src/dispatch.rs")
+push(rs_files, "arms/flowgpu-vulkan/src/memory.rs")
+push(rs_files, "arms/flowgpu-parser/src/lib.rs")
+let file_count = len(rs_files)
+
+// ---- Category classification ---------------------------------------
+// For each file: "KEEP" | "FLOW" | "THIN"
+let mut file_cats = []
+push(file_cats, "FLOW")   // compiler.rs — interpreter/evaluator → eval.flow done
+push(file_cats, "FLOW")   // preflight.rs — static analysis → preflight.flow done
+push(file_cats, "FLOW")   // lint.rs — dead code warnings → preflight.flow done
+push(file_cats, "THIN")   // main.rs — CLI entry point, arg parsing → keep thin
+push(file_cats, "THIN")   // lib.rs — crate re-exports → keep thin
+push(file_cats, "KEEP")   // image_io.rs — OS file I/O, image decode/encode → keep
+push(file_cats, "KEEP")   // csv_io.rs — OS file I/O, CSV parsing → keep
+push(file_cats, "KEEP")   // json_io.rs — JSON parsing (could be FLOW) → keep thin
+push(file_cats, "KEEP")   // http_io.rs — OS network I/O → keep
+push(file_cats, "KEEP")   // net_io.rs — OS socket I/O → keep
+push(file_cats, "KEEP")   // octo_io.rs — OctoData format I/O → keep
+push(file_cats, "KEEP")   // octo_media.rs — GPU media processing → keep
+push(file_cats, "KEEP")   // regex_io.rs — regex engine → keep
+push(file_cats, "FLOW")   // repl.rs — interactive REPL → could be flow
+push(file_cats, "FLOW")   // range_tracker.rs — source locations → could be flow
+push(file_cats, "FLOW")   // spirv/lib.rs — SPIR-V emitter → codegen.flow replaces
+push(file_cats, "FLOW")   // spirv/opcodes.rs — opcode table → FLOW data
+push(file_cats, "FLOW")   // spirv/types.rs — type structs → FLOW data
+push(file_cats, "KEEP")   // vulkan/lib.rs — Vulkan API bindings → MUST keep
+push(file_cats, "KEEP")   // vulkan/device.rs — device selection → MUST keep
+push(file_cats, "KEEP")   // vulkan/dispatch.rs — GPU dispatch → MUST keep
+push(file_cats, "KEEP")   // vulkan/memory.rs — GPU memory → MUST keep
+push(file_cats, "FLOW")   // parser/lib.rs — Rust parser → parser.flow done
+
+print("=== Phase 51: Rust OS-Boundary Audit ===")
+print("")
+print("  Category legend:")
+print("    KEEP  = OS boundary (I/O, GPU, network) — must remain Rust")
+print("    FLOW  = Already replaced by .flow or replaceable")
+print("    THIN  = Minimal Rust glue (CLI args, crate wiring)")
+print("")
+
+let mut total_lines  = 0.0
+let mut keep_lines   = 0.0
+let mut flow_lines   = 0.0
+let mut thin_lines   = 0.0
+
+let mut fi = 0.0
+while fi < file_count
+  let fpath = rs_files[fi]
+  let fcat  = file_cats[fi]
+
+  let src = read_file(fpath)
+  let lines = split(src, NL)
+  let lc = float(len(lines))
+
+  total_lines = total_lines + lc
+  if fcat == "KEEP"
+    keep_lines = keep_lines + lc
+  elif fcat == "FLOW"
+    flow_lines = flow_lines + lc
+  else
+    thin_lines = thin_lines + lc
+  end
+
+  print("  {fcat}  {fpath}  ({lc} lines)")
+  fi = fi + 1.0
+end
+
+print("")
+print("=== SUMMARY ===")
+print("  Total Rust lines:   {total_lines}")
+print("  KEEP (OS boundary): {keep_lines} lines  — stays as Rust")
+print("  FLOW (replaceable): {flow_lines} lines  — replaced by .flow")
+print("  THIN (glue):        {thin_lines} lines  — minimal wrappers")
+print("")
+
+// Calculate percentage reduction
+let removable = flow_lines + thin_lines
+let keep_pct  = floor(keep_lines / total_lines * 100.0)
+let flow_pct  = floor(flow_lines / total_lines * 100.0)
+print("  Rust reduction potential: {flow_lines}/{total_lines} lines ({flow_pct}%) replaceable")
+print("  Target OS boundary:       {keep_lines} lines ({keep_pct}% of current)")
+print("")
+
+// OctoFlow replacement status
+print("=== OCTOFLOW SELF-HOSTING STATUS ===")
+print("  eval.flow    — DONE  (Phase 44-46): meta-interpreter, ~1760 lines OctoFlow")
+print("  parser.flow  — DONE  (Phase 47):    recursive descent, parses 1547-node AST")
+print("  preflight.flow — DONE (Phase 48):   static analyzer, E001/E002/E003/D002/D003")
+print("  codegen.flow — DONE  (Phase 49):    OctoFlow → GLSL compute shaders")
+print("  bootstrap.flow — DONE (Phase 50):   VERIFIED: eval.flow = Rust runtime (7/7)")
+print("")
+print("  Combined OctoFlow compiler: ~4000 lines of pure OctoFlow")
+print("  Rust OS boundary target:    ~{keep_lines} lines (current estimate)")
+print("")
+print("  Remaining path to 0% Rust runtime:")
+print("  1. Replace compiler.rs eval loop with thin FFI to eval.flow")
+print("  2. Replace preflight.rs with call to preflight.flow")
+print("  3. Replace flowgpu-parser with call to parser.flow")
+print("  4. Vulkan/OS layer stays as Rust (non-negotiable)")
+print("")
+print("  STATUS: Architecture proven. Full reduction = Phase 51b (production work)")

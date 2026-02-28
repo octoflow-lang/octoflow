@@ -1,0 +1,117 @@
+// demo_chart.flow — Trading Chart Demo
+//
+// Demonstrates the plot library with synthetic OHLC candlestick data,
+// a moving average overlay, and volume bars.
+//
+// Usage:
+//   octoflow run stdlib/gui/demo_chart.flow
+
+use "gui"
+use "layout"
+use "plot"
+
+// ── Generate synthetic OHLC data ─────────────────────────────────
+// 50 candles with a trend + noise
+let num_bars = 50.0
+let mut dates = []
+let mut opens = []
+let mut highs = []
+let mut lows = []
+let mut closes = []
+let mut volumes = []
+
+let mut price = 1950.0
+let mut seed = 42.0
+let mut i = 0.0
+while i < num_bars
+  push(dates, i + 1.0)
+  // Simple LCG pseudo-random
+  seed = seed * 1103515245.0 + 12345.0
+  seed = seed - floor(seed / 65536.0) * 65536.0
+  let r1 = seed / 65536.0 - 0.5
+  seed = seed * 1103515245.0 + 12345.0
+  seed = seed - floor(seed / 65536.0) * 65536.0
+  let r2 = seed / 65536.0 - 0.5
+  seed = seed * 1103515245.0 + 12345.0
+  seed = seed - floor(seed / 65536.0) * 65536.0
+  let r3 = seed / 65536.0
+  // Trend + noise
+  let trend = 0.3
+  let vol = 15.0
+  let open_p = price
+  let close_p = open_p + trend + r1 * vol
+  let mut high_p = open_p + abs(r2) * vol * 1.2
+  if close_p > high_p
+    high_p = close_p + abs(r2) * 3.0
+  end
+  let mut low_p = open_p - abs(r2) * vol * 1.2
+  if close_p < low_p
+    low_p = close_p - abs(r2) * 3.0
+  end
+  if low_p > open_p
+    low_p = open_p - 2.0
+  end
+  if high_p < open_p
+    high_p = open_p + 2.0
+  end
+  push(opens, open_p)
+  push(highs, high_p)
+  push(lows, low_p)
+  push(closes, close_p)
+  push(volumes, 500.0 + r3 * 800.0)
+  price = close_p
+  i = i + 1.0
+end
+
+// ── Compute 10-period SMA ────────────────────────────────────────
+let sma_period = 10.0
+let mut sma_x = []
+let mut sma_y = []
+let mut si = sma_period - 1.0
+while si < num_bars
+  let mut sum = 0.0
+  let mut k = 0.0
+  while k < sma_period
+    let idx = int(si - sma_period + 1.0 + k)
+    sum = sum + closes[idx]
+    k = k + 1.0
+  end
+  let avg = sum / sma_period
+  push(sma_x, si + 1.0)
+  push(sma_y, avg)
+  si = si + 1.0
+end
+
+// ── Create GUI ───────────────────────────────────────────────────
+let app = gui_init(900.0, 650.0, "XAUUSD Chart Demo")
+let vl = vstack(10.0, 10.0, 6.0)
+
+let _title = vstack_label(vl, "XAUUSD - DAILY CANDLES + SMA(10)")
+
+// ── Price chart (candlestick + SMA line) ─────────────────────────
+let price_cvs = vstack_canvas(vl, 870.0, 400.0)
+let p1 = plot_create(price_cvs, 0.0, 52.0, 1900.0, 2100.0)
+let _pad = plot_set_padding(p1, 0.0, 0.0)
+
+// Add candle series (green up, red down)
+let _cs = plot_series_candle(p1, dates, opens, highs, lows, closes, 0.0, 180.0, 0.0, 200.0, 50.0, 50.0)
+// Add SMA overlay (yellow line)
+let _sma = plot_series_line(p1, sma_x, sma_y, 255.0, 200.0, 0.0)
+
+let _auto1 = plot_autoscale(p1)
+let _grid1 = plot_grid(p1, 10.0, 5.0)
+let _draw1 = plot_draw(p1)
+
+// ── Volume chart (bar series) ────────────────────────────────────
+let _sep = vstack_separator(vl, 870.0)
+let _vlbl = vstack_label(vl, "VOLUME")
+let vol_cvs = vstack_canvas(vl, 870.0, 120.0)
+let p2 = plot_create(vol_cvs, 0.0, 52.0, 0.0, 1500.0)
+let _vs = plot_series_bar(p2, dates, volumes, 80.0, 120.0, 200.0, 14.0)
+let _auto2 = plot_autoscale(p2)
+let _draw2 = plot_draw(p2)
+
+// ── Event loop ───────────────────────────────────────────────────
+while gui_running() == 1.0
+  let _u = gui_update()
+end

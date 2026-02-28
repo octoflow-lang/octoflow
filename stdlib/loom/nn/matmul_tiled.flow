@@ -1,0 +1,45 @@
+// stdlib/loom/matmul_tiled.flow — GPU Tiled Matrix Multiplication
+//
+// Two modes:
+//   gpu_matmul_tiled(a, b, m, n, k) → result array  (convenience)
+//   gpu_matmul_buf(buf_a, buf_b, buf_c, m, n, k) → 0.0  (zero-copy)
+
+use "runtime"
+
+fn gpu_matmul_buf(buf_a, buf_b, buf_c, m, n, k)
+  let pipe = rt_load_pipeline("stdlib/loom/kernels/nn/matmul_tiled.spv", 3.0, 12.0)
+  let _cb = rt_chain_begin(1.0, 3.0)
+  let mut pc = []
+  push(pc, m)
+  push(pc, k)
+  push(pc, n)
+  let _pc = rt_chain_push_constants(pipe, pc)
+  let mut bufs = []
+  push(bufs, buf_a)
+  push(bufs, buf_b)
+  push(bufs, buf_c)
+  let _d = rt_chain_dispatch(pipe, bufs, 1.0)
+  let _ce = rt_chain_end()
+  let _sw = rt_chain_submit_wait()
+  return 0.0
+end
+
+fn gpu_matmul_tiled(a, b, m, n, k)
+  let size_a = m * k
+  let size_b = k * n
+  let size_c = m * n
+  let buf_a = rt_create_buffer(size_a * 4.0)
+  let buf_b = rt_create_buffer(size_b * 4.0)
+  let buf_c = rt_create_buffer(size_c * 4.0)
+  let _u1 = rt_upload(buf_a, a)
+  let _u2 = rt_upload(buf_b, b)
+  let _d = gpu_matmul_buf(buf_a, buf_b, buf_c, m, n, k)
+  let _dl = rt_download(buf_c, size_c)
+  let mut result = []
+  let mut i = 0.0
+  while i < size_c
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+  return result
+end

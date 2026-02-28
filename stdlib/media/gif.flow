@@ -1,4 +1,9 @@
 // gif.flow — Pure OctoFlow GIF decoder
+//
+// Functions: gif_u16le, gif_interlace_row, gif_read_sub_blocks,
+//            gif_sub_block_size, gif_lzw, gif_decode, gif_extract_r,
+//            gif_extract_g, gif_extract_b
+//
 // Decodes GIF87a/GIF89a files from raw bytes
 // Supports: LZW decompression, color tables, transparency,
 //           disposal methods, interlace, multi-frame animation

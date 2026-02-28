@@ -1,4 +1,7 @@
 // stdlib/encoding/base64.flow — Pure .flow Base64 encoder/decoder
+//
+// Functions: b64_char, b64_val, b64_encode, b64_decode
+//
 // Standard Base64 alphabet (A-Z, a-z, 0-9, +, /) with = padding
 // All byte values are f32 floats in range 0-255
 

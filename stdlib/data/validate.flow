@@ -1,4 +1,6 @@
 // stdlib/data/validate.flow — Data validation utilities
+//
+// Functions: is_numeric, is_email, is_url, in_range, clamp_value
 
 fn is_numeric(s)
   // Check if string represents a valid number (int or float, optional sign)

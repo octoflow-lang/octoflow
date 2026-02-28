@@ -1,0 +1,65 @@
+// emit_vm_relu.flow — VM Register ReLU Activation Kernel Emitter
+//
+// Applies ReLU activation (max(x, 0)) on count floats within
+// the registers SSBO (binding 0).
+//
+// Push constants:
+//   pc[0] = src_offset (flat float index into registers SSBO, source)
+//   pc[1] = dst_offset (flat float index into registers SSBO, destination)
+//   pc[2] = count      (number of elements — bounds guard)
+//
+// Each thread: if gid < count: registers[dst_offset + gid] = max(registers[src_offset + gid], 0.0)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read/write)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (unused)
+//   Binding 3: control   (output, unused)
+//
+// Dispatch: workgroups = ceil(count / 256)
+//
+// Run: octoflow run stdlib/loom/emit_vm_relu.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_relu(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry = ir_block("entry")
+  let body = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  let gid = ir_load_gid(entry)
+
+  // Push constants
+  let src_off_f = ir_push_const(entry, 0.0)
+  let dst_off_f = ir_push_const(entry, 1.0)
+  let cnt_f = ir_push_const(entry, 2.0)
+
+  // Bounds check: skip if gid >= count
+  let cnt_u = ir_ftou(entry, cnt_f)
+  let oob = ir_ugte(entry, gid, cnt_u)
+  let _sm = ir_selection_merge(entry, exit_block)
+  let _br = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // body: compute indices, apply ReLU, write to destination
+  let src_off_u = ir_ftou(body, src_off_f)
+  let src_idx = ir_iadd(body, src_off_u, gid)
+  let dst_off_u = ir_ftou(body, dst_off_f)
+  let dst_idx = ir_iadd(body, dst_off_u, gid)
+  let val = ir_load_input_at(body, 0.0, src_idx)
+  let zero = ir_const_f(body, 0.0)
+  let result = ir_fmax(body, val, zero)
+  let _s = ir_buf_store_f(body, 0.0, dst_idx, result)
+  let _br2 = ir_term_branch(body, exit_block)
+
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/ops/vm_relu.spv"
+let _r = emit_vm_relu(out)
+print("Emitted: {out}")

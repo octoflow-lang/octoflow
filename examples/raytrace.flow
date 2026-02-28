@@ -1,0 +1,72 @@
+// raytrace.flow — GPU Ray Tracer in OctoFlow
+// 100% self-hosted: .flow emits SPIR-V, dispatches on GPU, renders in terminal.
+//
+// Usage:
+//   octoflow run examples/raytrace.flow --allow-read --allow-write
+//   octoflow run examples/raytrace.flow --allow-read --allow-write --set mode=kitty
+//   octoflow run examples/raytrace.flow --allow-read --allow-write --set mode=sixel
+//   octoflow run examples/raytrace.flow --allow-read --allow-write --set mode=halfblock
+
+use "../stdlib/loom/raytrace_emit"
+use "../stdlib/terminal/render"
+
+// Protocol selection: override via --set mode=kitty|sixel|halfblock|digits
+let mut mode = "halfblock"
+print("Terminal protocol: {mode}")
+
+// Resolution (overridable: --set w=120 --set h=80)
+// Halfblock: 1 pixel = 1 char column, keep under terminal width
+// Sixel/Kitty: pixel-based, can go larger
+let mut w = 80.0
+let mut h = 60.0
+if mode == "sixel"
+  w = 240.0
+  h = 180.0
+elif mode == "kitty"
+  w = 320.0
+  h = 240.0
+end
+
+let total = int(w * h)
+
+// Camera position (can be overridden with --set cam_y=N --set cam_z=N)
+let mut cam_y = 0.6
+let mut cam_z = -1.0
+
+// Phase 1: Compile SPIR-V kernel (cached — push constants make it resolution-independent)
+if file_exists("raytrace.spv") == 0.0
+  print("Phase 1: Compiling ray tracing kernel...")
+  emit_raytrace_kernel()
+else
+  print("Phase 1: Using cached raytrace.spv")
+end
+
+// Phase 2: Dispatch on GPU with push constants (w, h, cam_y, cam_z)
+print("Phase 2: GPU dispatch ({total} pixels, {w}x{h})...")
+let mut input = []
+for i in range(0, total)
+  push(input, 0.0)
+end
+let result = gpu_run("raytrace.spv", input, w, h, cam_y, cam_z)
+print("GPU render complete")
+
+// Phase 3: Unpack RGB on GPU (3 dispatches with channel push constant)
+if file_exists("unpack_rgb.spv") == 0.0
+  print("Phase 3: Compiling unpack kernel...")
+  emit_unpack_rgb_kernel()
+else
+  print("Phase 3: Using cached unpack_rgb.spv")
+end
+print("Phase 3: GPU unpack ({total} pixels x 3 channels)...")
+let r = gpu_run("unpack_rgb.spv", result, 0.0)
+let g = gpu_run("unpack_rgb.spv", result, 1.0)
+let b = gpu_run("unpack_rgb.spv", result, 2.0)
+
+// Phase 4: Render in terminal (pure .flow renderers — no Rust)
+print("Phase 4: Rendering ({mode})...")
+term_render(w, h, r, g, b, mode)
+print("")
+print("GPU ray tracing complete — 3 spheres + ground + sky")
+print("Specular highlights, hard shadows, single-bounce reflections")
+print("100% self-hosted: .flow -> IR -> SPIR-V -> GPU -> terminal")
+print("Push constants: resolution + camera independent kernel (cached .spv)")

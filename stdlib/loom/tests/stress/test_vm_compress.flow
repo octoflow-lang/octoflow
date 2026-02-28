@@ -1,0 +1,295 @@
+// test_vm_compress.flow — DB Compression: round-trips + compressed queries
+//
+// Validates the GPU VM compression primitives:
+//   TEST 1: Delta encode → decode round-trip (lossless)
+//   TEST 2: Dictionary lookup correctness (gather from Heap)
+//   TEST 3: Compressed DB query end-to-end
+//           delta-decode column → vm_where_gt → vm_reduce_sum
+//   TEST 4: Write-back path — compute → delta-encode → verify
+//
+// Run: octoflow run stdlib/loom/test_vm_compress.flow --allow-ffi
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 1: Delta encode → decode round-trip
+// ══════════════════════════════════════════════════════════════════════
+// Data: [10, 13, 17, 24, 30, 31, 35, 42] (8 sorted integers)
+// Deltas: [10, 3, 4, 7, 6, 1, 4, 7]
+// Decode(Deltas) should recover original values exactly.
+//
+// Flow: write raw values to registers → encode → globals[0:8]
+//       → decode globals[0:8] → globals[8:16] → read back
+
+let N1 = 8.0
+// reg_size=8 so register 0 can hold 8 floats
+let reg_size1 = 8.0
+// globals = 16 floats (deltas at [0:8], decoded at [8:16])
+let vm1 = vm_boot(1.0, reg_size1, 16.0)
+
+// Write raw values to register 0 for encoding
+let raw_vals = [10.0, 13.0, 17.0, 24.0, 30.0, 31.0, 35.0, 42.0]
+let _wr1 = vm_write_register(vm1, 0.0, 0.0, raw_vals)
+
+// Stage 1: delta encode (Registers[0:8] → Globals[0:8])
+let pc_enc = [0.0, 0.0, N1]
+let _d1 = vm_dispatch(vm1, "stdlib/loom/kernels/ops/vm_delta_encode.spv", pc_enc, 1.0)
+
+let prog1a = vm_build(vm1)
+let _e1a = vm_execute(prog1a)
+
+// Read encoded deltas from globals[0:8]
+let deltas = vm_read_globals(vm1, 0.0, N1)
+let d0 = deltas[0]
+let d1 = deltas[1]
+let d2 = deltas[2]
+let d3 = deltas[3]
+
+// Stage 2: delta decode (Globals[0:8] → Globals[8:16])
+let pc_dec = [0.0, N1, N1]
+let _d2 = vm_dispatch(vm1, "stdlib/loom/kernels/ops/vm_delta_decode.spv", pc_dec, 1.0)
+
+let prog1b = vm_build(vm1)
+let _e1b = vm_execute(prog1b)
+
+// Read decoded values from globals[8:16]
+let decoded = vm_read_globals(vm1, N1, N1)
+
+print("TEST 1: Delta encode -> decode round-trip")
+print("  Raw:     [10, 13, 17, 24, 30, 31, 35, 42]")
+print("  Deltas:  [{d0}, {d1}, {d2}, {d3}, ...]")
+let dec0 = decoded[0]
+let dec3 = decoded[3]
+let dec7 = decoded[7]
+print("  Decoded: [{dec0}, ..., {dec3}, ..., {dec7}]")
+
+let mut pass1 = 1.0
+let mut ci = 0.0
+while ci < N1
+  let orig = raw_vals[ci]
+  let got = decoded[ci]
+  if abs(orig - got) > 0.001
+    pass1 = 0.0
+    let idx = ci
+    print("  FAIL: decoded[{idx}]={got} expected {orig}")
+  end
+  ci = ci + 1.0
+end
+
+// Also verify deltas are correct
+let exp_deltas = [10.0, 3.0, 4.0, 7.0, 6.0, 1.0, 4.0, 7.0]
+let mut di = 0.0
+while di < N1
+  let exp_d = exp_deltas[di]
+  let got_d = deltas[di]
+  if abs(exp_d - got_d) > 0.001
+    pass1 = 0.0
+    let idx2 = di
+    print("  FAIL: delta[{idx2}]={got_d} expected {exp_d}")
+  end
+  di = di + 1.0
+end
+
+if pass1 == 1.0
+  print("TEST 1: PASS -- Delta encode/decode round-trip, lossless")
+else
+  print("TEST 1: FAIL")
+end
+
+let _sv1 = vm_shutdown(vm1)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 2: Dictionary lookup (gather from Heap)
+// ══════════════════════════════════════════════════════════════════════
+// Dictionary (Heap): [100, 200, 300, 400, 500]  (5 unique values)
+// Indices (Globals): [2, 0, 4, 1, 3, 0, 2, 1]   (8 encoded column entries)
+// Expected output (Registers): [300, 100, 500, 200, 400, 100, 300, 200]
+
+let N2 = 8.0
+let reg_size2 = 8.0
+let vm2 = vm_boot(1.0, reg_size2, N2)
+
+// Load dictionary into Heap (binding 4)
+let dict_data = [100.0, 200.0, 300.0, 400.0, 500.0]
+let _sh2 = vm_set_heap(vm2, dict_data)
+
+// Write encoded indices to Globals
+let indices = [2.0, 0.0, 4.0, 1.0, 3.0, 0.0, 2.0, 1.0]
+let _wg2 = vm_write_globals(vm2, 0.0, indices)
+
+// Dispatch dict lookup: dict at heap[0], indices at globals[0], output at registers[0]
+let pc_dict = [0.0, 0.0, 0.0, N2]
+let _d3 = vm_dispatch(vm2, "stdlib/loom/kernels/ops/vm_dict_lookup.spv", pc_dict, 1.0)
+
+let prog2 = vm_build(vm2)
+let _e2 = vm_execute(prog2)
+
+let looked_up = vm_read_register(vm2, 0.0, 0.0, N2)
+
+let expected_lu = [300.0, 100.0, 500.0, 200.0, 400.0, 100.0, 300.0, 200.0]
+
+print("TEST 2: Dictionary lookup (gather from Heap)")
+let lu0 = looked_up[0]
+let lu2 = looked_up[2]
+let lu4 = looked_up[4]
+let lu7 = looked_up[7]
+print("  Dict:     [100, 200, 300, 400, 500]")
+print("  Indices:  [2, 0, 4, 1, 3, 0, 2, 1]")
+print("  Output:   [{lu0}, ..., {lu2}, ..., {lu4}, ..., {lu7}]")
+
+let mut pass2 = 1.0
+let mut li = 0.0
+while li < N2
+  let exp_l = expected_lu[li]
+  let got_l = looked_up[li]
+  if abs(exp_l - got_l) > 0.001
+    pass2 = 0.0
+    let idx3 = li
+    print("  FAIL: lookup[{idx3}]={got_l} expected {exp_l}")
+  end
+  li = li + 1.0
+end
+
+if pass2 == 1.0
+  print("TEST 2: PASS -- Dict lookup, gather from Heap, all 8 values correct")
+else
+  print("TEST 2: FAIL")
+end
+
+let _sv2 = vm_shutdown(vm2)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 3: Compressed DB query (end-to-end read path)
+// ══════════════════════════════════════════════════════════════════════
+// Salary column stored as delta-encoded in Globals[0:8]:
+//   Original: [100, 150, 200, 250, 300, 350, 400, 450] (8 rows)
+//   Deltas:   [100, 50, 50, 50, 50, 50, 50, 50]
+//
+// Query: SELECT SUM(salary), COUNT(*) WHERE salary > 250
+// Expected: 4 matches (300, 350, 400, 450)
+//   SUM   = 300+350+400+450 = 1500
+//   COUNT = 4
+//
+// Globals layout:
+//   [0:8]  = delta-encoded (compressed salary)
+//   [8:16] = decoded salary (decompressed)
+//
+// Registers layout:
+//   [0:8]  = masked salary values
+//   [8:16] = mask (1.0 or 0.0)
+//
+// Pipeline (4 dispatches, 1 submit):
+//   vm_delta_decode → vm_where_gt → vm_reduce_sum (SUM) → vm_reduce_sum (COUNT)
+
+let N3 = 8.0
+// reg_size=16 → register 0 has 16 floats (masked[0:8] + mask[8:16])
+let reg_size3 = 16.0
+// globals = 16 (deltas[0:8] + decoded[8:16])
+let vm3 = vm_boot(1.0, reg_size3, 16.0)
+
+// Write delta-encoded salary column to globals[0:8]
+let salary_deltas = [100.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+let _wg3 = vm_write_globals(vm3, 0.0, salary_deltas)
+
+// Stage 1: Delta decode (Globals[0:8] → Globals[8:16])
+let pc_s1 = [0.0, N3, N3]
+let _d3_1 = vm_dispatch(vm3, "stdlib/loom/kernels/ops/vm_delta_decode.spv", pc_s1, 1.0)
+
+// Stage 2: WHERE salary > 250 on Globals[8:16] → Registers[0:8] + [8:16]
+// vm_where_gt: pc = [col_off, threshold, dst_val_off, dst_mask_off, count]
+let pc_s2 = [N3, 250.0, 0.0, N3, N3]
+let _d3_2 = vm_dispatch(vm3, "stdlib/loom/kernels/ops/vm_where_gt.spv", pc_s2, 1.0)
+
+// Stage 3: SUM(masked_salary) → metrics[0]
+let pc_s3 = [0.0, 0.0, N3]
+let _d3_3 = vm_dispatch(vm3, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc_s3, 1.0)
+
+// Stage 4: COUNT(*) = SUM(mask) → metrics[1]
+let pc_s4 = [N3, 1.0, N3]
+let _d3_4 = vm_dispatch(vm3, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc_s4, 1.0)
+
+let prog3 = vm_build(vm3)
+let _e3 = vm_execute(prog3)
+
+let metrics3 = vm_read_metrics(vm3, 0.0, 2.0)
+let gpu_sum3 = metrics3[0]
+let gpu_cnt3 = metrics3[1]
+
+print("TEST 3: Compressed DB query (delta-encoded salary column)")
+print("  Stored (deltas): [100, 50, 50, 50, 50, 50, 50, 50]")
+print("  Decoded:         [100, 150, 200, 250, 300, 350, 400, 450]")
+print("  Query: SELECT SUM(salary), COUNT(*) WHERE salary > 250")
+print("  Pipeline: delta_decode | where_gt | reduce_sum | reduce_sum")
+print("  GPU result:  SUM={gpu_sum3}  COUNT={gpu_cnt3}")
+print("  Expected:    SUM=1500  COUNT=4")
+
+let mut pass3 = 1.0
+if abs(gpu_sum3 - 1500.0) > 0.1
+  pass3 = 0.0
+  print("  FAIL: SUM={gpu_sum3} expected 1500")
+end
+if abs(gpu_cnt3 - 4.0) > 0.1
+  pass3 = 0.0
+  print("  FAIL: COUNT={gpu_cnt3} expected 4")
+end
+if pass3 == 1.0
+  print("TEST 3: PASS -- Compressed DB query, 4 dispatches, delta-encoded column, BIT EXACT")
+else
+  print("TEST 3: FAIL")
+end
+
+let _sv3 = vm_shutdown(vm3)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 4: Write-back path (compute → delta-encode → verify)
+// ══════════════════════════════════════════════════════════════════════
+// Modified values [100, 150, 200, 250, 400, 450, 500, 550] written
+// to registers, then delta-encoded back to globals.
+// Expected new deltas: [100, 50, 50, 50, 150, 50, 50, 50]
+
+let N4 = 8.0
+let reg_size4 = 8.0
+let vm4 = vm_boot(1.0, reg_size4, N4)
+
+// Write modified values to register 0
+let modified_vals = [100.0, 150.0, 200.0, 250.0, 400.0, 450.0, 500.0, 550.0]
+let _wr4 = vm_write_register(vm4, 0.0, 0.0, modified_vals)
+
+// Delta encode: Registers[0:8] → Globals[0:8]
+let pc_enc4 = [0.0, 0.0, N4]
+let _d4 = vm_dispatch(vm4, "stdlib/loom/kernels/ops/vm_delta_encode.spv", pc_enc4, 1.0)
+
+let prog4 = vm_build(vm4)
+let _e4 = vm_execute(prog4)
+
+// Read encoded deltas from globals[0:8]
+let new_deltas = vm_read_globals(vm4, 0.0, N4)
+
+let expected_deltas = [100.0, 50.0, 50.0, 50.0, 150.0, 50.0, 50.0, 50.0]
+
+print("TEST 4: Write-back path (compute -> delta-encode)")
+let nd0 = new_deltas[0]
+let nd4 = new_deltas[4]
+let nd7 = new_deltas[7]
+print("  Modified values: [100, 150, 200, 250, 400, 450, 500, 550]")
+print("  Encoded deltas:  [{nd0}, ..., {nd4}, ..., {nd7}]")
+print("  Expected:        [100, 50, 50, 50, 150, 50, 50, 50]")
+
+let mut pass4 = 1.0
+let mut ei = 0.0
+while ei < N4
+  let exp_e = expected_deltas[ei]
+  let got_e = new_deltas[ei]
+  if abs(exp_e - got_e) > 0.001
+    pass4 = 0.0
+    let idx4 = ei
+    print("  FAIL: delta[{idx4}]={got_e} expected {exp_e}")
+  end
+  ei = ei + 1.0
+end
+
+if pass4 == 1.0
+  print("TEST 4: PASS -- Write-back delta-encode, modified column compressed correctly")
+else
+  print("TEST 4: FAIL")
+end
+
+let _sv4 = vm_shutdown(vm4)

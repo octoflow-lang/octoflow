@@ -1,4 +1,6 @@
 // stdlib/db/schema.flow — Database schema inspection and modification
+//
+// Functions: db_columns, db_describe, db_rename_column
 
 fn db_columns(table)
   // Return column names as an array of strings

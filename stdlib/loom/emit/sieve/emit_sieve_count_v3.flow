@@ -1,0 +1,141 @@
+// emit_sieve_count_v3.flow — Sieve Count v3 Kernel Emitter (Shared Memory Reduction)
+//
+// Replaces v2's per-thread global atomic_add with workgroup-level shared memory
+// tree reduction. Each workgroup of 256 threads:
+//   1. Each thread: popcount(word) → shared[local_id]
+//   2. Barrier
+//   3. 8-step tree reduction in shared memory (stride 128 → 1)
+//   4. Thread 0 per workgroup: atomic_add(R0[count_off], total)
+//
+// Reduces global atomics from 31,250 to 123 per segment (256x fewer).
+//
+// Push constants:
+//   pc[0] = num_words  (bitmap words, 31250)
+//   pc[1] = count_off  (offset for segment count accumulator)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read bitmap as uint32, atomic-write count)
+//
+// Shared memory: 256 floats (one per thread)
+// Dispatch: wg = ceil(num_words / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_count_v3.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_count_v3(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+  ir_shared_size = 256.0
+  ir_workgroup_size = 256.0
+
+  let entry       = ir_block("entry")
+  let body        = ir_block("body")
+  let pre_loop    = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body   = ir_block("loop_body")
+  let reduce_do   = ir_block("reduce_do")
+  let reduce_skip = ir_block("reduce_skip")
+  let reduce_merge = ir_block("reduce_merge")
+  let loop_cont   = ir_block("loop_cont")
+  let loop_merge  = ir_block("loop_merge")
+  let write_back  = ir_block("write_back")
+  let write_skip  = ir_block("write_skip")
+  let exit_block  = ir_block("exit")
+
+  // ── Entry: load gid, local_id, push constants ──────────────
+  let gid       = ir_load_gid(entry)
+  let lid       = ir_load_local_id(entry)
+  let pc_words  = ir_push_const(entry, 0.0)
+  let pc_coff   = ir_push_const(entry, 1.0)
+  let words_u   = ir_ftou(entry, pc_words)
+
+  // ALL threads enter body (no early exit — must participate in barriers)
+  let _br_e     = ir_term_branch(entry, body)
+
+  // ── Body: popcount (or 0 if OOB), store to shared ─────────
+  let c0        = ir_const_u(body, 0.0)
+  let c1        = ir_const_u(body, 1.0)
+  let c2        = ir_const_u(body, 2.0)
+  let c128      = ir_const_u(body, 128.0)
+  let zero_f    = ir_const_f(body, 0.0)
+
+  // Safe index: clamp to 0 if OOB (avoids reading past buffer)
+  let in_bounds = ir_folt(body, ir_utof(body, gid), pc_words)
+  let safe_gid  = ir_select(body, IR_TYPE_UINT, in_bounds, gid, c0)
+
+  // Load word and popcount
+  let word      = ir_buf_load_u(body, 0.0, safe_gid)
+  let cnt       = ir_bitcount(body, word)
+  let cnt_f     = ir_utof(body, cnt)
+
+  // Zero out OOB threads' contribution
+  let cnt_safe  = ir_select(body, IR_TYPE_FLOAT, in_bounds, cnt_f, zero_f)
+
+  // Store to shared memory
+  let _ss       = ir_shared_store(body, lid, cnt_safe)
+  let _bar0     = ir_barrier(body)
+  let _br_b     = ir_term_branch(body, pre_loop)
+
+  // ── pre_loop: initial stride = 128 (WG_SIZE / 2) ──────────
+  let _br_pl    = ir_term_branch(pre_loop, loop_header)
+
+  // ── loop_header: stride phi, check stride >= 1 ────────────
+  let phi_stride = ir_phi(loop_header, 2.0)
+  let _ps0       = ir_phi_add(phi_stride, c128, pre_loop)
+
+  let stride_done = ir_folt(loop_header, ir_utof(loop_header, phi_stride), ir_const_f(loop_header, 1.0))
+  let _lm        = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc        = ir_term_cond_branch(loop_header, stride_done, loop_merge, loop_body)
+
+  // ── loop_body: if local_id < stride → reduce ──────────────
+  let active     = ir_folt(loop_body, ir_utof(loop_body, lid), ir_utof(loop_body, phi_stride))
+  let _sm        = ir_selection_merge(loop_body, reduce_merge)
+  let _bc2       = ir_term_cond_branch(loop_body, active, reduce_do, reduce_skip)
+
+  // ── reduce_do: shared[lid] += shared[lid + stride] ────────
+  let partner    = ir_iadd(reduce_do, lid, phi_stride)
+  let my_val     = ir_shared_load(reduce_do, lid)
+  let partner_val = ir_shared_load(reduce_do, partner)
+  let sum_val    = ir_fadd(reduce_do, my_val, partner_val)
+  let _ss2       = ir_shared_store(reduce_do, lid, sum_val)
+  let _br_rd     = ir_term_branch(reduce_do, reduce_merge)
+
+  // ── reduce_skip: nothing (OOB threads just skip) ──────────
+  let _br_rs     = ir_term_branch(reduce_skip, reduce_merge)
+
+  // ── reduce_merge: barrier, then continue loop ─────────────
+  let _bar1      = ir_barrier(reduce_merge)
+  let _br_rm     = ir_term_branch(reduce_merge, loop_cont)
+
+  // ── loop_cont: stride /= 2 ────────────────────────────────
+  let new_stride = ir_udiv(loop_cont, phi_stride, c2)
+  let _br_lc     = ir_term_branch(loop_cont, loop_header)
+  let _ps1       = ir_phi_add(phi_stride, new_stride, loop_cont)
+
+  // ── loop_merge: reduction complete, thread 0 writes result ─
+  let is_thread0 = ir_uequ(loop_merge, lid, c0)
+  let _sm2       = ir_selection_merge(loop_merge, exit_block)
+  let _bc3       = ir_term_cond_branch(loop_merge, is_thread0, write_back, write_skip)
+
+  // ── write_back: atomic_add(R0[count_off], total) ──────────
+  let coff_u     = ir_ftou(write_back, pc_coff)
+  let total_f    = ir_shared_load(write_back, c0)
+  let total_u    = ir_ftou(write_back, total_f)
+  let _atomic    = ir_buf_atomic_iadd(write_back, 0.0, coff_u, total_u)
+  let _br_wb     = ir_term_branch(write_back, exit_block)
+
+  // ── write_skip: non-thread-0 skips write ──────────────────
+  let _br_ws     = ir_term_branch(write_skip, exit_block)
+
+  // ── exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_count_v3.spv"
+let _r = emit_sieve_count_v3(out)
+print("Emitted: {out}")

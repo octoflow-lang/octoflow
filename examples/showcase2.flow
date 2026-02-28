@@ -1,0 +1,142 @@
+// OctoFlow GPU Showcase 2 — NASA Live Earth
+// Fetches satellite imagery from NASA GIBS, GPU-enhances, displays in terminal
+// Run:  octoflow run --allow-exec --allow-read --allow-write showcase2.flow
+// Exit: Runs once and exits
+
+// ═══ Configuration ═══════════════════════════════════════════
+let esc = chr(27)
+let reset = esc + "[0m"
+
+// ═══ Terminal setup ══════════════════════════════════════════
+let hide = esc + "[?25l" + esc + "[2J" + esc + "[H"
+print("{hide}")
+
+let c_title = esc + "[38;2;0;200;180m"
+let c_dim = esc + "[38;2;80;80;80m"
+let c_info = esc + "[38;2;140;160;180m"
+let c_hot = esc + "[38;2;255;180;60m"
+let c_err = esc + "[38;2;255;80;80m"
+
+print("")
+let title = c_title + "  OctoFlow Live Earth — NASA GIBS Satellite Imagery" + reset
+print("{title}")
+let rule = c_dim + "  ──────────────────────────────────────────────────" + reset
+print("{rule}")
+print("")
+
+// ═══ Get yesterday's date (MODIS has ~1 day delay) ═══════════
+let d = exec("python", "-c", "import datetime;print((datetime.datetime.now()-datetime.timedelta(days=1)).strftime('%Y-%m-%d'),end='')")
+let date = d.output
+if d.ok == 0
+    let msg = c_err + "  Could not get date. Using fallback." + reset
+    print("{msg}")
+    let date = "2026-02-19"
+end
+let date_msg = c_info + "  Date: " + c_hot + date + reset
+print("{date_msg}")
+
+// ═══ Fetch satellite tile ════════════════════════════════════
+// NASA GIBS — free, no API key, direct HTTP
+// MODIS Terra True Color, zoom 3, 250m resolution
+// Tile (3, 6) = Southeast Asia / Philippines region
+let layer = "MODIS_Terra_CorrectedReflectance_TrueColor"
+let base = "https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/"
+let url = base + layer + "/default/" + date + "/250m/3/3/6.jpg"
+
+let fetch_msg = c_info + "  Fetching tile from NASA GIBS..." + reset
+print("{fetch_msg}")
+
+let tmp = "nasa_tile.jpg"
+let dl = exec("curl", "-s", "-o", tmp, "-L", url)
+if dl.ok == 0
+    let err_msg = c_err + "  Download failed. Is curl installed? Is internet available?" + reset
+    print("{err_msg}")
+    let restore = esc + "[?25h"
+    print("{restore}")
+end
+
+// ═══ Decode image ════════════════════════════════════════════
+let tile_bytes = read_bytes(tmp)
+let tile_len = len(tile_bytes)
+let len_msg = c_info + "  Downloaded " + str(int(tile_len)) + " bytes" + reset
+print("{len_msg}")
+
+let vid = video_open(tile_bytes)
+let iw = vid.width
+let ih = vid.height
+let dim_msg = c_info + "  Decoded: " + str(int(iw)) + " x " + str(int(ih)) + " pixels" + reset
+print("{dim_msg}")
+
+let img = video_frame(vid, 0)
+
+// ═══ GPU Enhancement ═════════════════════════════════════════
+let enh_msg = c_info + "  GPU enhancing (contrast + saturation)..." + reset
+print("{enh_msg}")
+
+let total = iw * ih
+let itotal = int(total)
+
+// Contrast boost (1.3x around midpoint 128)
+let mid = gpu_fill(128.0, itotal)
+let r_sub = gpu_sub(img.r, mid)
+let r_sc = gpu_scale(r_sub, 1.3)
+let r_add = gpu_add(r_sc, mid)
+let r_enh = gpu_clamp(r_add, 0.0, 255.0)
+
+let g_sub = gpu_sub(img.g, mid)
+let g_sc = gpu_scale(g_sub, 1.3)
+let g_add = gpu_add(g_sc, mid)
+let g_enh = gpu_clamp(g_add, 0.0, 255.0)
+
+let b_sub = gpu_sub(img.b, mid)
+let b_sc = gpu_scale(b_sub, 1.2)
+let b_add = gpu_add(b_sc, mid)
+let b_enh = gpu_clamp(b_add, 0.0, 255.0)
+
+// Saturation boost (increase distance from gray by 1.2x)
+let r_plus_g = gpu_add(r_enh, g_enh)
+let rgb_sum = gpu_add(r_plus_g, b_enh)
+let gray = gpu_scale(rgb_sum, 0.333)
+
+let r_from_gray = gpu_sub(r_enh, gray)
+let r_sat = gpu_scale(r_from_gray, 1.2)
+let r_sat_add = gpu_add(r_sat, gray)
+let r_final = gpu_clamp(r_sat_add, 0.0, 255.0)
+
+let g_from_gray = gpu_sub(g_enh, gray)
+let g_sat = gpu_scale(g_from_gray, 1.2)
+let g_sat_add = gpu_add(g_sat, gray)
+let g_final = gpu_clamp(g_sat_add, 0.0, 255.0)
+
+let b_from_gray = gpu_sub(b_enh, gray)
+let b_sat = gpu_scale(b_from_gray, 1.2)
+let b_sat_add = gpu_add(b_sat, gray)
+let b_final = gpu_clamp(b_sat_add, 0.0, 255.0)
+
+// ═══ Display ═════════════════════════════════════════════════
+let clear = esc + "[2J" + esc + "[H"
+print("{clear}")
+print("")
+print("{title}")
+print("{rule}")
+print("")
+
+term_image(iw, ih, r_final, g_final, b_final)
+
+print("")
+let src = c_title + "  Source: " + c_hot + "NASA MODIS Terra" + c_info + " | Date: " + c_hot + date + reset
+print("{src}")
+let region = c_info + "  Region: Southeast Asia (GIBS zoom 3, 250m, tile 3/6)" + reset
+print("{region}")
+let npix = str(int(total))
+let stats = c_info + "  " + npix + " pixels | GPU contrast + saturation enhanced" + reset
+print("{stats}")
+let credit = c_dim + "  Data: NASA GIBS (gibs.earthdata.nasa.gov) — Free, no API key" + reset
+print("{credit}")
+print("")
+
+// Cleanup temp file
+let rm = exec("cmd", "/c", "del", "/q", tmp)
+
+let restore = esc + "[?25h"
+print("{restore}")

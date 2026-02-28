@@ -1,0 +1,273 @@
+// test_gif_encode.flow — Tests for GIF encoder
+// Tests encoding + decoding roundtrip
+// Run: octoflow run stdlib/media/test_gif_encode.flow --allow-read --allow-write
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+use gif_encode
+use gif
+
+// ─── Test 1: Encode and decode 2x2 red image ────────────────────
+
+// Create 2x2 red frame (4 pixels * 3 channels = 12 values)
+let mut all_pixels = []
+for i in range(0, 4)
+  push(all_pixels, 255.0)  // R
+  push(all_pixels, 0.0)    // G
+  push(all_pixels, 0.0)    // B
+end
+
+let delays = [100.0]
+
+// Encode
+gif_encode_frames(all_pixels, delays, 1.0, 2.0, 2.0, "test_red.gif")
+
+// Decode
+let bytes = read_bytes("test_red.gif")
+let g = gif_decode(bytes)
+
+if g["ok"] == 1.0
+  pass = pass + 1.0
+
+  // Check dimensions
+  let gw = g["width"]
+  if gw == 2.0
+    pass = pass + 1.0
+  else
+    print("FAIL: width expected 2, got {gw}")
+    fail = fail + 1.0
+  end
+
+  let gh = g["height"]
+  if gh == 2.0
+    pass = pass + 1.0
+  else
+    print("FAIL: height expected 2, got {gh}")
+    fail = fail + 1.0
+  end
+
+  let gfc = g["frame_count"]
+  if gfc == 1.0
+    pass = pass + 1.0
+  else
+    print("FAIL: frame_count expected 1, got {gfc}")
+    fail = fail + 1.0
+  end
+
+  // Check pixels (should be red or near-red due to palette quantization)
+  let plen = len(gif_pixels)
+  if plen == 12.0
+    pass = pass + 1.0
+  else
+    print("FAIL: pixel count expected 12, got {plen}")
+    fail = fail + 1.0
+  end
+
+  // Check first pixel (should be close to red)
+  if plen >= 3.0
+    let r = gif_pixels[0]
+    let g = gif_pixels[1]
+    let b = gif_pixels[2]
+    // Web-safe palette has 255,0,0 so should be exact
+    if r == 255.0
+      pass = pass + 1.0
+    else
+      print("FAIL: pixel R expected 255, got {r}")
+      fail = fail + 1.0
+    end
+    if g == 0.0
+      pass = pass + 1.0
+    else
+      print("FAIL: pixel G expected 0, got {g}")
+      fail = fail + 1.0
+    end
+    if b == 0.0
+      pass = pass + 1.0
+    else
+      print("FAIL: pixel B expected 0, got {b}")
+      fail = fail + 1.0
+    end
+  end
+else
+  let gerr = g["error"]
+  print("FAIL: decode failed: {gerr}")
+  fail = fail + 1.0
+end
+
+// ─── Test 2: Multi-frame animation ──────────────────────────────
+
+// Create 3 frames: red, green, blue (concatenated)
+let mut all_pixels3 = []
+
+// Frame 0: red
+for i in range(0, 9)  // 3x3 = 9 pixels
+  push(all_pixels3, 255.0)
+  push(all_pixels3, 0.0)
+  push(all_pixels3, 0.0)
+end
+
+// Frame 1: green
+for i in range(0, 9)
+  push(all_pixels3, 0.0)
+  push(all_pixels3, 204.0)  // Web-safe green
+  push(all_pixels3, 0.0)
+end
+
+// Frame 2: blue
+for i in range(0, 9)
+  push(all_pixels3, 0.0)
+  push(all_pixels3, 0.0)
+  push(all_pixels3, 255.0)
+end
+
+let delays3 = [50.0, 50.0, 50.0]
+
+gif_encode_frames(all_pixels3, delays3, 3.0, 3.0, 3.0, "test_anim.gif")
+
+let bytes3 = read_bytes("test_anim.gif")
+let g3 = gif_decode(bytes3)
+
+if g3["ok"] == 1.0
+  pass = pass + 1.0
+
+  let g3fc = g3["frame_count"]
+  if g3fc == 3.0
+    pass = pass + 1.0
+  else
+    print("FAIL: anim frame_count expected 3, got {g3fc}")
+    fail = fail + 1.0
+  end
+
+  // Check that we have 3 frames worth of pixels
+  let expected_pix = 3.0 * 3.0 * 3.0 * 3.0  // 3 frames * 3x3 * 3 channels
+  let actual_pix = len(gif_pixels)
+  if actual_pix == expected_pix
+    pass = pass + 1.0
+  else
+    print("FAIL: anim pixels expected {expected_pix}, got {actual_pix}")
+    fail = fail + 1.0
+  end
+
+  // Check delays
+  if len(gif_delays) == 3.0
+    pass = pass + 1.0
+    // Delays are stored in ms (50ms frames)
+    let d0 = gif_delays[0]
+    let d1 = gif_delays[1]
+    let d2 = gif_delays[2]
+    if d0 == 50.0
+      pass = pass + 1.0
+    else
+      print("FAIL: delay[0] expected 50, got {d0}")
+      fail = fail + 1.0
+    end
+    if d1 == 50.0
+      pass = pass + 1.0
+    else
+      print("FAIL: delay[1] expected 50, got {d1}")
+      fail = fail + 1.0
+    end
+    if d2 == 50.0
+      pass = pass + 1.0
+    else
+      print("FAIL: delay[2] expected 50, got {d2}")
+      fail = fail + 1.0
+    end
+  else
+    let dlen = len(gif_delays)
+    print("FAIL: delays count expected 3, got {dlen}")
+    fail = fail + 1.0
+  end
+else
+  let g3err = g3["error"]
+  print("FAIL: anim decode failed: {g3err}")
+  fail = fail + 1.0
+end
+
+// ─── Test 3: Single pixel (minimal case) ────────────────────────
+
+let mut px1 = [128.0, 128.0, 128.0]  // Gray pixel
+let delays1 = [100.0]
+
+gif_encode_frames(px1, delays1, 1.0, 1.0, 1.0, "test_gray.gif")
+
+let bytes1 = read_bytes("test_gray.gif")
+let g1 = gif_decode(bytes1)
+
+if g1["ok"] == 1.0
+  pass = pass + 1.0
+  let g1w = g1["width"]
+  if g1w == 1.0
+    pass = pass + 1.0
+  else
+    print("FAIL: 1px width expected 1, got {g1w}")
+    fail = fail + 1.0
+  end
+  let g1h = g1["height"]
+  if g1h == 1.0
+    pass = pass + 1.0
+  else
+    print("FAIL: 1px height expected 1, got {g1h}")
+    fail = fail + 1.0
+  end
+else
+  let g1err = g1["error"]
+  print("FAIL: 1px decode failed: {g1err}")
+  fail = fail + 1.0
+end
+
+// ─── Test 4: Palette quantization (test web-safe colors) ────────
+
+// Test that exact web-safe colors roundtrip perfectly
+let mut ws_frame = []
+// RGB(51, 102, 153) is web-safe
+push(ws_frame, 51.0)
+push(ws_frame, 102.0)
+push(ws_frame, 153.0)
+
+let delays_ws = [100.0]
+
+gif_encode_frames(ws_frame, delays_ws, 1.0, 1.0, 1.0, "test_websafe.gif")
+
+let bytes_ws = read_bytes("test_websafe.gif")
+let g_ws = gif_decode(bytes_ws)
+
+if g_ws["ok"] == 1.0
+  pass = pass + 1.0
+  // Check exact roundtrip for web-safe color
+  let r_ws = gif_pixels[0]
+  let g_ws = gif_pixels[1]
+  let b_ws = gif_pixels[2]
+  if r_ws == 51.0
+    pass = pass + 1.0
+  else
+    print("FAIL: web-safe R expected 51, got {r_ws}")
+    fail = fail + 1.0
+  end
+  if g_ws == 102.0
+    pass = pass + 1.0
+  else
+    print("FAIL: web-safe G expected 102, got {g_ws}")
+    fail = fail + 1.0
+  end
+  if b_ws == 153.0
+    pass = pass + 1.0
+  else
+    print("FAIL: web-safe B expected 153, got {b_ws}")
+    fail = fail + 1.0
+  end
+else
+  let gwserr = g_ws["error"]
+  print("FAIL: web-safe decode failed: {gwserr}")
+  fail = fail + 1.0
+end
+
+// ─── Summary ─────────────────────────────────────────────────────
+
+let total = pass + fail
+print("")
+print("gif_encode.flow tests: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

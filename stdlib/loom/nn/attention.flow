@@ -1,0 +1,159 @@
+// stdlib/loom/attention.flow — GPU Self-Attention with GQA
+//
+// Single-token MVP (no KV cache):
+//   Q = hidden @ Wq → (1 × n_embd)
+//   K = hidden @ Wk → (1 × kv_dim)
+//   V = hidden @ Wv → (1 × kv_dim)
+//   For single token, softmax of single score = 1.0, output = V
+//   Expand V via KV head repetition → (1 × n_embd)
+//   final = expanded_V @ Wo → (1 × n_embd)
+//
+// Supports GQA: n_kv_head <= n_head, each KV head serves multiple Q heads.
+// When n_kv_head == n_head (standard MHA), behaves identically.
+
+use "runtime"
+
+fn gpu_attention(hidden, wq, wk, wv, wo, pos, n_head, n_kv_head, n_embd)
+  let head_dim = n_embd / n_head
+  let kv_dim = n_kv_head * head_dim
+
+  // Pad hidden to 16 rows for tiled GEMM (16x16 workgroup)
+  let m = 16.0
+  let pad_h = m * n_embd
+  let pad_q = m * n_embd
+  let pad_kv = m * kv_dim
+
+  let mut h_padded = []
+  let mut pi = 0.0
+  while pi < pad_h
+    if pi < n_embd
+      push(h_padded, hidden[int(pi)])
+    else
+      push(h_padded, 0.0)
+    end
+    pi = pi + 1.0
+  end
+
+  // Allocate GPU buffers — adaptive sizes for GQA
+  let buf_h = rt_create_buffer(pad_h * 4.0)
+  let wq_size = n_embd * n_embd
+  let wkv_size = n_embd * kv_dim
+  let buf_wq = rt_create_buffer(wq_size * 4.0)
+  let buf_wk = rt_create_buffer(wkv_size * 4.0)
+  let buf_wv = rt_create_buffer(wkv_size * 4.0)
+  let buf_wo = rt_create_buffer(wq_size * 4.0)
+  let buf_q = rt_create_buffer(pad_q * 4.0)
+  let buf_k = rt_create_buffer(pad_kv * 4.0)
+  let buf_v = rt_create_buffer(pad_kv * 4.0)
+  let buf_out = rt_create_buffer(pad_q * 4.0)
+
+  // Upload all data once
+  let _u0 = rt_upload(buf_h, h_padded)
+  let _u1 = rt_upload(buf_wq, wq)
+  let _u2 = rt_upload(buf_wk, wk)
+  let _u3 = rt_upload(buf_wv, wv)
+  let _u4 = rt_upload(buf_wo, wo)
+
+  // Load pipeline
+  let pipe_mm = rt_load_pipeline("stdlib/loom/kernels/nn/matmul_tiled.spv", 3.0, 12.0)
+
+  // === Q projection: H(16xn_embd) @ Wq(n_embdxn_embd) → (16xn_embd) ===
+  let _cb1 = rt_chain_begin(1.0, 3.0)
+  let mut pc_q = []
+  push(pc_q, m)
+  push(pc_q, n_embd)
+  push(pc_q, n_embd)
+  let _pc1 = rt_chain_push_constants(pipe_mm, pc_q)
+  let mut bufs_q = []
+  push(bufs_q, buf_h)
+  push(bufs_q, buf_wq)
+  push(bufs_q, buf_q)
+  let _d1 = rt_chain_dispatch(pipe_mm, bufs_q, 1.0)
+  let _ce1 = rt_chain_end()
+  let _sw1 = rt_chain_submit_wait()
+
+  // === K projection: H(16xn_embd) @ Wk(n_embdxkv_dim) → (16xkv_dim) ===
+  let _cb2 = rt_chain_begin(1.0, 3.0)
+  let mut pc_kv = []
+  push(pc_kv, m)
+  push(pc_kv, n_embd)
+  push(pc_kv, kv_dim)
+  let _pc2 = rt_chain_push_constants(pipe_mm, pc_kv)
+  let mut bufs_k = []
+  push(bufs_k, buf_h)
+  push(bufs_k, buf_wk)
+  push(bufs_k, buf_k)
+  let _d2 = rt_chain_dispatch(pipe_mm, bufs_k, 1.0)
+  let _ce2 = rt_chain_end()
+  let _sw2 = rt_chain_submit_wait()
+
+  // === V projection: H(16xn_embd) @ Wv(n_embdxkv_dim) → (16xkv_dim) ===
+  let _cb3 = rt_chain_begin(1.0, 3.0)
+  let _pc3 = rt_chain_push_constants(pipe_mm, pc_kv)
+  let mut bufs_v = []
+  push(bufs_v, buf_h)
+  push(bufs_v, buf_wv)
+  push(bufs_v, buf_v)
+  let _d3 = rt_chain_dispatch(pipe_mm, bufs_v, 1.0)
+  let _ce3 = rt_chain_end()
+  let _sw3 = rt_chain_submit_wait()
+
+  // Single-token: softmax of one score = 1.0, so attention output = V
+  // For GQA (kv_dim < n_embd): expand V by repeating each KV head slice
+  let mut buf_v_final = buf_v
+
+  if kv_dim < n_embd
+    // GQA expansion: repeat each KV head for its query heads
+    let heads_per_kv = n_head / n_kv_head
+    let _dlv = rt_download(buf_v, kv_dim)
+    let mut v_expanded = []
+    let mut kh = 0.0
+    while kh < n_kv_head
+      let src_start = kh * head_dim
+      let mut rep = 0.0
+      while rep < heads_per_kv
+        let mut hi = 0.0
+        while hi < head_dim
+          push(v_expanded, rt_result[int(src_start + hi)])
+          hi = hi + 1.0
+        end
+        rep = rep + 1.0
+      end
+      kh = kh + 1.0
+    end
+    // Pad expanded V to 16 rows
+    let mut v_padded = []
+    let mut vi = 0.0
+    while vi < pad_q
+      if vi < n_embd
+        push(v_padded, v_expanded[int(vi)])
+      else
+        push(v_padded, 0.0)
+      end
+      vi = vi + 1.0
+    end
+    buf_v_final = rt_create_buffer(pad_q * 4.0)
+    let _uv = rt_upload(buf_v_final, v_padded)
+  end
+
+  // === Output projection: V_final(16xn_embd) @ Wo(n_embdxn_embd) → (16xn_embd) ===
+  let _cb4 = rt_chain_begin(1.0, 3.0)
+  let _pc4 = rt_chain_push_constants(pipe_mm, pc_q)
+  let mut bufs_o = []
+  push(bufs_o, buf_v_final)
+  push(bufs_o, buf_wo)
+  push(bufs_o, buf_out)
+  let _d4 = rt_chain_dispatch(pipe_mm, bufs_o, 1.0)
+  let _ce4 = rt_chain_end()
+  let _sw4 = rt_chain_submit_wait()
+
+  // Download only the final result (first row)
+  let _dl = rt_download(buf_out, n_embd)
+  let mut result = []
+  let mut ri = 0.0
+  while ri < n_embd
+    push(result, rt_result[int(ri)])
+    ri = ri + 1.0
+  end
+  return result
+end

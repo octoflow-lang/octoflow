@@ -1,4 +1,9 @@
 // stdlib/stats/timeseries.flow — Time series analysis (trading indicators)
+//
+// Functions: sma, ema, wma, rsi, macd, macd_signal, macd_histogram,
+//            bollinger, bollinger_upper, bollinger_lower, atr, vwap,
+//            returns, log_returns, drawdown, rolling, diff, cumsum,
+//            autocorrelation
 
 fn sma(arr, period)
   let n = len(arr)

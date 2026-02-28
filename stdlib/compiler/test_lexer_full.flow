@@ -1,0 +1,98 @@
+// test_lexer_full.flow — full lexer: two-char ops, float, string, npos look-ahead
+// Covers patterns used in lexer.flow (npos, c2, pos+2, triple-&& while, push parallel)
+let QT_CH = chr(34)
+let src = "x == 1.5 " + QT_CH + "hi" + QT_CH + " z != w"
+let n = len(src)
+let mut pos = 0.0
+let NL  = 10.0
+let QT  = 34.0
+let SP  = 32.0
+
+let mut tok_types = []
+let mut tok_values = []
+
+while pos < n
+  let c = char_at(src, pos)
+  let co = ord(c)
+  let npos = pos + 1.0
+
+  // space — skip
+  if co == SP
+    pos = pos + 1.0
+
+  // quoted string
+  elif co == QT
+    pos = pos + 1.0
+    let mut s = ""
+    while pos < n && ord(char_at(src, pos)) != QT && ord(char_at(src, pos)) != NL
+      s = s + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    if pos < n
+      pos = pos + 1.0
+    end
+    push(tok_types, "str")
+    push(tok_values, s)
+
+  // float literal
+  elif co >= 48.0 && co <= 57.0
+    let mut num = ""
+    while pos < n && contains("0123456789.", char_at(src, pos))
+      num = num + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    push(tok_types, "float")
+    push(tok_values, num)
+
+  // identifier
+  elif is_match(c, "[a-zA-Z_]")
+    let mut word = ""
+    while pos < n && is_match(char_at(src, pos), "[a-zA-Z_0-9]")
+      word = word + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    push(tok_types, "ident")
+    push(tok_values, word)
+
+  // two-char operators: npos look-ahead
+  elif npos < n
+    let c2 = char_at(src, npos)
+    if c == "=" && c2 == "="
+      push(tok_types, "op")
+      push(tok_values, "==")
+      pos = pos + 2.0
+    elif c == "!" && c2 == "="
+      push(tok_types, "op")
+      push(tok_values, "!=")
+      pos = pos + 2.0
+    elif c == "<" && c2 == "="
+      push(tok_types, "op")
+      push(tok_values, "<=")
+      pos = pos + 2.0
+    elif c == ">" && c2 == "="
+      push(tok_types, "op")
+      push(tok_values, ">=")
+      pos = pos + 2.0
+    else
+      push(tok_types, "op")
+      push(tok_values, c)
+      pos = pos + 1.0
+    end
+
+  // single-char fallback
+  else
+    push(tok_types, "op")
+    push(tok_values, c)
+    pos = pos + 1.0
+  end
+end
+
+let count = len(tok_types)
+print("tokens: {count}")
+let mut i = 0.0
+while i < count
+  let t = tok_types[i]
+  let v = tok_values[i]
+  print("{t} {v}")
+  i = i + 1.0
+end

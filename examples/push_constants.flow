@@ -1,0 +1,108 @@
+// push_constants.flow — Dynamic Shader Parameters: Push Constants Demo
+//
+// Passes a scale factor to the GPU shader via push constants.
+// Push constants live in the command buffer — zero buffer allocation,
+// zero descriptor binding, zero memory mapping. Up to 128 bytes of
+// parameters passed directly to the shader.
+//
+// This is how every real GPU workload parameterizes shaders:
+// element counts, strides, thresholds, iteration limits, matrix dimensions.
+//
+// Architecture:
+//   CPU: records push constant value into command buffer
+//   GPU: reads push constant directly (no buffer indirection)
+//   Cost: 0 allocations, 0 descriptors, 0 memory maps
+//
+// Run: octoflow run examples/push_constants.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N = 256.0
+let BUF_BYTES = N * 4.0
+let SCALE = 7.0
+
+// Boot GPU
+rt_init()
+
+// Load shader with 1 push constant float (4 bytes)
+let pipe = rt_load_pipeline("tests/gpu_shaders/13_scale.spv", 2.0, 4.0)
+
+// Create buffers
+let buf_in = rt_create_buffer(BUF_BYTES)
+let buf_out = rt_create_buffer(BUF_BYTES)
+
+// Upload data: [1, 2, 3, ..., 256]
+let mut data = []
+let mut i = 0.0
+while i < N
+  push(data, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(buf_in, data)
+
+// Zero output buffer
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_out, zeros)
+
+// ── Record + submit ──────────────────────────────────────────────────
+let t0 = time()
+
+rt_chain_begin(1.0, 2.0)
+let mut pc_vals = [SCALE]
+rt_chain_push_constants(pipe, pc_vals)
+let mut bufs = [buf_in, buf_out]
+rt_chain_dispatch(pipe, bufs, 1.0)
+rt_chain_end()
+
+let t1 = time()
+let record_ms = (t1 - t0) * 1000.0
+
+let t2 = time()
+rt_chain_submit_wait()
+let t3 = time()
+let gpu_ms = (t3 - t2) * 1000.0
+
+// ── Verify result (bit-exact) ────────────────────────────────────────
+rt_download(buf_out, 4.0)
+
+let expected_0 = 1.0 * SCALE
+let expected_1 = 2.0 * SCALE
+let expected_2 = 3.0 * SCALE
+let expected_3 = 4.0 * SCALE
+
+let v0 = rt_result[0]
+let v1 = rt_result[1]
+let v2 = rt_result[2]
+let v3 = rt_result[3]
+
+print("")
+print("OctoFlow Push Constants Demo")
+print("  Shader: 13_scale.spv (output[i] = input[i] * scale)")
+print("  Push constant: scale = {SCALE}")
+print("  Elements: {N}")
+print("  Buffer allocations for parameter: 0")
+print("  Descriptor bindings for parameter: 0")
+print("  Record time: {record_ms} ms")
+print("  GPU time:    {gpu_ms} ms")
+print("  Result[0..3]: [{v0}, {v1}, {v2}, {v3}]")
+print("  Expected:     [{expected_0}, {expected_1}, {expected_2}, {expected_3}]")
+
+if v0 == expected_0 && v1 == expected_1 && v2 == expected_2 && v3 == expected_3
+  print("  EXACT MATCH")
+else
+  print("  MISMATCH")
+  if v0 != expected_0
+    print("    v0: got {v0}, expected {expected_0}")
+  end
+  if v1 != expected_1
+    print("    v1: got {v1}, expected {expected_1}")
+  end
+end
+
+print("")
+rt_cleanup()

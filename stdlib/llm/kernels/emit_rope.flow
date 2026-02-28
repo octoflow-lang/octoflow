@@ -1,0 +1,111 @@
+// emit_rope.flow — Rotary Position Embedding Kernel Emitter
+//
+// RoPE applies position-dependent rotation to pairs of elements:
+//   x'[2i]   = x[2i]   * cos(theta) - x[2i+1] * sin(theta)
+//   x'[2i+1] = x[2i]   * sin(theta) + x[2i+1] * cos(theta)
+//
+// where theta = pos / (10000^(2i/d))
+//
+// Used in Llama, Qwen, Mistral for position encoding.
+//
+// Binding 0: input x (float array, d_head elements per head)
+// Binding 1: output (float array, same size)
+//
+// Push constants:
+//   [0]: position (float, token position in sequence)
+//   [1]: d_head (float, dimension per head)
+//
+// Each thread handles one pair (2i, 2i+1).
+// Dispatch: d_head/2 threads.
+
+use "../../compiler/ir"
+
+fn emit_rope(out_path)
+  ir_new()
+  ir_input_count = 1.0
+
+  let entry = ir_block("entry")
+
+  let gid = ir_load_gid(entry)
+
+  // Push constants
+  let pos_f = ir_push_const(entry, 0.0)
+  let d_f = ir_push_const(entry, 1.0)
+
+  // Each thread handles pair (2*gid, 2*gid+1)
+  let c2 = ir_const_f(entry, 2.0)
+  let gid_f = ir_utof(entry, gid)
+  let pair_base_f = ir_fmul(entry, gid_f, c2)
+  let pair_base = ir_ftou(entry, pair_base_f)
+  let c1u = ir_const_u(entry, 1.0)
+  let pair_next = ir_iadd(entry, pair_base, c1u)
+
+  // Load pair values
+  let x_even = ir_load_input_at(entry, 0.0, pair_base)
+  let x_odd = ir_load_input_at(entry, 0.0, pair_next)
+
+  // theta = pos / (10000^(2*gid / d_head))
+  // = pos * exp(-2*gid/d * ln(10000))
+  // ln(10000) = 9.21034...
+  let two_i = pair_base_f
+  let freq_idx = ir_fdiv(entry, two_i, d_f)
+  let ln10k = ir_const_f(entry, 9.21034)
+  let neg_freq = ir_fneg(entry, freq_idx)
+  let exponent = ir_fmul(entry, neg_freq, ln10k)
+  let inv_freq = ir_exp(entry, exponent)
+  let theta = ir_fmul(entry, pos_f, inv_freq)
+
+  // sin(theta) and cos(theta) via Taylor series
+  // sin(x) ≈ x - x^3/6 + x^5/120 - x^7/5040
+  // cos(x) ≈ 1 - x^2/2 + x^4/24 - x^6/720
+  //
+  // First reduce theta to [-pi, pi] range
+  // theta_mod = theta - round(theta / (2*pi)) * (2*pi)
+  let two_pi = ir_const_f(entry, 6.28318)
+  let inv_two_pi = ir_fdiv(entry, theta, two_pi)
+  let rounded = ir_floor(entry, ir_fadd(entry, inv_two_pi, ir_const_f(entry, 0.5)))
+  let theta_mod = ir_fsub(entry, theta, ir_fmul(entry, rounded, two_pi))
+
+  // Taylor sin/cos (7th order — accurate for |x| < pi)
+  let t2 = ir_fmul(entry, theta_mod, theta_mod)
+  let t3 = ir_fmul(entry, t2, theta_mod)
+  let t4 = ir_fmul(entry, t2, t2)
+  let t5 = ir_fmul(entry, t4, theta_mod)
+  let t6 = ir_fmul(entry, t4, t2)
+  let t7 = ir_fmul(entry, t6, theta_mod)
+
+  // sin coefficients
+  let c_s3 = ir_const_f(entry, 0.16666667)
+  let c_s5 = ir_const_f(entry, 0.00833333)
+  let c_s7 = ir_const_f(entry, 0.000198413)
+  let sin_val = ir_fsub(entry, theta_mod, ir_fmul(entry, c_s3, t3))
+  let sin_val2 = ir_fadd(entry, sin_val, ir_fmul(entry, c_s5, t5))
+  let sin_v = ir_fsub(entry, sin_val2, ir_fmul(entry, c_s7, t7))
+
+  // cos coefficients
+  let c1f = ir_const_f(entry, 1.0)
+  let c_c2 = ir_const_f(entry, 0.5)
+  let c_c4 = ir_const_f(entry, 0.04166667)
+  let c_c6 = ir_const_f(entry, 0.00138889)
+  let cos_val = ir_fsub(entry, c1f, ir_fmul(entry, c_c2, t2))
+  let cos_val2 = ir_fadd(entry, cos_val, ir_fmul(entry, c_c4, t4))
+  let cos_v = ir_fsub(entry, cos_val2, ir_fmul(entry, c_c6, t6))
+
+  // Apply rotation
+  // x'[2i]   = x[2i] * cos - x[2i+1] * sin
+  // x'[2i+1] = x[2i] * sin + x[2i+1] * cos
+  let even_cos = ir_fmul(entry, x_even, cos_v)
+  let odd_sin = ir_fmul(entry, x_odd, sin_v)
+  let out_even = ir_fsub(entry, even_cos, odd_sin)
+
+  let even_sin = ir_fmul(entry, x_even, sin_v)
+  let odd_cos = ir_fmul(entry, x_odd, cos_v)
+  let out_odd = ir_fadd(entry, even_sin, odd_cos)
+
+  ir_store_output_at(entry, pair_base, out_even)
+  ir_store_output_at(entry, pair_next, out_odd)
+  ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

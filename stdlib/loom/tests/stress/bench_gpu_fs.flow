@@ -1,0 +1,50 @@
+// Phase 80 benchmark: GPU filesystem I/O
+// Compare binary vs CSV load/save performance for 10M elements
+
+// Generate 10M elements on GPU
+let data = gpu_fill(1.5, 10000000)
+
+// Binary save
+let t0 = now_ms()
+let n1 = gpu_save_binary(data, "_bench_gpu_fs.bin")
+let t1 = now_ms()
+let d_save_bin = t1 - t0
+print("save_binary 10M: {d_save_bin} ms ({n1} elements)")
+
+// Binary load → GPU
+let t2 = now_ms()
+let loaded_bin = gpu_load_binary("_bench_gpu_fs.bin")
+let t3 = now_ms()
+let d_load_bin = t3 - t2
+print("load_binary 10M: {d_load_bin} ms")
+
+// Verify
+let s1 = gpu_sum(loaded_bin)
+print("binary verify: {s1}")
+
+// CSV save
+let t4 = now_ms()
+let n2 = gpu_save_csv(data, "_bench_gpu_fs.csv")
+let t5 = now_ms()
+let d_save_csv = t5 - t4
+print("save_csv 10M:    {d_save_csv} ms ({n2} elements)")
+
+// CSV load → GPU
+let t6 = now_ms()
+let loaded_csv = gpu_load_csv("_bench_gpu_fs.csv")
+let t7 = now_ms()
+let d_load_csv = t7 - t6
+print("load_csv 10M:    {d_load_csv} ms")
+
+// Verify
+let s2 = gpu_sum(loaded_csv)
+print("csv verify: {s2}")
+
+// Full pipeline: load binary → compute → save binary
+let t8 = now_ms()
+let a = gpu_load_binary("_bench_gpu_fs.bin")
+let b = gpu_mul(a, a)
+let n3 = gpu_save_binary(b, "_bench_gpu_fs_out.bin")
+let t9 = now_ms()
+let d_pipeline = t9 - t8
+print("pipeline (load+mul+save): {d_pipeline} ms")

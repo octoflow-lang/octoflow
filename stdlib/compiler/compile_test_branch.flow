@@ -1,0 +1,39 @@
+// stdlib/compiler/compile_test_branch.flow
+// Phase 71 Test: End-to-end compile — if/else branching
+//
+// Kernel: x = input[gid]; if x > 0.5 then output = x * 2 else output = 0
+// Expected: input > 0.5 → input * 2.0, else → 0.0
+
+use ir
+use lower
+use kparse
+
+let mut out_path = env("SPIRV_OUTPUT")
+if out_path == ""
+  out_path = "spirv_compile_branch.spv"
+end
+
+let nl = chr(10.0)
+let mut src = "let x = input [ gid ]" + nl
+src = src + "if x > 0.5" + nl
+src = src + "  output [ gid ] = x * 2.0" + nl
+src = src + "else" + nl
+src = src + "  output [ gid ] = 0.0" + nl
+src = src + "end" + nl
+
+let node_count = kparse_source(src)
+print("Parsed {node_count} AST nodes")
+
+for di in range(0.0, node_count)
+  let dk = nd_kind[di]
+  let dl = nd_lhs[di]
+  let dop = nd_op[di]
+  let dr = nd_rhs[di]
+  let dc = nd_child[di]
+  let dn = nd_next[di]
+  let dr2 = nd_rhs2[di]
+  print("  [{di}] {dk} lhs={dl} op={dop} rhs={dr} rhs2={dr2} child={dc} next={dn}")
+end
+
+lower_to_ir()
+let _e = ir_emit_spirv(out_path)

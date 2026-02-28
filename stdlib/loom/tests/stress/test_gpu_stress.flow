@@ -1,0 +1,549 @@
+// stdlib/loom/test_gpu_stress.flow — Multi-VM Load & Scale Tests
+//
+// Tests stress conditions that push beyond existing coverage:
+//   1. Four simultaneous VMs (isolated register spaces, 64 floats each)
+//   2. Large register file (4096 floats, scale kernel)
+//   3. Deep dispatch chain (10 scale ops, single submit → 2^10 = 1024x)
+//   4. VM reuse after shutdown + re-boot (two lifecycles)
+//   5. Async execution of 4 VMs simultaneously
+//   6. Register cross-VM isolation (write VM-A R5, verify VM-B R5 untouched)
+//
+// Kernels used:
+//   vm_affine.spv — dst[gid] = src[gid] * scale + bias   (pc: src,dst,scale,bias,count)
+//   vm_scale.spv  — reg[off+gid] *= scale                 (pc: off,scale,count)
+//   vm_copy.spv   — dst[gid] = src[gid]                   (pc: src,dst,count)
+//
+// 6 tests
+//
+// Run: flowgpu-cli run stdlib/loom/test_gpu_stress.flow --allow-read --allow-ffi
+
+print("=== GPU VM Stress Tests (6 tests) ===")
+print(" ")
+
+let mut passed = 0.0
+let mut failed = 0.0
+let n_regs = 32.0
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Test 1: Four simultaneous VMs, 64 floats each
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Test 1: Four simultaneous VMs (64 floats each) ---")
+
+let reg64 = 64.0
+let wg64 = 1.0
+
+let vm1 = vm_boot(1.0, reg64, 1.0)
+let vm2 = vm_boot(1.0, reg64, 1.0)
+let vm3 = vm_boot(1.0, reg64, 1.0)
+let vm4 = vm_boot(1.0, reg64, 1.0)
+print("  Booted 4 VMs: {vm1}, {vm2}, {vm3}, {vm4}")
+
+// Generate data: each VM gets [i*1.0 ... i*64.0] scaled by VM index
+fn gen_data(n, scale)
+    let mut arr = []
+    let mut idx = 0.0
+    while idx < n
+        push(arr, (idx + 1.0) * scale)
+        idx = idx + 1.0
+    end
+    return arr
+end
+
+let d1 = gen_data(64.0, 1.0)
+let d2 = gen_data(64.0, 2.0)
+let d3 = gen_data(64.0, 3.0)
+let d4 = gen_data(64.0, 4.0)
+
+let _w1 = vm_write_register(vm1, 0.0, 0.0, d1)
+let _w2 = vm_write_register(vm2, 0.0, 0.0, d2)
+let _w3 = vm_write_register(vm3, 0.0, 0.0, d3)
+let _w4 = vm_write_register(vm4, 0.0, 0.0, d4)
+
+// Each VM: affine R0 → R1 with different transforms
+// VM1: y = x * 2 + 0   VM2: y = x * 3 + 0   VM3: y = x * 0.5 + 0   VM4: y = x * 1 + 10
+let r0 = 0.0 * reg64
+let r1 = 1.0 * reg64
+
+let pc1 = [r0, r1, 2.0, 0.0, reg64]
+let _dp1 = vm_dispatch(vm1, "stdlib/loom/kernels/ops/vm_affine.spv", pc1, wg64)
+let p1 = vm_build(vm1)
+let pc2 = [r0, r1, 3.0, 0.0, reg64]
+let _dp2 = vm_dispatch(vm2, "stdlib/loom/kernels/ops/vm_affine.spv", pc2, wg64)
+let p2 = vm_build(vm2)
+let pc3 = [r0, r1, 0.5, 0.0, reg64]
+let _dp3 = vm_dispatch(vm3, "stdlib/loom/kernels/ops/vm_affine.spv", pc3, wg64)
+let p3 = vm_build(vm3)
+let pc4 = [r0, r1, 1.0, 10.0, reg64]
+let _dp4 = vm_dispatch(vm4, "stdlib/loom/kernels/ops/vm_affine.spv", pc4, wg64)
+let p4 = vm_build(vm4)
+
+let _e1 = vm_execute(p1)
+let _e2 = vm_execute(p2)
+let _e3 = vm_execute(p3)
+let _e4 = vm_execute(p4)
+
+let res1 = vm_read_register(vm1, 0.0, 1.0, reg64)
+let res2 = vm_read_register(vm2, 0.0, 1.0, reg64)
+let res3 = vm_read_register(vm3, 0.0, 1.0, reg64)
+let res4 = vm_read_register(vm4, 0.0, 1.0, reg64)
+
+// Verify all 4 VMs
+let mut pass1 = 1.0
+let mut i = 0.0
+while i < reg64
+    let idx = int(i)
+    let v = i + 1.0
+    // VM1: v*1 * 2 + 0
+    if abs(res1[idx] - v * 1.0 * 2.0) > 0.01
+        print("  FAIL VM1[{i}]: got {res1[idx]}, expected {v}")
+        pass1 = 0.0
+    end
+    // VM2: v*2 * 3 + 0
+    if abs(res2[idx] - v * 2.0 * 3.0) > 0.01
+        print("  FAIL VM2[{i}]: got {res2[idx]}")
+        pass1 = 0.0
+    end
+    // VM3: v*3 * 0.5 + 0
+    if abs(res3[idx] - v * 3.0 * 0.5) > 0.01
+        print("  FAIL VM3[{i}]: got {res3[idx]}")
+        pass1 = 0.0
+    end
+    // VM4: v*4 * 1 + 10
+    if abs(res4[idx] - (v * 4.0 * 1.0 + 10.0)) > 0.01
+        print("  FAIL VM4[{i}]: got {res4[idx]}")
+        pass1 = 0.0
+    end
+    i = i + 1.0
+end
+
+if pass1 == 1.0
+    print("  PASS 1: Four VMs, 64 floats each, all correct")
+    passed = passed + 1.0
+else
+    print("  FAIL 1: Four-VM verification failed")
+    failed = failed + 1.0
+end
+
+// Shutdown all 4
+let _s1 = vm_shutdown(vm1)
+let _s2 = vm_shutdown(vm2)
+let _s3 = vm_shutdown(vm3)
+let _s4 = vm_shutdown(vm4)
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Test 2: Large register file (4096 floats)
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Test 2: Large register file (4096 floats) ---")
+
+let reg4k = 4096.0
+let wg4k = 16.0
+
+let vm_big = vm_boot(1.0, reg4k, 1.0)
+print("  Booted VM with reg_size=4096")
+
+// Generate 4096 values: [1.0, 2.0, ..., 4096.0]
+let big_data = gen_data(4096.0, 1.0)
+let _wb = vm_write_register(vm_big, 0.0, 0.0, big_data)
+
+// Scale R0 in-place by 3.0
+let big_r0 = 0.0 * reg4k
+let pc_big = [big_r0, 3.0, reg4k]
+let _db = vm_dispatch(vm_big, "stdlib/loom/kernels/ops/vm_scale.spv", pc_big, wg4k)
+let prog_big = vm_build(vm_big)
+let _eb = vm_execute(prog_big)
+
+let big_result = vm_read_register(vm_big, 0.0, 0.0, reg4k)
+
+// Verify: spot-check first 8, last 8, and middle 8
+let mut pass2 = 1.0
+// Check first 8
+i = 0.0
+while i < 8.0
+    let idx = int(i)
+    let expected = (i + 1.0) * 3.0
+    if abs(big_result[idx] - expected) > 0.01
+        print("  FAIL first[{i}]: got {big_result[idx]}, expected {expected}")
+        pass2 = 0.0
+    end
+    i = i + 1.0
+end
+// Check middle 8 (around index 2044)
+i = 0.0
+while i < 8.0
+    let mid_i = 2044.0 + i
+    let idx = int(mid_i)
+    let expected = (mid_i + 1.0) * 3.0
+    if abs(big_result[idx] - expected) > 0.01
+        print("  FAIL mid[{mid_i}]: got {big_result[idx]}, expected {expected}")
+        pass2 = 0.0
+    end
+    i = i + 1.0
+end
+// Check last 8
+i = 0.0
+while i < 8.0
+    let last_i = 4088.0 + i
+    let idx = int(last_i)
+    let expected = (last_i + 1.0) * 3.0
+    if abs(big_result[idx] - expected) > 0.01
+        print("  FAIL last[{last_i}]: got {big_result[idx]}, expected {expected}")
+        pass2 = 0.0
+    end
+    i = i + 1.0
+end
+
+if pass2 == 1.0
+    let first_val = big_result[0]
+    let last_val = big_result[4095]
+    print("  PASS 2: 4096 floats scaled by 3.0 — first={first_val}, last={last_val}")
+    passed = passed + 1.0
+else
+    print("  FAIL 2: Large register verification failed")
+    failed = failed + 1.0
+end
+
+let _sb = vm_shutdown(vm_big)
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Test 3: Deep dispatch chain (10 scale ops → 2^10 = 1024x)
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Test 3: Deep dispatch chain (10 ops, single submit) ---")
+
+let reg8 = 8.0
+let wg8 = 1.0
+
+let vm_deep = vm_boot(1.0, reg8, 1.0)
+
+// Write [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] to R0
+let ones = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+let _wd = vm_write_register(vm_deep, 0.0, 0.0, ones)
+
+// Copy R0 → R1 first (preserve original)
+let deep_r0 = 0.0 * reg8
+let deep_r1 = 1.0 * reg8
+let pc_copy = [deep_r0, deep_r1, reg8]
+let _dc = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_copy.spv", pc_copy, wg8)
+
+// 10 in-place scale ops on R1, each multiplying by 2.0
+// Total: 2^10 = 1024
+let pc_scale = [deep_r1, 2.0, reg8]
+let _ds1 = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, wg8)
+let _ds2 = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, wg8)
+let _ds3 = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, wg8)
+let _ds4 = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, wg8)
+let _ds5 = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, wg8)
+let _ds6 = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, wg8)
+let _ds7 = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, wg8)
+let _ds8 = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, wg8)
+let _ds9 = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, wg8)
+let _ds10 = vm_dispatch(vm_deep, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, wg8)
+
+// Build ONE program from all 11 staged ops (1 copy + 10 scale)
+let prog_deep = vm_build(vm_deep)
+print("  Built program with 11 ops (1 copy + 10 scale)")
+
+// Execute ONCE — single vkQueueSubmit
+let _ed = vm_execute(prog_deep)
+
+// Verify R1 = [1024.0, 1024.0, ...]
+let deep_result = vm_read_register(vm_deep, 0.0, 1.0, reg8)
+let mut pass3 = 1.0
+i = 0.0
+while i < reg8
+    let idx = int(i)
+    if abs(deep_result[idx] - 1024.0) > 0.01
+        print("  FAIL [{i}]: got {deep_result[idx]}, expected 1024.0")
+        pass3 = 0.0
+    end
+    i = i + 1.0
+end
+
+// Also verify R0 is untouched (still [1, 1, 1, ...])
+let orig = vm_read_register(vm_deep, 0.0, 0.0, reg8)
+i = 0.0
+while i < reg8
+    let idx = int(i)
+    if abs(orig[idx] - 1.0) > 0.01
+        print("  FAIL R0[{i}]: got {orig[idx]}, expected 1.0 (clobbered!)")
+        pass3 = 0.0
+    end
+    i = i + 1.0
+end
+
+if pass3 == 1.0
+    let dv0 = deep_result[0]
+    print("  PASS 3: 10-op chain, single submit → R1[0]={dv0} (2^10=1024)")
+    passed = passed + 1.0
+else
+    print("  FAIL 3: Deep dispatch chain verification failed")
+    failed = failed + 1.0
+end
+
+let _sd = vm_shutdown(vm_deep)
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Test 4: VM reuse after shutdown + re-boot
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Test 4: VM lifecycle reuse (shutdown + re-boot) ---")
+
+// Lifecycle 1: boot, compute, verify, shutdown
+let vm_life = vm_boot(1.0, reg8, 1.0)
+let life_data1 = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+let _wl1 = vm_write_register(vm_life, 0.0, 0.0, life_data1)
+let life_r0 = 0.0
+let life_r1 = reg8
+let pc_l1 = [life_r0, life_r1, 0.1, 0.0, reg8]
+let _dl1 = vm_dispatch(vm_life, "stdlib/loom/kernels/ops/vm_affine.spv", pc_l1, wg8)
+let prog_l1 = vm_build(vm_life)
+let _el1 = vm_execute(prog_l1)
+let life_res1 = vm_read_register(vm_life, 0.0, 1.0, reg8)
+
+let mut pass4 = 1.0
+i = 0.0
+while i < reg8
+    let idx = int(i)
+    let exp = life_data1[idx] * 0.1
+    if abs(life_res1[idx] - exp) > 0.01
+        print("  FAIL lifecycle 1 [{i}]: got {life_res1[idx]}, expected {exp}")
+        pass4 = 0.0
+    end
+    i = i + 1.0
+end
+
+let _sl1 = vm_shutdown(vm_life)
+print("  Lifecycle 1: boot → compute → verify → shutdown OK")
+
+// Lifecycle 2: re-boot, different data, compute, verify, shutdown
+let vm_life2 = vm_boot(1.0, reg8, 1.0)
+let life_data2 = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0]
+let _wl2 = vm_write_register(vm_life2, 0.0, 0.0, life_data2)
+let pc_l2 = [life_r0, life_r1, -1.0, 0.0, reg8]
+let _dl2 = vm_dispatch(vm_life2, "stdlib/loom/kernels/ops/vm_affine.spv", pc_l2, wg8)
+let prog_l2 = vm_build(vm_life2)
+let _el2 = vm_execute(prog_l2)
+let life_res2 = vm_read_register(vm_life2, 0.0, 1.0, reg8)
+
+i = 0.0
+while i < reg8
+    let idx = int(i)
+    let exp = life_data2[idx] * -1.0
+    if abs(life_res2[idx] - exp) > 0.01
+        print("  FAIL lifecycle 2 [{i}]: got {life_res2[idx]}, expected {exp}")
+        pass4 = 0.0
+    end
+    i = i + 1.0
+end
+
+let _sl2 = vm_shutdown(vm_life2)
+print("  Lifecycle 2: re-boot → compute → verify → shutdown OK")
+
+if pass4 == 1.0
+    print("  PASS 4: Two full VM lifecycles, both correct")
+    passed = passed + 1.0
+else
+    print("  FAIL 4: VM lifecycle reuse verification failed")
+    failed = failed + 1.0
+end
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Test 5: Async execution of 4 VMs simultaneously
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Test 5: Four VMs async + poll all ---")
+
+let vm_a1 = vm_boot(1.0, reg8, 1.0)
+let vm_a2 = vm_boot(1.0, reg8, 1.0)
+let vm_a3 = vm_boot(1.0, reg8, 1.0)
+let vm_a4 = vm_boot(1.0, reg8, 1.0)
+
+let ad1 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let ad2 = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+let ad3 = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0]
+let ad4 = [-1.0, -2.0, -3.0, -4.0, -5.0, -6.0, -7.0, -8.0]
+
+let _wa1 = vm_write_register(vm_a1, 0.0, 0.0, ad1)
+let _wa2 = vm_write_register(vm_a2, 0.0, 0.0, ad2)
+let _wa3 = vm_write_register(vm_a3, 0.0, 0.0, ad3)
+let _wa4 = vm_write_register(vm_a4, 0.0, 0.0, ad4)
+
+let a_r0 = 0.0
+let a_r1 = reg8
+
+// Each VM: affine with scale=5, bias=0
+let pc_a = [a_r0, a_r1, 5.0, 0.0, reg8]
+let _dpa1 = vm_dispatch(vm_a1, "stdlib/loom/kernels/ops/vm_affine.spv", pc_a, wg8)
+let pa1 = vm_build(vm_a1)
+let _dpa2 = vm_dispatch(vm_a2, "stdlib/loom/kernels/ops/vm_affine.spv", pc_a, wg8)
+let pa2 = vm_build(vm_a2)
+let _dpa3 = vm_dispatch(vm_a3, "stdlib/loom/kernels/ops/vm_affine.spv", pc_a, wg8)
+let pa3 = vm_build(vm_a3)
+let _dpa4 = vm_dispatch(vm_a4, "stdlib/loom/kernels/ops/vm_affine.spv", pc_a, wg8)
+let pa4 = vm_build(vm_a4)
+
+// Submit ALL 4 async — GPU runs all autonomously
+let _sub1 = vm_execute_async(pa1)
+let _sub2 = vm_execute_async(pa2)
+let _sub3 = vm_execute_async(pa3)
+let _sub4 = vm_execute_async(pa4)
+print("  Submitted 4 VMs async")
+
+// Poll all until done
+let mut done1 = 0.0
+let mut done2 = 0.0
+let mut done3 = 0.0
+let mut done4 = 0.0
+let mut poll_total = 0.0
+
+while done1 < 1.0
+    done1 = vm_poll(pa1)
+    poll_total = poll_total + 1.0
+end
+while done2 < 1.0
+    done2 = vm_poll(pa2)
+    poll_total = poll_total + 1.0
+end
+while done3 < 1.0
+    done3 = vm_poll(pa3)
+    poll_total = poll_total + 1.0
+end
+while done4 < 1.0
+    done4 = vm_poll(pa4)
+    poll_total = poll_total + 1.0
+end
+print("  All 4 VMs done after {poll_total} total poll(s)")
+
+// Read and verify all 4
+let ar1 = vm_read_register(vm_a1, 0.0, 1.0, reg8)
+let ar2 = vm_read_register(vm_a2, 0.0, 1.0, reg8)
+let ar3 = vm_read_register(vm_a3, 0.0, 1.0, reg8)
+let ar4 = vm_read_register(vm_a4, 0.0, 1.0, reg8)
+
+let mut pass5 = 1.0
+i = 0.0
+while i < reg8
+    let idx = int(i)
+    if abs(ar1[idx] - ad1[idx] * 5.0) > 0.01
+        print("  FAIL VM-A1[{i}]: got {ar1[idx]}")
+        pass5 = 0.0
+    end
+    if abs(ar2[idx] - ad2[idx] * 5.0) > 0.01
+        print("  FAIL VM-A2[{i}]: got {ar2[idx]}")
+        pass5 = 0.0
+    end
+    if abs(ar3[idx] - ad3[idx] * 5.0) > 0.01
+        print("  FAIL VM-A3[{i}]: got {ar3[idx]}")
+        pass5 = 0.0
+    end
+    if abs(ar4[idx] - ad4[idx] * 5.0) > 0.01
+        print("  FAIL VM-A4[{i}]: got {ar4[idx]}")
+        pass5 = 0.0
+    end
+    i = i + 1.0
+end
+
+if pass5 == 1.0
+    print("  PASS 5: Four async VMs, all results correct")
+    passed = passed + 1.0
+else
+    print("  FAIL 5: Async multi-VM verification failed")
+    failed = failed + 1.0
+end
+
+let _sa1 = vm_shutdown(vm_a1)
+let _sa2 = vm_shutdown(vm_a2)
+let _sa3 = vm_shutdown(vm_a3)
+let _sa4 = vm_shutdown(vm_a4)
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Test 6: Register cross-VM isolation
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Test 6: Cross-VM register isolation ---")
+
+// Boot 2 VMs — each has its own Vulkan buffer
+let vm_iso_a = vm_boot(1.0, reg8, 1.0)
+let vm_iso_b = vm_boot(1.0, reg8, 1.0)
+
+// Write distinct data to each VM's R0
+let iso_a_data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let iso_b_data = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0]
+let _wia = vm_write_register(vm_iso_a, 0.0, 0.0, iso_a_data)
+let _wib = vm_write_register(vm_iso_b, 0.0, 0.0, iso_b_data)
+
+// VM-A: affine R0 → R5 with scale=2, bias=0
+// VM-B: affine R0 → R5 with scale=10, bias=0
+let iso_r0 = 0.0
+let iso_r5 = 5.0 * reg8
+
+let pc_ia = [iso_r0, iso_r5, 2.0, 0.0, reg8]
+let _dia = vm_dispatch(vm_iso_a, "stdlib/loom/kernels/ops/vm_affine.spv", pc_ia, wg8)
+let prog_ia = vm_build(vm_iso_a)
+let pc_ib = [iso_r0, iso_r5, 10.0, 0.0, reg8]
+let _dib = vm_dispatch(vm_iso_b, "stdlib/loom/kernels/ops/vm_affine.spv", pc_ib, wg8)
+let prog_ib = vm_build(vm_iso_b)
+
+let _eia = vm_execute(prog_ia)
+let _eib = vm_execute(prog_ib)
+
+// Read R5 from both VMs
+let iso_res_a = vm_read_register(vm_iso_a, 0.0, 5.0, reg8)
+let iso_res_b = vm_read_register(vm_iso_b, 0.0, 5.0, reg8)
+
+// Verify VM-A R5 = [2, 4, 6, 8, 10, 12, 14, 16]  (NOT VM-B's values)
+// Verify VM-B R5 = [1000, 2000, 3000, ..., 8000]   (NOT VM-A's values)
+let mut pass6 = 1.0
+i = 0.0
+while i < reg8
+    let idx = int(i)
+    let exp_a = iso_a_data[idx] * 2.0
+    let exp_b = iso_b_data[idx] * 10.0
+    if abs(iso_res_a[idx] - exp_a) > 0.01
+        print("  FAIL VM-A R5[{i}]: got {iso_res_a[idx]}, expected {exp_a}")
+        pass6 = 0.0
+    end
+    if abs(iso_res_b[idx] - exp_b) > 0.01
+        print("  FAIL VM-B R5[{i}]: got {iso_res_b[idx]}, expected {exp_b}")
+        pass6 = 0.0
+    end
+    i = i + 1.0
+end
+
+// Extra: verify VM-A's R0 is still the original (VM-B's write didn't affect it)
+let iso_orig_a = vm_read_register(vm_iso_a, 0.0, 0.0, reg8)
+i = 0.0
+while i < reg8
+    let idx = int(i)
+    if abs(iso_orig_a[idx] - iso_a_data[idx]) > 0.01
+        print("  FAIL VM-A R0[{i}] clobbered: got {iso_orig_a[idx]}, expected {iso_a_data[idx]}")
+        pass6 = 0.0
+    end
+    i = i + 1.0
+end
+
+if pass6 == 1.0
+    let va5 = iso_res_a[0]
+    let vb5 = iso_res_b[0]
+    print("  PASS 6: Cross-VM isolation verified — A.R5[0]={va5}, B.R5[0]={vb5}")
+    passed = passed + 1.0
+else
+    print("  FAIL 6: Cross-VM isolation broken!")
+    failed = failed + 1.0
+end
+
+let _sia = vm_shutdown(vm_iso_a)
+let _sib = vm_shutdown(vm_iso_b)
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SUMMARY
+// ═══════════════════════════════════════════════════════════════════════
+let total = passed + failed
+print("=== Results: {passed}/{total} passed, {failed} failed ===")
+if failed == 0.0
+    print("ALL 6 STRESS TESTS PASSED")
+else
+    print("SOME TESTS FAILED — see above for details")
+end

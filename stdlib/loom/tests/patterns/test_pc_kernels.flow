@@ -1,0 +1,204 @@
+// test_pc_kernels.flow — Validate push-constant kernels on GPU
+//
+// Run: octoflow run stdlib/loom/test_pc_kernels.flow --allow-read --allow-write --allow-exec
+
+print("=== Push-Constant Kernel GPU Tests ===")
+
+// Test multiply_pc: out = in * 3.0
+let mut in1 = [1.0, 2.0, 3.0, 4.0]
+let r1 = gpu_run("stdlib/loom/kernels/math/multiply_pc.spv", in1, 3.0)
+let v1 = r1[0]
+let v2 = r1[1]
+let v3 = r1[2]
+let v4 = r1[3]
+if v1 == 3.0
+  if v2 == 6.0
+    if v3 == 9.0
+      if v4 == 12.0
+        print("  multiply_pc: PASS")
+      else
+        print("  multiply_pc: FAIL (v4)")
+      end
+    else
+      print("  multiply_pc: FAIL (v3)")
+    end
+  else
+    print("  multiply_pc: FAIL (v2)")
+  end
+else
+  print("  multiply_pc: FAIL (v1={v1})")
+end
+
+// Test add_pc: out = in + 10.0
+let r2 = gpu_run("stdlib/loom/kernels/math/add_pc.spv", in1, 10.0)
+let a1 = r2[0]
+let a4 = r2[3]
+if a1 == 11.0
+  if a4 == 14.0
+    print("  add_pc:      PASS")
+  else
+    print("  add_pc:      FAIL (a4={a4})")
+  end
+else
+  print("  add_pc:      FAIL (a1={a1})")
+end
+
+// Test subtract_pc: out = in - 1.0
+let r3 = gpu_run("stdlib/loom/kernels/math/subtract_pc.spv", in1, 1.0)
+let s1 = r3[0]
+let s4 = r3[3]
+if s1 == 0.0
+  if s4 == 3.0
+    print("  subtract_pc: PASS")
+  else
+    print("  subtract_pc: FAIL (s4={s4})")
+  end
+else
+  print("  subtract_pc: FAIL (s1={s1})")
+end
+
+// Test divide_pc: out = in / 2.0
+let r4 = gpu_run("stdlib/loom/kernels/math/divide_pc.spv", in1, 2.0)
+let d1 = r4[0]
+let d4 = r4[3]
+if d1 == 0.5
+  if d4 == 2.0
+    print("  divide_pc:   PASS")
+  else
+    print("  divide_pc:   FAIL (d4={d4})")
+  end
+else
+  print("  divide_pc:   FAIL (d1={d1})")
+end
+
+// Test pow_pc: out = pow(in, 2.0)
+let r5 = gpu_run("stdlib/loom/kernels/math/pow_pc.spv", in1, 2.0)
+let pw1 = r5[0]
+let pw3 = r5[2]
+if pw1 == 1.0
+  if pw3 == 9.0
+    print("  pow_pc:      PASS")
+  else
+    print("  pow_pc:      FAIL (pw3={pw3})")
+  end
+else
+  print("  pow_pc:      FAIL (pw1={pw1})")
+end
+
+// Test min_pc: out = min(in, 2.5)
+let r6 = gpu_run("stdlib/loom/kernels/math/min_pc.spv", in1, 2.5)
+let mn1 = r6[0]
+let mn3 = r6[2]
+let mn4 = r6[3]
+if mn1 == 1.0
+  if mn3 == 2.5
+    if mn4 == 2.5
+      print("  min_pc:      PASS")
+    else
+      print("  min_pc:      FAIL (mn4={mn4})")
+    end
+  else
+    print("  min_pc:      FAIL (mn3={mn3})")
+  end
+else
+  print("  min_pc:      FAIL (mn1={mn1})")
+end
+
+// Test max_pc: out = max(in, 2.5)
+let r7 = gpu_run("stdlib/loom/kernels/math/max_pc.spv", in1, 2.5)
+let mx1 = r7[0]
+let mx2 = r7[1]
+let mx3 = r7[2]
+if mx1 == 2.5
+  if mx2 == 2.5
+    if mx3 == 3.0
+      print("  max_pc:      PASS")
+    else
+      print("  max_pc:      FAIL (mx3={mx3})")
+    end
+  else
+    print("  max_pc:      FAIL (mx2={mx2})")
+  end
+else
+  print("  max_pc:      FAIL (mx1={mx1})")
+end
+
+// Test clamp_pc: out = clamp(in, 1.5, 3.5)
+let r8 = gpu_run("stdlib/loom/kernels/math/clamp_pc.spv", in1, 1.5, 3.5)
+let cl1 = r8[0]
+let cl2 = r8[1]
+let cl3 = r8[2]
+let cl4 = r8[3]
+if cl1 == 1.5
+  if cl2 == 2.0
+    if cl3 == 3.0
+      if cl4 == 3.5
+        print("  clamp_pc:    PASS")
+      else
+        print("  clamp_pc:    FAIL (cl4={cl4})")
+      end
+    else
+      print("  clamp_pc:    FAIL (cl3={cl3})")
+    end
+  else
+    print("  clamp_pc:    FAIL (cl2={cl2})")
+  end
+else
+  print("  clamp_pc:    FAIL (cl1={cl1})")
+end
+
+// Test normalize_pc: out = (in - 1.0) / (4.0 - 1.0)
+let r9 = gpu_run("stdlib/loom/kernels/math/normalize_pc.spv", in1, 1.0, 4.0)
+let n1 = r9[0]
+let n4 = r9[3]
+if n1 == 0.0
+  if n4 == 1.0
+    print("  normalize_pc: PASS")
+  else
+    print("  normalize_pc: FAIL (n4={n4})")
+  end
+else
+  print("  normalize_pc: FAIL (n1={n1})")
+end
+
+// Test scale_shift_pc: out = in * 2.0 + 5.0
+let r10 = gpu_run("stdlib/loom/kernels/math/scale_shift_pc.spv", in1, 2.0, 5.0)
+let ss1 = r10[0]
+let ss4 = r10[3]
+if ss1 == 7.0
+  if ss4 == 13.0
+    print("  scale_shift_pc: PASS")
+  else
+    print("  scale_shift_pc: FAIL (ss4={ss4})")
+  end
+else
+  print("  scale_shift_pc: FAIL (ss1={ss1})")
+end
+
+// Test mod_pc: out = in mod 3.0 → [1,2,0,1]
+let mut in_mod = [1.0, 5.0, 9.0, 7.0]
+let rm = gpu_run("stdlib/loom/kernels/math/mod_pc.spv", in_mod, 3.0)
+let m1 = rm[0]
+let m2 = rm[1]
+let m3 = rm[2]
+let m4 = rm[3]
+if m1 == 1.0
+  if m2 == 2.0
+    if m3 == 0.0
+      if m4 == 1.0
+        print("  mod_pc:      PASS")
+      else
+        print("  mod_pc:      FAIL (m4={m4})")
+      end
+    else
+      print("  mod_pc:      FAIL (m3={m3})")
+    end
+  else
+    print("  mod_pc:      FAIL (m2={m2})")
+  end
+else
+  print("  mod_pc:      FAIL (m1={m1})")
+end
+
+print(" ")
+print("=== All tests complete ===")

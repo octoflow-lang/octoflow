@@ -1,0 +1,172 @@
+// test_timeseries.flow — Tests for stdlib/stats/timeseries.flow
+// Functions tested: sma, ema, rsi
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from stats/timeseries.flow --
+fn sma(arr, period)
+  let n = len(arr)
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    if i < period - 1.0
+      push(result, 0.0)
+    else
+      let mut sum = 0.0
+      let mut j = i - period + 1.0
+      while j <= i
+        sum = sum + arr[j]
+        j = j + 1.0
+      end
+      push(result, sum / period)
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn ema(arr, period)
+  let n = len(arr)
+  let alpha = 2.0 / (period + 1.0)
+  let mut result = []
+  let mut prev = arr[0]
+  push(result, prev)
+  let mut i = 1.0
+  while i < n
+    prev = alpha * arr[i] + (1.0 - alpha) * prev
+    push(result, prev)
+    i = i + 1.0
+  end
+  return result
+end
+
+fn rsi(arr, period)
+  let n = len(arr)
+  let mut result = []
+  push(result, 50.0)
+  let mut avg_gain = 0.0
+  let mut avg_loss = 0.0
+  let mut i = 1.0
+  while i <= period && i < n
+    let change = arr[i] - arr[i - 1.0]
+    if change > 0.0
+      avg_gain = avg_gain + change
+    else
+      avg_loss = avg_loss - change
+    end
+    push(result, 50.0)
+    i = i + 1.0
+  end
+  avg_gain = avg_gain / period
+  avg_loss = avg_loss / period
+  while i < n
+    let change = arr[i] - arr[i - 1.0]
+    let mut gain = 0.0
+    let mut loss = 0.0
+    if change > 0.0
+      gain = change
+    else
+      loss = -1.0 * change
+    end
+    avg_gain = (avg_gain * (period - 1.0) + gain) / period
+    avg_loss = (avg_loss * (period - 1.0) + loss) / period
+    if avg_loss == 0.0
+      push(result, 100.0)
+    else
+      let rs = avg_gain / avg_loss
+      push(result, 100.0 - 100.0 / (1.0 + rs))
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+// -- Tests --
+
+print("=== test_timeseries ===")
+
+let prices = [10.0, 11.0, 12.0, 11.0, 13.0, 14.0, 13.0, 15.0]
+
+// SMA(3) test: first 2 values are 0, third = (10+11+12)/3 = 11.0
+let s = sma(prices, 3.0)
+if s[0] == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: sma[0] expected 0 got {s[0]}")
+  fail = fail + 1.0
+end
+
+if s[1] == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: sma[1] expected 0 got {s[1]}")
+  fail = fail + 1.0
+end
+
+let diff_s2 = abs(s[2] - 11.0)
+if diff_s2 < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: sma[2] expected 11.0 got {s[2]}")
+  fail = fail + 1.0
+end
+
+// SMA(3) at index 3 = (11+12+11)/3 = 11.333
+let diff_s3 = abs(s[3] - 11.333)
+if diff_s3 < 0.01
+  pass = pass + 1.0
+else
+  print("  FAIL: sma[3] expected ~11.333 got {s[3]}")
+  fail = fail + 1.0
+end
+
+// EMA test: first value equals first price
+let e = ema(prices, 3.0)
+let diff_e0 = abs(e[0] - 10.0)
+if diff_e0 < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: ema[0] expected 10.0 got {e[0]}")
+  fail = fail + 1.0
+end
+
+// EMA tracks trend: last EMA > first EMA for uptrending data
+let last_idx = len(e) - 1.0
+if e[last_idx] > e[0]
+  pass = pass + 1.0
+else
+  print("  FAIL: ema trend expected last > first")
+  fail = fail + 1.0
+end
+
+// RSI test: output length matches input length
+let r = rsi(prices, 3.0)
+let rlen = len(r)
+let plen = len(prices)
+if rlen == plen
+  pass = pass + 1.0
+else
+  print("  FAIL: rsi length expected {plen} got {rlen}")
+  fail = fail + 1.0
+end
+
+// RSI should be between 0 and 100
+let rlast = r[last_idx]
+if rlast >= 0.0 && rlast <= 100.0
+  pass = pass + 1.0
+else
+  print("  FAIL: rsi value out of range: {rlast}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_timeseries ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

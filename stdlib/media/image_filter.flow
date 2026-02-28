@@ -1,6 +1,9 @@
 // image_filter.flow — Convolution filters for OctoFlow image processing
-// Works with flat (r, g, b) channel arrays of width*height floats (0-255)
 //
+// Functions: img_convolve, img_blur_box, img_sharpen, img_edge_detect,
+//            img_threshold, img_invert
+//
+// Works with flat (r, g, b) channel arrays of width*height floats (0-255)
 // Usage:
 //   use image_filter
 //   let mut out_r = []

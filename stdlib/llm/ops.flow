@@ -1,0 +1,134 @@
+// stdlib/llm/ops.flow — Shared CPU Operations for LLM Inference
+//
+// Pure CPU math on arrays — no imports needed.
+// Used by inference.flow, generate.flow, transformer.flow, and tests.
+//
+// Functions:
+//   rmsnorm_cpu(hidden, weight, n, eps) -> normalized array
+//   silu_cpu(arr, n) -> activated array
+//   gqa_expand(v_arr, n_head, n_kv_head, head_dim) -> expanded array
+//   vec_add(a, b, n) -> element-wise sum array
+//   rope_cpu(vec, pos, head_dim, n_heads, rope_theta) -> rotated array
+//   bpe_decode(text) -> decoded string
+
+// -- CPU RMSNorm --
+fn rmsnorm_cpu(hidden, weight, n, eps)
+  let mut sum_sq = 0.0
+  let mut i = 0.0
+  while i < n
+    let val = hidden[int(i)]
+    sum_sq = sum_sq + val * val
+    i = i + 1.0
+  end
+  let rms = sqrt(sum_sq / n + eps)
+  let mut _rms_out = []
+  let mut j = 0.0
+  while j < n
+    push(_rms_out, hidden[int(j)] / rms * weight[int(j)])
+    j = j + 1.0
+  end
+  return _rms_out
+end
+
+// -- CPU SiLU activation --
+fn silu_cpu(arr, n)
+  let mut _silu_out = []
+  let mut i = 0.0
+  while i < n
+    let x = arr[int(i)]
+    push(_silu_out, x / (1.0 + exp(x * -1.0)))
+    i = i + 1.0
+  end
+  return _silu_out
+end
+
+// -- CPU GQA expand --
+fn gqa_expand(v_arr, n_head, n_kv_head, head_dim)
+  let heads_per_kv = n_head / n_kv_head
+  let mut _gqa_out = []
+  let mut kh = 0.0
+  while kh < n_kv_head
+    let src_start = kh * head_dim
+    let mut rep = 0.0
+    while rep < heads_per_kv
+      let mut hi = 0.0
+      while hi < head_dim
+        push(_gqa_out, v_arr[int(src_start + hi)])
+        hi = hi + 1.0
+      end
+      rep = rep + 1.0
+    end
+    kh = kh + 1.0
+  end
+  return _gqa_out
+end
+
+// -- CPU vector add (for bias addition) --
+fn vec_add(a, b, n)
+  let mut _va_out = []
+  let mut i = 0.0
+  while i < n
+    push(_va_out, a[int(i)] + b[int(i)])
+    i = i + 1.0
+  end
+  return _va_out
+end
+
+// -- CPU RoPE (Rotary Position Embedding) --
+fn rope_cpu(vec, pos, head_dim, n_heads, rope_theta)
+  let mut _rope_out = []
+  let mut h = 0.0
+  while h < n_heads
+    let base = h * head_dim
+    let mut i = 0.0
+    while i < head_dim
+      let pair_idx = floor(i / 2.0)
+      let theta = pos / pow(rope_theta, 2.0 * pair_idx / head_dim)
+      let cos_t = cos(theta)
+      let sin_t = sin(theta)
+      let even = i - floor(i / 2.0) * 2.0
+      if even == 0.0
+        let x = vec[int(base + i)]
+        let y = vec[int(base + i + 1.0)]
+        push(_rope_out, x * cos_t - y * sin_t)
+      else
+        let x = vec[int(base + i - 1.0)]
+        let y = vec[int(base + i)]
+        push(_rope_out, x * sin_t + y * cos_t)
+      end
+      i = i + 1.0
+    end
+    h = h + 1.0
+  end
+  return _rope_out
+end
+
+// -- BPE token decode (GPT-2 byte encoding -> text) --
+fn bpe_decode(text)
+  let n = len(text)
+  let mut result = " "
+  let mut i = 0.0
+  while i < n
+    let c = char_at(text, i)
+    let o = ord(c)
+    if o < 256.0
+      result = result + c
+    else
+      if o <= 288.0
+        let byte_val = o - 256.0
+        result = result + chr(byte_val)
+      elif o == 289.0
+        result = result + chr(127.0)
+      elif o <= 322.0
+        let byte_val = o - 290.0 + 128.0
+        result = result + chr(byte_val)
+      elif o == 323.0
+        result = result + chr(173.0)
+      else
+        result = result + c
+      end
+    end
+    i = i + 1.0
+  end
+  return result
+end

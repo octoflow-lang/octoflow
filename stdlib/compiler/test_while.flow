@@ -1,0 +1,8 @@
+// Test while loop + assignment in self-hosting evaluator
+let mut i = 0.0
+let mut sum = 0.0
+while i < 5.0
+  sum = sum + i
+  i = i + 1.0
+end
+print("sum={sum}")

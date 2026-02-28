@@ -1,0 +1,90 @@
+// emit_vm_maxnorm.flow — VM Max-Norm Kernel Emitter
+//
+// Computes L∞ norm (max absolute value) over a register slice.
+// Thread 0 (gid==0) performs a sequential scan. All other threads exit early.
+//
+// Output written to metrics[metrics_slot].
+//
+// Push constants:
+//   pc[0] = reg_off       (float → uint, start index in registers SSBO)
+//   pc[1] = count         (float → uint, number of elements to scan)
+//   pc[2] = metrics_slot  (float → uint, index in metrics SSBO to write result)
+//
+// Binding layout (ir_input_count=2):
+//   Binding 0: registers (read source values)
+//   Binding 1: metrics   (write max-norm result)
+//
+// Dispatch: wg=1 (only 1 workgroup; thread 0 performs the sequential scan)
+//
+// Run: octoflow run stdlib/loom/emit_vm_maxnorm.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_maxnorm(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry       = ir_block("entry")
+  let pre_loop    = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body   = ir_block("loop_body")
+  let loop_cont   = ir_block("loop_continue")
+  let loop_merge  = ir_block("loop_merge")
+  let exit_block  = ir_block("exit")
+
+  // ── Entry: load gid, push constants, guard gid==0 ──────────────────
+  let gid     = ir_load_gid(entry)
+  let pc_roff = ir_push_const(entry, 0.0)
+  let pc_cnt  = ir_push_const(entry, 1.0)
+  let pc_ms   = ir_push_const(entry, 2.0)
+  let reg_off = ir_ftou(entry, pc_roff)
+  let count_u = ir_ftou(entry, pc_cnt)
+  let mslot_u = ir_ftou(entry, pc_ms)
+  let one_u   = ir_const_u(entry, 1.0)
+  // if gid >= 1 (gid != 0) → skip to exit
+  let not_t0  = ir_ugte(entry, gid, one_u)
+  let _sm     = ir_selection_merge(entry, exit_block)
+  let _br0    = ir_term_cond_branch(entry, not_t0, exit_block, pre_loop)
+
+  // ── pre_loop: initialise loop variables ────────────────────────────
+  let zero_u  = ir_const_u(pre_loop, 0.0)
+  let zero_f  = ir_const_f(pre_loop, 0.0)
+  let _bpl    = ir_term_branch(pre_loop, loop_header)
+
+  // ── Loop header: phi nodes for j (uint) and max_val (float) ────────
+  let phi_j   = ir_phi(loop_header, 2.0)
+  let phi_max = ir_phi(loop_header, 1.0)
+  let _pj0    = ir_phi_add(phi_j,   zero_u, pre_loop)
+  let _pm0    = ir_phi_add(phi_max, zero_f, pre_loop)
+  let j_done  = ir_ugte(loop_header, phi_j, count_u)
+  let _lm     = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc     = ir_term_cond_branch(loop_header, j_done, loop_merge, loop_body)
+
+  // ── Loop body: load element, abs, running max ──────────────────────
+  let reg_idx = ir_iadd(loop_body, reg_off, phi_j)
+  let val     = ir_load_input_at(loop_body, 0.0, reg_idx)
+  let abs_val = ir_fabs(loop_body, val)
+  let new_max = ir_fmax(loop_body, phi_max, abs_val)
+  let _blb    = ir_term_branch(loop_body, loop_cont)
+
+  // ── Loop continue: increment j, back-edge phis ─────────────────────
+  let one_u2  = ir_const_u(loop_cont, 1.0)
+  let new_j   = ir_iadd(loop_cont, phi_j, one_u2)
+  let _blc    = ir_term_branch(loop_cont, loop_header)
+  let _pj1    = ir_phi_add(phi_j,   new_j,   loop_cont)
+  let _pm1    = ir_phi_add(phi_max, new_max, loop_cont)
+
+  // ── Loop merge: write max-norm result to metrics[metrics_slot] ──────
+  let _store  = ir_buf_store_f(loop_merge, 1.0, mslot_u, phi_max)
+  let _blm    = ir_term_branch(loop_merge, exit_block)
+
+  // ── Exit ────────────────────────────────────────────────────────────
+  let _ret    = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/ops/vm_maxnorm.spv"
+let _r = emit_vm_maxnorm(out)
+print("Emitted: {out}")

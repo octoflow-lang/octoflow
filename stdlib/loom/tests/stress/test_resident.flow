@@ -1,0 +1,24 @@
+// Phase 79: GPU-resident buffer chaining test
+// Verifies zero-PCIe chaining: gpu_fill -> gpu_add -> gpu_mul -> gpu_sum
+// Expected: (1+2)^2 * 1000000 = 9000000
+
+let a = gpu_fill(1.0, 1000000)
+let b = gpu_fill(2.0, 1000000)
+let c = gpu_add(a, b)
+let d = gpu_mul(c, c)
+let s = gpu_sum(d)
+print("resident_chain: {s}")
+
+// Small correctness: 3+7=10, sum of 4 elements = 40
+let x = gpu_fill(3.0, 4)
+let y = gpu_fill(7.0, 4)
+let z = gpu_add(x, y)
+let zs = gpu_sum(z)
+print("small_sum: {zs}")
+
+// Unary chain: sqrt(abs(-16)) = 4, 4 elements → sum=16
+let neg = gpu_fill(-16.0, 4)
+let pos = gpu_abs(neg)
+let rt = gpu_sqrt(pos)
+let rts = gpu_sum(rt)
+print("unary_chain: {rts}")

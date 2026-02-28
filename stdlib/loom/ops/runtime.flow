@@ -1,0 +1,1123 @@
+// stdlib/loom/runtime.flow — Boot Once GPU Runtime
+// Phase 89-91: CPU boots Vulkan once, GPU runs N dispatches.
+// Phase 90: Indirect dispatch — GPU self-scheduling.
+// Phase 91: Timeline semaphores — GPU self-synchronization.
+//
+// Architecture: Pre-record dispatch chains in .flow via Vulkan FFI.
+// All scheduling, chain recording, task management in pure .flow.
+// Zero new Rust builtins.
+//
+// Usage:
+//   use "stdlib/loom/runtime"
+//   rt_init()
+//   let pipe = rt_load_pipeline("shader.spv", 2)
+//   let buf_a = rt_create_buffer(1024.0)
+//   rt_upload(buf_a, data)
+//   rt_chain_begin(100.0, 2.0)
+//   for i in range(0, 100)
+//     rt_chain_dispatch(pipe, buf_indices, 1.0)
+//   end
+//   rt_chain_end()
+//   rt_chain_submit_wait()
+//   let result = rt_download(buf_a, 256.0)
+//   rt_cleanup()
+
+use vk
+
+// ── Module state (arrays for snapshot-safe cross-function access) ─────
+// rt_handles: [0]=instance [1]=phys_dev [2]=device [3]=queue
+//             [4]=cmd_pool [5]=fence [6]=cmd_buf [7]=qfi
+let mut rt_handles = []
+
+// rt_pipes: flat stride-4 array [shader, ds_layout, pipe_layout, pipeline] per entry
+let mut rt_pipes = []
+
+// rt_bufs: flat stride-3 array [vk_buffer, vk_memory, size_bytes] per entry
+let mut rt_bufs = []
+
+// rt_chain_ds_pool: descriptor pool handle for current chain (in array for snapshot safety)
+let mut rt_chain_pool = []
+
+// rt_result: download output buffer (populated by rt_download, read by caller)
+let mut rt_result = []
+
+// rt_sems: flat array of timeline semaphore handles
+let mut rt_sems = []
+
+// rt_ds_pools: descriptor pools accumulated across chains (for multi-submit)
+let mut rt_ds_pools = []
+
+// ── Init: Create VkInstance, device, queue, command pool, fence ──────
+fn rt_init()
+  // 1. VkInstance
+  let app_name = mem_from_str("OctoFlowRT")
+  let app_info = mem_alloc(48)
+  mem_set_u32(app_info, 0.0, VK_STRUCTURE_TYPE_APPLICATION_INFO)
+  mem_set_ptr(app_info, 16.0, app_name)
+  mem_set_u32(app_info, 24.0, 1.0)
+  mem_set_u32(app_info, 44.0, VK_API_VERSION_1_2)
+
+  let inst_ci = mem_alloc(64)
+  mem_set_u32(inst_ci, 0.0, VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO)
+  mem_set_ptr(inst_ci, 24.0, app_info)
+
+  let p = mem_alloc(8)
+  let r = vkCreateInstance(inst_ci, 0, p)
+  let _c = vk_check(r, "rt_init:vkCreateInstance")
+  let instance = mem_get_ptr(p, 0.0)
+  push(rt_handles, instance)  // [0] = instance
+  mem_free(p)
+  mem_free(inst_ci)
+  mem_free(app_info)
+  mem_free(app_name)
+
+  // 2. Physical device
+  let pc = mem_alloc(4)
+  mem_set_u32(pc, 0.0, 1.0)
+  let pd = mem_alloc(8)
+  let r = vkEnumeratePhysicalDevices(instance, pc, pd)
+  let _c = vk_check(r, "rt_init:vkEnumeratePhysicalDevices")
+  let phys_dev = mem_get_ptr(pd, 0.0)
+  push(rt_handles, phys_dev)  // [1] = phys_dev
+  mem_free(pd)
+  mem_free(pc)
+
+  // 3. Find compute queue family
+  let qc = mem_alloc(4)
+  let _r = vkGetPhysicalDeviceQueueFamilyProperties(phys_dev, qc, 0)
+  let qf_count = mem_get_u32(qc, 0.0)
+  let qp = mem_alloc(qf_count * 24.0)
+  let _r = vkGetPhysicalDeviceQueueFamilyProperties(phys_dev, qc, qp)
+  mem_free(qc)
+
+  let mut comp_qfi = 0.0 - 1.0
+  let mut qi = 0.0
+  while qi < qf_count && comp_qfi < 0.0
+    let flags = mem_get_u32(qp, qi * 24.0)
+    if bit_test(flags, 1.0) == 1.0
+      comp_qfi = qi
+    end
+    qi = qi + 1.0
+  end
+  mem_free(qp)
+
+  // 4. Create logical device + queue
+  let prio = mem_alloc(4)
+  mem_set_f32(prio, 0.0, 1.0)
+  let dqci = mem_alloc(40)
+  mem_set_u32(dqci, 0.0, VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
+  mem_set_u32(dqci, 20.0, comp_qfi)
+  mem_set_u32(dqci, 24.0, 1.0)
+  mem_set_ptr(dqci, 32.0, prio)
+
+  let dci = mem_alloc(72)
+  mem_set_u32(dci, 0.0, VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
+  mem_set_u32(dci, 20.0, 1.0)
+  mem_set_ptr(dci, 24.0, dqci)
+
+  // VkPhysicalDeviceVulkan12Features: enable timeline semaphore
+  let v12feat = mem_alloc(208.0)
+  mem_set_u32(v12feat, 0.0, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
+  mem_set_u32(v12feat, 164.0, 1.0)
+  mem_set_ptr(dci, 8.0, v12feat)
+
+  let p = mem_alloc(8)
+  let r = vkCreateDevice(phys_dev, dci, 0, p)
+  let _c = vk_check(r, "rt_init:vkCreateDevice")
+  let device = mem_get_ptr(p, 0.0)
+  push(rt_handles, device)  // [2] = device
+  mem_free(p)
+  mem_free(dci)
+  mem_free(v12feat)
+  mem_free(dqci)
+  mem_free(prio)
+
+  let pq = mem_alloc(8)
+  let _r = vkGetDeviceQueue(device, comp_qfi, 0, pq)
+  let queue = mem_get_ptr(pq, 0.0)
+  push(rt_handles, queue)  // [3] = queue
+  mem_free(pq)
+
+  // 5. Command pool
+  let cpci = mem_alloc(24)
+  mem_set_u32(cpci, 0.0, VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO)
+  mem_set_u32(cpci, 20.0, comp_qfi)
+  let p = mem_alloc(8)
+  let r = vkCreateCommandPool(device, cpci, 0, p)
+  let _c = vk_check(r, "rt_init:vkCreateCommandPool")
+  let cmd_pool = mem_get_ptr(p, 0.0)
+  push(rt_handles, cmd_pool)  // [4] = cmd_pool
+  mem_free(p)
+  mem_free(cpci)
+
+  // 6. Fence
+  let fci = mem_alloc(24)
+  mem_set_u32(fci, 0.0, VK_STRUCTURE_TYPE_FENCE_CREATE_INFO)
+  let p = mem_alloc(8)
+  let r = vkCreateFence(device, fci, 0, p)
+  let _c = vk_check(r, "rt_init:vkCreateFence")
+  let fence = mem_get_ptr(p, 0.0)
+  push(rt_handles, fence)  // [5] = fence
+  mem_free(p)
+  mem_free(fci)
+
+  // 7. Allocate command buffer
+  let cbai = mem_alloc(32)
+  mem_set_u32(cbai, 0.0, VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
+  mem_set_ptr(cbai, 16.0, cmd_pool)
+  mem_set_u32(cbai, 24.0, VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+  mem_set_u32(cbai, 28.0, 1.0)
+  let p = mem_alloc(8)
+  let r = vkAllocateCommandBuffers(device, cbai, p)
+  let _c = vk_check(r, "rt_init:vkAllocateCommandBuffers")
+  let cmd_buf = mem_get_ptr(p, 0.0)
+  push(rt_handles, cmd_buf)  // [6] = cmd_buf
+  mem_free(p)
+  mem_free(cbai)
+
+  push(rt_handles, comp_qfi)  // [7] = queue family index
+
+  return 0.0
+end
+
+// ── Cleanup ──────────────────────────────────────────────────────────
+fn rt_cleanup()
+  let device = rt_handles[2]
+  let _r = vkDestroyFence(device, rt_handles[5], 0)
+  let _r = vkDestroyCommandPool(device, rt_handles[4], 0)
+  // Destroy pipelines
+  let np = int(len(rt_pipes) / 5.0)
+  let mut pi = 0.0
+  while pi < np
+    let base = pi * 5.0
+    let _r = vkDestroyPipeline(device, rt_pipes[int(base + 3.0)], 0)
+    let _r = vkDestroyPipelineLayout(device, rt_pipes[int(base + 2.0)], 0)
+    let _r = vkDestroyDescriptorSetLayout(device, rt_pipes[int(base + 1.0)], 0)
+    let _r = vkDestroyShaderModule(device, rt_pipes[int(base)], 0)
+    pi = pi + 1.0
+  end
+  // Destroy buffers
+  let nb = int(len(rt_bufs) / 3.0)
+  let mut bi = 0.0
+  while bi < nb
+    let base = bi * 3.0
+    let _r = vkFreeMemory(device, rt_bufs[int(base + 1.0)], 0)
+    let _r = vkDestroyBuffer(device, rt_bufs[int(base)], 0)
+    bi = bi + 1.0
+  end
+  // Destroy semaphores
+  let mut si = 0.0
+  while si < len(rt_sems)
+    let _r = vkDestroySemaphore(device, rt_sems[int(si)], 0)
+    si = si + 1.0
+  end
+  let _r = vkDestroyDevice(device, 0)
+  let _r = vkDestroyInstance(rt_handles[0], 0)
+  return 0.0
+end
+
+// ── Load pipeline from .spv file ─────────────────────────────────────
+fn rt_load_pipeline(spv_path, num_bindings, pc_size)
+  let device = rt_handles[2]
+  let pipe_idx = len(rt_pipes) / 5.0
+
+  // Load SPIR-V bytes
+  let spv = read_bytes(spv_path)
+  let spv_len = len(spv)
+  let spv_mem = mem_alloc(spv_len)
+  let mut si = 0.0
+  while si < spv_len
+    mem_set_u8(spv_mem, si, spv[int(si)])
+    si = si + 1.0
+  end
+
+  // Shader module
+  let smci = mem_alloc(40)
+  mem_set_u32(smci, 0.0, VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO)
+  mem_set_u64(smci, 24.0, spv_len)
+  mem_set_ptr(smci, 32.0, spv_mem)
+  let p = mem_alloc(8)
+  let r = vkCreateShaderModule(device, smci, 0, p)
+  let _c = vk_check(r, "rt_load_pipeline:vkCreateShaderModule")
+  let shader_mod = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(smci)
+  mem_free(spv_mem)
+
+  // Descriptor set layout: num_bindings SSBOs
+  // VkDescriptorSetLayoutBinding = 24 bytes each
+  let bindings = mem_alloc(num_bindings * 24.0)
+  let mut bi = 0.0
+  while bi < num_bindings
+    let off = bi * 24.0
+    mem_set_u32(bindings, off, bi)
+    mem_set_u32(bindings, off + 4.0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+    mem_set_u32(bindings, off + 8.0, 1.0)
+    mem_set_u32(bindings, off + 12.0, VK_SHADER_STAGE_COMPUTE_BIT)
+    bi = bi + 1.0
+  end
+  let dslci = mem_alloc(32)
+  mem_set_u32(dslci, 0.0, VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
+  mem_set_u32(dslci, 20.0, num_bindings)
+  mem_set_ptr(dslci, 24.0, bindings)
+  let p = mem_alloc(8)
+  let r = vkCreateDescriptorSetLayout(device, dslci, 0, p)
+  let _c = vk_check(r, "rt_load_pipeline:vkCreateDescriptorSetLayout")
+  let ds_layout = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(dslci)
+  mem_free(bindings)
+
+  // Pipeline layout
+  let p_lay = mem_alloc(8)
+  mem_set_ptr(p_lay, 0.0, ds_layout)
+  let plci = mem_alloc(48)
+  mem_set_u32(plci, 0.0, VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
+  mem_set_u32(plci, 20.0, 1.0)
+  mem_set_ptr(plci, 24.0, p_lay)
+
+  // Push constant range (if pc_size > 0)
+  let mut pcr = 0.0
+  if pc_size > 0.0
+    pcr = mem_alloc(12.0)
+    mem_set_u32(pcr, 0.0, VK_SHADER_STAGE_COMPUTE_BIT)
+    mem_set_u32(pcr, 4.0, 0.0)
+    mem_set_u32(pcr, 8.0, pc_size)
+    mem_set_u32(plci, 32.0, 1.0)
+    mem_set_ptr(plci, 40.0, pcr)
+  end
+
+  let p = mem_alloc(8)
+  let r = vkCreatePipelineLayout(device, plci, 0, p)
+  let _c = vk_check(r, "rt_load_pipeline:vkCreatePipelineLayout")
+  let pipe_layout = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(plci)
+  mem_free(p_lay)
+  if pcr > 0.0
+    mem_free(pcr)
+  end
+
+  // Compute pipeline
+  let entry_name = mem_from_str("main")
+  let cpci = mem_alloc(96)
+  mem_set_u32(cpci, 0.0, VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO)
+  mem_set_u32(cpci, 24.0, VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
+  mem_set_u32(cpci, 44.0, VK_SHADER_STAGE_COMPUTE_BIT)
+  mem_set_ptr(cpci, 48.0, shader_mod)
+  mem_set_ptr(cpci, 56.0, entry_name)
+  mem_set_ptr(cpci, 72.0, pipe_layout)
+  let p = mem_alloc(8)
+  let r = vkCreateComputePipelines(device, 0, 1, cpci, 0, p)
+  let _c = vk_check(r, "rt_load_pipeline:vkCreateComputePipelines")
+  let pipeline = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(cpci)
+  mem_free(entry_name)
+
+  // Store: stride 5 [shader_mod, ds_layout, pipe_layout, pipeline, pc_size]
+  push(rt_pipes, shader_mod)
+  push(rt_pipes, ds_layout)
+  push(rt_pipes, pipe_layout)
+  push(rt_pipes, pipeline)
+  push(rt_pipes, pc_size)
+
+  return pipe_idx
+end
+
+// ── Create buffer (HOST_VISIBLE + HOST_COHERENT) ─────────────────────
+fn rt_create_buffer(size_bytes)
+  let device = rt_handles[2]
+  let phys_dev = rt_handles[1]
+  let buf_idx = len(rt_bufs) / 3.0
+
+  // VkBufferCreateInfo (56 bytes)
+  let bci = mem_alloc(56)
+  mem_set_u32(bci, 0.0, VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+  mem_set_u64(bci, 24.0, size_bytes)
+  mem_set_u32(bci, 32.0, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+  let p = mem_alloc(8)
+  let r = vkCreateBuffer(device, bci, 0, p)
+  let _c = vk_check(r, "rt_create_buffer:vkCreateBuffer")
+  let buf = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(bci)
+
+  // Memory requirements
+  let reqs = mem_alloc(24)
+  let _r = vkGetBufferMemoryRequirements(device, buf, reqs)
+  let req_size = mem_get_u64(reqs, 0.0)
+  let type_bits = mem_get_u32(reqs, 16.0)
+  mem_free(reqs)
+
+  let mem_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT + VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+  let mem_type = vk_find_memory_type(phys_dev, type_bits, mem_flags)
+
+  // Allocate + bind
+  let mai = mem_alloc(32)
+  mem_set_u32(mai, 0.0, VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+  mem_set_u64(mai, 16.0, req_size)
+  mem_set_u32(mai, 24.0, mem_type)
+  let p = mem_alloc(8)
+  let r = vkAllocateMemory(device, mai, 0, p)
+  let _c = vk_check(r, "rt_create_buffer:vkAllocateMemory")
+  let memory = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(mai)
+
+  let r = vkBindBufferMemory(device, buf, memory, 0)
+  let _c = vk_check(r, "rt_create_buffer:vkBindBufferMemory")
+
+  // Store: stride 3 [buf, memory, size_bytes]
+  push(rt_bufs, buf)
+  push(rt_bufs, memory)
+  push(rt_bufs, size_bytes)
+
+  return buf_idx
+end
+
+// ── Create indirect buffer (STORAGE + INDIRECT usage) ────────────────
+fn rt_create_indirect_buffer(size_bytes)
+  let device = rt_handles[2]
+  let phys_dev = rt_handles[1]
+  let buf_idx = len(rt_bufs) / 3.0
+
+  // VkBufferCreateInfo (56 bytes) — STORAGE_BUFFER | INDIRECT_BUFFER
+  let usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT + VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT
+  let bci = mem_alloc(56)
+  mem_set_u32(bci, 0.0, VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+  mem_set_u64(bci, 24.0, size_bytes)
+  mem_set_u32(bci, 32.0, usage)
+  let p = mem_alloc(8)
+  let r = vkCreateBuffer(device, bci, 0, p)
+  let _c = vk_check(r, "rt_create_indirect_buffer:vkCreateBuffer")
+  let buf = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(bci)
+
+  // Memory requirements
+  let reqs = mem_alloc(24)
+  let _r = vkGetBufferMemoryRequirements(device, buf, reqs)
+  let req_size = mem_get_u64(reqs, 0.0)
+  let type_bits = mem_get_u32(reqs, 16.0)
+  mem_free(reqs)
+
+  let mem_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT + VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+  let mem_type = vk_find_memory_type(phys_dev, type_bits, mem_flags)
+
+  // Allocate + bind
+  let mai = mem_alloc(32)
+  mem_set_u32(mai, 0.0, VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+  mem_set_u64(mai, 16.0, req_size)
+  mem_set_u32(mai, 24.0, mem_type)
+  let p = mem_alloc(8)
+  let r = vkAllocateMemory(device, mai, 0, p)
+  let _c = vk_check(r, "rt_create_indirect_buffer:vkAllocateMemory")
+  let memory = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(mai)
+
+  let r = vkBindBufferMemory(device, buf, memory, 0)
+  let _c = vk_check(r, "rt_create_indirect_buffer:vkBindBufferMemory")
+
+  // Store: stride 3 [buf, memory, size_bytes]
+  push(rt_bufs, buf)
+  push(rt_bufs, memory)
+  push(rt_bufs, size_bytes)
+
+  return buf_idx
+end
+
+// ── Upload u32 array to buffer ──────────────────────────────────────
+fn rt_upload_u32(buf_idx, data)
+  let device = rt_handles[2]
+  let base = buf_idx * 3.0
+  let memory = rt_bufs[int(base + 1.0)]
+  let size = rt_bufs[int(base + 2.0)]
+
+  let pp = mem_alloc(8)
+  let r = vkMapMemory(device, memory, 0, size, 0, pp)
+  let _c = vk_check(r, "rt_upload_u32:vkMapMemory")
+  let mapped = mem_get_ptr(pp, 0.0)
+  mem_free(pp)
+
+  let n = len(data)
+  let mut i = 0.0
+  while i < n
+    mem_set_u32(mapped, i * 4.0, data[int(i)])
+    i = i + 1.0
+  end
+
+  let _r = vkUnmapMemory(device, memory)
+  return 0.0
+end
+
+// ── Upload f32 array to buffer ───────────────────────────────────────
+fn rt_upload(buf_idx, data)
+  let device = rt_handles[2]
+  let base = buf_idx * 3.0
+  let memory = rt_bufs[int(base + 1.0)]
+  let size = rt_bufs[int(base + 2.0)]
+
+  let pp = mem_alloc(8)
+  let r = vkMapMemory(device, memory, 0, size, 0, pp)
+  let _c = vk_check(r, "rt_upload:vkMapMemory")
+  let mapped = mem_get_ptr(pp, 0.0)
+  mem_free(pp)
+
+  let n = len(data)
+  let mut i = 0.0
+  while i < n
+    mem_set_f32(mapped, i * 4.0, data[int(i)])
+    i = i + 1.0
+  end
+
+  let _r = vkUnmapMemory(device, memory)
+  return 0.0
+end
+
+// ── Download f32 array from buffer ───────────────────────────────────
+fn rt_download(buf_idx, count)
+  let device = rt_handles[2]
+  let base = buf_idx * 3.0
+  let memory = rt_bufs[int(base + 1.0)]
+  let size = rt_bufs[int(base + 2.0)]
+
+  // Clear previous results
+  while len(rt_result) > 0.0
+    pop(rt_result)
+  end
+
+  let pp = mem_alloc(8)
+  let r = vkMapMemory(device, memory, 0, size, 0, pp)
+  let _c = vk_check(r, "rt_download:vkMapMemory")
+  let mapped = mem_get_ptr(pp, 0.0)
+  mem_free(pp)
+
+  let mut i = 0.0
+  while i < count
+    push(rt_result, mem_get_f32(mapped, i * 4.0))
+    i = i + 1.0
+  end
+
+  let _r = vkUnmapMemory(device, memory)
+  return 0.0
+end
+
+// ── Load file region directly into GPU buffer (no Value overhead) ────
+// Maps buffer memory, reads file bytes directly into it via Rust FFI.
+// offset_buf: MEM_TABLE handle containing u64 absolute file offset
+// offset_pos: byte position within offset_buf where the u64 is stored
+// byte_count: number of bytes to read (f32, must fit in buffer)
+fn rt_load_file_region(file_path, buf_idx, offset_buf, offset_pos, byte_count)
+  let device = rt_handles[2]
+  let base = buf_idx * 3.0
+  let memory = rt_bufs[int(base + 1.0)]
+  let size = rt_bufs[int(base + 2.0)]
+
+  // Map GPU buffer memory
+  let pp = mem_alloc(8)
+  let r = vkMapMemory(device, memory, 0, size, 0, pp)
+  let _c = vk_check(r, "rt_load_file_region:vkMapMemory")
+  let mapped = mem_get_ptr(pp, 0.0)
+  mem_free(pp)
+
+  // Read file region directly into mapped memory (u64-precise offset)
+  let _r = file_read_into_mem_u64(file_path, mapped, offset_buf, offset_pos, byte_count)
+
+  // Unmap
+  let _r = vkUnmapMemory(device, memory)
+  return 0.0
+end
+
+// ── Load file region with simple f32 offset (for small offsets < 16MB) ─
+fn rt_load_file_region_f32(file_path, buf_idx, file_offset, byte_count)
+  let device = rt_handles[2]
+  let base = buf_idx * 3.0
+  let memory = rt_bufs[int(base + 1.0)]
+  let size = rt_bufs[int(base + 2.0)]
+
+  let pp = mem_alloc(8)
+  let r = vkMapMemory(device, memory, 0, size, 0, pp)
+  let _c = vk_check(r, "rt_load_file_region_f32:vkMapMemory")
+  let mapped = mem_get_ptr(pp, 0.0)
+  mem_free(pp)
+
+  let _r = file_read_into_mem(file_path, mapped, file_offset, byte_count)
+
+  let _r = vkUnmapMemory(device, memory)
+  return 0.0
+end
+
+// ── Chain: Begin recording ───────────────────────────────────────────
+fn rt_chain_begin(max_dispatches, max_bindings_per)
+  let device = rt_handles[2]
+
+  // Allocate fresh command buffer from pool (no reset — supports multi-submit)
+  let cbai = mem_alloc(32)
+  mem_set_u32(cbai, 0.0, VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
+  mem_set_ptr(cbai, 16.0, rt_handles[4])
+  mem_set_u32(cbai, 24.0, VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+  mem_set_u32(cbai, 28.0, 1.0)
+  let p = mem_alloc(8)
+  let r = vkAllocateCommandBuffers(device, cbai, p)
+  let _c = vk_check(r, "rt_chain_begin:vkAllocateCommandBuffers")
+  rt_handles[6] = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(cbai)
+
+  // Create descriptor pool for chain
+  let total_desc = max_dispatches * max_bindings_per
+  let pool_size = mem_alloc(8)
+  mem_set_u32(pool_size, 0.0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+  mem_set_u32(pool_size, 4.0, total_desc)
+
+  let dpci = mem_alloc(40)
+  mem_set_u32(dpci, 0.0, VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO)
+  mem_set_u32(dpci, 20.0, max_dispatches)
+  mem_set_u32(dpci, 24.0, 1.0)
+  mem_set_ptr(dpci, 32.0, pool_size)
+
+  let p = mem_alloc(8)
+  let r = vkCreateDescriptorPool(device, dpci, 0, p)
+  let _c = vk_check(r, "rt_chain_begin:vkCreateDescriptorPool")
+  let ds_pool = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(dpci)
+  mem_free(pool_size)
+
+  // Store pool handle (current chain + accumulator for multi-submit)
+  while len(rt_chain_pool) > 0.0
+    pop(rt_chain_pool)
+  end
+  push(rt_chain_pool, ds_pool)
+  push(rt_ds_pools, ds_pool)
+
+  // Begin command buffer
+  let cbbi = mem_alloc(32)
+  mem_set_u32(cbbi, 0.0, VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
+  mem_set_u32(cbbi, 16.0, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT)
+  let r = vkBeginCommandBuffer(rt_handles[6], cbbi)
+  let _c = vk_check(r, "rt_chain_begin:vkBeginCommandBuffer")
+  mem_free(cbbi)
+
+  return 0.0
+end
+
+// ── Chain: Record one dispatch ───────────────────────────────────────
+fn rt_chain_dispatch(pipe_idx, buf_indices, workgroups)
+  let device = rt_handles[2]
+  let cmd_buf = rt_handles[6]
+  let ds_pool = rt_chain_pool[0]
+
+  let pipe_base = pipe_idx * 5.0
+  let ds_layout = rt_pipes[int(pipe_base + 1.0)]
+  let pipe_layout = rt_pipes[int(pipe_base + 2.0)]
+  let pipeline = rt_pipes[int(pipe_base + 3.0)]
+
+  let num_bufs = len(buf_indices)
+
+  // Allocate descriptor set
+  let p_lay = mem_alloc(8)
+  mem_set_ptr(p_lay, 0.0, ds_layout)
+  let dsai = mem_alloc(40)
+  mem_set_u32(dsai, 0.0, VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
+  mem_set_ptr(dsai, 16.0, ds_pool)
+  mem_set_u32(dsai, 24.0, 1.0)
+  mem_set_ptr(dsai, 32.0, p_lay)
+  let p_ds = mem_alloc(8)
+  let r = vkAllocateDescriptorSets(device, dsai, p_ds)
+  let _c = vk_check(r, "rt_chain_dispatch:vkAllocateDescriptorSets")
+  let desc_set = mem_get_ptr(p_ds, 0.0)
+  mem_free(p_ds)
+  mem_free(dsai)
+  mem_free(p_lay)
+
+  // Update descriptor set: one VkWriteDescriptorSet per binding
+  let mut wi = 0.0
+  while wi < num_bufs
+    let bidx = buf_indices[int(wi)]
+    let buf_base = bidx * 3.0
+    let buf_handle = rt_bufs[int(buf_base)]
+    let buf_size = rt_bufs[int(buf_base + 2.0)]
+
+    let dbi = mem_alloc(24)
+    mem_set_ptr(dbi, 0.0, buf_handle)
+    mem_set_u64(dbi, 8.0, 0.0)
+    mem_set_u64(dbi, 16.0, buf_size)
+
+    let wd = mem_alloc(64)
+    mem_set_u32(wd, 0.0, VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+    mem_set_ptr(wd, 16.0, desc_set)
+    mem_set_u32(wd, 24.0, wi)
+    mem_set_u32(wd, 32.0, 1.0)
+    mem_set_u32(wd, 36.0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+    mem_set_ptr(wd, 48.0, dbi)
+
+    let _r = vkUpdateDescriptorSets(device, 1, wd, 0, 0)
+    mem_free(wd)
+    mem_free(dbi)
+    wi = wi + 1.0
+  end
+
+  // Bind pipeline + descriptors + dispatch
+  let _r = vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline)
+  let p_sets = mem_alloc(8)
+  mem_set_ptr(p_sets, 0.0, desc_set)
+  let _r = vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_layout, 0, 1, p_sets, 0, 0)
+  mem_free(p_sets)
+  let _r = vkCmdDispatch(cmd_buf, workgroups, 1, 1)
+
+  // Pipeline barrier: SHADER_WRITE → SHADER_READ|SHADER_WRITE
+  let barrier = mem_alloc(24)
+  mem_set_u32(barrier, 0.0, VK_STRUCTURE_TYPE_MEMORY_BARRIER)
+  mem_set_u32(barrier, 16.0, VK_ACCESS_SHADER_WRITE_BIT)
+  let dst_access = VK_ACCESS_SHADER_READ_BIT + VK_ACCESS_SHADER_WRITE_BIT + VK_ACCESS_INDIRECT_COMMAND_READ_BIT
+  mem_set_u32(barrier, 20.0, dst_access)
+  let dst_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT + VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT
+  let _r = vkCmdPipelineBarrier(cmd_buf, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dst_stage, 0, 1, barrier, 0, 0, 0, 0)
+  mem_free(barrier)
+
+  return 0.0
+end
+
+// ── Chain: Record one 2D dispatch ────────────────────────────────────
+fn rt_chain_dispatch_2d(pipe_idx, buf_indices, workgroups_x, workgroups_y)
+  let device = rt_handles[2]
+  let cmd_buf = rt_handles[6]
+  let ds_pool = rt_chain_pool[0]
+
+  let pipe_base = pipe_idx * 5.0
+  let ds_layout = rt_pipes[int(pipe_base + 1.0)]
+  let pipe_layout = rt_pipes[int(pipe_base + 2.0)]
+  let pipeline = rt_pipes[int(pipe_base + 3.0)]
+
+  let num_bufs = len(buf_indices)
+
+  // Allocate descriptor set
+  let p_lay = mem_alloc(8)
+  mem_set_ptr(p_lay, 0.0, ds_layout)
+  let dsai = mem_alloc(40)
+  mem_set_u32(dsai, 0.0, VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
+  mem_set_ptr(dsai, 16.0, ds_pool)
+  mem_set_u32(dsai, 24.0, 1.0)
+  mem_set_ptr(dsai, 32.0, p_lay)
+  let p_ds = mem_alloc(8)
+  let r = vkAllocateDescriptorSets(device, dsai, p_ds)
+  let _c = vk_check(r, "rt_chain_dispatch_2d:vkAllocateDescriptorSets")
+  let desc_set = mem_get_ptr(p_ds, 0.0)
+  mem_free(p_ds)
+  mem_free(dsai)
+  mem_free(p_lay)
+
+  // Update descriptor set: one VkWriteDescriptorSet per binding
+  let mut wi = 0.0
+  while wi < num_bufs
+    let bidx = buf_indices[int(wi)]
+    let buf_base = bidx * 3.0
+    let buf_handle = rt_bufs[int(buf_base)]
+    let buf_size = rt_bufs[int(buf_base + 2.0)]
+
+    let dbi = mem_alloc(24)
+    mem_set_ptr(dbi, 0.0, buf_handle)
+    mem_set_u64(dbi, 8.0, 0.0)
+    mem_set_u64(dbi, 16.0, buf_size)
+
+    let wd = mem_alloc(64)
+    mem_set_u32(wd, 0.0, VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+    mem_set_ptr(wd, 16.0, desc_set)
+    mem_set_u32(wd, 24.0, wi)
+    mem_set_u32(wd, 32.0, 1.0)
+    mem_set_u32(wd, 36.0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+    mem_set_ptr(wd, 48.0, dbi)
+
+    let _r = vkUpdateDescriptorSets(device, 1, wd, 0, 0)
+    mem_free(wd)
+    mem_free(dbi)
+    wi = wi + 1.0
+  end
+
+  // Bind pipeline + descriptors + dispatch (2D)
+  let _r = vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline)
+  let p_sets = mem_alloc(8)
+  mem_set_ptr(p_sets, 0.0, desc_set)
+  let _r = vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_layout, 0, 1, p_sets, 0, 0)
+  mem_free(p_sets)
+  let _r = vkCmdDispatch(cmd_buf, workgroups_x, workgroups_y, 1)
+
+  // Pipeline barrier: SHADER_WRITE → SHADER_READ|SHADER_WRITE
+  let barrier = mem_alloc(24)
+  mem_set_u32(barrier, 0.0, VK_STRUCTURE_TYPE_MEMORY_BARRIER)
+  mem_set_u32(barrier, 16.0, VK_ACCESS_SHADER_WRITE_BIT)
+  let dst_access = VK_ACCESS_SHADER_READ_BIT + VK_ACCESS_SHADER_WRITE_BIT + VK_ACCESS_INDIRECT_COMMAND_READ_BIT
+  mem_set_u32(barrier, 20.0, dst_access)
+  let dst_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT + VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT
+  let _r = vkCmdPipelineBarrier(cmd_buf, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dst_stage, 0, 1, barrier, 0, 0, 0, 0)
+  mem_free(barrier)
+
+  return 0.0
+end
+
+// ── Chain: Record one INDIRECT dispatch ──────────────────────────────
+fn rt_chain_dispatch_indirect(pipe_idx, buf_indices, indirect_buf_idx)
+  let device = rt_handles[2]
+  let cmd_buf = rt_handles[6]
+  let ds_pool = rt_chain_pool[0]
+
+  let pipe_base = pipe_idx * 5.0
+  let ds_layout = rt_pipes[int(pipe_base + 1.0)]
+  let pipe_layout = rt_pipes[int(pipe_base + 2.0)]
+  let pipeline = rt_pipes[int(pipe_base + 3.0)]
+
+  let num_bufs = len(buf_indices)
+
+  // Allocate descriptor set
+  let p_lay = mem_alloc(8)
+  mem_set_ptr(p_lay, 0.0, ds_layout)
+  let dsai = mem_alloc(40)
+  mem_set_u32(dsai, 0.0, VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
+  mem_set_ptr(dsai, 16.0, ds_pool)
+  mem_set_u32(dsai, 24.0, 1.0)
+  mem_set_ptr(dsai, 32.0, p_lay)
+  let p_ds = mem_alloc(8)
+  let r = vkAllocateDescriptorSets(device, dsai, p_ds)
+  let _c = vk_check(r, "rt_chain_dispatch_indirect:vkAllocateDescriptorSets")
+  let desc_set = mem_get_ptr(p_ds, 0.0)
+  mem_free(p_ds)
+  mem_free(dsai)
+  mem_free(p_lay)
+
+  // Update descriptor set: one VkWriteDescriptorSet per binding
+  let mut wi = 0.0
+  while wi < num_bufs
+    let bidx = buf_indices[int(wi)]
+    let buf_base = bidx * 3.0
+    let buf_handle = rt_bufs[int(buf_base)]
+    let buf_size = rt_bufs[int(buf_base + 2.0)]
+
+    let dbi = mem_alloc(24)
+    mem_set_ptr(dbi, 0.0, buf_handle)
+    mem_set_u64(dbi, 8.0, 0.0)
+    mem_set_u64(dbi, 16.0, buf_size)
+
+    let wd = mem_alloc(64)
+    mem_set_u32(wd, 0.0, VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+    mem_set_ptr(wd, 16.0, desc_set)
+    mem_set_u32(wd, 24.0, wi)
+    mem_set_u32(wd, 32.0, 1.0)
+    mem_set_u32(wd, 36.0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+    mem_set_ptr(wd, 48.0, dbi)
+
+    let _r = vkUpdateDescriptorSets(device, 1, wd, 0, 0)
+    mem_free(wd)
+    mem_free(dbi)
+    wi = wi + 1.0
+  end
+
+  // Bind pipeline + descriptors
+  let _r = vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline)
+  let p_sets = mem_alloc(8)
+  mem_set_ptr(p_sets, 0.0, desc_set)
+  let _r = vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_layout, 0, 1, p_sets, 0, 0)
+  mem_free(p_sets)
+
+  // INDIRECT dispatch — GPU reads workgroup count from indirect buffer
+  let ind_base = indirect_buf_idx * 3.0
+  let ind_buf = rt_bufs[int(ind_base)]
+  let _r = vkCmdDispatchIndirect(cmd_buf, ind_buf, 0)
+
+  // Pipeline barrier: SHADER_WRITE → SHADER_READ|SHADER_WRITE|INDIRECT_READ
+  let barrier = mem_alloc(24)
+  mem_set_u32(barrier, 0.0, VK_STRUCTURE_TYPE_MEMORY_BARRIER)
+  mem_set_u32(barrier, 16.0, VK_ACCESS_SHADER_WRITE_BIT)
+  let dst_access = VK_ACCESS_SHADER_READ_BIT + VK_ACCESS_SHADER_WRITE_BIT + VK_ACCESS_INDIRECT_COMMAND_READ_BIT
+  mem_set_u32(barrier, 20.0, dst_access)
+  let dst_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT + VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT
+  let _r = vkCmdPipelineBarrier(cmd_buf, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dst_stage, 0, 1, barrier, 0, 0, 0, 0)
+  mem_free(barrier)
+
+  return 0.0
+end
+
+// ── Chain: Record push constants ─────────────────────────────────────
+fn rt_chain_push_constants(pipe_idx, values)
+  let cmd_buf = rt_handles[6]
+  let pipe_base = pipe_idx * 5.0
+  let pipe_layout = rt_pipes[int(pipe_base + 2.0)]
+  let pc_size = rt_pipes[int(pipe_base + 4.0)]
+
+  // Pack f32 values into contiguous memory
+  let n = len(values)
+  let data = mem_alloc(n * 4.0)
+  let mut i = 0.0
+  while i < n
+    mem_set_f32(data, i * 4.0, values[int(i)])
+    i = i + 1.0
+  end
+
+  let _r = vkCmdPushConstants(cmd_buf, pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pc_size, data)
+  mem_free(data)
+  return 0.0
+end
+
+// ── Chain: End recording ─────────────────────────────────────────────
+fn rt_chain_end()
+  let cmd_buf = rt_handles[6]
+  let r = vkEndCommandBuffer(cmd_buf)
+  let _c = vk_check(r, "rt_chain_end:vkEndCommandBuffer")
+  return 0.0
+end
+
+// ── Chain: Submit + wait ─────────────────────────────────────────────
+fn rt_chain_submit_wait()
+  let device = rt_handles[2]
+  let queue = rt_handles[3]
+  let cmd_buf = rt_handles[6]
+  let fence = rt_handles[5]
+
+  // Build VkSubmitInfo (72 bytes)
+  let p_cmds = mem_alloc(8)
+  mem_set_ptr(p_cmds, 0.0, cmd_buf)
+  let sub = mem_alloc(72)
+  mem_set_u32(sub, 0.0, VK_STRUCTURE_TYPE_SUBMIT_INFO)
+  mem_set_u32(sub, 40.0, 1.0)
+  mem_set_ptr(sub, 48.0, p_cmds)
+
+  let r = vkQueueSubmit(queue, 1, sub, fence)
+  let _c = vk_check(r, "rt_chain_submit_wait:vkQueueSubmit")
+  mem_free(sub)
+  mem_free(p_cmds)
+
+  // Wait for completion
+  let p_fence = mem_alloc(8)
+  mem_set_ptr(p_fence, 0.0, fence)
+  let r = vkWaitForFences(device, 1, p_fence, 1, 999999999)
+  let _c = vk_check(r, "rt_chain_submit_wait:vkWaitForFences")
+
+  // Reset fence for reuse
+  let r = vkResetFences(device, 1, p_fence)
+  let _c = vk_check(r, "rt_chain_submit_wait:vkResetFences")
+  mem_free(p_fence)
+
+  // Reset command pool (frees all command buffers for reuse)
+  let r = vkResetCommandPool(device, rt_handles[4], 0)
+  let _c = vk_check(r, "rt_chain_submit_wait:vkResetCommandPool")
+
+  // Destroy all accumulated descriptor pools
+  let mut di = 0.0
+  while di < len(rt_ds_pools)
+    let _r = vkDestroyDescriptorPool(device, rt_ds_pools[int(di)], 0)
+    di = di + 1.0
+  end
+  while len(rt_ds_pools) > 0.0
+    pop(rt_ds_pools)
+  end
+  while len(rt_chain_pool) > 0.0
+    pop(rt_chain_pool)
+  end
+
+  return 0.0
+end
+
+// ── Timeline Semaphore: Helper ──────────────────────────────────────
+// Write sType bytes for large values that exceed f32 precision (>2^24)
+fn vk_set_stype(ptr, b0, b1, b2, b3)
+  mem_set_u8(ptr, 0.0, b0)
+  mem_set_u8(ptr, 1.0, b1)
+  mem_set_u8(ptr, 2.0, b2)
+  mem_set_u8(ptr, 3.0, b3)
+  return 0.0
+end
+
+// ── Timeline Semaphore: Create ──────────────────────────────────────
+fn rt_create_timeline_semaphore(initial_value)
+  let device = rt_handles[2]
+  let sem_idx = len(rt_sems)
+
+  // VkSemaphoreTypeCreateInfo (32 bytes)
+  // sType = 1000207002 = 0x3B9DF29A -> [154, 242, 157, 59]
+  let stci = mem_alloc(32.0)
+  vk_set_stype(stci, 154.0, 242.0, 157.0, 59.0)
+  mem_set_u32(stci, 16.0, VK_SEMAPHORE_TYPE_TIMELINE)
+  mem_set_u64(stci, 24.0, initial_value)
+
+  // VkSemaphoreCreateInfo (24 bytes)
+  let sci = mem_alloc(24.0)
+  mem_set_u32(sci, 0.0, VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO)
+  mem_set_ptr(sci, 8.0, stci)
+
+  let p = mem_alloc(8.0)
+  let r = vkCreateSemaphore(device, sci, 0, p)
+  let _c = vk_check(r, "rt_create_timeline_semaphore:vkCreateSemaphore")
+  let sem = mem_get_ptr(p, 0.0)
+  mem_free(p)
+  mem_free(sci)
+  mem_free(stci)
+
+  push(rt_sems, sem)
+  return sem_idx
+end
+
+// ── Timeline Semaphore: Get value ───────────────────────────────────
+fn rt_get_semaphore_value(sem_idx)
+  let device = rt_handles[2]
+  let sem = rt_sems[int(sem_idx)]
+
+  let p = mem_alloc(8.0)
+  let r = vkGetSemaphoreCounterValue(device, sem, p)
+  let _c = vk_check(r, "rt_get_semaphore_value:vkGetSemaphoreCounterValue")
+  let val = mem_get_u64(p, 0.0)
+  mem_free(p)
+
+  return val
+end
+
+// ── Timeline Semaphore: CPU wait ────────────────────────────────────
+fn rt_wait_semaphore(sem_idx, value)
+  let device = rt_handles[2]
+  let sem = rt_sems[int(sem_idx)]
+
+  // Build semaphore handle array (1 element)
+  let p_sem = mem_alloc(8.0)
+  mem_set_ptr(p_sem, 0.0, sem)
+
+  // Build value array (1 u64 element)
+  let p_val = mem_alloc(8.0)
+  mem_set_u64(p_val, 0.0, value)
+
+  // VkSemaphoreWaitInfo (40 bytes)
+  // sType = 1000207004 = 0x3B9DF29C -> [156, 242, 157, 59]
+  let swi = mem_alloc(40.0)
+  vk_set_stype(swi, 156.0, 242.0, 157.0, 59.0)
+  mem_set_u32(swi, 20.0, 1.0)
+  mem_set_ptr(swi, 24.0, p_sem)
+  mem_set_ptr(swi, 32.0, p_val)
+
+  let r = vkWaitSemaphores(device, swi, 999999999)
+  let _c = vk_check(r, "rt_wait_semaphore:vkWaitSemaphores")
+  mem_free(swi)
+  mem_free(p_val)
+  mem_free(p_sem)
+
+  return 0.0
+end
+
+// ── Timeline Semaphore: CPU signal ──────────────────────────────────
+fn rt_signal_semaphore(sem_idx, value)
+  let device = rt_handles[2]
+  let sem = rt_sems[int(sem_idx)]
+
+  // VkSemaphoreSignalInfo (32 bytes)
+  // sType = 1000207005 = 0x3B9DF29D -> [157, 242, 157, 59]
+  let ssi = mem_alloc(32.0)
+  vk_set_stype(ssi, 157.0, 242.0, 157.0, 59.0)
+  mem_set_ptr(ssi, 16.0, sem)
+  mem_set_u64(ssi, 24.0, value)
+
+  let r = vkSignalSemaphore(device, ssi)
+  let _c = vk_check(r, "rt_signal_semaphore:vkSignalSemaphore")
+  mem_free(ssi)
+
+  return 0.0
+end
+
+// ── Chain: Submit with timeline semaphore (no fence, no wait) ───────
+// wait_sem/signal_sem: semaphore index (-1 = none)
+// wait_val/signal_val: timeline counter values
+fn rt_chain_submit_timeline(wait_sem, wait_val, signal_sem, signal_val)
+  let device = rt_handles[2]
+  let queue = rt_handles[3]
+  let cmd_buf = rt_handles[6]
+
+  // Determine wait/signal counts
+  let mut has_wait = 0.0
+  if wait_sem >= 0.0
+    has_wait = 1.0
+  end
+  let mut has_signal = 0.0
+  if signal_sem >= 0.0
+    has_signal = 1.0
+  end
+
+  // Semaphore handle arrays
+  let p_wait_sem = mem_alloc(8.0)
+  if has_wait == 1.0
+    mem_set_ptr(p_wait_sem, 0.0, rt_sems[int(wait_sem)])
+  end
+  let p_signal_sem = mem_alloc(8.0)
+  if has_signal == 1.0
+    mem_set_ptr(p_signal_sem, 0.0, rt_sems[int(signal_sem)])
+  end
+
+  // Wait stage mask
+  let p_wait_stage = mem_alloc(4.0)
+  mem_set_u32(p_wait_stage, 0.0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
+
+  // Timeline values
+  let p_wait_val = mem_alloc(8.0)
+  mem_set_u64(p_wait_val, 0.0, wait_val)
+  let p_signal_val = mem_alloc(8.0)
+  mem_set_u64(p_signal_val, 0.0, signal_val)
+
+  // VkTimelineSemaphoreSubmitInfo (48 bytes)
+  // sType = 1000207003 = 0x3B9DF29B -> [155, 242, 157, 59]
+  let tssi = mem_alloc(48.0)
+  vk_set_stype(tssi, 155.0, 242.0, 157.0, 59.0)
+  mem_set_u32(tssi, 16.0, has_wait)
+  mem_set_ptr(tssi, 24.0, p_wait_val)
+  mem_set_u32(tssi, 32.0, has_signal)
+  mem_set_ptr(tssi, 40.0, p_signal_val)
+
+  // VkSubmitInfo (72 bytes) with timeline pNext chain
+  let p_cmds = mem_alloc(8.0)
+  mem_set_ptr(p_cmds, 0.0, cmd_buf)
+
+  let sub = mem_alloc(72.0)
+  mem_set_u32(sub, 0.0, VK_STRUCTURE_TYPE_SUBMIT_INFO)
+  mem_set_ptr(sub, 8.0, tssi)
+  mem_set_u32(sub, 16.0, has_wait)
+  mem_set_ptr(sub, 24.0, p_wait_sem)
+  mem_set_ptr(sub, 32.0, p_wait_stage)
+  mem_set_u32(sub, 40.0, 1.0)
+  mem_set_ptr(sub, 48.0, p_cmds)
+  mem_set_u32(sub, 56.0, has_signal)
+  mem_set_ptr(sub, 64.0, p_signal_sem)
+
+  let r = vkQueueSubmit(queue, 1, sub, 0)
+  let _c = vk_check(r, "rt_chain_submit_timeline:vkQueueSubmit")
+
+  mem_free(sub)
+  mem_free(p_cmds)
+  mem_free(tssi)
+  mem_free(p_signal_val)
+  mem_free(p_wait_val)
+  mem_free(p_wait_stage)
+  mem_free(p_signal_sem)
+  mem_free(p_wait_sem)
+
+  return 0.0
+end
+
+// ── Chain: Reset (cleanup after all timeline submits complete) ──────
+fn rt_chain_reset()
+  let device = rt_handles[2]
+
+  // Reset command pool (frees all command buffers)
+  let r = vkResetCommandPool(device, rt_handles[4], 0)
+  let _c = vk_check(r, "rt_chain_reset:vkResetCommandPool")
+
+  // Destroy all accumulated descriptor pools
+  let mut di = 0.0
+  while di < len(rt_ds_pools)
+    let _r = vkDestroyDescriptorPool(device, rt_ds_pools[int(di)], 0)
+    di = di + 1.0
+  end
+  while len(rt_ds_pools) > 0.0
+    pop(rt_ds_pools)
+  end
+  while len(rt_chain_pool) > 0.0
+    pop(rt_chain_pool)
+  end
+
+  return 0.0
+end

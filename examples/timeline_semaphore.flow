@@ -1,0 +1,177 @@
+// timeline_semaphore.flow — GPU Self-Synchronization: Tier 3 Autonomy Proof
+//
+// THREE vkQueueSubmit calls, ZERO fences between them.
+// GPU coordinates all inter-submission ordering via timeline semaphore values.
+// CPU fires 3 submits, then sleeps until the timeline reaches 3.
+//
+// This proves GPU SELF-SYNCHRONIZATION.
+// Tier 1 proved sequential autonomy (CPU scheduled, GPU executed).
+// Tier 2 proved the GPU makes scheduling decisions (indirect dispatch).
+// Tier 3 proves the GPU manages its own synchronization without CPU intervention.
+//
+// Verification is BIT-EXACT: 30 doublings of 1.0 = 2^30 = 1073741824.
+// Power of 2 — zero floating-point ambiguity.
+//
+// Architecture:
+//   Submit 1: 10 doublings → signals timeline=1
+//   Submit 2: waits timeline>=1 → 10 doublings → signals timeline=2
+//   Submit 3: waits timeline>=2 → 10 doublings → signals timeline=3
+//   CPU: vkWaitSemaphores(timeline>=3) — single call, then reads result.
+//
+// Run: octoflow run examples/timeline_semaphore.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N = 256.0
+let BUF_BYTES = N * 4.0
+let DOUBLINGS = 10.0
+
+// Boot GPU (Vulkan 1.2 with timeline semaphore feature)
+rt_init()
+
+// Load shader
+let pipe = rt_load_pipeline("tests/gpu_shaders/01_double.spv", 2.0, 0.0)
+
+// Create buffers
+let buf_a = rt_create_buffer(BUF_BYTES)
+let buf_b = rt_create_buffer(BUF_BYTES)
+
+// Upload data: [1, 2, 3, ..., 256]
+let mut data = []
+let mut i = 0.0
+while i < N
+  push(data, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(buf_a, data)
+
+// Zero buf_b
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_b, zeros)
+
+// Create timeline semaphore (initial counter = 0)
+let sem = rt_create_timeline_semaphore(0.0)
+
+// Ping-pong buffer pairs
+let mut bufs_ab = [buf_a, buf_b]
+let mut bufs_ba = [buf_b, buf_a]
+
+// ── Record + submit 3 chains ───────────────────────────────────────
+let t0 = time()
+
+// Submit 1: 10 doublings, no wait, signal timeline=1
+rt_chain_begin(DOUBLINGS, 2.0)
+let mut d = 0.0
+let mut use_ab = 1.0
+while d < DOUBLINGS
+  if use_ab == 1.0
+    rt_chain_dispatch(pipe, bufs_ab, 1.0)
+    use_ab = 0.0
+  else
+    rt_chain_dispatch(pipe, bufs_ba, 1.0)
+    use_ab = 1.0
+  end
+  d = d + 1.0
+end
+rt_chain_end()
+rt_chain_submit_timeline(0.0 - 1.0, 0.0, sem, 1.0)
+
+// Submit 2: 10 doublings, wait timeline>=1, signal timeline=2
+rt_chain_begin(DOUBLINGS, 2.0)
+let mut d = 0.0
+let mut use_ab = 1.0
+while d < DOUBLINGS
+  if use_ab == 1.0
+    rt_chain_dispatch(pipe, bufs_ab, 1.0)
+    use_ab = 0.0
+  else
+    rt_chain_dispatch(pipe, bufs_ba, 1.0)
+    use_ab = 1.0
+  end
+  d = d + 1.0
+end
+rt_chain_end()
+rt_chain_submit_timeline(sem, 1.0, sem, 2.0)
+
+// Submit 3: 10 doublings, wait timeline>=2, signal timeline=3
+rt_chain_begin(DOUBLINGS, 2.0)
+let mut d = 0.0
+let mut use_ab = 1.0
+while d < DOUBLINGS
+  if use_ab == 1.0
+    rt_chain_dispatch(pipe, bufs_ab, 1.0)
+    use_ab = 0.0
+  else
+    rt_chain_dispatch(pipe, bufs_ba, 1.0)
+    use_ab = 1.0
+  end
+  d = d + 1.0
+end
+rt_chain_end()
+rt_chain_submit_timeline(sem, 2.0, sem, 3.0)
+
+let t1 = time()
+let record_ms = (t1 - t0) * 1000.0
+
+// ── CPU sleeps until GPU reaches timeline=3 ────────────────────────
+let t2 = time()
+rt_wait_semaphore(sem, 3.0)
+let t3 = time()
+let gpu_ms = (t3 - t2) * 1000.0
+
+// Cleanup chains
+rt_chain_reset()
+
+// ── Verify result (bit-exact) ──────────────────────────────────────
+rt_download(buf_a, 4.0)
+
+// 30 doublings: 2^30 = 1073741824 (power of 2, exact in f32)
+let expected_0 = 1073741824.0
+let expected_1 = 2147483648.0
+let expected_2 = 3221225472.0
+let expected_3 = 4294967296.0
+
+let v0 = rt_result[0]
+let v1 = rt_result[1]
+let v2 = rt_result[2]
+let v3 = rt_result[3]
+
+// Check final semaphore value
+let sem_val = rt_get_semaphore_value(sem)
+
+print("")
+print("OctoFlow GPU Autonomy — Tier 3 Proof")
+print("  Pipeline:")
+print("    Submit 1: 10 doublings -> signals timeline=1")
+print("    Submit 2: waits timeline>=1 -> 10 doublings -> signals timeline=2")
+print("    Submit 3: waits timeline>=2 -> 10 doublings -> signals timeline=3")
+print("  Submissions: 3")
+print("  Fences: 0")
+print("  CPU synchronization: vkWaitSemaphores (single call at end)")
+print("  GPU synchronization: timeline semaphore values [1, 2, 3]")
+print("  Final semaphore value: {sem_val}")
+print("  Total doublings: 30")
+print("  Record time: {record_ms} ms")
+print("  GPU time:    {gpu_ms} ms")
+print("  Result[0..3]: [{v0}, {v1}, {v2}, {v3}]")
+print("  Expected:     [{expected_0}, {expected_1}, {expected_2}, {expected_3}]")
+
+if v0 == expected_0 && v1 == expected_1 && v2 == expected_2 && v3 == expected_3
+  print("  EXACT MATCH")
+else
+  print("  MISMATCH")
+  if v0 != expected_0
+    print("    v0: got {v0}, expected {expected_0}")
+  end
+  if v1 != expected_1
+    print("    v1: got {v1}, expected {expected_1}")
+  end
+end
+
+print("")
+rt_cleanup()

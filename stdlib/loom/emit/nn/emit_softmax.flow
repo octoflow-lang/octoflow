@@ -1,0 +1,213 @@
+// emit_softmax.flow — Softmax Kernel Emitter
+//
+// softmax(x)_i = exp(x_i - max(x)) / sum(exp(x_j - max(x)))
+//
+// Numerically stable: subtract max before exp to prevent overflow.
+// Uses shared memory reduction for max and sum.
+//
+// Binding 0: input x (float array, length N)
+// Binding 1: output (float array, length N)
+//
+// Push constants:
+//   [0]: N (vector length, float)
+//
+// Workgroup: 256 threads. Handles vectors up to 256 elements.
+// MVP: single vector, N <= 256.
+
+use "../compiler/ir"
+
+fn emit_softmax(out_path)
+  ir_new()
+  ir_input_count = 1.0
+  ir_shared_size = 256.0
+  ir_workgroup_size = 256.0
+
+  let entry = ir_block("entry")
+
+  let lid = ir_load_local_id(entry)
+  let n_f = ir_push_const(entry, 0.0)
+  let n = ir_ftou(entry, n_f)
+
+  // Load input value (out-of-bounds threads get -inf for max, 0 for sum)
+  let in_bounds = ir_ulte(entry, lid, n)
+  let x = ir_load_input_at(entry, 0.0, lid)
+  let neg_inf = ir_const_f(entry, -100000.0)
+  let x_val = ir_select(entry, 1.0, in_bounds, x, neg_inf)
+
+  // === Phase 1: Find max using shared memory reduction ===
+  ir_shared_store(entry, lid, x_val)
+  ir_barrier(entry)
+
+  // Unrolled max reduction (8 steps for 256 threads)
+  let c128 = ir_const_u(entry, 128.0)
+  let c64 = ir_const_u(entry, 64.0)
+  let c32 = ir_const_u(entry, 32.0)
+  let c16 = ir_const_u(entry, 16.0)
+  let c8 = ir_const_u(entry, 8.0)
+  let c4 = ir_const_u(entry, 4.0)
+  let c2u = ir_const_u(entry, 2.0)
+  let c1u = ir_const_u(entry, 1.0)
+
+  // Step 1: stride 128
+  let p1 = ir_iadd(entry, lid, c128)
+  let d1 = ir_ulte(entry, lid, c128)
+  let m1a = ir_shared_load(entry, lid)
+  let m1b = ir_shared_load(entry, p1)
+  let m1 = ir_fmax(entry, m1a, m1b)
+  let k1 = ir_select(entry, 1.0, d1, m1, m1a)
+  ir_shared_store(entry, lid, k1)
+  ir_barrier(entry)
+
+  // Step 2: stride 64
+  let p2 = ir_iadd(entry, lid, c64)
+  let d2 = ir_ulte(entry, lid, c64)
+  let m2a = ir_shared_load(entry, lid)
+  let m2b = ir_shared_load(entry, p2)
+  let m2 = ir_fmax(entry, m2a, m2b)
+  let k2 = ir_select(entry, 1.0, d2, m2, m2a)
+  ir_shared_store(entry, lid, k2)
+  ir_barrier(entry)
+
+  // Step 3: stride 32
+  let p3 = ir_iadd(entry, lid, c32)
+  let d3 = ir_ulte(entry, lid, c32)
+  let m3a = ir_shared_load(entry, lid)
+  let m3b = ir_shared_load(entry, p3)
+  let m3 = ir_fmax(entry, m3a, m3b)
+  let k3 = ir_select(entry, 1.0, d3, m3, m3a)
+  ir_shared_store(entry, lid, k3)
+  ir_barrier(entry)
+
+  // Step 4: stride 16
+  let p4 = ir_iadd(entry, lid, c16)
+  let d4 = ir_ulte(entry, lid, c16)
+  let m4a = ir_shared_load(entry, lid)
+  let m4b = ir_shared_load(entry, p4)
+  let m4 = ir_fmax(entry, m4a, m4b)
+  let k4 = ir_select(entry, 1.0, d4, m4, m4a)
+  ir_shared_store(entry, lid, k4)
+  ir_barrier(entry)
+
+  // Step 5: stride 8
+  let p5 = ir_iadd(entry, lid, c8)
+  let d5 = ir_ulte(entry, lid, c8)
+  let m5a = ir_shared_load(entry, lid)
+  let m5b = ir_shared_load(entry, p5)
+  let m5 = ir_fmax(entry, m5a, m5b)
+  let k5 = ir_select(entry, 1.0, d5, m5, m5a)
+  ir_shared_store(entry, lid, k5)
+  ir_barrier(entry)
+
+  // Step 6: stride 4
+  let p6 = ir_iadd(entry, lid, c4)
+  let d6 = ir_ulte(entry, lid, c4)
+  let m6a = ir_shared_load(entry, lid)
+  let m6b = ir_shared_load(entry, p6)
+  let m6 = ir_fmax(entry, m6a, m6b)
+  let k6 = ir_select(entry, 1.0, d6, m6, m6a)
+  ir_shared_store(entry, lid, k6)
+  ir_barrier(entry)
+
+  // Step 7: stride 2
+  let p7 = ir_iadd(entry, lid, c2u)
+  let d7 = ir_ulte(entry, lid, c2u)
+  let m7a = ir_shared_load(entry, lid)
+  let m7b = ir_shared_load(entry, p7)
+  let m7 = ir_fmax(entry, m7a, m7b)
+  let k7 = ir_select(entry, 1.0, d7, m7, m7a)
+  ir_shared_store(entry, lid, k7)
+  ir_barrier(entry)
+
+  // Step 8: stride 1
+  let p8 = ir_iadd(entry, lid, c1u)
+  let d8 = ir_ulte(entry, lid, c1u)
+  let m8a = ir_shared_load(entry, lid)
+  let m8b = ir_shared_load(entry, p8)
+  let m8 = ir_fmax(entry, m8a, m8b)
+  let k8 = ir_select(entry, 1.0, d8, m8, m8a)
+  ir_shared_store(entry, lid, k8)
+  ir_barrier(entry)
+
+  // shared[0] = max value
+  let c0u = ir_const_u(entry, 0.0)
+  let max_val = ir_shared_load(entry, c0u)
+
+  // === Phase 2: Compute exp(x - max) and store to shared for sum ===
+  let x_shifted = ir_fsub(entry, x_val, max_val)
+  let exp_x = ir_exp(entry, x_shifted)
+
+  // Out-of-bounds threads contribute 0.0 to sum
+  let c0f = ir_const_f(entry, 0.0)
+  let exp_safe = ir_select(entry, 1.0, in_bounds, exp_x, c0f)
+  ir_shared_store(entry, lid, exp_safe)
+  ir_barrier(entry)
+
+  // === Phase 3: Sum reduction for denominator ===
+  // Reuse same 8-step reduction pattern
+  let s1a = ir_shared_load(entry, lid)
+  let s1b = ir_shared_load(entry, ir_iadd(entry, lid, c128))
+  let ss1 = ir_fadd(entry, s1a, s1b)
+  let sk1 = ir_select(entry, 1.0, d1, ss1, s1a)
+  ir_shared_store(entry, lid, sk1)
+  ir_barrier(entry)
+
+  let s2a = ir_shared_load(entry, lid)
+  let s2b = ir_shared_load(entry, ir_iadd(entry, lid, c64))
+  let ss2 = ir_fadd(entry, s2a, s2b)
+  let sk2 = ir_select(entry, 1.0, d2, ss2, s2a)
+  ir_shared_store(entry, lid, sk2)
+  ir_barrier(entry)
+
+  let s3a = ir_shared_load(entry, lid)
+  let s3b = ir_shared_load(entry, ir_iadd(entry, lid, c32))
+  let ss3 = ir_fadd(entry, s3a, s3b)
+  let sk3 = ir_select(entry, 1.0, d3, ss3, s3a)
+  ir_shared_store(entry, lid, sk3)
+  ir_barrier(entry)
+
+  let s4a = ir_shared_load(entry, lid)
+  let s4b = ir_shared_load(entry, ir_iadd(entry, lid, c16))
+  let ss4 = ir_fadd(entry, s4a, s4b)
+  let sk4 = ir_select(entry, 1.0, d4, ss4, s4a)
+  ir_shared_store(entry, lid, sk4)
+  ir_barrier(entry)
+
+  let s5a = ir_shared_load(entry, lid)
+  let s5b = ir_shared_load(entry, ir_iadd(entry, lid, c8))
+  let ss5 = ir_fadd(entry, s5a, s5b)
+  let sk5 = ir_select(entry, 1.0, d5, ss5, s5a)
+  ir_shared_store(entry, lid, sk5)
+  ir_barrier(entry)
+
+  let s6a = ir_shared_load(entry, lid)
+  let s6b = ir_shared_load(entry, ir_iadd(entry, lid, c4))
+  let ss6 = ir_fadd(entry, s6a, s6b)
+  let sk6 = ir_select(entry, 1.0, d6, ss6, s6a)
+  ir_shared_store(entry, lid, sk6)
+  ir_barrier(entry)
+
+  let s7a = ir_shared_load(entry, lid)
+  let s7b = ir_shared_load(entry, ir_iadd(entry, lid, c2u))
+  let ss7 = ir_fadd(entry, s7a, s7b)
+  let sk7 = ir_select(entry, 1.0, d7, ss7, s7a)
+  ir_shared_store(entry, lid, sk7)
+  ir_barrier(entry)
+
+  let s8a = ir_shared_load(entry, lid)
+  let s8b = ir_shared_load(entry, ir_iadd(entry, lid, c1u))
+  let ss8 = ir_fadd(entry, s8a, s8b)
+  let sk8 = ir_select(entry, 1.0, d8, ss8, s8a)
+  ir_shared_store(entry, lid, sk8)
+  ir_barrier(entry)
+
+  // shared[0] = sum of exp values
+  let sum_exp = ir_shared_load(entry, c0u)
+
+  // === Phase 4: Normalize ===
+  let result = ir_fdiv(entry, exp_safe, sum_exp)
+  ir_store_output_at(entry, lid, result)
+  ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

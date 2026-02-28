@@ -1,0 +1,120 @@
+// emit_sieve_mark.flow — Sieve Mark Kernel Emitter
+//
+// Marks composite numbers in segment bitmap R0.
+// Each thread handles one element: loads bitmap, loops over a batch of primes,
+// marks as composite if divisible.
+//
+// Thread i:
+//   value = seg_idx * seg_size + i
+//   bitmap = R0[i]
+//   for j in [prime_start..prime_end):
+//     prime = globals[j]
+//     if value >= prime+1 AND value % prime == 0:
+//       bitmap = 0.0
+//   R0[i] = bitmap
+//
+// Push constants:
+//   pc[0] = seg_idx        (float → uint, segment index)
+//   pc[1] = seg_size       (float → uint, elements per segment)
+//   pc[2] = prime_start    (float → uint, start index in primes array)
+//   pc[3] = prime_end      (float → uint, end index in primes array)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read+write R0 bitmap)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (read primes list)
+//   Binding 3: control   (unused)
+//
+// Dispatch: wg = ceil(seg_size / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_mark.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_mark(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry       = ir_block("entry")
+  let pre_loop    = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body   = ir_block("loop_body")
+  let loop_cont   = ir_block("loop_cont")
+  let loop_merge  = ir_block("loop_merge")
+  let exit_block  = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────
+  let gid      = ir_load_gid(entry)
+  let pc_seg   = ir_push_const(entry, 0.0)    // seg_idx
+  let pc_sz    = ir_push_const(entry, 1.0)    // seg_size
+  let pc_start = ir_push_const(entry, 2.0)    // prime_start
+  let pc_end   = ir_push_const(entry, 3.0)    // prime_end
+  let seg_u    = ir_ftou(entry, pc_seg)
+  let sz_u     = ir_ftou(entry, pc_sz)
+  let start_u  = ir_ftou(entry, pc_start)
+  let end_u    = ir_ftou(entry, pc_end)
+  let oob      = ir_ugte(entry, gid, sz_u)    // gid >= seg_size → skip
+  let _sm_e    = ir_selection_merge(entry, exit_block)
+  let _br_e    = ir_term_cond_branch(entry, oob, exit_block, pre_loop)
+
+  // ── pre_loop: compute value, load current bitmap ──────────
+  // value = seg_idx * seg_size + gid  (all in uint)
+  let base     = ir_imul(pre_loop, seg_u, sz_u)
+  let value    = ir_iadd(pre_loop, base, gid)
+  // Load current bitmap value from R0[gid]
+  let bm_init  = ir_load_input_at(pre_loop, 0.0, gid)
+  let _bpl     = ir_term_branch(pre_loop, loop_header)
+
+  // ── loop_header: phi(j, bitmap), check j < prime_end ──────
+  let phi_j    = ir_phi(loop_header, 2.0)      // uint: loop counter
+  let phi_bm   = ir_phi(loop_header, 1.0)      // float: bitmap value
+  let _pj0     = ir_phi_add(phi_j,  start_u, pre_loop)
+  let _pb0     = ir_phi_add(phi_bm, bm_init, pre_loop)
+  let j_done   = ir_ugte(loop_header, phi_j, end_u)
+  let _lm      = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc      = ir_term_cond_branch(loop_header, j_done, loop_merge, loop_body)
+
+  // ── loop_body: test prime, conditionally mark ─────────────
+  // Load prime from globals[j]
+  let prime_f  = ir_load_input_at(loop_body, 2.0, phi_j)    // globals[j]
+  let prime_u  = ir_ftou(loop_body, prime_f)
+
+  // Check: value >= prime + 1  (emulates value > prime)
+  let one_u    = ir_const_u(loop_body, 1.0)
+  let pp1      = ir_iadd(loop_body, prime_u, one_u)
+  let gt_prime = ir_ugte(loop_body, value, pp1)
+
+  // Check: value % prime == 0
+  let zero_u   = ir_const_u(loop_body, 0.0)
+  let rem      = ir_umod(loop_body, value, prime_u)
+  let is_mult  = ir_uequ(loop_body, rem, zero_u)
+
+  // should_mark = gt_prime AND is_multiple
+  let should   = ir_land(loop_body, gt_prime, is_mult)
+
+  // new_bitmap = should_mark ? 0.0 : current_bitmap
+  let zero_f   = ir_const_f(loop_body, 0.0)
+  let new_bm   = ir_select(loop_body, IR_TYPE_FLOAT, should, zero_f, phi_bm)
+  let _blb     = ir_term_branch(loop_body, loop_cont)
+
+  // ── loop_cont: j++, back-edge phis ────────────────────────
+  let one_u2   = ir_const_u(loop_cont, 1.0)
+  let new_j    = ir_iadd(loop_cont, phi_j, one_u2)
+  let _blc     = ir_term_branch(loop_cont, loop_header)
+  let _pj1     = ir_phi_add(phi_j,  new_j,  loop_cont)
+  let _pb1     = ir_phi_add(phi_bm, new_bm, loop_cont)
+
+  // ── loop_merge: write final bitmap back to R0[gid] ────────
+  let _store   = ir_buf_store_f(loop_merge, 0.0, gid, phi_bm)
+  let _blm     = ir_term_branch(loop_merge, exit_block)
+
+  // ── exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_mark.spv"
+let _r = emit_sieve_mark(out)
+print("Emitted: {out}")

@@ -1,0 +1,125 @@
+// test_vm_pipeline.flow — Step 3.5: Two-VM Pipeline via Message Passing
+//
+// Validates the R30 (outbox) -> R31 (inbox) message-passing protocol
+// between two VM instances sharing the same registers SSBO.
+//
+// Pipeline (3 sequential GPU dispatches, 1 CPU roundtrip per submit):
+//
+//   VM0: vm_affine  R0  -> R30  (scale=2.0, bias=0.0)
+//   MSG: vm_copy    VM0.R30 -> VM1.R31
+//   VM1: vm_affine  R31 -> R30  (scale=-1.0, bias=0.0)
+//
+// The "message" is VM0's outbox (R30) copied into VM1's inbox (R31).
+// All three ops execute on the same registers SSBO (binding 0).
+// Offset arithmetic maps instance+register to a flat float index:
+//
+//   registers[instance * 32 * reg_size + reg_id * reg_size .. +reg_size]
+//
+// Input:    VM0.R0  = [1, 2, 3, 4, 5, 6, 7, 8]
+// Midpoint: VM0.R30 = [2, 4, 6, 8, 10, 12, 14, 16]  (doubled)
+// Inbox:    VM1.R31 = [2, 4, 6, 8, 10, 12, 14, 16]  (copied)
+// Output:   VM1.R30 = [-2, -4, -6, -8, -10, -12, -14, -16]  (negated)
+//
+// Note: uses 3 separate vm_execute calls (3 vkQueueSubmits).
+// Step 4 will introduce vm_chain_* for single-submit pipelines.
+//
+// Run: octoflow run stdlib/loom/test_vm_pipeline.flow --allow-ffi
+
+// ── 1. Boot VM with 2 instances ──────────────────────────────────────────────
+let reg_size = 8.0
+let n_inst   = 2.0
+let vm = vm_boot(n_inst, reg_size, 1.0)
+
+// ── 2. Write input to VM0.R0 ─────────────────────────────────────────────────
+let input = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let _wr = vm_write_register(vm, 0.0, 0.0, input)
+
+// ── 3. Compute flat offsets into registers SSBO ───────────────────────────────
+// registers[i * 32 * reg_size + r * reg_size .. +reg_size]
+let n_regs  = 32.0
+let vm0_r0  = (0.0 * n_regs +  0.0) * reg_size  //   0 (VM0 input)
+let vm0_r30 = (0.0 * n_regs + 30.0) * reg_size  // 240 (VM0 outbox)
+let vm1_r31 = (1.0 * n_regs + 31.0) * reg_size  // 504 (VM1 inbox)
+let vm1_r30 = (1.0 * n_regs + 30.0) * reg_size  // 496 (VM1 outbox / result)
+
+// reg_size=8 < 256 -> 1 workgroup
+let wg = 1.0
+
+// ── 4. Build programs ─────────────────────────────────────────────────────────
+// Op 1: VM0 doubles R0 -> R30  (affine: src, dst, scale, bias, count)
+let pc1 = [vm0_r0, vm0_r30, 2.0, 0.0, reg_size]
+let _d1 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_affine.spv", pc1, wg)
+let prog1 = vm_build(vm)
+
+// Op 2: message pass VM0.R30 -> VM1.R31  (copy: src, dst, count)
+let pc2 = [vm0_r30, vm1_r31, reg_size]
+let _d2 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_copy.spv", pc2, wg)
+let prog2 = vm_build(vm)
+
+// Op 3: VM1 negates R31 -> R30  (affine: src, dst, scale, bias, count)
+let pc3 = [vm1_r31, vm1_r30, -1.0, 0.0, reg_size]
+let _d3 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_affine.spv", pc3, wg)
+let prog3 = vm_build(vm)
+
+// ── 5. Execute pipeline ───────────────────────────────────────────────────────
+let _e1 = vm_execute(prog1)
+let _e2 = vm_execute(prog2)
+let _e3 = vm_execute(prog3)
+
+// ── 6. Read VM1.R30 (result) ─────────────────────────────────────────────────
+let result = vm_read_register(vm, 1.0, 30.0, reg_size)
+
+// ── 7. Also read VM0.R30 to verify the message was not corrupted ──────────────
+let mid = vm_read_register(vm, 0.0, 30.0, reg_size)
+
+// ── 8. Report (extract to scalars for print interpolation) ───────────────────
+let m0 = mid[0]
+let m1 = mid[1]
+let m2 = mid[2]
+let m3 = mid[3]
+let r0 = result[0]
+let r1 = result[1]
+let r2 = result[2]
+let r3 = result[3]
+print("VM0.R30 (outbox):  [{m0}, {m1}, {m2}, {m3}, ...] (doubled input)")
+print("VM1.R30 (output):  [{r0}, {r1}, {r2}, {r3}, ...] (negated)")
+print("Expected:          [-2, -4, -6, -8, ...]")
+
+// ── 9. Verify ─────────────────────────────────────────────────────────────────
+let mut pass = 1.0
+let mut vi = 0.0
+while vi < reg_size
+  let exp_val = 0.0 - (vi + 1.0) * 2.0
+  let diff = abs(result[int(vi)] - exp_val)
+  if diff > 0.001
+    pass = 0.0
+    print("  MISMATCH [{vi}]: got {result[int(vi)]}, expected {exp_val}")
+  end
+  vi = vi + 1.0
+end
+
+if pass == 1.0
+  print("TEST 1: PASS -- two-VM R30->R31 message passing")
+else
+  print("TEST 1: FAIL")
+end
+
+// ── Second test: verify VM0's R30 (outbox) is intact after pipeline ───────────
+let mut pass2 = 1.0
+let mut vi2 = 0.0
+while vi2 < reg_size
+  let exp_mid = (vi2 + 1.0) * 2.0
+  let diff2 = abs(mid[int(vi2)] - exp_mid)
+  if diff2 > 0.001
+    pass2 = 0.0
+  end
+  vi2 = vi2 + 1.0
+end
+
+if pass2 == 1.0
+  print("TEST 2: PASS -- VM0.R30 outbox value preserved after message copy")
+else
+  print("TEST 2: FAIL -- VM0.R30 corrupted")
+end
+
+let _sv = vm_shutdown(vm)

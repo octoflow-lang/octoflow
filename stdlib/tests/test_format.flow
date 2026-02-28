@@ -1,0 +1,236 @@
+// test_format.flow — Tests for stdlib/string/format.flow
+// Functions tested: pad_left, pad_right, format_number, format_bytes, format_duration
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from string/format.flow --
+
+fn pad_left(s, width, ch)
+  let n = len(s)
+  if n >= width
+    return s
+  end
+  let mut result = ""
+  let mut i = n
+  while i < width
+    result = result + ch
+    i = i + 1.0
+  end
+  return result + s
+end
+
+fn pad_right(s, width, ch)
+  let n = len(s)
+  if n >= width
+    return s
+  end
+  let mut result = s
+  let mut i = n
+  while i < width
+    result = result + ch
+    i = i + 1.0
+  end
+  return result
+end
+
+fn format_number(n, decimals)
+  let factor = pow(10.0, decimals)
+  let rounded = round(n * factor) / factor
+  let s = str(rounded)
+  let dot_idx = index_of(s, ".")
+  if dot_idx < 0.0
+    if decimals == 0.0
+      return s
+    end
+    let mut result = s + "."
+    let mut i = 0.0
+    while i < decimals
+      result = result + "0"
+      i = i + 1.0
+    end
+    return result
+  end
+  let current_dec = len(s) - dot_idx - 1.0
+  if decimals == 0.0
+    return substr(s, 0.0, dot_idx)
+  end
+  if current_dec >= decimals
+    return substr(s, 0.0, dot_idx + 1.0 + decimals)
+  end
+  let mut result = s
+  let mut i = current_dec
+  while i < decimals
+    result = result + "0"
+    i = i + 1.0
+  end
+  return result
+end
+
+fn format_bytes(n)
+  if n < 1024.0
+    return str(round(n)) + " B"
+  end
+  let kb = n / 1024.0
+  if kb < 1024.0
+    return format_number(kb, 1.0) + " KB"
+  end
+  let mb = kb / 1024.0
+  if mb < 1024.0
+    return format_number(mb, 1.0) + " MB"
+  end
+  let gb = mb / 1024.0
+  if gb < 1024.0
+    return format_number(gb, 2.0) + " GB"
+  end
+  let tb = gb / 1024.0
+  return format_number(tb, 2.0) + " TB"
+end
+
+fn format_duration(seconds)
+  if seconds < 60.0
+    return format_number(seconds, 1.0) + "s"
+  end
+  let mut remaining = floor(seconds)
+  let secs = remaining - floor(remaining / 60.0) * 60.0
+  remaining = floor(remaining / 60.0)
+  let mins = remaining - floor(remaining / 60.0) * 60.0
+  remaining = floor(remaining / 60.0)
+  let hours = remaining - floor(remaining / 24.0) * 24.0
+  let days = floor(remaining / 24.0)
+  let mut result = ""
+  if days > 0.0
+    result = str(days) + "d "
+  end
+  if hours > 0.0 || days > 0.0
+    result = result + str(hours) + "h "
+  end
+  if mins > 0.0 || hours > 0.0 || days > 0.0
+    result = result + str(mins) + "m "
+  end
+  result = result + str(secs) + "s"
+  return result
+end
+
+// -- Tests --
+
+print("=== test_format ===")
+
+// Test 1: pad_left basic
+let p1 = pad_left("42", 5.0, "0")
+if p1 == "00042"
+  pass = pass + 1.0
+else
+  print("  FAIL: pad_left expected 00042 got {p1}")
+  fail = fail + 1.0
+end
+
+// Test 2: pad_left no padding needed
+let p2 = pad_left("hello", 3.0, " ")
+if p2 == "hello"
+  pass = pass + 1.0
+else
+  print("  FAIL: pad_left no-pad expected hello got {p2}")
+  fail = fail + 1.0
+end
+
+// Test 3: pad_right basic
+let p3 = pad_right("hi", 5.0, ".")
+if p3 == "hi..."
+  pass = pass + 1.0
+else
+  print("  FAIL: pad_right expected hi... got {p3}")
+  fail = fail + 1.0
+end
+
+// Test 4: pad_right no padding needed
+let p4 = pad_right("hello", 3.0, " ")
+if p4 == "hello"
+  pass = pass + 1.0
+else
+  print("  FAIL: pad_right no-pad expected hello got {p4}")
+  fail = fail + 1.0
+end
+
+// Test 5: format_number — 2 decimal places
+let fn1 = format_number(3.14159, 2.0)
+if fn1 == "3.14"
+  pass = pass + 1.0
+else
+  print("  FAIL: format_number(3.14159, 2) expected 3.14 got {fn1}")
+  fail = fail + 1.0
+end
+
+// Test 6: format_number — 0 decimal places
+let fn2 = format_number(3.7, 0.0)
+if fn2 == "4"
+  pass = pass + 1.0
+else
+  print("  FAIL: format_number(3.7, 0) expected 4 got {fn2}")
+  fail = fail + 1.0
+end
+
+// Test 7: format_bytes — bytes
+let fb1 = format_bytes(500.0)
+if fb1 == "500 B"
+  pass = pass + 1.0
+else
+  print("  FAIL: format_bytes(500) expected 500 B got {fb1}")
+  fail = fail + 1.0
+end
+
+// Test 8: format_bytes — kilobytes
+let fb2 = format_bytes(2048.0)
+if fb2 == "2.0 KB"
+  pass = pass + 1.0
+else
+  print("  FAIL: format_bytes(2048) expected 2.0 KB got {fb2}")
+  fail = fail + 1.0
+end
+
+// Test 9: format_bytes — megabytes
+let fb3 = format_bytes(1048576.0)
+if fb3 == "1.0 MB"
+  pass = pass + 1.0
+else
+  print("  FAIL: format_bytes(1048576) expected 1.0 MB got {fb3}")
+  fail = fail + 1.0
+end
+
+// Test 10: format_duration — seconds only
+let fd1 = format_duration(30.0)
+if fd1 == "30.0s"
+  pass = pass + 1.0
+else
+  print("  FAIL: format_duration(30) expected 30.0s got {fd1}")
+  fail = fail + 1.0
+end
+
+// Test 11: format_duration — minutes + seconds
+let fd2 = format_duration(90.0)
+if fd2 == "1m 30s"
+  pass = pass + 1.0
+else
+  print("  FAIL: format_duration(90) expected 1m 30s got {fd2}")
+  fail = fail + 1.0
+end
+
+// Test 12: format_duration — hours + minutes + seconds
+let fd3 = format_duration(3661.0)
+if fd3 == "1h 1m 1s"
+  pass = pass + 1.0
+else
+  print("  FAIL: format_duration(3661) expected 1h 1m 1s got {fd3}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_format ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

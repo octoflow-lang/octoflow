@@ -1,0 +1,163 @@
+// test_gpu_bfs.flow — GPU Breadth-First Search unit test
+//
+// Graph: 8 vertices, undirected
+//   0 — 1, 2
+//   1 — 0, 3
+//   2 — 0, 4, 5
+//   3 — 1, 6
+//   4 — 2, 6
+//   5 — 2, 7
+//   6 — 3, 4, 7
+//   7 — 5, 6
+//
+// BFS from vertex 0:
+//   Level 1: vertex 0
+//   Level 2: vertices 1, 2
+//   Level 3: vertices 3, 4, 5
+//   Level 4: vertices 6, 7
+//
+// CSR format, 1 dispatch per BFS level, multi-submit.
+//
+// Run: octoflow run stdlib/tests/test_gpu_bfs.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+rt_init()
+
+let pipe_expand = rt_load_pipeline("tests/gpu_shaders/25_bfs_expand.spv", 5.0, 4.0)
+
+let N = 8.0
+
+// CSR offsets: offsets[i] = start of adjacency list for vertex i
+// offsets has N+1 entries (last = total edges)
+// Vertex 0: edges at [0,1]   → neighbors 1, 2
+// Vertex 1: edges at [2,3]   → neighbors 0, 3
+// Vertex 2: edges at [4,6]   → neighbors 0, 4, 5
+// Vertex 3: edges at [7,8]   → neighbors 1, 6
+// Vertex 4: edges at [9,10]  → neighbors 2, 6
+// Vertex 5: edges at [11,12] → neighbors 2, 7
+// Vertex 6: edges at [13,15] → neighbors 3, 4, 7
+// Vertex 7: edges at [16,17] → neighbors 5, 6
+let mut offsets = [0.0, 2.0, 4.0, 7.0, 9.0, 11.0, 13.0, 16.0, 18.0]
+let mut edge_list = [1.0, 2.0, 0.0, 3.0, 0.0, 4.0, 5.0, 1.0, 6.0, 2.0, 6.0, 2.0, 7.0, 3.0, 4.0, 7.0, 5.0, 6.0]
+
+let n_edges = 18.0
+
+// Upload graph (CSR)
+let buf_offsets = rt_create_buffer((N + 1.0) * 4.0)
+let buf_edges = rt_create_buffer(n_edges * 4.0)
+rt_upload(buf_offsets, offsets)
+rt_upload(buf_edges, edge_list)
+
+// Frontier buffers (padded to 256 for workgroup alignment)
+let PAD = 256.0
+let buf_frontier = rt_create_buffer(PAD * 4.0)
+let buf_next = rt_create_buffer(PAD * 4.0)
+let buf_visited = rt_create_buffer(PAD * 4.0)
+
+// Initialize: frontier = [1, 0, 0, ...], visited = [0, 0, ...]
+let mut frontier = []
+let mut i = 0.0
+while i < PAD
+  if i == 0.0
+    push(frontier, 1.0)
+  else
+    push(frontier, 0.0)
+  end
+  i = i + 1.0
+end
+
+let mut zeros = []
+let mut i = 0.0
+while i < PAD
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+
+rt_upload(buf_frontier, frontier)
+rt_upload(buf_next, zeros)
+rt_upload(buf_visited, zeros)
+
+// BFS: iterate levels until frontier is empty
+let mut level = 1.0
+let mut total_dispatches = 0.0
+
+while level < 10.0
+  // Dispatch expand: frontier → next_frontier
+  rt_chain_begin(1.0, 5.0)
+  let mut pc = [level]
+  rt_chain_push_constants(pipe_expand, pc)
+  let mut bufs = [buf_offsets, buf_edges, buf_frontier, buf_next, buf_visited]
+  rt_chain_dispatch(pipe_expand, bufs, 1.0)
+  rt_chain_end()
+  rt_chain_submit_wait()
+  total_dispatches = total_dispatches + 1.0
+
+  // Download next_frontier to check if empty
+  rt_download(buf_next, N)
+  let mut has_next = 0.0
+  let mut i = 0.0
+  while i < N
+    if rt_result[int(i)] == 1.0
+      has_next = 1.0
+    end
+    i = i + 1.0
+  end
+
+  if has_next == 0.0
+    // No more frontier — BFS complete
+    level = 100.0
+  else
+    // Swap: frontier = next_frontier, clear next_frontier
+    // Re-upload: copy next into frontier, zero next
+    let mut new_frontier = []
+    let mut i = 0.0
+    while i < PAD
+      if i < N
+        push(new_frontier, rt_result[int(i)])
+      else
+        push(new_frontier, 0.0)
+      end
+      i = i + 1.0
+    end
+    rt_upload(buf_frontier, new_frontier)
+    rt_upload(buf_next, zeros)
+
+    level = level + 1.0
+  end
+end
+
+// Download visited array
+rt_download(buf_visited, N)
+let mut visited_result = []
+let mut i = 0.0
+while i < N
+  push(visited_result, rt_result[int(i)])
+  i = i + 1.0
+end
+
+// Expected BFS levels from vertex 0:
+// 0→1, 1→2, 2→2, 3→3, 4→3, 5→3, 6→4, 7→4
+let mut expected = [1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0, 4.0]
+
+print("GPU BFS (8 vertices, start=0):")
+let mut pass = 1.0
+let mut i = 0.0
+while i < N
+  let got = visited_result[int(i)]
+  let exp = expected[int(i)]
+  print("  vertex {i}: level={got} expected={exp}")
+  if got != exp
+    print("  FAIL!")
+    pass = 0.0
+  end
+  i = i + 1.0
+end
+
+print("  Total dispatches: {total_dispatches}")
+
+if pass == 1.0
+  print("PASS: gpu_bfs BIT EXACT")
+end
+
+rt_cleanup()

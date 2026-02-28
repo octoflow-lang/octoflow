@@ -1,0 +1,121 @@
+// test_buffer_view.flow — Buffer View Tests
+//
+// Tests buffer visualization functions: image, heatmap, waveform, histogram.
+//
+// Usage:
+//   octoflow run stdlib/gui/test_buffer_view.flow
+
+use "gui"
+use "buffer_view"
+
+let mut _tcount = [0.0, 0.0]
+
+fn check(name, got, expected)
+  if got == expected
+    _tcount[0] = _tcount[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected {expected}")
+  _tcount[1] = _tcount[1] + 1.0
+  return 0.0
+end
+
+fn check_range(name, got, lo, hi)
+  if got >= lo
+    if got <= hi
+      _tcount[0] = _tcount[0] + 1.0
+      return 1.0
+    end
+  end
+  print("  FAIL: {name} — got {got}, expected [{lo}..{hi}]")
+  _tcount[1] = _tcount[1] + 1.0
+  return 0.0
+end
+
+print("=== Buffer View Tests ===")
+
+// ── 1. Waveform ─────────────────────────────────────────────────────
+print("1. Waveform")
+let cvs1 = gui_canvas(10.0, 10.0, 200.0, 100.0)
+let mut wave = [0.0, 10.0, 20.0, 30.0, 20.0, 10.0, 0.0, -10.0, -20.0, -10.0]
+let _w1 = buffer_view_waveform(cvs1, wave, 255.0, 128.0, 0.0)
+// Should produce 9 line segments (10 points - 1)
+let c1_cmds = _gui_list_count[int(cvs1)]
+let _c1 = check("waveform lines", c1_cmds, 9.0)
+
+// ── 2. Waveform flat data ───────────────────────────────────────────
+print("2. Waveform flat")
+let cvs2 = gui_canvas(10.0, 120.0, 200.0, 100.0)
+let mut flat = [5.0, 5.0, 5.0, 5.0]
+let _w2 = buffer_view_waveform(cvs2, flat, 0.0, 255.0, 0.0)
+// Flat data → single horizontal line
+let c2_cmds = _gui_list_count[int(cvs2)]
+let _c2 = check("flat waveform line", c2_cmds, 1.0)
+
+// ── 3. Histogram ────────────────────────────────────────────────────
+print("3. Histogram")
+let cvs3 = gui_canvas(10.0, 230.0, 200.0, 100.0)
+let mut hist_data = [1.0, 1.0, 2.0, 3.0, 3.0, 3.0, 4.0, 5.0]
+let _h1 = buffer_view_histogram(cvs3, hist_data, 5.0, 0.0, 128.0, 255.0)
+// 5 bins should produce 5 fill commands (one per bin)
+let c3_cmds = _gui_list_count[int(cvs3)]
+let _c3 = check("histogram bins", c3_cmds, 5.0)
+
+// ── 4. Histogram single value ───────────────────────────────────────
+print("4. Histogram single value")
+let cvs4 = gui_canvas(10.0, 340.0, 200.0, 100.0)
+let mut single_val = [42.0, 42.0, 42.0]
+let _h2 = buffer_view_histogram(cvs4, single_val, 3.0, 255.0, 0.0, 0.0)
+// All same value → range=0 → single fill
+let c4_cmds = _gui_list_count[int(cvs4)]
+let _c4 = check("single val histogram", c4_cmds, 1.0)
+
+// ── 5. Heatmap ──────────────────────────────────────────────────────
+print("5. Heatmap")
+let cvs5 = gui_canvas(10.0, 450.0, 200.0, 200.0)
+// 4x4 heatmap data
+let mut hmap = [0.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 3.0, 4.0, 5.0, 6.0]
+let _hm = buffer_view_heatmap(cvs5, hmap, 4.0, 4.0, 0.0, 6.0)
+// 4x4 = 16 fill commands
+let c5_cmds = _gui_list_count[int(cvs5)]
+let _c5 = check("heatmap cells", c5_cmds, 16.0)
+
+// ── 6. Image ────────────────────────────────────────────────────────
+print("6. Image")
+let cvs6 = gui_canvas(10.0, 660.0, 200.0, 200.0)
+// 3x2 image
+let mut img_r = [255.0, 0.0, 0.0, 0.0, 255.0, 0.0]
+let mut img_g = [0.0, 255.0, 0.0, 0.0, 0.0, 255.0]
+let mut img_b = [0.0, 0.0, 255.0, 255.0, 0.0, 0.0]
+let _im = buffer_view_image(cvs6, img_r, img_g, img_b, 3.0, 2.0)
+// 3x2 = 6 fill commands
+let c6_cmds = _gui_list_count[int(cvs6)]
+let _c6 = check("image pixels", c6_cmds, 6.0)
+
+// ── 7. Waveform empty ───────────────────────────────────────────────
+print("7. Empty waveform")
+let cvs7 = gui_canvas(10.0, 870.0, 200.0, 100.0)
+let mut empty = [42.0]
+let _w3 = buffer_view_waveform(cvs7, empty, 255.0, 255.0, 255.0)
+// Single point → no lines drawn
+let c7_cmds = _gui_list_count[int(cvs7)]
+let _c7 = check("empty waveform", c7_cmds, 0.0)
+
+// ── 8. Heatmap zero range ───────────────────────────────────────────
+print("8. Heatmap zero range")
+let cvs8 = gui_canvas(10.0, 980.0, 100.0, 100.0)
+let mut hflat = [5.0, 5.0, 5.0, 5.0]
+let _hf = buffer_view_heatmap(cvs8, hflat, 2.0, 2.0, 5.0, 5.0)
+// Zero range returns early, no commands
+let c8_cmds = _gui_list_count[int(cvs8)]
+let _c8 = check("zero range heatmap", c8_cmds, 0.0)
+
+// ── Summary ─────────────────────────────────────────────────────────
+let total = _tcount[0] + _tcount[1]
+let passed = _tcount[0]
+let failed = _tcount[1]
+print(" ")
+print("=== Results: {passed}/{total} passed ===")
+if failed > 0.0
+  print("FAILURES: {failed}")
+end

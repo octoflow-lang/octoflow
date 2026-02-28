@@ -1,4 +1,23 @@
 // stdlib/string/regex.flow — Pattern matching and text utilities
+//
+// Functions: glob_match, str_escape, word_count, re_match, re_find,
+//            re_replace, re_test, re_split
+//
+// Built-in regex functions (implemented in Rust, always available):
+//
+//   regex_match(text, pattern)      → 1.0 if pattern matches text fully, else 0.0
+//   is_match(text, pattern)         → alias for regex_match
+//   regex_find(text, pattern)       → first match as string, or "" if none
+//   regex_find_all(text, pattern)   → populates array "matches" with all matches
+//   regex_replace(text, pat, repl)  → text with first match of pat replaced by repl
+//   capture_groups(text, pattern)   → populates array "captures" with group matches
+//
+// Patterns use standard regex syntax: . * + ? [] () | ^ $ \d \w \s etc.
+// Examples:
+//   regex_match("hello123", "[a-z]+\d+")     → 1.0
+//   regex_find("abc 42 def", "\d+")           → "42"
+//   regex_replace("hello world", "world", "OctoFlow") → "hello OctoFlow"
+//
 
 fn glob_match(pattern, text)
   // Simple glob matching: * matches any sequence, ? matches one char
@@ -77,4 +96,39 @@ fn word_count(s)
     i = i + 1.0
   end
   return count
+end
+
+// ── Regex wrapper functions ──
+// These call the built-in regex builtins and provide a convenient API
+// for code that does `use "string/regex"`.
+
+fn re_match(text, pattern)
+  // Returns 1.0 if pattern matches the full text, 0.0 otherwise.
+  return regex_match(text, pattern)
+end
+
+fn re_find(text, pattern)
+  // Returns the first substring matching pattern, or "" if none.
+  return regex_find(text, pattern)
+end
+
+fn re_replace(text, pattern, replacement)
+  // Replaces first occurrence of pattern in text with replacement.
+  return regex_replace(text, pattern, replacement)
+end
+
+fn re_test(text, pattern)
+  // Tests if pattern matches anywhere in text (partial match).
+  let found = regex_find(text, pattern)
+  if len(found) > 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn re_split(text, pattern)
+  // Splits text on pattern matches. Returns word_count-like result.
+  // Uses regex_replace to convert delimiters, then splits.
+  let normalized = regex_replace(text, pattern, "\n")
+  return split(normalized, "\n")
 end

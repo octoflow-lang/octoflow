@@ -1,0 +1,47 @@
+// stdlib/terminal/halfblock.flow — Pure .flow ANSI truecolor halfblock renderer
+// Each character cell = 2 vertical pixels using ▀ (upper half block)
+// Foreground color = top pixel, background color = bottom pixel
+// Works on any terminal with truecolor support (256M colors)
+
+// Convert integer 0-255 to its decimal string representation
+fn _hb_n2s(n)
+  if n < 10.0
+    return chr(48.0 + n)
+  end
+  let d = floor(n / 10.0)
+  let r = n - d * 10.0
+  if d < 10.0
+    return chr(48.0 + d) + chr(48.0 + r)
+  end
+  let d2 = floor(d / 10.0)
+  let r2 = d - d2 * 10.0
+  return chr(48.0 + d2) + chr(48.0 + r2) + chr(48.0 + r)
+end
+
+fn halfblock_render(w, h, r, g, b)
+  let esc = chr(27)
+  let block = chr(9600)
+  let text_rows = int(h / 2.0)
+  let reset = esc + "[0m"
+  let semi = ";"
+
+  for row in range(0, text_rows)
+    let top_y = row * 2.0
+    let bot_y = row * 2.0 + 1.0
+    let mut line = ""
+    for x in range(0, int(w))
+      let ti = int(top_y * w + x)
+      let bi = int(bot_y * w + x)
+      let tr = _hb_n2s(int(r[ti]))
+      let tg = _hb_n2s(int(g[ti]))
+      let tb = _hb_n2s(int(b[ti]))
+      let br = _hb_n2s(int(r[bi]))
+      let bg = _hb_n2s(int(g[bi]))
+      let bb = _hb_n2s(int(b[bi]))
+      line = line + esc + "[38;2;" + tr + semi + tg + semi + tb + ";48;2;" + br + semi + bg + semi + bb + "m" + block
+    end
+    print_raw(line + reset)
+    print("")
+  end
+  return 0.0
+end

@@ -1,0 +1,141 @@
+// test_gguf.flow — GGUF Parser Tests
+// Run from stdlib/formats/: octoflow run test_gguf.flow --allow-read
+//
+// Tests GGUF parsing with synthetic byte arrays.
+// Full model loading requires a real .gguf file (tested separately).
+
+use "gguf"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+print("=== GGUF PARSER TESTS ===")
+print(" ")
+
+// ── Test 1: Helper functions ────────────────────────────────────
+print("--- u32/u64 little-endian readers ---")
+
+// Build test bytes: GGUF magic + version 3 + u64 value 1
+let mut test_bytes = []
+push(test_bytes, 71.0)
+push(test_bytes, 71.0)
+push(test_bytes, 85.0)
+push(test_bytes, 70.0)
+push(test_bytes, 3.0)
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 1.0)
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+
+let magic = read_u32_le(test_bytes, 0.0)
+let _c = check(counters, "magic LE", magic, 1179993927.0)
+
+let version = read_u32_le(test_bytes, 4.0)
+let _c = check(counters, "version", version, 3.0)
+
+let val64 = read_u64_le(test_bytes, 8.0)
+let _c = check(counters, "u64 read", val64, 1.0)
+
+// ── Test 2: String reading ──────────────────────────────────────
+print("--- GGUF string reader ---")
+
+// u64 len=5 + "hello"
+let mut str_bytes = []
+push(str_bytes, 5.0)
+push(str_bytes, 0.0)
+push(str_bytes, 0.0)
+push(str_bytes, 0.0)
+push(str_bytes, 0.0)
+push(str_bytes, 0.0)
+push(str_bytes, 0.0)
+push(str_bytes, 0.0)
+push(str_bytes, 104.0)
+push(str_bytes, 101.0)
+push(str_bytes, 108.0)
+push(str_bytes, 108.0)
+push(str_bytes, 111.0)
+
+let s = read_string(str_bytes, 0.0)
+let _c = check(counters, "string read", s, "hello")
+
+let slen = read_string_len(str_bytes, 0.0)
+let _c = check(counters, "string len", slen, 13.0)
+
+// ── Test 3: Header parsing ──────────────────────────────────────
+print("--- GGUF header parser ---")
+
+// GGUF header: magic + version + tensor_count=0 + kv_count=0
+let mut hdr_bytes = []
+push(hdr_bytes, 71.0)
+push(hdr_bytes, 71.0)
+push(hdr_bytes, 85.0)
+push(hdr_bytes, 70.0)
+push(hdr_bytes, 3.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+push(hdr_bytes, 0.0)
+
+let hdr = gguf_parse_header(hdr_bytes)
+let hdr_magic = map_get(hdr, "magic")
+let _c = check(counters, "hdr magic", hdr_magic, 1179993927.0)
+
+let hdr_ver = map_get(hdr, "version")
+let _c = check(counters, "hdr version", hdr_ver, 3.0)
+
+let hdr_tcount = map_get(hdr, "tensor_count")
+let _c = check(counters, "hdr tensor_count", hdr_tcount, 0.0)
+
+let hdr_kvcount = map_get(hdr, "kv_count")
+let _c = check(counters, "hdr kv_count", hdr_kvcount, 0.0)
+
+let hdr_size = map_get(hdr, "header_size")
+let _c = check(counters, "hdr size", hdr_size, 24.0)
+
+// ── SUMMARY ─────────────────────────────────────────────────────
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print(" ")
+print("=== GGUF PARSER TEST SUMMARY ===")
+print("  pass: {pass}/{total}")
+print("  fail: {fail}")
+if fail == 0.0
+  print("  ALL PASS")
+  print(" ")
+  print("NOTE: Full model loading requires a real .gguf file.")
+  print("Download: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF")
+else
+  print("  FAILURES DETECTED")
+end

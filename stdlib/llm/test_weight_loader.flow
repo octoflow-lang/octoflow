@@ -1,0 +1,216 @@
+// test_weight_loader.flow — Tests for GGUF weight loading pipeline
+// Tests: f16→f32, bits_to_float, read_f32_le, Q4_K dequant, tensor loading
+// Run: octoflow run test_weight_loader.flow --allow-read --allow-write
+
+use "../formats/gguf"
+use "weight_loader"
+
+let mut counters = [0.0, 0.0]
+
+fn check_near(counters, label, got, expected, tol)
+  let d = abs(got - expected)
+  if d < tol
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}, diff={d}")
+  return 0.0
+end
+
+fn check_eq(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+print("=== WEIGHT LOADER TESTS ===")
+print(" ")
+
+// ── Test 1: bits_to_float roundtrip ──────────────────────────────
+print("--- Test 1: bits_to_float ---")
+
+// 1.0 = 0x3F800000 = 1065353216
+let f1 = bits_to_float(1065353216.0)
+let _c1 = check_near(counters, "bits_to_float(1.0)", f1, 1.0, 0.0001)
+
+// 2.0 = 0x40000000 = 1073741824
+let f2 = bits_to_float(1073741824.0)
+let _c2 = check_near(counters, "bits_to_float(2.0)", f2, 2.0, 0.0001)
+
+// -1.0 = 0xBF800000 = 3212836864
+let f3 = bits_to_float(3212836864.0)
+let _c3 = check_near(counters, "bits_to_float(-1.0)", f3, -1.0, 0.0001)
+
+// float_to_bits roundtrip
+let b4 = float_to_bits(3.14)
+let f4 = bits_to_float(b4)
+let _c4 = check_near(counters, "roundtrip(3.14)", f4, 3.14, 0.001)
+
+// ── Test 2: read_f32_le with known bytes ─────────────────────────
+print("--- Test 2: read_f32_le ---")
+
+// Write 4 known F32 values as binary file
+let mut test_bytes = []
+// 1.0 = bytes [0, 0, 128, 63]
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 128.0)
+push(test_bytes, 63.0)
+// 2.0 = bytes [0, 0, 0, 64]
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 64.0)
+// 3.0 = bytes [0, 0, 64, 64]
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 64.0)
+push(test_bytes, 64.0)
+// -1.0 = bytes [0, 0, 128, 191]
+push(test_bytes, 0.0)
+push(test_bytes, 0.0)
+push(test_bytes, 128.0)
+push(test_bytes, 191.0)
+
+write_bytes("_test_f32.bin", test_bytes)
+let rb = read_bytes("_test_f32.bin")
+
+let v1 = read_f32_le(rb, 0.0)
+let _c5 = check_near(counters, "read_f32_le(1.0)", v1, 1.0, 0.0001)
+let v2 = read_f32_le(rb, 4.0)
+let _c6 = check_near(counters, "read_f32_le(2.0)", v2, 2.0, 0.0001)
+let v3 = read_f32_le(rb, 8.0)
+let _c7 = check_near(counters, "read_f32_le(3.0)", v3, 3.0, 0.0001)
+let v4 = read_f32_le(rb, 12.0)
+let _c8 = check_near(counters, "read_f32_le(-1.0)", v4, -1.0, 0.0001)
+
+// ── Test 3: read_f16_le with known bytes ─────────────────────────
+print("--- Test 3: read_f16_le ---")
+
+let mut f16_bytes = []
+// 1.0 as f16 = 0x3C00 = bytes [0, 60]
+push(f16_bytes, 0.0)
+push(f16_bytes, 60.0)
+// 0.5 as f16 = 0x3800 = bytes [0, 56]
+push(f16_bytes, 0.0)
+push(f16_bytes, 56.0)
+// -2.0 as f16 = 0xC000 = bytes [0, 192]
+push(f16_bytes, 0.0)
+push(f16_bytes, 192.0)
+// 0.0 as f16 = 0x0000 = bytes [0, 0]
+push(f16_bytes, 0.0)
+push(f16_bytes, 0.0)
+
+let h1 = read_f16_le(f16_bytes, 0.0)
+let _c9 = check_near(counters, "read_f16_le(1.0)", h1, 1.0, 0.001)
+let h2 = read_f16_le(f16_bytes, 2.0)
+let _c10 = check_near(counters, "read_f16_le(0.5)", h2, 0.5, 0.001)
+let h3 = read_f16_le(f16_bytes, 4.0)
+let _c11 = check_near(counters, "read_f16_le(-2.0)", h3, -2.0, 0.001)
+let h4 = read_f16_le(f16_bytes, 6.0)
+let _c12 = check_near(counters, "read_f16_le(0.0)", h4, 0.0, 0.001)
+
+// ── Test 4: Q4_K dequant block ───────────────────────────────────
+print("--- Test 4: Q4_K block dequant ---")
+
+// Build a known Q4_K block (144 bytes):
+// d = 1.0 as f16 [0, 60], dmin = 0.0 as f16 [0, 0]
+// scales = all 1 (scale=1, min=0 for all sub-blocks)
+// qs = all 0x31 (low=1, high=3)
+let mut q4_block = []
+// d = 1.0 f16
+push(q4_block, 0.0)
+push(q4_block, 60.0)
+// dmin = 0.0 f16
+push(q4_block, 0.0)
+push(q4_block, 0.0)
+// scales: 12 bytes [1,1,1,1, 0,0,0,0, 1,1,1,1]
+// j<4: scale = q[j]&63 = 1, min = q[j+4]&63 = 0
+// j>=4: scale = (q[j+4]&0xF)|((q[j-4]>>6)<<4) = (1&15)|(0) = 1
+//        min = (q[j+4]>>4)|((q[j]>>6)<<4) = 0
+push(q4_block, 1.0)
+push(q4_block, 1.0)
+push(q4_block, 1.0)
+push(q4_block, 1.0)
+push(q4_block, 0.0)
+push(q4_block, 0.0)
+push(q4_block, 0.0)
+push(q4_block, 0.0)
+push(q4_block, 1.0)
+push(q4_block, 1.0)
+push(q4_block, 1.0)
+push(q4_block, 1.0)
+// qs: 128 bytes, all 0x31 (decimal 49)
+// low nibble = 49 - floor(49/16)*16 = 49 - 48 = 1
+// high nibble = floor(49/16) = 3
+let mut qi = 0.0
+while qi < 128.0
+  push(q4_block, 49.0)
+  qi = qi + 1.0
+end
+
+// Dequant: with d=1.0, dmin=0.0, scale=1, min=0:
+//   val = d * scale * q4_val - dmin * min = 1.0 * 1 * q4_val - 0 = q4_val
+// So first 32 weights should be 1.0 (low nibble), next 32 should be 3.0 (high nibble)
+let dq = dequant_q4k_block(q4_block, 0.0)
+let dq_len = len(dq)
+let _c13 = check_eq(counters, "q4k block len=256", dq_len, 256.0)
+let _c14 = check_near(counters, "q4k[0]=1.0 (low nibble)", dq[0], 1.0, 0.01)
+let _c15 = check_near(counters, "q4k[31]=1.0 (low nibble)", dq[31], 1.0, 0.01)
+let _c16 = check_near(counters, "q4k[32]=3.0 (high nibble)", dq[32], 3.0, 0.01)
+let _c17 = check_near(counters, "q4k[63]=3.0 (high nibble)", dq[63], 3.0, 0.01)
+// Second pair (j=1): same pattern
+let _c18 = check_near(counters, "q4k[64]=1.0 (pair 2 low)", dq[64], 1.0, 0.01)
+let _c19 = check_near(counters, "q4k[96]=3.0 (pair 2 high)", dq[96], 3.0, 0.01)
+
+// ── Test 5: gguf_data_start alignment ────────────────────────────
+print("--- Test 5: Data start alignment ---")
+let ds1 = gguf_data_start(100.0, 32.0)
+let _c20 = check_eq(counters, "align(100,32)=128", ds1, 128.0)
+let ds2 = gguf_data_start(64.0, 32.0)
+let _c21 = check_eq(counters, "align(64,32)=64", ds2, 64.0)
+let ds3 = gguf_data_start(1.0, 32.0)
+let _c22 = check_eq(counters, "align(1,32)=32", ds3, 32.0)
+
+// ── Test 6: tensor_name builder ──────────────────────────────────
+print("--- Test 6: Tensor name builder ---")
+let tn0 = tensor_name(0.0, "attn_norm.weight")
+let _c23 = check_eq(counters, "tensor_name(0,attn_norm)", tn0, "blk.0.attn_norm.weight")
+let tn5 = tensor_name(5.0, "ffn_gate.weight")
+let _c24 = check_eq(counters, "tensor_name(5,ffn_gate)", tn5, "blk.5.ffn_gate.weight")
+
+// ── Test 7: Full F32 tensor via load_tensor_named (flat key API) ──
+print("--- Test 7: F32 tensor read ---")
+
+// Build a fake model map with flat tensor keys
+let mut fake_model = map()
+map_set(fake_model, "data_start", 0.0)
+map_set(fake_model, "t.test_tensor.type", 0.0)
+map_set(fake_model, "t.test_tensor.offset", 0.0)
+map_set(fake_model, "t.test_tensor.ndims", 1.0)
+map_set(fake_model, "t.test_tensor.dim0", 4.0)
+map_set(fake_model, "t.test_tensor.count", 4.0)
+
+// Use test_bytes from earlier (4 F32 values written to _test_f32.bin)
+let ft = read_tensor_by_name(rb, fake_model, "test_tensor")
+let ft_len = len(ft)
+let _c25 = check_eq(counters, "f32 tensor len", ft_len, 4.0)
+let _c26 = check_near(counters, "f32 tensor[0]=1.0", ft[0], 1.0, 0.001)
+let _c27 = check_near(counters, "f32 tensor[1]=2.0", ft[1], 2.0, 0.001)
+let _c28 = check_near(counters, "f32 tensor[2]=3.0", ft[2], 3.0, 0.001)
+let _c29 = check_near(counters, "f32 tensor[3]=-1.0", ft[3], -1.0, 0.001)
+
+// ── Cleanup ──────────────────────────────────────────────────────
+let _rm = exec("rm", "_test_f32.bin")
+
+// ── Summary ──────────────────────────────────────────────────────
+print(" ")
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print("=== RESULTS: {pass}/{total} passed ===")

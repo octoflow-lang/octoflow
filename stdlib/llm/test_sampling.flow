@@ -1,0 +1,248 @@
+// test_sampling.flow — Sampling Strategy Tests
+//
+// Tests greedy, top-k, top-p, temperature, and min-p sampling.
+// Deterministic checks where possible, statistical checks for randomized.
+//
+// Usage:
+//   octoflow run stdlib/ai/test_sampling.flow
+
+use "sampling"
+
+let mut _tc = [0.0, 0.0]
+
+fn check(name, got, expected)
+  if got == expected
+    _tc[0] = _tc[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected {expected}")
+  _tc[1] = _tc[1] + 1.0
+  return 0.0
+end
+
+fn check_range(name, got, lo, hi)
+  if got >= lo
+    if got <= hi
+      _tc[0] = _tc[0] + 1.0
+      return 1.0
+    end
+  end
+  print("  FAIL: {name} — got {got}, expected [{lo}..{hi}]")
+  _tc[1] = _tc[1] + 1.0
+  return 0.0
+end
+
+fn check_in_set(name, got, a, b, c)
+  if got == a
+    _tc[0] = _tc[0] + 1.0
+    return 1.0
+  end
+  if got == b
+    _tc[0] = _tc[0] + 1.0
+    return 1.0
+  end
+  if got == c
+    _tc[0] = _tc[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected one of {a},{b},{c}")
+  _tc[1] = _tc[1] + 1.0
+  return 0.0
+end
+
+print("=== Sampling Tests ===")
+
+// ── 1. Greedy ─────────────────────────────────────────────────────
+print("1. Greedy sampling")
+let mut g1 = [0.1, 0.5, 0.3, 0.2]
+let _c1 = check("greedy middle", sample_greedy(g1), 1.0)
+
+let mut g2 = [5.0, 1.0, 2.0]
+let _c2 = check("greedy first", sample_greedy(g2), 0.0)
+
+let mut g3 = [1.0, 2.0, 10.0]
+let _c3 = check("greedy last", sample_greedy(g3), 2.0)
+
+let mut g4 = [42.0]
+let _c4 = check("greedy single", sample_greedy(g4), 0.0)
+
+let mut g5 = [-1.0, -0.5, -2.0]
+let _c5 = check("greedy negative", sample_greedy(g5), 1.0)
+
+let mut g6 = [3.0, 3.0, 3.0]
+let _c6 = check("greedy tied", sample_greedy(g6), 0.0)
+
+// ── 2. Top-K basic ───────────────────────────────────────────────
+print("2. Top-K basic")
+// With k=1 and any temperature, should behave like greedy
+let mut tk1 = [1.0, 5.0, 3.0, 2.0]
+let _c7 = check("top-k k=1 is greedy", sample_top_k(tk1, 1.0, 1.0), 1.0)
+
+// With very low temperature, should converge to greedy
+let mut tk2 = [1.0, 10.0, 3.0, 2.0]
+let _c8 = check("top-k low temp", sample_top_k(tk2, 5.0, 0.001), 1.0)
+
+// ── 3. Top-K distribution ────────────────────────────────────────
+print("3. Top-K distribution")
+// With k=3, samples should only come from top 3 indices
+// logits: [1, 5, 3, 2, 0] → top 3 are indices 1(5), 2(3), 3(2)
+let mut tk3 = [1.0, 5.0, 3.0, 2.0, 0.0]
+let mut tk_hits = [0.0, 0.0, 0.0, 0.0, 0.0]
+let mut ti = 0.0
+while ti < 100.0
+  let s = sample_top_k(tk3, 3.0, 1.0)
+  let si = int(s)
+  tk_hits[si] = tk_hits[si] + 1.0
+  ti = ti + 1.0
+end
+// Indices 0 and 4 should never be selected (not in top 3)
+let _c9 = check("top-k excludes idx 0", tk_hits[0], 0.0)
+let _c10 = check("top-k excludes idx 4", tk_hits[4], 0.0)
+// Indices 1, 2, 3 should all have been hit at least once
+let _c11 = check_range("top-k includes idx 1", tk_hits[1], 1.0, 100.0)
+let _c12 = check_range("top-k includes idx 2", tk_hits[2], 1.0, 100.0)
+// Index 1 (logit=5) should be most frequent
+let idx1_most = 0.0
+let _dummy1 = check_range("top-k idx 1 dominant", tk_hits[1], tk_hits[2], 100.0)
+
+// ── 4. Top-P basic ───────────────────────────────────────────────
+print("4. Top-P basic")
+// Very peaked distribution: logits [10, 0, 0, 0]
+// After softmax, idx 0 has ~99.99% of mass → top-p=0.9 should almost always pick 0
+let mut tp1 = [10.0, 0.0, 0.0, 0.0]
+let mut tp_count0 = 0.0
+ti = 0.0
+while ti < 50.0
+  let s = sample_top_p(tp1, 0.9, 1.0)
+  if s == 0.0
+    tp_count0 = tp_count0 + 1.0
+  end
+  ti = ti + 1.0
+end
+let _c13 = check_range("top-p peaked picks dominant", tp_count0, 45.0, 50.0)
+
+// ── 5. Top-P nucleus size ────────────────────────────────────────
+print("5. Top-P nucleus size")
+// Uniform-ish logits: [1.0, 1.1, 0.9, 1.0, 1.0]
+// After softmax, probs are roughly equal (~20% each)
+// p=0.5 should include ~2-3 tokens, p=0.9 should include ~4-5
+let mut tp2 = [1.0, 1.1, 0.9, 1.0, 1.0]
+let mut tp2_hits = [0.0, 0.0, 0.0, 0.0, 0.0]
+ti = 0.0
+while ti < 100.0
+  let s = sample_top_p(tp2, 0.95, 1.0)
+  let si = int(s)
+  tp2_hits[si] = tp2_hits[si] + 1.0
+  ti = ti + 1.0
+end
+// With p=0.95 and roughly equal probs, all 5 should get some hits
+let mut nonzero_count = 0.0
+let mut ni = 0.0
+while ni < 5.0
+  if tp2_hits[int(ni)] > 0.0
+    nonzero_count = nonzero_count + 1.0
+  end
+  ni = ni + 1.0
+end
+let _c14 = check_range("top-p wide nucleus", nonzero_count, 3.0, 5.0)
+
+// ── 6. Temperature scaling ───────────────────────────────────────
+print("6. Temperature sampling")
+// High temperature → more uniform distribution
+// Low temperature → more peaked (near greedy)
+let mut ts1 = [3.0, 1.0, 0.5]
+// Very low temp should always pick index 0
+let mut ts_low_0 = 0.0
+ti = 0.0
+while ti < 50.0
+  let s = sample_temperature(ts1, 0.01)
+  if s == 0.0
+    ts_low_0 = ts_low_0 + 1.0
+  end
+  ti = ti + 1.0
+end
+let _c15 = check("temp 0.01 is greedy", ts_low_0, 50.0)
+
+// High temp should spread samples across all indices
+let mut ts_high_hits = [0.0, 0.0, 0.0]
+ti = 0.0
+while ti < 200.0
+  let s = sample_temperature(ts1, 5.0)
+  let si = int(s)
+  ts_high_hits[si] = ts_high_hits[si] + 1.0
+  ti = ti + 1.0
+end
+// All indices should get at least some hits with high temp
+let _c16 = check_range("high temp idx 0", ts_high_hits[0], 1.0, 200.0)
+let _c17 = check_range("high temp idx 1", ts_high_hits[1], 1.0, 200.0)
+let _c18 = check_range("high temp idx 2", ts_high_hits[2], 1.0, 200.0)
+
+// ── 7. Min-P basic ───────────────────────────────────────────────
+print("7. Min-P sampling")
+// Very peaked: [10, 0, 0, 0]
+// max_prob ≈ 1.0, threshold = 0.1 * 1.0 = 0.1
+// Only index 0 passes threshold
+let mut mp1 = [10.0, 0.0, 0.0, 0.0]
+let mut mp_count0 = 0.0
+ti = 0.0
+while ti < 50.0
+  let s = sample_min_p(mp1, 0.1, 1.0)
+  if s == 0.0
+    mp_count0 = mp_count0 + 1.0
+  end
+  ti = ti + 1.0
+end
+let _c19 = check_range("min-p peaked picks dominant", mp_count0, 45.0, 50.0)
+
+// Uniform logits: all should pass with low min_p
+let mut mp2 = [1.0, 1.0, 1.0, 1.0]
+let mut mp2_hits = [0.0, 0.0, 0.0, 0.0]
+ti = 0.0
+while ti < 100.0
+  let s = sample_min_p(mp2, 0.5, 1.0)
+  let si = int(s)
+  mp2_hits[si] = mp2_hits[si] + 1.0
+  ti = ti + 1.0
+end
+// All should get hits (equal logits, all pass threshold)
+let _c20 = check_range("min-p uniform idx 0", mp2_hits[0], 5.0, 60.0)
+let _c21 = check_range("min-p uniform idx 3", mp2_hits[3], 5.0, 60.0)
+
+// ── 8. Edge cases ────────────────────────────────────────────────
+print("8. Edge cases")
+// k > vocab size should work (clamped)
+let mut e1 = [1.0, 2.0]
+let s_e1 = sample_top_k(e1, 100.0, 0.001)
+let _c22 = check("top-k k>n low temp", s_e1, 1.0)
+
+// p=1.0 should include everything
+let mut e2 = [3.0, 1.0, 2.0]
+let s_e2 = sample_top_p(e2, 1.0, 0.001)
+let _c23 = check("top-p p=1 low temp", s_e2, 0.0)
+
+// temp=0 should be treated as temp=1
+let mut e3 = [1.0, 5.0, 3.0]
+let s_e3 = sample_top_k(e3, 1.0, 0.0)
+let _c24 = check("top-k temp=0 safe", s_e3, 1.0)
+
+// ── 9. Large logit spread ────────────────────────────────────────
+print("9. Large logit spread")
+// Test numerical stability with large logit values
+let mut big = [100.0, 99.0, 50.0, 0.0]
+let _c25 = check("greedy big logits", sample_greedy(big), 0.0)
+let s_big = sample_top_k(big, 2.0, 0.001)
+let _c26 = check("top-k big logits", s_big, 0.0)
+
+// Negative large values
+let mut neg_big = [-100.0, -99.0, -50.0, -200.0]
+let _c27 = check("greedy neg big", sample_greedy(neg_big), 2.0)
+
+// ── Summary ───────────────────────────────────────────────────────
+let total = _tc[0] + _tc[1]
+let passed = _tc[0]
+let failed = _tc[1]
+print(" ")
+print("=== Results: {passed}/{total} passed ===")
+if failed > 0.0
+  print("FAILURES: {failed}")
+end

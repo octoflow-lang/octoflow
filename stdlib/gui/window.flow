@@ -1,0 +1,820 @@
+// window.flow — GUI Window Init, Event Loop, and Software Renderer
+//
+// Provides gui_init (window creation), gui_update (event processing
+// and render dispatch), and _gui_render (software rasterizer).
+//
+// Usage:
+//   use "gui"
+//   let app = gui_init(800.0, 600.0, "My App")
+//   while gui_running() == 1.0
+//     gui_update()
+//   end
+
+use "gui_core"
+
+// ── Window Init ─────────────────────────────────────────────────────
+
+fn gui_init(w, h, title)
+  // Initialize font on first call
+  if _gs[10] == 0.0
+    let _fi = _font_init(0.0)
+    _gs[10] = 1.0
+  end
+  _gs[1] = w
+  _gs[2] = h
+  let ok = window_open(w, h, title)
+  if ok == 0.0
+    print("gui_init: failed to open window")
+    return 0.0
+  end
+  _gs[0] = 1.0
+  // Allocate pixel buffers
+  let total = w * h
+  let mut i = 0.0
+  while i < total
+    push(_gui_px_r, 0.0)
+    push(_gui_px_g, 0.0)
+    push(_gui_px_b, 0.0)
+    i = i + 1.0
+  end
+  _gs[9] = 1.0
+  return 1.0
+end
+
+// ── Event Processing ────────────────────────────────────────────────
+
+fn gui_update()
+  // Reset per-frame state
+  _gs[6] = 0.0
+  _gs[7] = 0.0
+  _gss[1] = " "
+  let wcount = len(_gui_types)
+  let mut i = 0.0
+  while i < wcount
+    _gui_clicked[int(i)] = 0.0
+    _gui_hovered[int(i)] = 0.0
+    _gui_pressed[int(i)] = 0.0
+    i = i + 1.0
+  end
+
+  // Poll events
+  let mut evt = window_poll()
+  while evt != "none"
+    if evt == "close"
+      _gs[0] = 0.0
+      window_close()
+      return 0.0
+    elif evt == "mouse_move"
+      _gs[3] = window_event_x()
+      _gs[4] = window_event_y()
+      _gs[9] = 1.0
+    elif evt == "mouse_down"
+      _gs[5] = 1.0
+      _gs[6] = 1.0
+      _gs[9] = 1.0
+    elif evt == "mouse_up"
+      _gs[5] = 0.0
+      _gs[9] = 1.0
+    elif evt == "key_down"
+      _gss[0] = window_event_key()
+      _gs[7] = 1.0
+      _gs[9] = 1.0
+    end
+    evt = window_poll()
+  end
+
+  if _gs[0] == 0.0
+    return 0.0
+  end
+
+  // Update widget states
+  let mx = _gs[3]
+  let my = _gs[4]
+  let mdown = _gs[5]
+  let mclick = _gs[6]
+  let mut old_focus = _gs[8]
+
+  if mclick == 1.0
+    _gs[8] = -1.0
+  end
+
+  // Handle open dropdown overlay click (before normal widgets — Z-order priority)
+  let mut dd_handled = 0.0
+  if mclick == 1.0
+    if _gs[11] >= 0.0
+      let dd_id = int(_gs[11])
+      let dd_x = _gui_x[dd_id]
+      let dd_y = _gui_y[dd_id] + _gui_h[dd_id]
+      let dd_w = _gui_w[dd_id]
+      let dd_count = _gui_list_count[dd_id]
+      let dd_row_h = 22.0
+      let dd_h = dd_count * dd_row_h
+      if mx >= dd_x
+        if mx < dd_x + dd_w
+          if my >= dd_y
+            if my < dd_y + dd_h
+              // Clicked on a dropdown item
+              let dd_item = floor((my - dd_y) / dd_row_h)
+              if dd_item >= 0.0
+                if dd_item < dd_count
+                  _gui_list_selected[dd_id] = dd_item
+                  _gui_clicked[dd_id] = 1.0
+                end
+              end
+              dd_handled = 1.0
+            end
+          end
+        end
+      end
+      // Close the dropdown regardless
+      _gs[11] = -1.0
+      _gs[9] = 1.0
+    end
+  end
+
+  i = 0.0
+  while i < wcount
+    let ii = int(i)
+    let vis = _gui_visible[ii]
+    let enb = _gui_enabled[ii]
+    if vis == 1.0
+      if enb == 1.0
+        let wx = _gui_x[ii]
+        let wy = _gui_y[ii]
+        let ww = _gui_w[ii]
+        let wh = _gui_h[ii]
+        if mx >= wx
+          if mx < wx + ww
+            if my >= wy
+              if my < wy + wh
+                _gui_hovered[ii] = 1.0
+                let wtype = _gui_types[ii]
+                // Pressed: hovering + mouse held
+                if mdown == 1.0
+                  if wtype == GUI_BUTTON
+                    _gui_pressed[ii] = 1.0
+                  end
+                end
+                // Click handling
+                if mclick == 1.0
+                  if wtype == GUI_BUTTON
+                    _gui_clicked[ii] = 1.0
+                  elif wtype == GUI_CHECKBOX
+                    let cur_chk = _gui_checked[ii]
+                    if cur_chk == 0.0
+                      _gui_checked[ii] = 1.0
+                    else
+                      _gui_checked[ii] = 0.0
+                    end
+                    _gui_clicked[ii] = 1.0
+                  elif wtype == GUI_TEXTINPUT
+                    _gs[8] = i
+                    _gui_input_focused[ii] = 1.0
+                  elif wtype == GUI_SLIDER
+                    let rel = (mx - wx) / ww
+                    let smin = _gui_slider_min[ii]
+                    let smax = _gui_slider_max[ii]
+                    let mut sv = smin + rel * (smax - smin)
+                    if sv < smin
+                      sv = smin
+                    end
+                    if sv > smax
+                      sv = smax
+                    end
+                    _gui_slider_val[ii] = sv
+                    _gui_clicked[ii] = 1.0
+                  elif wtype == GUI_RADIO
+                    // Uncheck all radios in same group
+                    let rgroup = _gui_parent[ii]
+                    let mut rj = 0.0
+                    while rj < wcount
+                      let rjj = int(rj)
+                      if _gui_types[rjj] == GUI_RADIO
+                        if _gui_parent[rjj] == rgroup
+                          _gui_checked[rjj] = 0.0
+                        end
+                      end
+                      rj = rj + 1.0
+                    end
+                    _gui_checked[ii] = 1.0
+                    _gui_clicked[ii] = 1.0
+                  elif wtype == GUI_LISTBOX
+                    // Calculate which item was clicked
+                    let row_h = 20.0
+                    let click_y = my - wy - 2.0
+                    let scroll = _gui_list_scroll[ii]
+                    let item_idx = floor(click_y / row_h) + scroll
+                    let lcount = _gui_list_count[ii]
+                    if item_idx >= 0.0
+                      if item_idx < lcount
+                        _gui_list_selected[ii] = item_idx
+                        _gui_clicked[ii] = 1.0
+                      end
+                    end
+                  elif wtype == GUI_SPINBOX
+                    // Check if click is on - or + button
+                    let btn_w = 30.0
+                    let step = _gui_parent[ii]
+                    let sval = _gui_slider_val[ii]
+                    let smin2 = _gui_slider_min[ii]
+                    let smax2 = _gui_slider_max[ii]
+                    if mx < wx + btn_w
+                      // Minus button
+                      let mut nv = sval - step
+                      if nv < smin2
+                        nv = smin2
+                      end
+                      _gui_slider_val[ii] = nv
+                      _gui_clicked[ii] = 1.0
+                    elif mx >= wx + ww - btn_w
+                      // Plus button
+                      let mut nv2 = sval + step
+                      if nv2 > smax2
+                        nv2 = smax2
+                      end
+                      _gui_slider_val[ii] = nv2
+                      _gui_clicked[ii] = 1.0
+                    end
+                  elif wtype == GUI_DROPDOWN
+                    if dd_handled == 0.0
+                      // Toggle open/close
+                      if _gs[11] == i
+                        _gs[11] = -1.0
+                      else
+                        _gs[11] = i
+                      end
+                    end
+                  elif wtype == GUI_TABS
+                    // Check if click is on a tab header (top 30px)
+                    let tab_h = 30.0
+                    if my < wy + tab_h
+                      let tcount = _gui_list_count[ii]
+                      if tcount > 0.0
+                        let tab_w = ww / tcount
+                        let tab_idx = floor((mx - wx) / tab_w)
+                        if tab_idx >= 0.0
+                          if tab_idx < tcount
+                            _gui_slider_val[ii] = tab_idx
+                            _gui_clicked[ii] = 1.0
+                          end
+                        end
+                      end
+                    end
+                  elif wtype == GUI_CANVAS
+                    _gui_clicked[ii] = 1.0
+                  elif wtype == GUI_TREEVIEW
+                    let tv_row_h = 20.0
+                    let tv_click_y = my - wy - 2.0
+                    let tv_scroll = _gui_list_scroll[ii]
+                    let tv_click_row = floor(tv_click_y / tv_row_h)
+                    let tv_start = _gui_list_start[ii]
+                    let tv_count = _gui_list_count[ii]
+                    let mut tv_vis = 0.0
+                    let mut tv_ni = 0.0
+                    let mut tv_clicked = -1.0
+                    while tv_ni < tv_count
+                      let tv_nv = _gui_tree_node_visible(i, tv_ni)
+                      if tv_nv == 1.0
+                        if tv_vis == tv_click_row + tv_scroll
+                          tv_clicked = tv_ni
+                        end
+                        tv_vis = tv_vis + 1.0
+                      end
+                      tv_ni = tv_ni + 1.0
+                    end
+                    if tv_clicked >= 0.0
+                      _gui_list_selected[ii] = tv_clicked
+                      // Toggle expand if click on arrow area and node has children
+                      let tv_nd = _gui_tree_depth[int(tv_start + tv_clicked)]
+                      let tv_arrow_end = wx + tv_nd * 16.0 + 20.0
+                      if mx < tv_arrow_end
+                        let mut tv_has_kids = 0.0
+                        let mut tv_ci = 0.0
+                        while tv_ci < tv_count
+                          if _gui_tree_parents[int(tv_start + tv_ci)] == tv_clicked
+                            tv_has_kids = 1.0
+                          end
+                          tv_ci = tv_ci + 1.0
+                        end
+                        if tv_has_kids == 1.0
+                          let _tvt = gui_tree_toggle(i, tv_clicked)
+                        end
+                      end
+                      _gui_clicked[ii] = 1.0
+                    end
+                  end
+                end
+                // Slider drag
+                if wtype == GUI_SLIDER
+                  if mdown == 1.0
+                    let rel2 = (mx - wx) / ww
+                    let smin2 = _gui_slider_min[ii]
+                    let smax2 = _gui_slider_max[ii]
+                    let mut sv2 = smin2 + rel2 * (smax2 - smin2)
+                    if sv2 < smin2
+                      sv2 = smin2
+                    end
+                    if sv2 > smax2
+                      sv2 = smax2
+                    end
+                    _gui_slider_val[ii] = sv2
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Text input for focused widget
+  if _gs[8] >= 0.0
+    let fid = int(_gs[8])
+    if _gs[7] == 1.0
+      let key = _gss[0]
+      let cur_text = _gui_input_text[fid]
+      if key == "backspace"
+        let tl = len(cur_text)
+        if tl > 1.0
+          let new_text = substr(cur_text, 0.0, tl - 1.0)
+          _gui_input_text[fid] = new_text
+        end
+      elif len(key) == 1.0
+        let new_text2 = cur_text + key
+        _gui_input_text[fid] = new_text2
+      elif key == "space"
+        let new_text3 = cur_text + " "
+        _gui_input_text[fid] = new_text3
+      end
+    end
+  end
+
+  // Unfocus previous input
+  if old_focus >= 0.0
+    if old_focus != _gs[8]
+      _gui_input_focused[int(old_focus)] = 0.0
+    end
+  end
+
+  // Render if dirty
+  if _gs[9] == 1.0
+    let _r = _gui_render()
+    _gs[9] = 0.0
+  end
+
+  sleep(16)
+  return 0.0
+end
+
+// ── Rendering ───────────────────────────────────────────────────────
+
+fn _gui_render()
+  let ww = _gs[1]
+  let wh = _gs[2]
+  let total = ww * wh
+
+  // Clear to background
+  let mut pi = 0.0
+  while pi < total
+    let pii = int(pi)
+    _gui_px_r[pii] = _tc[0]
+    _gui_px_g[pii] = _tc[1]
+    _gui_px_b[pii] = _tc[2]
+    pi = pi + 1.0
+  end
+
+  // Draw widgets
+  let wcount = len(_gui_types)
+  let mut i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      let wtype = _gui_types[ii]
+      let wx = _gui_x[ii]
+      let wy = _gui_y[ii]
+      let ww2 = _gui_w[ii]
+      let wh2 = _gui_h[ii]
+      let hover = _gui_hovered[ii]
+      let text = _gui_texts[ii]
+      let scale = 2.0
+
+      if wtype == GUI_PANEL
+        let _f = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, _tc[3], _tc[4], _tc[5], ww, wh)
+        let _b = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, _tc[21], _tc[22], _tc[23], ww, wh)
+
+      elif wtype == GUI_LABEL
+        let _t = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, text, wx, wy + 2.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+
+      elif wtype == GUI_BUTTON
+        let mut br = _tc[6]
+        let mut bg = _tc[7]
+        let mut bb = _tc[8]
+        if hover == 1.0
+          br = _tc[9]
+          bg = _tc[10]
+          bb = _tc[11]
+        end
+        if _gui_pressed[ii] == 1.0
+          br = _tc[12]
+          bg = _tc[13]
+          bb = _tc[14]
+        end
+        let _f2 = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, br, bg, bb, ww, wh)
+        let _b2 = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, _tc[21], _tc[22], _tc[23], ww, wh)
+        let tlen = len(text)
+        let tw = tlen * 5.0 * scale
+        let tx = wx + (ww2 - tw) / 2.0
+        let ty = wy + (wh2 - 6.0 * scale) / 2.0
+        let _t2 = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, text, tx, ty, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+
+      elif wtype == GUI_CHECKBOX
+        let box_x = wx
+        let box_y = wy + 1.0
+        let box_sz = 18.0
+        let _fb = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, box_x, box_y, box_sz, box_sz, _tc[6], _tc[7], _tc[8], ww, wh)
+        let _bb = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, box_x, box_y, box_sz, box_sz, _tc[21], _tc[22], _tc[23], ww, wh)
+        if _gui_checked[ii] == 1.0
+          let _ck = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, box_x + 4.0, box_y + 4.0, 10.0, 10.0, _tc[24], _tc[25], _tc[26], ww, wh)
+        end
+        let _tl = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, text, wx + 24.0, wy + 3.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+
+      elif wtype == GUI_SLIDER
+        let track_h = 6.0
+        let track_y = wy + (wh2 - track_h) / 2.0
+        let _ft = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, track_y, ww2, track_h, _tc[6], _tc[7], _tc[8], ww, wh)
+        let smin = _gui_slider_min[ii]
+        let smax = _gui_slider_max[ii]
+        let sval = _gui_slider_val[ii]
+        let range = smax - smin
+        let mut frac = 0.0
+        if range > 0.0
+          frac = (sval - smin) / range
+        end
+        let fill_w = frac * ww2
+        let _ff = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, track_y, fill_w, track_h, _tc[27], _tc[28], _tc[29], ww, wh)
+        let thumb_x = wx + fill_w - 6.0
+        let thumb_y = wy + 2.0
+        let _fth = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, thumb_x, thumb_y, 12.0, 20.0, _tc[15], _tc[16], _tc[17], ww, wh)
+
+      elif wtype == GUI_TEXTINPUT
+        let mut ibg_r = _tc[6]
+        let mut ibg_g = _tc[7]
+        let mut ibg_b = _tc[8]
+        if _gui_input_focused[ii] == 1.0
+          ibg_r = 50.0
+          ibg_g = 52.0
+          ibg_b = 60.0
+        end
+        let _fi2 = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, ibg_r, ibg_g, ibg_b, ww, wh)
+        let mut bdr = _tc[21]
+        let mut bdg = _tc[22]
+        let mut bdb = _tc[23]
+        if _gui_input_focused[ii] == 1.0
+          bdr = _tc[12]
+          bdg = _tc[13]
+          bdb = _tc[14]
+        end
+        let _bi = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, bdr, bdg, bdb, ww, wh)
+        let input_t = _gui_input_text[ii]
+        let _ti = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, input_t, wx + 6.0, wy + 8.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+        if _gui_input_focused[ii] == 1.0
+          let cursor_x = wx + 6.0 + len(input_t) * 5.0 * scale
+          let _fc = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, cursor_x, wy + 6.0, 2.0, 18.0, _tc[15], _tc[16], _tc[17], ww, wh)
+        end
+
+      elif wtype == GUI_PROGRESS
+        // Track background
+        let pt_h = 14.0
+        let pt_y = wy + (wh2 - pt_h) / 2.0
+        let _fp = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, pt_y, ww2, pt_h, _tc[6], _tc[7], _tc[8], ww, wh)
+        let _bp = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, pt_y, ww2, pt_h, _tc[21], _tc[22], _tc[23], ww, wh)
+        // Fill based on value
+        let pval = _gui_slider_val[ii]
+        let pfrac = pval / 100.0
+        let pfill = pfrac * (ww2 - 2.0)
+        if pfill > 0.0
+          let _pf = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx + 1.0, pt_y + 1.0, pfill, pt_h - 2.0, _tc[27], _tc[28], _tc[29], ww, wh)
+        end
+        // Percentage text
+        let pct_i = floor(pval)
+        let pct_txt = str(pct_i) + "%"
+        let ptw = len(pct_txt) * 5.0 * scale
+        let ptx = wx + (ww2 - ptw) / 2.0
+        let _pt = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, pct_txt, ptx, pt_y + 1.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+
+      elif wtype == GUI_RADIO
+        // Radio circle (approximated as small box with dot)
+        let rb_x = wx + 1.0
+        let rb_y = wy + 2.0
+        let rb_sz = 16.0
+        let _rb = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, rb_x, rb_y, rb_sz, rb_sz, _tc[21], _tc[22], _tc[23], ww, wh)
+        if _gui_checked[ii] == 1.0
+          let _rd = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, rb_x + 4.0, rb_y + 4.0, 8.0, 8.0, _tc[24], _tc[25], _tc[26], ww, wh)
+        end
+        let _rl = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, text, wx + 24.0, wy + 3.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+
+      elif wtype == GUI_SEPARATOR
+        let sep_y = wy
+        let _sep = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, sep_y, ww2, 1.0, _tc[21], _tc[22], _tc[23], ww, wh)
+        let _sep2 = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, sep_y + 1.0, ww2, 1.0, _tc[18], _tc[19], _tc[20], ww, wh)
+
+      elif wtype == GUI_LISTBOX
+        // Background
+        let _lb = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, _tc[6], _tc[7], _tc[8], ww, wh)
+        let _lbb = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, _tc[21], _tc[22], _tc[23], ww, wh)
+        // Draw items
+        let row_h = 20.0
+        let visible_rows = floor((wh2 - 4.0) / row_h)
+        let lstart = _gui_list_start[ii]
+        let lcount = _gui_list_count[ii]
+        let lscroll = _gui_list_scroll[ii]
+        let lsel = _gui_list_selected[ii]
+        let mut ri = 0.0
+        while ri < visible_rows
+          let item_idx = ri + lscroll
+          if item_idx < lcount
+            let ry = wy + 2.0 + ri * row_h
+            // Highlight selected row
+            if item_idx == lsel
+              let _hs = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx + 1.0, ry, ww2 - 2.0, row_h, _tc[12], _tc[13], _tc[14], ww, wh)
+            elif hover == 1.0
+              let click_ri = floor((_gs[4] - wy - 2.0) / row_h) + lscroll
+              if click_ri == item_idx
+                let _hh = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx + 1.0, ry, ww2 - 2.0, row_h, _tc[9], _tc[10], _tc[11], ww, wh)
+              end
+            end
+            let item_text = _gui_list_items[int(lstart + item_idx)]
+            let _it = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, item_text, wx + 6.0, ry + 3.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+          end
+          ri = ri + 1.0
+        end
+
+      elif wtype == GUI_SPINBOX
+        // Minus button
+        let btn_w = 30.0
+        let mut mbr = _tc[6]
+        let mut mbg = _tc[7]
+        let mut mbb = _tc[8]
+        if hover == 1.0
+          if _gs[3] < wx + btn_w
+            mbr = _tc[9]
+            mbg = _tc[10]
+            mbb = _tc[11]
+          end
+        end
+        let _mb = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, btn_w, wh2, mbr, mbg, mbb, ww, wh)
+        let _mbd = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, btn_w, wh2, _tc[21], _tc[22], _tc[23], ww, wh)
+        let _mt = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, "-", wx + 10.0, wy + 7.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+        // Value display
+        let val_x = wx + btn_w
+        let val_w = ww2 - btn_w * 2.0
+        let _vb = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, val_x, wy, val_w, wh2, _tc[6], _tc[7], _tc[8], ww, wh)
+        let sval = _gui_slider_val[ii]
+        let val_text = str(sval)
+        let vtw = len(val_text) * 5.0 * scale
+        let vtx = val_x + (val_w - vtw) / 2.0
+        let _vt = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, val_text, vtx, wy + 7.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+        // Plus button
+        let pb_x = wx + ww2 - btn_w
+        let mut pbr = _tc[6]
+        let mut pbg = _tc[7]
+        let mut pbb = _tc[8]
+        if hover == 1.0
+          if _gs[3] >= pb_x
+            pbr = _tc[9]
+            pbg = _tc[10]
+            pbb = _tc[11]
+          end
+        end
+        let _pb = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, pb_x, wy, btn_w, wh2, pbr, pbg, pbb, ww, wh)
+        let _pbd = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, pb_x, wy, btn_w, wh2, _tc[21], _tc[22], _tc[23], ww, wh)
+        let _pt2 = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, "+", pb_x + 10.0, wy + 7.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+
+      elif wtype == GUI_DROPDOWN
+        // Collapsed dropdown button
+        let mut ddr = _tc[6]
+        let mut ddg = _tc[7]
+        let mut ddb = _tc[8]
+        if hover == 1.0
+          ddr = _tc[9]
+          ddg = _tc[10]
+          ddb = _tc[11]
+        end
+        let _ddf = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, ddr, ddg, ddb, ww, wh)
+        let _ddbd = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, _tc[21], _tc[22], _tc[23], ww, wh)
+        // Selected text
+        let dd_sel = _gui_list_selected[ii]
+        let mut dd_text = " "
+        if dd_sel >= 0.0
+          let dd_s = _gui_list_start[ii]
+          dd_text = _gui_list_items[int(dd_s + dd_sel)]
+        end
+        let _ddt = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, dd_text, wx + 8.0, wy + 8.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+        // Down arrow indicator
+        let arrow_x = wx + ww2 - 18.0
+        let _dda = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, "V", arrow_x, wy + 8.0, scale, _tc[18], _tc[19], _tc[20], ww, wh)
+
+      elif wtype == GUI_TABS
+        // Tab header bar
+        let tab_hh = 30.0
+        let tcount = _gui_list_count[ii]
+        let tstart = _gui_list_start[ii]
+        let active_tab = _gui_slider_val[ii]
+        // Header background
+        let _thbg = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, tab_hh, _tc[6], _tc[7], _tc[8], ww, wh)
+        // Draw each tab header
+        if tcount > 0.0
+          let tab_tw = ww2 / tcount
+          let mut ti = 0.0
+          while ti < tcount
+            let tx = wx + ti * tab_tw
+            if ti == active_tab
+              // Active tab — highlight
+              let _atf = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, tx, wy, tab_tw, tab_hh, _tc[3], _tc[4], _tc[5], ww, wh)
+              let _atb = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, tx, wy, tab_tw, tab_hh, _tc[12], _tc[13], _tc[14], ww, wh)
+            else
+              let _itb = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, tx, wy, tab_tw, tab_hh, _tc[21], _tc[22], _tc[23], ww, wh)
+            end
+            let tlabel = _gui_list_items[int(tstart + ti)]
+            let tlw = len(tlabel) * 5.0 * scale
+            let tlx = tx + (tab_tw - tlw) / 2.0
+            let mut ttr = _tc[15]
+            let mut ttg = _tc[16]
+            let mut ttb = _tc[17]
+            if ti != active_tab
+              ttr = _tc[18]
+              ttg = _tc[19]
+              ttb = _tc[20]
+            end
+            let _tlt = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, tlabel, tlx, wy + 8.0, scale, ttr, ttg, ttb, ww, wh)
+            ti = ti + 1.0
+          end
+        end
+        // Content area (below header)
+        let cnt_y = wy + tab_hh
+        let cnt_h = wh2 - tab_hh
+        let _cnf = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, cnt_y, ww2, cnt_h, _tc[3], _tc[4], _tc[5], ww, wh)
+        let _cnb = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, cnt_y, ww2, cnt_h, _tc[21], _tc[22], _tc[23], ww, wh)
+
+      elif wtype == GUI_CANVAS
+        // Canvas background
+        let _cvf = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, _tc[3], _tc[4], _tc[5], ww, wh)
+        let _cvb = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, _tc[21], _tc[22], _tc[23], ww, wh)
+        // Execute draw commands
+        let cv_start = _gui_list_start[ii]
+        let cv_count = _gui_list_count[ii]
+        let mut cv_i = 0.0
+        while cv_i < cv_count
+          let cv_base = int(cv_start + cv_i * 8.0)
+          let cv_type = _gui_canvas_cmds[cv_base]
+          let cv_p1 = _gui_canvas_cmds[cv_base + 1]
+          let cv_p2 = _gui_canvas_cmds[cv_base + 2]
+          let cv_p3 = _gui_canvas_cmds[cv_base + 3]
+          let cv_p4 = _gui_canvas_cmds[cv_base + 4]
+          let cv_p5 = _gui_canvas_cmds[cv_base + 5]
+          let cv_p6 = _gui_canvas_cmds[cv_base + 6]
+          let cv_p7 = _gui_canvas_cmds[cv_base + 7]
+          if cv_type == 1.0
+            let _cl = _gui_draw_line(_gui_px_r, _gui_px_g, _gui_px_b, wx+cv_p1, wy+cv_p2, wx+cv_p3, wy+cv_p4, cv_p5, cv_p6, cv_p7, ww, wh)
+          elif cv_type == 2.0
+            let _cr2 = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx+cv_p1, wy+cv_p2, cv_p3, cv_p4, cv_p5, cv_p6, cv_p7, ww, wh)
+          elif cv_type == 3.0
+            let _cf2 = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx+cv_p1, wy+cv_p2, cv_p3, cv_p4, cv_p5, cv_p6, cv_p7, ww, wh)
+          elif cv_type == 4.0
+            let _cc = _gui_draw_circle(_gui_px_r, _gui_px_g, _gui_px_b, wx+cv_p1, wy+cv_p2, cv_p3, cv_p5, cv_p6, cv_p7, ww, wh)
+          elif cv_type == 5.0
+            let _cfc = _gui_fill_circle(_gui_px_r, _gui_px_g, _gui_px_b, wx+cv_p1, wy+cv_p2, cv_p3, cv_p5, cv_p6, cv_p7, ww, wh)
+          elif cv_type == 6.0
+            let _cpx = _gui_set_pixel(_gui_px_r, _gui_px_g, _gui_px_b, wx+cv_p1, wy+cv_p2, cv_p5, cv_p6, cv_p7, ww, wh)
+          end
+          cv_i = cv_i + 1.0
+        end
+
+      elif wtype == GUI_TREEVIEW
+        // Treeview background
+        let _tvf = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, _tc[6], _tc[7], _tc[8], ww, wh)
+        let _tvb = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, _tc[21], _tc[22], _tc[23], ww, wh)
+        let tv_row_h = 20.0
+        let tv_start = _gui_list_start[ii]
+        let tv_count = _gui_list_count[ii]
+        let tv_scroll = _gui_list_scroll[ii]
+        let tv_sel = _gui_list_selected[ii]
+        let tv_max_rows = floor((wh2 - 4.0) / tv_row_h)
+        let mut tv_vis_row = 0.0
+        let mut tv_drawn = 0.0
+        let mut tv_ni = 0.0
+        while tv_ni < tv_count
+          let tv_nv = _gui_tree_node_visible(i, tv_ni)
+          if tv_nv == 1.0
+            if tv_vis_row >= tv_scroll
+              if tv_drawn < tv_max_rows
+                let tv_ry = wy + 2.0 + tv_drawn * tv_row_h
+                let tv_depth = _gui_tree_depth[int(tv_start + tv_ni)]
+                let tv_indent = tv_depth * 16.0 + 4.0
+                // Selection highlight
+                if tv_ni == tv_sel
+                  let _tvs = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, wx + 1.0, tv_ry, ww2 - 2.0, tv_row_h, _tc[12], _tc[13], _tc[14], ww, wh)
+                end
+                // Expand/collapse indicator
+                let mut tv_has_ch = 0.0
+                let mut tv_chi = 0.0
+                while tv_chi < tv_count
+                  if _gui_tree_parents[int(tv_start + tv_chi)] == tv_ni
+                    tv_has_ch = 1.0
+                  end
+                  tv_chi = tv_chi + 1.0
+                end
+                if tv_has_ch == 1.0
+                  if _gui_tree_expanded[int(tv_start + tv_ni)] == 1.0
+                    let _tve = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, "-", wx + tv_indent, tv_ry + 3.0, scale, _tc[18], _tc[19], _tc[20], ww, wh)
+                  else
+                    let _tvp = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, "+", wx + tv_indent, tv_ry + 3.0, scale, _tc[18], _tc[19], _tc[20], ww, wh)
+                  end
+                end
+                // Node label
+                let tv_label = _gui_tree_labels[int(tv_start + tv_ni)]
+                let tv_lx = wx + tv_indent + 16.0
+                let _tvl = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, tv_label, tv_lx, tv_ry + 3.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+                tv_drawn = tv_drawn + 1.0
+              end
+            end
+            tv_vis_row = tv_vis_row + 1.0
+          end
+          tv_ni = tv_ni + 1.0
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Render open dropdown overlay (Z-order: on top of everything)
+  if _gs[11] >= 0.0
+    let ov_id = int(_gs[11])
+    let ov_vis = _gui_visible[ov_id]
+    if ov_vis == 1.0
+      let ov_x = _gui_x[ov_id]
+      let ov_y = _gui_y[ov_id] + _gui_h[ov_id]
+      let ov_w = _gui_w[ov_id]
+      let ov_count = _gui_list_count[ov_id]
+      let ov_row_h = 22.0
+      let ov_h = ov_count * ov_row_h
+      let ov_sel = _gui_list_selected[ov_id]
+      let ov_start = _gui_list_start[ov_id]
+      // Background
+      let _ovbg = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, ov_x, ov_y, ov_w, ov_h, _tc[3], _tc[4], _tc[5], ww, wh)
+      let _ovbd = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, ov_x, ov_y, ov_w, ov_h, _tc[21], _tc[22], _tc[23], ww, wh)
+      // Items
+      let mut oi = 0.0
+      while oi < ov_count
+        let oiy = ov_y + oi * ov_row_h
+        // Selected highlight
+        if oi == ov_sel
+          let _osh = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, ov_x + 1.0, oiy, ov_w - 2.0, ov_row_h, _tc[12], _tc[13], _tc[14], ww, wh)
+        end
+        // Hover highlight
+        if _gs[4] >= oiy
+          if _gs[4] < oiy + ov_row_h
+            if _gs[3] >= ov_x
+              if _gs[3] < ov_x + ov_w
+                let _ohh = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, ov_x + 1.0, oiy, ov_w - 2.0, ov_row_h, _tc[9], _tc[10], _tc[11], ww, wh)
+              end
+            end
+          end
+        end
+        let oi_text = _gui_list_items[int(ov_start + oi)]
+        let _oit = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, oi_text, ov_x + 8.0, oiy + 4.0, scale, _tc[15], _tc[16], _tc[17], ww, wh)
+        oi = oi + 1.0
+      end
+    end
+  end
+
+  // Render tooltips (Z-order: on top of everything)
+  let tt_wcount = len(_gui_types)
+  let mut tt_i = 0.0
+  while tt_i < tt_wcount
+    let tt_ii = int(tt_i)
+    if _gui_types[tt_ii] == GUI_TOOLTIP
+      let tt_target = int(_gui_parent[tt_ii])
+      if tt_target >= 0.0
+        if tt_target < tt_wcount
+          if _gui_hovered[tt_target] == 1.0
+            let tt_text = _gui_texts[tt_ii]
+            let tt_w = _gui_w[tt_ii]
+            let tt_h = _gui_h[tt_ii]
+            let tt_x = _gs[3] + 12.0
+            let tt_y = _gs[4] - 24.0
+            let _ttf = _gui_fill_rect(_gui_px_r, _gui_px_g, _gui_px_b, tt_x, tt_y, tt_w, tt_h, 50.0, 50.0, 55.0, ww, wh)
+            let _ttb = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, tt_x, tt_y, tt_w, tt_h, _tc[21], _tc[22], _tc[23], ww, wh)
+            let _ttt = _gui_draw_text(_gui_px_r, _gui_px_g, _gui_px_b, tt_text, tt_x + 4.0, tt_y + 3.0, 2.0, 240.0, 240.0, 240.0, ww, wh)
+          end
+        end
+      end
+    end
+    tt_i = tt_i + 1.0
+  end
+
+  window_draw(_gui_px_r, _gui_px_g, _gui_px_b)
+  return 0.0
+end

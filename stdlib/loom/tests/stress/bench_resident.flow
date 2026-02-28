@@ -1,0 +1,39 @@
+// Phase 79 benchmark: GPU-resident chaining
+// 10M elements, full pipeline
+
+// Warmup: compile all pipelines
+let wa = gpu_fill(1.0, 4)
+let wb = gpu_fill(1.0, 4)
+let wc = gpu_add(wa, wb)
+let wd = gpu_mul(wc, wc)
+let we = gpu_scale(wd, 0.5)
+let ws = gpu_sum(we)
+
+// Timed: 10M element chain
+let t0 = now_ms()
+let a = gpu_fill(1.5, 10000000)
+let b = gpu_fill(2.5, 10000000)
+let t1 = now_ms()
+let c = gpu_add(a, b)
+let t2 = now_ms()
+let d = gpu_mul(c, c)
+let t3 = now_ms()
+let e = gpu_scale(d, 0.1)
+let t4 = now_ms()
+let s = gpu_sum(e)
+let t5 = now_ms()
+
+let d_fill = t1 - t0
+let d_add = t2 - t1
+let d_mul = t3 - t2
+let d_scale = t4 - t3
+let d_sum = t5 - t4
+let d_total = t5 - t0
+
+print("fill 2x10M:  {d_fill} ms")
+print("gpu_add:     {d_add} ms")
+print("gpu_mul:     {d_mul} ms")
+print("gpu_scale:   {d_scale} ms")
+print("gpu_sum:     {d_sum} ms")
+print("total chain: {d_total} ms")
+print("result: {s}")

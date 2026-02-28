@@ -1,4 +1,7 @@
 // stdlib/sys/platform.flow — Platform detection and system info
+//
+// Functions: get_os, is_windows, is_linux, is_mac, home_dir, temp_dir,
+//            user_name, path_separator
 
 fn get_os()
   return os_name()

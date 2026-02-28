@@ -1,0 +1,40 @@
+// emit_kv_write.flow — KV Cache Write Kernel Emitter
+//
+// Writes a K or V projection vector into the KV cache at a specific position.
+// Called twice per layer per token: once for K, once for V.
+//
+// Binding 0: input vector (kv_dim floats, the K or V projection)
+// Binding 1: output = KV cache buffer (persistent, written at offset)
+//
+// Push constants:
+//   [0]: write_offset (float) = pre-computed: layer * max_seq * kv_dim + pos * kv_dim
+//
+// Dispatch: ceil(kv_dim / 256) workgroups x 256 threads
+// Each thread writes one element: cache[offset + gid] = input[gid]
+
+use "../../compiler/ir"
+
+fn emit_kv_write(out_path)
+  ir_new()
+  ir_input_count = 1.0
+  ir_workgroup_size = 256.0
+
+  let entry = ir_block("entry")
+
+  let gid = ir_load_gid(entry)
+  let offset_f = ir_push_const(entry, 0.0)
+  let offset = ir_ftou(entry, offset_f)
+
+  // Read input element
+  let val = ir_load_input_at(entry, 0.0, gid)
+
+  // Compute write index: offset + gid
+  let write_idx = ir_iadd(entry, offset, gid)
+
+  // Write to output (KV cache)
+  let _s = ir_store_output_at(entry, write_idx, val)
+  let _t = ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

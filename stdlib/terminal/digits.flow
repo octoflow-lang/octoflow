@@ -1,0 +1,28 @@
+// stdlib/terminal/digits.flow — Pure .flow ASCII digit art renderer
+// Maps pixel brightness to digits 0-9
+// 0 = darkest, 9 = brightest
+// Compact, works on ANY terminal (no color support needed)
+
+fn digits_render(w, h, r, g, b)
+  for y in range(0, int(h))
+    let mut line = ""
+    for x in range(0, int(w))
+      let idx = int(y * w + x)
+      let rv = r[idx]
+      let gv = g[idx]
+      let bv = b[idx]
+      let lum = 0.299 * rv + 0.587 * gv + 0.114 * bv
+      let mut digit = int(floor(lum / 255.0 * 9.99))
+      if digit > 9.0
+        digit = 9.0
+      end
+      if digit < 0.0
+        digit = 0.0
+      end
+      line = line + chr(48.0 + digit)
+    end
+    print_raw(line)
+    print("")
+  end
+  return 0.0
+end

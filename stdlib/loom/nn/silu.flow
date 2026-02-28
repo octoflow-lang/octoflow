@@ -1,0 +1,35 @@
+// stdlib/loom/silu.flow — GPU SiLU dispatch (buffer-handle API)
+//
+// Two modes:
+//   gpu_silu(x_array) → result array  (convenience, copies data)
+//   gpu_silu_buf(buf_in, buf_out, n) → 0.0  (zero-copy, GPU-resident)
+
+use "runtime"
+
+fn gpu_silu_buf(buf_in, buf_out, n)
+  let pipe = rt_load_pipeline("stdlib/loom/kernels/nn/silu.spv", 2.0, 0.0)
+  let _cb = rt_chain_begin(1.0, 2.0)
+  let mut bufs = []
+  push(bufs, buf_in)
+  push(bufs, buf_out)
+  let _d = rt_chain_dispatch(pipe, bufs, 1.0)
+  let _ce = rt_chain_end()
+  let _sw = rt_chain_submit_wait()
+  return 0.0
+end
+
+fn gpu_silu(x)
+  let n = len(x)
+  let buf_in = rt_create_buffer(n * 4.0)
+  let buf_out = rt_create_buffer(n * 4.0)
+  let _u = rt_upload(buf_in, x)
+  let _d = gpu_silu_buf(buf_in, buf_out, n)
+  let _dl = rt_download(buf_out, n)
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+  return result
+end

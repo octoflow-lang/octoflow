@@ -12,7 +12,7 @@ Unzip. Run. No installer, no dependencies, no SDK.
 
 ```
 $ octoflow --version
-OctoFlow 1.0.0
+OctoFlow 0.83.1
 ```
 
 ## Hello World
@@ -62,9 +62,9 @@ ok 12ms
 
 ```
 $ octoflow repl
-OctoFlow v1.0.0 — GPU-native language
+OctoFlow v0.83.1 — GPU-native language
 GPU: NVIDIA GeForce GTX 1660 SUPER
-247 stdlib modules | :help | :time
+143 stdlib modules | :help | :time
 
 > 2 + 2
 4
@@ -87,7 +87,7 @@ let last_sma = sma_3[len(sma_3) - 1]
 print("SMA(3): {last_sma}")
 ```
 
-247 modules across 18 domains. Run `octoflow help <domain>` to explore:
+143 modules across 12 domains. Run `octoflow help <domain>` to explore:
 
 ```
 $ octoflow help stats

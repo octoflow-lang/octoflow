@@ -1,5 +1,7 @@
 // stdlib/sys/args.flow — CLI argument parsing
 //
+// Functions: parse_args, arg_flag, arg_value, arg_required
+//
 // Usage:
 //   let args = parse_args()
 //   let verbose = arg_flag(args, "--verbose")

@@ -1,7 +1,16 @@
 // stdlib/stats/descriptive.flow — Descriptive statistics
+//
+// Functions: skewness, kurtosis, iqr, percentile, weighted_mean,
+//            trimmed_mean, describe, mode, geometric_mean, harmonic_mean,
+//            coeff_of_variation, zscore
+//
+// All functions guard against empty arrays and division by zero.
 
 fn skewness(arr)
   let n = len(arr)
+  if n < 3.0
+    return 0.0
+  end
   let m = mean(arr)
   let sd = stddev(arr)
   if sd == 0.0
@@ -17,6 +26,9 @@ end
 
 fn kurtosis(arr)
   let n = len(arr)
+  if n < 4.0
+    return 0.0
+  end
   let m = mean(arr)
   let sd = stddev(arr)
   if sd == 0.0
@@ -31,6 +43,9 @@ fn kurtosis(arr)
 end
 
 fn iqr(arr)
+  if len(arr) < 4.0
+    return 0.0
+  end
   let sorted = sort_array(arr)
   let n = len(sorted)
   let q1_idx = floor(n * 0.25)
@@ -39,6 +54,9 @@ fn iqr(arr)
 end
 
 fn percentile(arr, p)
+  if len(arr) == 0.0
+    return 0.0
+  end
   let sorted = sort_array(arr)
   let n = len(sorted)
   let mut idx = floor(n * p / 100.0)
@@ -86,6 +104,10 @@ end
 fn describe(arr)
   let mut d = map()
   let n = len(arr)
+  if n == 0.0
+    map_set(d, "count", "0")
+    return d
+  end
   map_set(d, "count", str(n))
   map_set(d, "mean", str(mean(arr)))
   map_set(d, "std", str(stddev(arr)))
@@ -104,6 +126,9 @@ end
 
 fn mode(arr)
   // Returns most frequent value
+  if len(arr) == 0.0
+    return 0.0
+  end
   let mut counts = map()
   let mut best = arr[0]
   let mut best_count = 0.0
@@ -124,8 +149,14 @@ end
 
 fn geometric_mean(arr)
   let n = len(arr)
+  if n == 0.0
+    return 0.0
+  end
   let mut log_sum = 0.0
   for x in arr
+    if x <= 0.0
+      return 0.0
+    end
     log_sum = log_sum + log(x)
   end
   return exp(log_sum / n)
@@ -133,6 +164,9 @@ end
 
 fn harmonic_mean(arr)
   let n = len(arr)
+  if n == 0.0
+    return 0.0
+  end
   let mut inv_sum = 0.0
   for x in arr
     if x == 0.0
@@ -144,6 +178,9 @@ fn harmonic_mean(arr)
 end
 
 fn coeff_of_variation(arr)
+  if len(arr) == 0.0
+    return 0.0
+  end
   let m = mean(arr)
   if m == 0.0
     return 0.0
@@ -152,6 +189,9 @@ fn coeff_of_variation(arr)
 end
 
 fn zscore(arr)
+  if len(arr) == 0.0
+    return []
+  end
   let m = mean(arr)
   let sd = stddev(arr)
   let n = len(arr)

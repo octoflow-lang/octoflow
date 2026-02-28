@@ -1,0 +1,193 @@
+// emit_sieve_mark_v7_large.flow — Hybrid Carry-Forward + Sentinel Mark Kernel
+//
+// Reads carry-forward half_off from B0. If the carry-forward is the sentinel
+// value 0xFFFFFFFF (written by init_offsets_v7), computes the starting half_off
+// from scratch using uint64 arithmetic (same as v6 mark_large). Otherwise,
+// uses the carry-forward value directly (pure uint32).
+//
+// After marking, saves residual (phi_h - max_bits) for the next segment.
+// Subsequent dispatches for the same prime read the uint32 residual, bypassing
+// all uint64 arithmetic entirely.
+//
+// This design decouples the carry-forward from bucket sieve boundary precision,
+// making it immune to f32 precision issues in sqrt/p² comparisons.
+//
+// Thread gid (dispatch-local):
+//   prime_idx = gid + prime_start
+//   prime = ftou(B2[prime_idx])
+//   carry = B0[offset_base + prime_idx]
+//
+//   if carry == 0xFFFFFFFF:
+//     half_off = compute_from_scratch_uint64(seg_idx, prime)
+//   else:
+//     half_off = carry
+//
+//   while half_off < max_bits:
+//     atomic_and(B0[word], ~(1 << bit))
+//     half_off += prime
+//
+//   B0[offset_base + prime_idx] = half_off - max_bits
+//
+// Push constants (5):
+//   pc[0] = seg_idx      (needed for sentinel fallback: seg_start computation)
+//   pc[1] = num_words    (bitmap words)
+//   pc[2] = prime_start  (index of first large prime)
+//   pc[3] = prime_end    (index past last prime in this dispatch)
+//   pc[4] = offset_base  (start of carry-forward area in B0)
+//
+// Binding layout:
+//   B0 (uint): Read/write bitmap + carry-forward
+//   B2 (float): Read prime values
+//
+// Dispatch: wg = ceil((prime_end - prime_start) / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_mark_v7_large.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_mark_v7_large(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry         = ir_block("entry")
+  let pre_loop      = ir_block("pre_loop")
+  let compute_fresh = ir_block("compute_fresh")
+  let carry_path    = ir_block("carry_path")
+  let init_ready    = ir_block("init_ready")
+  let loop_header   = ir_block("loop_header")
+  let loop_body     = ir_block("loop_body")
+  let loop_cont     = ir_block("loop_cont")
+  let loop_merge    = ir_block("loop_merge")
+  let exit_block    = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────
+  let gid      = ir_load_gid(entry)
+  let pc_seg   = ir_push_const(entry, 0.0)   // seg_idx (for sentinel uint64 path)
+  let pc_words = ir_push_const(entry, 1.0)   // num_words
+  let pc_pst   = ir_push_const(entry, 2.0)   // prime_start
+  let pc_pen   = ir_push_const(entry, 3.0)   // prime_end
+  let pc_obase = ir_push_const(entry, 4.0)   // offset_base
+
+  let pstart_u  = ir_ftou(entry, pc_pst)
+  let pend_u    = ir_ftou(entry, pc_pen)
+  let prime_idx = ir_iadd(entry, gid, pstart_u)
+
+  let oob    = ir_ugte(entry, prime_idx, pend_u)
+  let _sm    = ir_selection_merge(entry, exit_block)
+  let _br    = ir_term_cond_branch(entry, oob, exit_block, pre_loop)
+
+  // ── pre_loop: load prime, carry; check sentinel ───────────
+  let obase_u  = ir_ftou(pre_loop, pc_obase)
+  let words_u  = ir_ftou(pre_loop, pc_words)
+
+  let c0   = ir_const_u(pre_loop, 0.0)
+  let c1   = ir_const_u(pre_loop, 1.0)
+  let c2   = ir_const_u(pre_loop, 2.0)
+  let c32  = ir_const_u(pre_loop, 32.0)
+  let c64  = ir_const_u(pre_loop, 64.0)
+
+  let max_bits = ir_imul(pre_loop, words_u, c32)
+
+  // Load prime from globals (B2)
+  let prime_f = ir_load_input_at(pre_loop, 2.0, prime_idx)
+  let prime_u = ir_ftou(pre_loop, prime_f)
+
+  // Load carry-forward: B0[offset_base + prime_idx]
+  let carry_idx = ir_iadd(pre_loop, obase_u, prime_idx)
+  let carry     = ir_buf_load_u(pre_loop, 0.0, carry_idx)
+
+  // Check sentinel: 0xFFFFFFFF = ~0
+  let sentinel_val = ir_not(pre_loop, c0)
+  let is_sentinel  = ir_uequ(pre_loop, carry, sentinel_val)
+
+  let _sm2 = ir_selection_merge(pre_loop, init_ready)
+  let _br2 = ir_term_cond_branch(pre_loop, is_sentinel, compute_fresh, carry_path)
+
+  // ── compute_fresh: uint64 first-multiple (v6 logic) ───────
+  // Only executed on first dispatch for this prime (sentinel detected).
+  // Computes seg_start in uint64 and finds the first odd multiple of
+  // the prime >= max(p², seg_start).
+
+  let seg_u       = ir_ftou(compute_fresh, pc_seg)
+  let seg_range   = ir_imul(compute_fresh, words_u, c64)
+
+  let seg_u64     = ir_u32_to_u64(compute_fresh, seg_u)
+  let seg_range64 = ir_u32_to_u64(compute_fresh, seg_range)
+  let seg_base64  = ir_imul64(compute_fresh, seg_u64, seg_range64)
+  let c1_64       = ir_u32_to_u64(compute_fresh, c1)
+  let seg_start64 = ir_iadd64(compute_fresh, seg_base64, c1_64)
+
+  let prime64  = ir_u32_to_u64(compute_fresh, prime_u)
+  let p_sq64   = ir_imul64(compute_fresh, prime64, prime64)
+
+  let use_psq    = ir_ugte64(compute_fresh, p_sq64, seg_start64)
+  let start_pt64 = ir_select(compute_fresh, IR_TYPE_UINT64, use_psq, p_sq64, seg_start64)
+
+  // Align to prime: rem = start_pt % prime, gap = (prime - rem) % prime
+  let rem64     = ir_umod64(compute_fresh, start_pt64, prime64)
+  let gap_raw64 = ir_isub64(compute_fresh, prime64, rem64)
+  let gap64     = ir_umod64(compute_fresh, gap_raw64, prime64)
+  let first_m64 = ir_iadd64(compute_fresh, start_pt64, gap64)
+
+  // Ensure odd multiple: if even, add prime
+  let first_m_low   = ir_u64_to_u32(compute_fresh, first_m64)
+  let low_bit       = ir_bit_and(compute_fresh, first_m_low, c1)
+  let is_even       = ir_uequ(compute_fresh, low_bit, c0)
+  let first_m_adj64 = ir_iadd64(compute_fresh, first_m64, prime64)
+  let mult_init64   = ir_select(compute_fresh, IR_TYPE_UINT64, is_even, first_m_adj64, first_m64)
+
+  // Convert to segment-relative half_off: (mult - seg_start) / 2
+  let c2_64           = ir_u32_to_u64(compute_fresh, c2)
+  let offset64        = ir_isub64(compute_fresh, mult_init64, seg_start64)
+  let half_off_init64 = ir_udiv64(compute_fresh, offset64, c2_64)
+  let fresh_h         = ir_u64_to_u32(compute_fresh, half_off_init64)
+
+  let _br_cf = ir_term_branch(compute_fresh, init_ready)
+
+  // ── carry_path: use carry value directly ──────────────────
+  let _br_cp = ir_term_branch(carry_path, init_ready)
+
+  // ── init_ready: merge half_off_init from both paths ───────
+  let phi_halfoff = ir_phi(init_ready, IR_TYPE_UINT)
+  let _phi_cf     = ir_phi_add(phi_halfoff, fresh_h, compute_fresh)
+  let _phi_cp     = ir_phi_add(phi_halfoff, carry, carry_path)
+  let _br_ir      = ir_term_branch(init_ready, loop_header)
+
+  // ── Loop header: iterate in uint32 half_off space ─────────
+  let phi_h = ir_phi(loop_header, IR_TYPE_UINT)
+  let _ph0  = ir_phi_add(phi_h, phi_halfoff, init_ready)
+
+  let h_past = ir_ugte(loop_header, phi_h, max_bits)
+  let _lm    = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc    = ir_term_cond_branch(loop_header, h_past, loop_merge, loop_body)
+
+  // ── loop_body: clear bit at half_off position ─────────────
+  let word_idx = ir_udiv(loop_body, phi_h, c32)
+  let bit_pos  = ir_umod(loop_body, phi_h, c32)
+  let one_shl  = ir_shl(loop_body, c1, bit_pos)
+  let mask     = ir_not(loop_body, one_shl)
+  let _atomic  = ir_buf_atomic_and(loop_body, 0.0, word_idx, mask)
+  let _br_lb   = ir_term_branch(loop_body, loop_cont)
+
+  // ── loop_cont: advance half_off by prime ──────────────────
+  let next_h  = ir_iadd(loop_cont, phi_h, prime_u)
+  let _br_lc  = ir_term_branch(loop_cont, loop_header)
+  let _ph1    = ir_phi_add(phi_h, next_h, loop_cont)
+
+  // ── loop_merge: save residual for next segment ────────────
+  // residual = phi_h - max_bits (always >= 0, always < prime)
+  let residual = ir_isub(loop_merge, phi_h, max_bits)
+  let _save    = ir_buf_store_u(loop_merge, 0.0, carry_idx, residual)
+  let _br_lm   = ir_term_branch(loop_merge, exit_block)
+
+  // ── exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_mark_v7_large.spv"
+let _r = emit_sieve_mark_v7_large(out)
+print("Emitted: {out}")

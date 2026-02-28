@@ -1,0 +1,184 @@
+// stdlib/loom/test_vm_gguf.flow — GGUF Model Hosted in GPU VM
+//
+// Proves: VM loads real GGUF weights, runs matvec on GPU, produces correct output.
+//
+// Flow:
+//   1. Load GGUF model metadata
+//   2. Boot VM with globals large enough for one weight matrix
+//   3. Load token embedding into VM register R0
+//   4. Load weight matrix into VM globals via GPU-to-GPU copy
+//   5. Dispatch matvec kernel on GPU
+//   6. Read result from VM register R1
+//   7. Cross-validate against CPU matvec (gguf_matvec)
+//
+// Pre-req: models/qwen2.5-1.5b.gguf, vm_matvec.spv emitted
+
+use "../../llm/gguf"
+
+print("=== GGUF in GPU VM Test ===")
+print(" ")
+
+// ── Test 1: Synthetic matvec (verify kernel correctness) ────────
+print("--- Test 1: Synthetic 4x3 matvec ---")
+
+// 4×3 matrix (M=4 rows, K=3 cols, row-major)
+// Row 0: [1, 2, 3]
+// Row 1: [4, 5, 6]
+// Row 2: [7, 8, 9]
+// Row 3: [10, 11, 12]
+let weights = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+let input_vec = [1.0, 0.5, 0.25]
+// Expected: row 0 = 1*1 + 2*0.5 + 3*0.25 = 2.75
+//           row 1 = 4*1 + 5*0.5 + 6*0.25 = 8.0
+//           row 2 = 7*1 + 8*0.5 + 9*0.25 = 13.25
+//           row 3 = 10*1 + 11*0.5 + 12*0.25 = 18.5
+
+let M = 4.0
+let K = 3.0
+let reg_size = 32.0
+
+// Boot VM: globals = 12 floats (the matrix), reg_size = 32 per register
+let vm = vm_boot(1.0, reg_size, 12.0)
+print("  VM booted, handle={vm}")
+
+// Write input vector to R0 at offset 0
+let _wi = vm_write_register(vm, 0.0, 0.0, input_vec)
+
+// Write weight matrix to globals
+let _wg = vm_write_globals(vm, 0.0, weights)
+
+// Dispatch matvec: pc = [M, K, weight_offset, input_offset, output_offset]
+// weight_offset = 0 (globals start)
+// input_offset = 0 (R0 start in registers)
+// output_offset = reg_size (R1 start in registers = 1 * reg_size = 32)
+let r1_off = reg_size
+let matvec_pc = [M, K, 0.0, 0.0, r1_off]
+let wg_m = floor((M + 255.0) / 256.0)
+let _d = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_matvec.spv", matvec_pc, wg_m)
+let prog = vm_build(vm)
+let _e = vm_execute(prog)
+
+// Read result from R1
+let result = vm_read_register(vm, 0.0, 1.0, M)
+let expected = [2.75, 8.0, 13.25, 18.5]
+let mut pass1 = 1.0
+let mut i = 0.0
+while i < M
+  let exp = expected[int(i)]
+  let act = result[int(i)]
+  if act != exp
+    print("  FAIL: result[{i}] = {act}, expected {exp}")
+    pass1 = 0.0
+  end
+  i = i + 1.0
+end
+if pass1 == 1.0
+  print("  PASS: Synthetic matvec [2.75, 8.0, 13.25, 18.5]")
+end
+let _s1 = vm_shutdown(vm)
+
+// ── Test 2: Real GGUF weight — attn_k.weight matvec ────────────
+print(" ")
+print("--- Test 2: Real GGUF matvec (attn_k.weight) ---")
+
+let model_path = "models/qwen2.5-1.5b.gguf"
+print("  Loading model: {model_path}")
+let model = gguf_load_from_file(model_path)
+let n_embd = map_get(model, "n_embd")
+let n_kv_head = map_get(model, "n_kv_head")
+let head_dim = n_embd / map_get(model, "n_head")
+let kv_dim = n_kv_head * head_dim
+print("  n_embd={n_embd}, n_kv_head={n_kv_head}, head_dim={head_dim}, kv_dim={kv_dim}")
+
+// Load token embedding for token 0 ("!")
+let tok_emb = gguf_load_tensor(model_path, model, "token_embd.weight", 0.0)
+let emb_len = len(tok_emb)
+print("  Loaded token 0 embedding: {emb_len} floats")
+
+// Load attn_k.weight for layer 0 (smallest weight: kv_dim × n_embd)
+// This is a matrix of size kv_dim rows × n_embd cols
+let tname = "blk.0.attn_k.weight"
+let w_key = "t." + tname + ".count"
+let w_count = map_get(model, w_key)
+print("  Loading {tname}: {w_count} floats (kv_dim={kv_dim} x n_embd={n_embd})")
+let attn_k_w = gguf_load_tensor(model_path, model, tname)
+let wlen = len(attn_k_w)
+print("  Loaded weight: {wlen} floats")
+
+// Boot VM: reg_size = n_embd (fits hidden state + output),
+//          globals = w_count (fits the weight matrix)
+let vm2_reg = n_embd
+let vm2 = vm_boot(1.0, vm2_reg, w_count)
+print("  VM booted for GGUF, handle={vm2}")
+
+// Write embedding into R0
+let _we = vm_write_register(vm2, 0.0, 0.0, tok_emb)
+print("  Wrote embedding to R0")
+
+// Load weight matrix into globals (GPU-to-GPU copy)
+let loaded = vm_load_weights(vm2, 0.0, attn_k_w)
+print("  vm_load_weights: {loaded} floats (GPU→GPU)")
+
+// Dispatch matvec: output = attn_k.weight × embedding
+// M = kv_dim (output size), K = n_embd (inner dim)
+// weight_offset = 0 (globals), input_offset = 0 (R0), output_offset = vm2_reg (R1)
+let mv_pc = [kv_dim, n_embd, 0.0, 0.0, vm2_reg]
+let wg_kv = floor((kv_dim + 255.0) / 256.0)
+let _d2 = vm_dispatch(vm2, "stdlib/loom/kernels/nn/vm_matvec.spv", mv_pc, wg_kv)
+let prog2 = vm_build(vm2)
+let _e2 = vm_execute(prog2)
+print("  VM matvec dispatched and executed")
+
+// Read result from R1
+let vm_result = vm_read_register(vm2, 0.0, 1.0, kv_dim)
+print("  VM result (first 8):")
+i = 0.0
+while i < 8.0
+  let v = vm_result[int(i)]
+  print("    [{i}] = {v}")
+  i = i + 1.0
+end
+
+// Cross-validate: run same matvec via CPU (gguf_matvec)
+let cpu_result = gguf_matvec(model_path, model, tname, tok_emb)
+print("  CPU result (first 8):")
+i = 0.0
+while i < 8.0
+  let cv = cpu_result[int(i)]
+  print("    [{i}] = {cv}")
+  i = i + 1.0
+end
+
+// Compare VM vs CPU results
+let mut pass2 = 1.0
+let mut max_err = 0.0
+i = 0.0
+while i < kv_dim
+  let vm_v = vm_result[int(i)]
+  let cpu_v = cpu_result[int(i)]
+  let mut diff = vm_v - cpu_v
+  if diff < 0.0
+    diff = 0.0 - diff
+  end
+  if diff > max_err
+    max_err = diff
+  end
+  // Allow small floating point tolerance (f32 precision)
+  if diff > 0.01
+    if pass2 == 1.0
+      print("  FAIL: first mismatch at [{i}]: VM={vm_v} CPU={cpu_v} diff={diff}")
+    end
+    pass2 = 0.0
+  end
+  i = i + 1.0
+end
+
+if pass2 == 1.0
+  print("  PASS: VM matvec matches CPU matvec (max_err={max_err})")
+else
+  print("  Max error: {max_err}")
+end
+
+let _s2 = vm_shutdown(vm2)
+print(" ")
+print("=== DONE ===")

@@ -1,0 +1,324 @@
+// test_gui.flow — GUI Widget Toolkit State Management Tests
+//
+// Tests all 13 widget types: creation, state queries, setters.
+// Does NOT call gui_init() — exercises array-based state only.
+//
+// Usage:
+//   octoflow run stdlib/gui/test_gui.flow
+
+use "gui"
+
+// Array-based counters (scalar snapshot semantics — functions can't modify scalars)
+let mut _tcount = [0.0, 0.0]
+
+fn check(name, got, expected)
+  if got == expected
+    _tcount[0] = _tcount[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected {expected}")
+  _tcount[1] = _tcount[1] + 1.0
+  return 0.0
+end
+
+fn check_str(name, got, expected)
+  if got == expected
+    _tcount[0] = _tcount[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected {expected}")
+  _tcount[1] = _tcount[1] + 1.0
+  return 0.0
+end
+
+print("=== GUI Widget Toolkit Tests ===")
+
+// ── 1. Panel ───────────────────────────────────────────────────────
+print("1. Panel")
+let panel = gui_panel(10.0, 20.0, 300.0, 400.0)
+let _c1 = check("panel id", panel, 0.0)
+let _c2 = check("panel type", _gui_types[0], GUI_PANEL)
+let _c3 = check("panel x", _gui_x[0], 10.0)
+let _c4 = check("panel y", _gui_y[0], 20.0)
+let _c5 = check("panel w", _gui_w[0], 300.0)
+let _c6 = check("panel h", _gui_h[0], 400.0)
+let _c7 = check("panel visible", _gui_visible[0], 1.0)
+let _c8 = check("panel enabled", _gui_enabled[0], 1.0)
+
+// ── 2. Label ───────────────────────────────────────────────────────
+print("2. Label")
+let lbl = gui_label(50.0, 60.0, "HELLO")
+let _c9 = check("label id", lbl, 1.0)
+let _c10 = check("label type", _gui_types[1], GUI_LABEL)
+let _c11 = check("label x", _gui_x[1], 50.0)
+let _c12 = check_str("label text", _gui_texts[1], "HELLO")
+let _st1 = gui_set_text(lbl, "WORLD")
+let _c13 = check_str("label set_text", _gui_texts[1], "WORLD")
+
+// ── 3. Button ──────────────────────────────────────────────────────
+print("3. Button")
+let btn = gui_button(10.0, 100.0, 120.0, 36.0, "CLICK ME")
+let _c14 = check("button id", btn, 2.0)
+let _c15 = check("button type", _gui_types[2], GUI_BUTTON)
+let _c16 = check("button w", _gui_w[2], 120.0)
+let _c17 = check("button h", _gui_h[2], 36.0)
+let _c18 = check_str("button text", _gui_texts[2], "CLICK ME")
+let _c19 = check("button clicked init", gui_clicked(btn), 0.0)
+
+// ── 4. Checkbox ────────────────────────────────────────────────────
+print("4. Checkbox")
+let chk = gui_checkbox(10.0, 150.0, "OPTION")
+let _c20 = check("checkbox id", chk, 3.0)
+let _c21 = check("checkbox type", _gui_types[3], GUI_CHECKBOX)
+let _c22 = check("checkbox checked init", gui_checked(chk), 0.0)
+let _sc1 = gui_set_checked(chk, 1.0)
+let _c23 = check("checkbox set_checked", gui_checked(chk), 1.0)
+let _sc2 = gui_set_checked(chk, 0.0)
+let _c24 = check("checkbox uncheck", gui_checked(chk), 0.0)
+
+// ── 5. Slider ──────────────────────────────────────────────────────
+print("5. Slider")
+let sld = gui_slider(10.0, 200.0, 200.0, 0.0, 100.0, 50.0)
+let _c25 = check("slider id", sld, 4.0)
+let _c26 = check("slider type", _gui_types[4], GUI_SLIDER)
+let _c27 = check("slider initial", gui_slider_value(sld), 50.0)
+let _c28 = check("slider min", _gui_slider_min[4], 0.0)
+let _c29 = check("slider max", _gui_slider_max[4], 100.0)
+let _ss1 = gui_set_slider(sld, 75.0)
+let _c30 = check("slider set", gui_slider_value(sld), 75.0)
+
+// ── 6. Text Input ──────────────────────────────────────────────────
+print("6. Text Input")
+let inp = gui_textinput(10.0, 250.0, 200.0)
+let _c31 = check("input id", inp, 5.0)
+let _c32 = check("input type", _gui_types[5], GUI_TEXTINPUT)
+let _c33 = check("input w", _gui_w[5], 200.0)
+let _c34 = check("input h", _gui_h[5], 30.0)
+
+// ── 7. Progress Bar ────────────────────────────────────────────────
+print("7. Progress Bar")
+let prog = gui_progress(10.0, 300.0, 250.0)
+let _c35 = check("progress id", prog, 6.0)
+let _c36 = check("progress type", _gui_types[6], GUI_PROGRESS)
+let _c37 = check("progress init", gui_slider_value(prog), 0.0)
+let _sp1 = gui_set_progress(prog, 42.0)
+let _c38 = check("progress set", gui_slider_value(prog), 42.0)
+// Clamp to 0-100
+let _sp2 = gui_set_progress(prog, 150.0)
+let _c39 = check("progress clamp high", gui_slider_value(prog), 100.0)
+let _sp3 = gui_set_progress(prog, -10.0)
+let _c40 = check("progress clamp low", gui_slider_value(prog), 0.0)
+
+// ── 8. Radio Buttons ───────────────────────────────────────────────
+print("8. Radio Buttons")
+let rad1 = gui_radio(10.0, 350.0, "OPT A", 1.0)
+let rad2 = gui_radio(120.0, 350.0, "OPT B", 1.0)
+let rad3 = gui_radio(230.0, 350.0, "OPT C", 2.0)
+let _c41 = check("radio1 id", rad1, 7.0)
+let _c42 = check("radio2 id", rad2, 8.0)
+let _c43 = check("radio3 id", rad3, 9.0)
+let _c44 = check("radio1 type", _gui_types[7], GUI_RADIO)
+let _c45 = check("radio1 group", _gui_parent[7], 1.0)
+let _c46 = check("radio2 group", _gui_parent[8], 1.0)
+let _c47 = check("radio3 group", _gui_parent[9], 2.0)
+// Set checked state
+let _sr1 = gui_set_checked(rad1, 1.0)
+let _c48 = check("radio1 checked", gui_checked(rad1), 1.0)
+let _c49 = check("radio2 checked", gui_checked(rad2), 0.0)
+
+// ── 9. Separator ───────────────────────────────────────────────────
+print("9. Separator")
+let sep = gui_separator(10.0, 390.0, 300.0)
+let _c50 = check("separator id", sep, 10.0)
+let _c51 = check("separator type", _gui_types[10], GUI_SEPARATOR)
+let _c52 = check("separator w", _gui_w[10], 300.0)
+let _c53 = check("separator h", _gui_h[10], 2.0)
+
+// ── 10. Listbox ────────────────────────────────────────────────────
+print("10. Listbox")
+let lst = gui_listbox(10.0, 400.0, 200.0, 100.0)
+let _c54 = check("listbox id", lst, 11.0)
+let _c55 = check("listbox type", _gui_types[11], GUI_LISTBOX)
+let _c56 = check("listbox count init", _gui_list_count[11], 0.0)
+let _c57 = check("listbox selected init", gui_listbox_selected(lst), -1.0)
+let _la1 = gui_listbox_add(lst, "ALPHA")
+let _la2 = gui_listbox_add(lst, "BETA")
+let _la3 = gui_listbox_add(lst, "GAMMA")
+let _c58 = check("listbox count", _gui_list_count[11], 3.0)
+let _c59 = check_str("listbox item 0", gui_listbox_text(lst, 0.0), "ALPHA")
+let _c60 = check_str("listbox item 1", gui_listbox_text(lst, 1.0), "BETA")
+let _c61 = check_str("listbox item 2", gui_listbox_text(lst, 2.0), "GAMMA")
+// Simulate selection
+_gui_list_selected[11] = 1.0
+let _c62 = check("listbox selected", gui_listbox_selected(lst), 1.0)
+
+// ── 11. Spinbox ────────────────────────────────────────────────────
+print("11. Spinbox")
+let spn = gui_spinbox(10.0, 520.0, 140.0, 0.0, 50.0, 10.0, 2.0)
+let _c63 = check("spinbox id", spn, 12.0)
+let _c64 = check("spinbox type", _gui_types[12], GUI_SPINBOX)
+let _c65 = check("spinbox initial", gui_spinbox_value(spn), 10.0)
+let _c66 = check("spinbox min", _gui_slider_min[12], 0.0)
+let _c67 = check("spinbox max", _gui_slider_max[12], 50.0)
+let _c68 = check("spinbox step", _gui_parent[12], 2.0)
+// Set value within range
+let _ssn1 = gui_set_spinbox(spn, 30.0)
+let _c69 = check("spinbox set", gui_spinbox_value(spn), 30.0)
+// Clamp above max
+let _ssn2 = gui_set_spinbox(spn, 999.0)
+let _c70 = check("spinbox clamp high", gui_spinbox_value(spn), 50.0)
+// Clamp below min
+let _ssn3 = gui_set_spinbox(spn, -5.0)
+let _c71 = check("spinbox clamp low", gui_spinbox_value(spn), 0.0)
+
+// ── 12. Dropdown ───────────────────────────────────────────────────
+print("12. Dropdown")
+let dd = gui_dropdown(10.0, 570.0, 160.0)
+let _c72 = check("dropdown id", dd, 13.0)
+let _c73 = check("dropdown type", _gui_types[13], GUI_DROPDOWN)
+let _da1 = gui_dropdown_add(dd, "RED")
+let _da2 = gui_dropdown_add(dd, "GREEN")
+let _da3 = gui_dropdown_add(dd, "BLUE")
+let _c74 = check("dropdown count", _gui_list_count[13], 3.0)
+let _c75 = check("dropdown selected init", gui_dropdown_selected(dd), 0.0)
+let _c76 = check_str("dropdown text 0", gui_dropdown_text(dd, 0.0), "RED")
+let _c77 = check_str("dropdown text 1", gui_dropdown_text(dd, 1.0), "GREEN")
+let _c78 = check_str("dropdown text 2", gui_dropdown_text(dd, 2.0), "BLUE")
+// Change selection
+let _sdd = gui_set_dropdown(dd, 2.0)
+let _c79 = check("dropdown set", gui_dropdown_selected(dd), 2.0)
+// Out of range — should not change
+let _sdd2 = gui_set_dropdown(dd, 10.0)
+let _c80 = check("dropdown oob no change", gui_dropdown_selected(dd), 2.0)
+
+// ── 13. Tabs ───────────────────────────────────────────────────────
+print("13. Tabs")
+let tabs = gui_tabs(10.0, 620.0, 300.0, 100.0)
+let _c81 = check("tabs id", tabs, 14.0)
+let _c82 = check("tabs type", _gui_types[14], GUI_TABS)
+let _c83 = check("tabs active init", gui_tab_active(tabs), 0.0)
+let _ta1 = gui_tab_add(tabs, "HOME")
+let _ta2 = gui_tab_add(tabs, "SETTINGS")
+let _ta3 = gui_tab_add(tabs, "ABOUT")
+let _c84 = check("tabs count", _gui_list_count[14], 3.0)
+// Switch tab
+let _st2 = gui_set_tab(tabs, 2.0)
+let _c85 = check("tabs set active", gui_tab_active(tabs), 2.0)
+let _c86 = check("tabs set fires click", gui_clicked(tabs), 1.0)
+
+// ── Cross-cutting: visibility/enabled ──────────────────────────────
+print("14. Visibility and Enabled")
+let _sv1 = gui_set_visible(btn, 0.0)
+let _c87 = check("button hidden", _gui_visible[2], 0.0)
+let _sv2 = gui_set_visible(btn, 1.0)
+let _c88 = check("button visible", _gui_visible[2], 1.0)
+let _se1 = gui_set_enabled(btn, 0.0)
+let _c89 = check("button disabled", _gui_enabled[2], 0.0)
+let _se2 = gui_set_enabled(btn, 1.0)
+let _c90 = check("button enabled", _gui_enabled[2], 1.0)
+
+// ── Theme switching ────────────────────────────────────────────────
+print("15. Themes")
+let _td = gui_theme_dark()
+let dark_bg_r = _tc[0]
+let _tl = gui_theme_light()
+let light_bg_r = _tc[0]
+let _to = gui_theme_ocean()
+let ocean_bg_r = _tc[0]
+// Dark bg R=30, Light bg R=240, Ocean bg R=15
+let _c91 = check("dark bg R", dark_bg_r, 30.0)
+let _c92 = check("light bg R", light_bg_r, 240.0)
+let _c93 = check("ocean bg R", ocean_bg_r, 15.0)
+
+// ── 14. Canvas ───────────────────────────────────────────────────────
+print("16. Canvas")
+let cvs = gui_canvas(10.0, 700.0, 300.0, 200.0)
+let _c94 = check("canvas id", cvs, 15.0)
+let _c95 = check("canvas type", _gui_types[15], GUI_CANVAS)
+let _c96 = check("canvas x", _gui_x[15], 10.0)
+let _c97 = check("canvas w", _gui_w[15], 300.0)
+let _c98 = check("canvas h", _gui_h[15], 200.0)
+let _c99 = check("canvas cmd count init", _gui_list_count[15], 0.0)
+// Add draw commands
+let _cl1 = gui_canvas_line(cvs, 0.0, 0.0, 100.0, 100.0, 255.0, 0.0, 0.0)
+let _c100 = check("canvas 1 cmd", _gui_list_count[15], 1.0)
+let _cr1 = gui_canvas_rect(cvs, 10.0, 10.0, 50.0, 30.0, 0.0, 255.0, 0.0)
+let _c101 = check("canvas 2 cmds", _gui_list_count[15], 2.0)
+let _cf1 = gui_canvas_fill(cvs, 20.0, 20.0, 40.0, 20.0, 0.0, 0.0, 255.0)
+let _cc1 = gui_canvas_circle(cvs, 50.0, 50.0, 20.0, 255.0, 255.0, 0.0)
+let _cfc1 = gui_canvas_fill_circle(cvs, 80.0, 80.0, 15.0, 255.0, 0.0, 255.0)
+let _cpx1 = gui_canvas_pixel(cvs, 5.0, 5.0, 128.0, 128.0, 128.0)
+let _c102 = check("canvas 6 cmds", _gui_list_count[15], 6.0)
+// Verify command encoding (line: type=1, x1=0, y1=0, x2=100, y2=100, r=255, g=0, b=0)
+let cmd_base = _gui_list_start[15]
+let _c103 = check("cmd type=line", _gui_canvas_cmds[int(cmd_base)], 1.0)
+let _c104 = check("cmd x2=100", _gui_canvas_cmds[int(cmd_base + 3)], 100.0)
+let _c105 = check("cmd r=255", _gui_canvas_cmds[int(cmd_base + 5)], 255.0)
+// Clear canvas
+let _ccl = gui_canvas_clear(cvs)
+let _c106 = check("canvas cleared", _gui_list_count[15], 0.0)
+
+// ── 15. Treeview ─────────────────────────────────────────────────────
+print("17. Treeview")
+let tree = gui_treeview(10.0, 910.0, 250.0, 150.0)
+let _c107 = check("tree id", tree, 16.0)
+let _c108 = check("tree type", _gui_types[16], GUI_TREEVIEW)
+let _c109 = check("tree count init", _gui_list_count[16], 0.0)
+let _c110 = check("tree selected init", gui_tree_selected(tree), -1.0)
+// Add root nodes
+let n0 = gui_tree_add(tree, "ROOT A", -1.0)
+let _c111 = check("node0 idx", n0, 0.0)
+let n1 = gui_tree_add(tree, "ROOT B", -1.0)
+let _c112 = check("node1 idx", n1, 1.0)
+// Add children
+let n2 = gui_tree_add(tree, "CHILD A1", 0.0)
+let _c113 = check("node2 idx", n2, 2.0)
+let n3 = gui_tree_add(tree, "CHILD A2", 0.0)
+let _c114 = check("tree count", _gui_list_count[16], 4.0)
+// Check depth
+let ts = _gui_list_start[16]
+let _c115 = check("root depth", _gui_tree_depth[int(ts)], 0.0)
+let _c116 = check("child depth", _gui_tree_depth[int(ts + 2)], 1.0)
+// Check text
+let _c117 = check_str("tree text 0", gui_tree_text(tree, 0.0), "ROOT A")
+let _c118 = check_str("tree text 2", gui_tree_text(tree, 2.0), "CHILD A1")
+// Expand/collapse
+let _c119 = check("expanded init", gui_tree_is_expanded(tree, 0.0), 1.0)
+let _tgl = gui_tree_toggle(tree, 0.0)
+let _c120 = check("collapsed", gui_tree_is_expanded(tree, 0.0), 0.0)
+let _tgl2 = gui_tree_toggle(tree, 0.0)
+let _c121 = check("re-expanded", gui_tree_is_expanded(tree, 0.0), 1.0)
+// Visibility: children of collapsed parent
+let _tgl3 = gui_tree_toggle(tree, 0.0)
+let _c122 = check("child hidden", _gui_tree_node_visible(tree, 2.0), 0.0)
+let _tgl4 = gui_tree_toggle(tree, 0.0)
+let _c123 = check("child visible", _gui_tree_node_visible(tree, 2.0), 1.0)
+
+// ── 16. Tooltip ──────────────────────────────────────────────────────
+print("18. Tooltip")
+let tt = gui_tooltip(btn, "CLICK THIS BUTTON")
+let _c124 = check("tooltip type", _gui_types[int(tt)], GUI_TOOLTIP)
+let _c125 = check("tooltip target", _gui_parent[int(tt)], btn)
+let _c126 = check("tooltip hidden", _gui_visible[int(tt)], 0.0)
+let _c127 = check_str("tooltip text", _gui_texts[int(tt)], "CLICK THIS BUTTON")
+
+// ── Widget count ───────────────────────────────────────────────────
+print("19. Widget Count")
+let total_widgets = len(_gui_types)
+// 15 original + canvas + treeview + tooltip = 18
+let _c128 = check("total widgets", total_widgets, 18.0)
+
+// ── _gs state array ────────────────────────────────────────────────
+print("20. State Array")
+let _c129 = check("dropdown_open init", _gs[11], -1.0)
+let _c130 = check("dirty flag", _gs[9], 1.0)
+
+// ── Summary ────────────────────────────────────────────────────────
+let total = _tcount[0] + _tcount[1]
+let passed = _tcount[0]
+let failed = _tcount[1]
+print(" ")
+print("=== Results: {passed}/{total} passed ===")
+if failed > 0.0
+  print("FAILURES: {failed}")
+end

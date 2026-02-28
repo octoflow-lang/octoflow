@@ -1,4 +1,7 @@
 // stdlib/collections/stack.flow — Stack (LIFO) data structure
+//
+// Functions: stack_create, stack_push, stack_pop, stack_peek, stack_size,
+//            stack_is_empty, stack_clear
 
 fn stack_create()
   let mut s = []

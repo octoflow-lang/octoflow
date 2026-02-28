@@ -1,0 +1,130 @@
+// emit_vm_rmsnorm.flow — VM RMSNorm Kernel Emitter
+//
+// Computes RMS Normalization over a register slice using per-thread full reduction.
+// Each parallel thread independently computes sum(x²) for all elements, then
+// normalizes its own element and stores to the output register slice.
+//
+//   RMS(x) = sqrt(mean(x²) + eps)
+//   out[i] = (x[i] / RMS(x)) * w[i]
+//
+// DESIGN NOTE — per-thread full reduction + store in loop_merge:
+//   NVIDIA NVVM miscompiles any loop where the loop BODY both reads and writes
+//   to the same SSBO binding. The workaround is to NEVER store in loop_body.
+//   Here, the loop_body only accumulates (no store). The normalization store
+//   happens in loop_merge, AFTER the loop exits — exactly the same pattern as
+//   the proven-working vm_sum_sq kernel.
+//
+//   Each thread runs an O(count) inner loop to compute sum_sq independently.
+//   For small count (8 for LLM layer norm), this O(count²) total work is
+//   negligible. No scratch slot or cross-kernel communication is needed.
+//
+// Push constants:
+//   pc[0] = in_off   (float -> uint, start index in registers SSBO, input)
+//   pc[1] = out_off  (float -> uint, start index in registers SSBO, output)
+//   pc[2] = wgt_off  (float -> uint, start index in globals SSBO, weights)
+//   pc[3] = count    (float, number of elements; also used as float divisor)
+//   pc[4] = eps      (float, epsilon for numerical stability, e.g. 1e-5)
+//
+// Each thread (gid < count):
+//   sum_sq = sum of x[in_off+j]² for j in 0..count
+//   scale  = 1 / sqrt(sum_sq / count + eps)
+//   out[out_off + gid] = x[in_off + gid] * scale * globals[wgt_off + gid]
+//
+// Binding layout (ir_input_count=3):
+//   Binding 0: registers (read input, write output)
+//   Binding 1: metrics   (unused -- declared for VM descriptor layout)
+//   Binding 2: globals   (read weight vector)
+//   Binding 3: control   (unused)
+//
+// Dispatch: workgroups = ceil(count / 256)
+//
+// Run: octoflow run stdlib/loom/emit_vm_rmsnorm.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_rmsnorm(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry       = ir_block("entry")
+  let pre_loop    = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body   = ir_block("loop_body")
+  let loop_cont   = ir_block("loop_cont")
+  let loop_merge  = ir_block("loop_merge")
+  let exit_block  = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ────────────────────────────
+  let gid        = ir_load_gid(entry)
+  let pc_in      = ir_push_const(entry, 0.0)
+  let pc_out     = ir_push_const(entry, 1.0)
+  let pc_wgt     = ir_push_const(entry, 2.0)
+  let pc_cnt     = ir_push_const(entry, 3.0)
+  let pc_eps     = ir_push_const(entry, 4.0)
+  let in_off_u   = ir_ftou(entry, pc_in)
+  let out_off_u  = ir_ftou(entry, pc_out)
+  let wgt_off_u  = ir_ftou(entry, pc_wgt)
+  let count_u    = ir_ftou(entry, pc_cnt)
+  let oob        = ir_ugte(entry, gid, count_u)
+  let _sm_e      = ir_selection_merge(entry, exit_block)
+  let _br_e      = ir_term_cond_branch(entry, oob, exit_block, pre_loop)
+
+  // ── Pre-loop: initialise j=0, sum_sq=0 ──────────────────────────────────
+  let zero_u1    = ir_const_u(pre_loop, 0.0)
+  let zero_f1    = ir_const_f(pre_loop, 0.0)
+  let _bpl       = ir_term_branch(pre_loop, loop_header)
+
+  // ── Loop header: phi(j, sum_sq), check j >= count ───────────────────────
+  let phi_j      = ir_phi(loop_header, 2.0)
+  let phi_sum    = ir_phi(loop_header, 1.0)
+  let _pj0       = ir_phi_add(phi_j,   zero_u1, pre_loop)
+  let _ps0       = ir_phi_add(phi_sum, zero_f1, pre_loop)
+  let j_done     = ir_ugte(loop_header, phi_j, count_u)
+  let _lm_inst   = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc        = ir_term_cond_branch(loop_header, j_done, loop_merge, loop_body)
+
+  // ── Loop body: load x[j], square, accumulate — NO STORE HERE ────────────
+  // Stores in loop_body cause NVIDIA NVVM to miscompile (aliasing assumption).
+  // Accumulate only; the normalization store happens in loop_merge.
+  let in_idx_j   = ir_iadd(loop_body, in_off_u, phi_j)
+  let val_j      = ir_load_input_at(loop_body, 0.0, in_idx_j)  // x[in_off+j]
+  let sq_j       = ir_fmul(loop_body, val_j, val_j)
+  let new_sum    = ir_fadd(loop_body, phi_sum, sq_j)
+  let _blb       = ir_term_branch(loop_body, loop_cont)
+
+  // ── Loop continue: j++ ──────────────────────────────────────────────────
+  let one_u      = ir_const_u(loop_cont, 1.0)
+  let new_j      = ir_iadd(loop_cont, phi_j, one_u)
+  let _blc       = ir_term_branch(loop_cont, loop_header)
+  let _pj1       = ir_phi_add(phi_j,   new_j,   loop_cont)
+  let _ps1       = ir_phi_add(phi_sum, new_sum, loop_cont)
+
+  // ── Loop merge: compute scale, load x[gid] + w[gid], store result ───────
+  // phi_sum here = total sum(x²) after all iterations.
+  // All loads and the single store happen in this flat post-loop block.
+  // This is the proven-working pattern (same as vm_sum_sq storing in loop_merge).
+  let f_one      = ir_const_f(loop_merge, 1.0)
+  let mean_sq    = ir_fdiv(loop_merge, phi_sum, pc_cnt)
+  let var_eps    = ir_fadd(loop_merge, mean_sq, pc_eps)
+  let var_sqrt   = ir_sqrt(loop_merge, var_eps)
+  let rms_scale  = ir_fdiv(loop_merge, f_one, var_sqrt)
+  let in_idx_g   = ir_iadd(loop_merge, in_off_u, gid)
+  let out_idx    = ir_iadd(loop_merge, out_off_u, gid)
+  let wgt_idx    = ir_iadd(loop_merge, wgt_off_u, gid)
+  let x_gid      = ir_load_input_at(loop_merge, 0.0, in_idx_g)   // x[in_off+gid]
+  let w_gid      = ir_load_input_at(loop_merge, 2.0, wgt_idx)    // globals[wgt_off+gid]
+  let normed     = ir_fmul(loop_merge, x_gid, rms_scale)
+  let out_val    = ir_fmul(loop_merge, normed, w_gid)
+  let _store     = ir_buf_store_f(loop_merge, 0.0, out_idx, out_val)
+  let _blm       = ir_term_branch(loop_merge, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/nn/vm_rmsnorm.spv"
+let _r = emit_vm_rmsnorm(out)
+print("Emitted: {out}")

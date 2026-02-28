@@ -1,0 +1,93 @@
+// test_transformer_compose.flow — Test GPU kernel wrappers + composition
+// Run: octoflow run test_transformer_compose.flow --allow-read --allow-write --allow-exec --allow-ffi
+
+use "../build_kernels"
+use "../runtime"
+use "../matmul_tiled"
+use "../silu"
+use "../rmsnorm"
+use "../softmax"
+use "../rope"
+
+let mut counters = [0.0, 0.0]
+
+fn check_near(counters, label, got, expected, tol)
+  let d = abs(got - expected)
+  if d < tol
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}, diff={d}")
+  return 0.0
+end
+
+print("=== TRANSFORMER COMPOSITION TESTS ===")
+print(" ")
+
+// Build all kernels first (emit step)
+print("--- Building kernels ---")
+let _b = build_all_kernels()
+
+// Initialize GPU runtime
+let _init = rt_init()
+
+// ── Test 1: gpu_silu ──────────────────────────────────────────────────
+print("--- Test 1: gpu_silu ---")
+let mut sx = [0.0, 1.0, -1.0, 2.0]
+let silu_out = gpu_silu(sx)
+let _c1 = check_near(counters, "silu(0)=0", silu_out[0], 0.0, 0.01)
+let _c2 = check_near(counters, "silu(1)~0.731", silu_out[1], 0.7311, 0.02)
+let _c3 = check_near(counters, "silu(-1)~-0.269", silu_out[2], -0.2689, 0.02)
+
+// ── Test 2: gpu_rmsnorm ───────────────────────────────────────────────
+print("--- Test 2: gpu_rmsnorm ---")
+let mut rn_x = [3.0, 4.0]
+let mut rn_w = [1.0, 1.0]
+let rn_out = gpu_rmsnorm(rn_x, rn_w)
+let _c4 = check_near(counters, "rmsnorm[0]~0.849", rn_out[0], 0.8485, 0.02)
+let _c5 = check_near(counters, "rmsnorm[1]~1.131", rn_out[1], 1.1314, 0.02)
+
+// ── Test 3: gpu_softmax ───────────────────────────────────────────────
+print("--- Test 3: gpu_softmax ---")
+let mut sm_x = [1.0, 2.0, 3.0]
+let sm_out = gpu_softmax(sm_x)
+let _c6 = check_near(counters, "softmax[0]~0.090", sm_out[0], 0.0900, 0.02)
+let _c7 = check_near(counters, "softmax[2]~0.665", sm_out[2], 0.6652, 0.02)
+
+// ── Test 4: gpu_rope (pos=0 → identity) ──────────────────────────────
+print("--- Test 4: gpu_rope ---")
+let mut rp_x = [1.0, 2.0, 3.0, 4.0]
+let rp_out = gpu_rope(rp_x, 0.0, 4.0)
+let _c8 = check_near(counters, "rope[0]=1", rp_out[0], 1.0, 0.01)
+let _c9 = check_near(counters, "rope[1]=2", rp_out[1], 2.0, 0.01)
+
+// ── Test 5: gpu_matmul_tiled (2×2 known) ─────────────────────────────
+print("--- Test 5: gpu_matmul_tiled ---")
+let mut a2 = []
+let mut b2 = []
+let mut j = 0.0
+while j < 256.0
+  push(a2, 0.0)
+  push(b2, 0.0)
+  j = j + 1.0
+end
+a2[0] = 1.0
+a2[1] = 2.0
+a2[16] = 3.0
+a2[17] = 4.0
+b2[0] = 5.0
+b2[1] = 6.0
+b2[16] = 7.0
+b2[17] = 8.0
+let mm_out = gpu_matmul_tiled(a2, b2, 16.0, 16.0, 16.0)
+let _c10 = check_near(counters, "mm[0,0]=19", mm_out[0], 19.0, 0.1)
+let _c11 = check_near(counters, "mm[0,1]=22", mm_out[1], 22.0, 0.1)
+let _c12 = check_near(counters, "mm[1,0]=43", mm_out[16], 43.0, 0.1)
+
+// ── Summary ──────────────────────────────────────────────────────────
+print(" ")
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print("=== RESULTS: {pass}/{total} passed ===")

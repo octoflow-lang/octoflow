@@ -1,0 +1,242 @@
+// stdlib/llm/decompose_gguf.flow — GGUF Model Decomposition Tool
+//
+// Decomposes a monolithic GGUF model file into per-layer binary files
+// for streaming inference. Preserves raw quantized bytes (no dequant).
+//
+// Output structure:
+//   {output_dir}/manifest.od     — model config + per-layer metadata
+//   {output_dir}/embed.bin       — token embedding table (raw)
+//   {output_dir}/final_norm.bin  — output norm weights (raw)
+//   {output_dir}/lm_head.bin     — LM head / output weights (raw)
+//   {output_dir}/layer_NNN.bin   — all tensors for layer N (concatenated raw)
+//
+// Usage:
+//   use "decompose_gguf"
+//   let _r = decompose_model("path/to/model.gguf", "models/qwen-0.5b")
+//
+// Or standalone:
+//   octoflow run stdlib/llm/decompose_gguf.flow --allow-read --allow-write
+
+use "gguf"
+
+fn decompose_model(gguf_path, output_dir)
+  print("=== GGUF Model Decomposition ===")
+  print("  Input:  {gguf_path}")
+  print("  Output: {output_dir}")
+
+  // Load model metadata (header only, not full file)
+  print("Loading model metadata...")
+  let model = gguf_load_from_file(gguf_path)
+
+  let n_embd = map_get(model, "n_embd")
+  let n_head = map_get(model, "n_head")
+  let n_kv_head = map_get(model, "n_kv_head")
+  let n_ff = map_get(model, "n_ff")
+  let n_layer = map_get(model, "n_layer")
+  let vocab_size = map_get(model, "vocab_size")
+  let arch = map_get(model, "arch")
+
+  print("  {arch}: {n_layer} layers, {n_embd} dim, {vocab_size} vocab")
+
+  // Note: output directory must exist before running (mkdir not a builtin)
+  // Create it manually: mkdir models/qwen-decomp
+
+  // ── Extract persistent (non-layer) tensors ──────────────────
+  print("Extracting persistent tensors...")
+
+  // Token embedding
+  let emb_path = output_dir + "/embed.bin"
+  let emb_size = gguf_extract_tensor_raw(gguf_path, model, "token_embd.weight", emb_path)
+  let emb_type = gguf_tensor_type(model, "token_embd.weight")
+  print("  embed.bin: {emb_size} bytes (type {emb_type})")
+
+  // Output norm
+  let norm_path = output_dir + "/final_norm.bin"
+  let norm_size = gguf_extract_tensor_raw(gguf_path, model, "output_norm.weight", norm_path)
+  let norm_type = gguf_tensor_type(model, "output_norm.weight")
+  print("  final_norm.bin: {norm_size} bytes (type {norm_type})")
+
+  // LM head (output weights) — may be same as token_embd (tied weights)
+  let has_output = gguf_has_tensor(model, "output.weight")
+  let mut lm_head_source = "token_embd.weight"
+  let mut lm_head_size = 0.0
+  let mut lm_head_type = 0.0
+  if has_output == 1.0
+    lm_head_source = "output.weight"
+    let lm_path = output_dir + "/lm_head.bin"
+    lm_head_size = gguf_extract_tensor_raw(gguf_path, model, "output.weight", lm_path)
+    lm_head_type = gguf_tensor_type(model, "output.weight")
+    print("  lm_head.bin: {lm_head_size} bytes (type {lm_head_type})")
+  else
+    print("  lm_head: tied to embed (no separate output.weight)")
+  end
+
+  // ── Check for bias tensors ────────────────────────────────────
+  let has_qbias = gguf_has_tensor(model, "blk.0.attn_q.bias")
+  if has_qbias == 1.0
+    print("  Model has Q/K/V attention biases")
+  end
+
+  // ── Extract per-layer files ─────────────────────────────────
+  print("Extracting {n_layer} layers...")
+
+  let mut total_layer_bytes = 0.0
+  let mut layer_idx = 0.0
+
+  // Track per-layer tensor offsets for manifest
+  let mut layer_tensor_offsets = []
+  let mut layer_tensor_sizes = []
+
+  while layer_idx < n_layer
+    let li = int(layer_idx)
+    let lis = str(li)
+
+    // Build layer file path with zero-padded name
+    let mut layer_file = output_dir + "/layer_"
+    if layer_idx < 10.0
+      layer_file = layer_file + "00" + lis + ".bin"
+    elif layer_idx < 100.0
+      layer_file = layer_file + "0" + lis + ".bin"
+    else
+      layer_file = layer_file + lis + ".bin"
+    end
+
+    // Delete existing file (gguf_extract_tensor_raw appends)
+    if file_exists(layer_file)
+      let _d = delete_file(layer_file)
+    end
+
+    // 9 weight tensors per layer (+ 3 optional biases)
+    let mut layer_bytes = 0.0
+    let mut tensor_count = 0.0
+
+    // Attention norm
+    let tn_an = "blk." + lis + ".attn_norm.weight"
+    let s_an = gguf_extract_tensor_raw(gguf_path, model, tn_an, layer_file)
+    layer_bytes = layer_bytes + s_an
+    tensor_count = tensor_count + 1.0
+
+    // Q weight
+    let tn_q = "blk." + lis + ".attn_q.weight"
+    let s_q = gguf_extract_tensor_raw(gguf_path, model, tn_q, layer_file)
+    layer_bytes = layer_bytes + s_q
+    tensor_count = tensor_count + 1.0
+
+    // K weight
+    let tn_k = "blk." + lis + ".attn_k.weight"
+    let s_k = gguf_extract_tensor_raw(gguf_path, model, tn_k, layer_file)
+    layer_bytes = layer_bytes + s_k
+    tensor_count = tensor_count + 1.0
+
+    // V weight
+    let tn_v = "blk." + lis + ".attn_v.weight"
+    let s_v = gguf_extract_tensor_raw(gguf_path, model, tn_v, layer_file)
+    layer_bytes = layer_bytes + s_v
+    tensor_count = tensor_count + 1.0
+
+    // Output projection weight
+    let tn_o = "blk." + lis + ".attn_output.weight"
+    let s_o = gguf_extract_tensor_raw(gguf_path, model, tn_o, layer_file)
+    layer_bytes = layer_bytes + s_o
+    tensor_count = tensor_count + 1.0
+
+    // FFN norm
+    let tn_fn = "blk." + lis + ".ffn_norm.weight"
+    let s_fn = gguf_extract_tensor_raw(gguf_path, model, tn_fn, layer_file)
+    layer_bytes = layer_bytes + s_fn
+    tensor_count = tensor_count + 1.0
+
+    // Gate weight
+    let tn_g = "blk." + lis + ".ffn_gate.weight"
+    let s_g = gguf_extract_tensor_raw(gguf_path, model, tn_g, layer_file)
+    layer_bytes = layer_bytes + s_g
+    tensor_count = tensor_count + 1.0
+
+    // Up weight
+    let tn_u = "blk." + lis + ".ffn_up.weight"
+    let s_u = gguf_extract_tensor_raw(gguf_path, model, tn_u, layer_file)
+    layer_bytes = layer_bytes + s_u
+    tensor_count = tensor_count + 1.0
+
+    // Down weight
+    let tn_d = "blk." + lis + ".ffn_down.weight"
+    let s_d = gguf_extract_tensor_raw(gguf_path, model, tn_d, layer_file)
+    layer_bytes = layer_bytes + s_d
+    tensor_count = tensor_count + 1.0
+
+    // Optional: Q/K/V biases
+    if has_qbias == 1.0
+      let tn_qb = "blk." + lis + ".attn_q.bias"
+      let s_qb = gguf_extract_tensor_raw(gguf_path, model, tn_qb, layer_file)
+      layer_bytes = layer_bytes + s_qb
+      tensor_count = tensor_count + 1.0
+
+      let tn_kb = "blk." + lis + ".attn_k.bias"
+      let s_kb = gguf_extract_tensor_raw(gguf_path, model, tn_kb, layer_file)
+      layer_bytes = layer_bytes + s_kb
+      tensor_count = tensor_count + 1.0
+
+      let tn_vb = "blk." + lis + ".attn_v.bias"
+      let s_vb = gguf_extract_tensor_raw(gguf_path, model, tn_vb, layer_file)
+      layer_bytes = layer_bytes + s_vb
+      tensor_count = tensor_count + 1.0
+    end
+
+    total_layer_bytes = total_layer_bytes + layer_bytes
+    push(layer_tensor_sizes, layer_bytes)
+    print("  layer_{lis}: {layer_bytes} bytes ({tensor_count} tensors)")
+
+    layer_idx = layer_idx + 1.0
+  end
+
+  // ── Write manifest ────────────────────────────────────────────
+  print("Writing manifest...")
+  let manifest_path = output_dir + "/manifest.od"
+
+  let mut lines = []
+  push(lines, "// OctoFlow GGUF Decomposed Model Manifest")
+  push(lines, "// Auto-generated by decompose_gguf.flow")
+  push(lines, " ")
+  push(lines, "let arch = " + chr(34.0) + arch + chr(34.0))
+  push(lines, "let n_embd = " + str(int(n_embd)))
+  push(lines, "let n_head = " + str(int(n_head)))
+  push(lines, "let n_kv_head = " + str(int(n_kv_head)))
+  push(lines, "let n_ff = " + str(int(n_ff)))
+  push(lines, "let n_layer = " + str(int(n_layer)))
+  push(lines, "let vocab_size = " + str(int(vocab_size)))
+
+  let eps_val = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+  push(lines, "let eps = " + str(eps_val))
+
+  let rope_val = gguf_meta_default(model, "rope.freq_base", 10000.0)
+  push(lines, "let rope_theta = " + str(rope_val))
+
+  push(lines, "let has_bias = " + str(has_qbias))
+  push(lines, "let lm_head_source = " + chr(34.0) + lm_head_source + chr(34.0))
+  push(lines, "let embed_bytes = " + str(emb_size))
+  push(lines, "let embed_type = " + str(emb_type))
+  push(lines, "let norm_bytes = " + str(norm_size))
+  push(lines, "let norm_type = " + str(norm_type))
+
+  let mut manifest_text = " "
+  let mut mi = 0.0
+  while mi < len(lines)
+    let line = lines[int(mi)]
+    let nl = chr(10.0)
+    manifest_text = manifest_text + line + nl
+    mi = mi + 1.0
+  end
+
+  write_file(manifest_path, manifest_text)
+
+  // ── Summary ──────────────────────────────────────────────────
+  let gguf_size = file_size(gguf_path)
+  let total_extracted = total_layer_bytes + emb_size + norm_size + lm_head_size
+  print(" ")
+  print("=== Decomposition Complete ===")
+  print("  Original GGUF: {gguf_size} bytes")
+  print("  Extracted:     {total_extracted} bytes")
+  print("  Layers:        {n_layer} files")
+  print("  Output dir:    {output_dir}")
+  return 0.0
+end

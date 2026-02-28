@@ -1,0 +1,99 @@
+// bench_eval.flow — Performance benchmark for eval.flow interpreter
+// Tests compute-heavy patterns: loops, math, array ops, function calls
+
+// B1: Tight numeric loop (10000 iterations)
+let mut sum1 = 0.0
+let mut i1 = 0.0
+while i1 < 10000.0
+  sum1 = sum1 + i1
+  i1 = i1 + 1.0
+end
+print("B1 sum={sum1}")
+
+// B2: String building (1000 chars)
+let mut s2 = ""
+let mut i2 = 0.0
+while i2 < 1000.0
+  s2 = s2 + "x"
+  i2 = i2 + 1.0
+end
+let l2 = len(s2)
+print("B2 len={l2}")
+
+// B3: Map operations (1000 set + 1000 get)
+let mut m3 = map()
+let mut i3 = 0.0
+while i3 < 1000.0
+  let k3 = str(i3)
+  map_set(m3, k3, i3)
+  i3 = i3 + 1.0
+end
+let mut sum3 = 0.0
+let mut j3 = 0.0
+while j3 < 1000.0
+  let k3r = str(j3)
+  let v3 = map_get(m3, k3r)
+  sum3 = sum3 + v3
+  j3 = j3 + 1.0
+end
+print("B3 mapsum={sum3}")
+
+// B4: Function calls (1000 calls)
+fn add_one(x)
+  return x + 1.0
+end
+
+let mut sum4 = 0.0
+let mut i4 = 0.0
+while i4 < 1000.0
+  let r4 = add_one(i4)
+  sum4 = sum4 + r4
+  i4 = i4 + 1.0
+end
+print("B4 fnsum={sum4}")
+
+// B5: Array build + access (1000 elements)
+let mut arr5 = []
+let mut i5 = 0.0
+while i5 < 1000.0
+  push(arr5, i5)
+  i5 = i5 + 1.0
+end
+let mut sum5 = 0.0
+let mut j5 = 0.0
+while j5 < 1000.0
+  sum5 = sum5 + arr5[j5]
+  j5 = j5 + 1.0
+end
+print("B5 arrsum={sum5}")
+
+// B6: Nested function with string ops (500 calls)
+fn classify_char(c)
+  let o = ord(c)
+  if o >= 65.0 && o <= 90.0
+    return 1.0
+  elif o >= 97.0 && o <= 122.0
+    return 2.0
+  elif o >= 48.0 && o <= 57.0
+    return 3.0
+  end
+  return 0.0
+end
+
+let test_str = "Hello World 123 Test"
+let ts_len = len(test_str)
+let mut sum6 = 0.0
+let mut rep6 = 0.0
+while rep6 < 25.0
+  let mut j6 = 0.0
+  while j6 < ts_len
+    let ch6 = char_at(test_str, j6)
+    let cl6 = classify_char(ch6)
+    sum6 = sum6 + cl6
+    j6 = j6 + 1.0
+  end
+  rep6 = rep6 + 1.0
+end
+print("B6 classify={sum6}")
+
+print("BENCH DONE")

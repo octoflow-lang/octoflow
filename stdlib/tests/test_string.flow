@@ -1,0 +1,167 @@
+// test_string.flow — Tests for stdlib/string/string.flow
+// Functions tested: str_center, str_reverse, str_count, str_is_digit
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from string/string.flow --
+fn str_center(s, width, fill)
+  let n = len(s)
+  if n >= width
+    return s
+  end
+  let pad = width - n
+  let left = floor(pad / 2.0)
+  let right = pad - left
+  let mut result = ""
+  let mut i = 0.0
+  while i < left
+    result = result + fill
+    i = i + 1.0
+  end
+  result = result + s
+  i = 0.0
+  while i < right
+    result = result + fill
+    i = i + 1.0
+  end
+  return result
+end
+
+fn str_reverse(s)
+  let n = len(s)
+  let mut result = ""
+  let mut i = n - 1.0
+  while i >= 0.0
+    result = result + char_at(s, i)
+    i = i - 1.0
+  end
+  return result
+end
+
+fn str_count(s, sub)
+  let mut count = 0.0
+  let slen = len(s)
+  let sublen = len(sub)
+  if sublen == 0.0
+    return 0.0
+  end
+  let mut i = 0.0
+  while i <= slen - sublen
+    let chunk = substr(s, i, sublen)
+    if chunk == sub
+      count = count + 1.0
+      i = i + sublen
+    else
+      i = i + 1.0
+    end
+  end
+  return count
+end
+
+fn str_is_digit(s)
+  let n = len(s)
+  if n == 0.0
+    return 0.0
+  end
+  let mut i = 0.0
+  while i < n
+    let c = ord(char_at(s, i))
+    if c < 48.0 || c > 57.0
+      return 0.0
+    end
+    i = i + 1.0
+  end
+  return 1.0
+end
+
+// -- Tests --
+
+print("=== test_string ===")
+
+// Test str_center
+let c1 = str_center("hi", 6.0, "*")
+if c1 == "**hi**"
+  pass = pass + 1.0
+else
+  print("  FAIL: str_center expected **hi** got {c1}")
+  fail = fail + 1.0
+end
+
+let c2 = str_center("abc", 7.0, "-")
+if c2 == "--abc--"
+  pass = pass + 1.0
+else
+  print("  FAIL: str_center expected --abc-- got {c2}")
+  fail = fail + 1.0
+end
+
+// Test str_reverse
+let r1 = str_reverse("hello")
+if r1 == "olleh"
+  pass = pass + 1.0
+else
+  print("  FAIL: str_reverse expected olleh got {r1}")
+  fail = fail + 1.0
+end
+
+let r2 = str_reverse("ab")
+if r2 == "ba"
+  pass = pass + 1.0
+else
+  print("  FAIL: str_reverse expected ba got {r2}")
+  fail = fail + 1.0
+end
+
+// Test str_count
+let n1 = str_count("banana", "an")
+if n1 == 2.0
+  pass = pass + 1.0
+else
+  print("  FAIL: str_count expected 2 got {n1}")
+  fail = fail + 1.0
+end
+
+let n2 = str_count("aaa", "a")
+if n2 == 3.0
+  pass = pass + 1.0
+else
+  print("  FAIL: str_count expected 3 got {n2}")
+  fail = fail + 1.0
+end
+
+// Test str_is_digit
+let d1 = str_is_digit("12345")
+if d1 == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: str_is_digit expected 1 for 12345 got {d1}")
+  fail = fail + 1.0
+end
+
+let d2 = str_is_digit("12a45")
+if d2 == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: str_is_digit expected 0 for 12a45 got {d2}")
+  fail = fail + 1.0
+end
+
+let d3 = str_is_digit("")
+if d3 == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: str_is_digit expected 0 for empty got {d3}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_string ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

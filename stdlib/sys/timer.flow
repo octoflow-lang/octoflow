@@ -1,4 +1,7 @@
 // stdlib/sys/timer.flow — Timing and benchmarking utilities
+//
+// Functions: stopwatch, elapsed, elapsed_secs, benchmark, benchmark_end,
+//            sleep_busy, format_duration
 
 fn stopwatch()
   return now_ms()

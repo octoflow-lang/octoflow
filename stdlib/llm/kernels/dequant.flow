@@ -1,0 +1,227 @@
+// stdlib/llm/kernels/dequant.flow — GPU Dequantization Dispatch
+//
+// Converts quantized weights (Q4_K, Q6_K) to fp32 via GPU kernels.
+// Uses hybrid approach: CPU pre-decodes block headers (d, scales),
+// GPU handles nibble/bit extraction and final multiply.
+//
+// ALL-FLOAT DESIGN: raw bytes stored as 1 byte per float element.
+// Avoids f32→uint32 precision loss that kills packed uint32 values.
+//
+// Functions:
+//   gpu_dequant_q4k(qs_bytes, params, n_weights) → fp32_array
+//   gpu_dequant_q6k(raw_bytes, params, n_weights) → fp32_array
+//   prepare_q4k_block(block_bytes) → [qs(128 floats) + params(16 floats)]
+//   prepare_q6k_block(block_bytes) → [raw(192 floats) + params(16 floats)]
+//
+// Requirements: --allow-ffi --allow-read --allow-write
+// Usage:
+//   use "dequant"
+//   rt_init()
+//   let weights = gpu_dequant_q4k(qs_bytes, params, 256)
+
+use "../../gpu/runtime"
+
+// ── Q4_K GPU dispatch ──────────────────────────────────────────
+
+fn gpu_dequant_q4k(qs_bytes, params, n_weights)
+  // qs_bytes: float array — 1 byte per float, 128 floats per block
+  // params: float array — 16 per block: [d*sc0, dmin*mn0, d*sc1, dmin*mn1, ...]
+  // n_weights: total output weights (256 per block)
+
+  let n_blocks = ceil(n_weights / 256.0)
+  let qs_count = n_blocks * 128.0
+  let param_count = n_blocks * 16.0
+
+  // Create buffers: binding 0 (qs float), binding 1 (params float), binding 2 (output float)
+  let buf_qs = rt_create_buffer(qs_count * 4.0)
+  let buf_params = rt_create_buffer(param_count * 4.0)
+  let buf_out = rt_create_buffer(n_weights * 4.0)
+
+  // Upload
+  let _u0 = rt_upload(buf_qs, qs_bytes)
+  let _u1 = rt_upload(buf_params, params)
+
+  // Load pipeline (3 bindings, 0 push constants)
+  let pipe = rt_load_pipeline("stdlib/llm/kernels/dequant_q4k.spv", 3.0, 0.0)
+
+  // Dispatch — one thread per output weight
+  let mut wgs = int((n_weights + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  let _cb = rt_chain_begin(1.0, 3.0)
+  let mut bufs = []
+  push(bufs, buf_qs)
+  push(bufs, buf_params)
+  push(bufs, buf_out)
+  let _d = rt_chain_dispatch(pipe, bufs, wgs)
+  let _ce = rt_chain_end()
+  let _sw = rt_chain_submit_wait()
+
+  // Download result
+  let _dl = rt_download(buf_out, n_weights)
+  let mut result = []
+  let mut i = 0.0
+  while i < n_weights
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── Q6_K GPU dispatch ──────────────────────────────────────────
+
+fn gpu_dequant_q6k(raw_bytes, params, n_weights)
+  // raw_bytes: float array — 1 byte per float, 192 floats per block (128 ql + 64 qh)
+  // params: float array — 16 per block: [d*sc0..d*sc15]
+  // n_weights: total output weights (256 per block)
+
+  let n_blocks = ceil(n_weights / 256.0)
+  let raw_count = n_blocks * 192.0
+  let param_count = n_blocks * 16.0
+
+  let buf_raw = rt_create_buffer(raw_count * 4.0)
+  let buf_params = rt_create_buffer(param_count * 4.0)
+  let buf_out = rt_create_buffer(n_weights * 4.0)
+
+  let _u0 = rt_upload(buf_raw, raw_bytes)
+  let _u1 = rt_upload(buf_params, params)
+
+  let pipe = rt_load_pipeline("stdlib/llm/kernels/dequant_q6k.spv", 3.0, 0.0)
+
+  let mut wgs = int((n_weights + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  let _cb = rt_chain_begin(1.0, 3.0)
+  let mut bufs = []
+  push(bufs, buf_raw)
+  push(bufs, buf_params)
+  push(bufs, buf_out)
+  let _d = rt_chain_dispatch(pipe, bufs, wgs)
+  let _ce = rt_chain_end()
+  let _sw = rt_chain_submit_wait()
+
+  let _dl = rt_download(buf_out, n_weights)
+  let mut result = []
+  let mut i = 0.0
+  while i < n_weights
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── CPU helpers: prepare params from raw GGUF block bytes ──────
+
+fn read_f16_val(b0, b1)
+  // Decode f16 from two bytes (little-endian)
+  let bits = b0 + b1 * 256.0
+  let sign = floor(bits / 32768.0)
+  let rem = bits - sign * 32768.0
+  let exp_v = floor(rem / 1024.0)
+  let man = rem - exp_v * 1024.0
+  let mut val = 0.0
+  if exp_v > 0.0
+    if exp_v < 31.0
+      val = (1.0 + man / 1024.0) * pow(2.0, exp_v - 15.0)
+      if sign == 1.0
+        val = val * -1.0
+      end
+    end
+  end
+  return val
+end
+
+fn get_scale_min_k4_bytes(j, scales)
+  // Decode 6-bit scale and min from Q4_K 12-byte scales array
+  // Returns [scale, min]
+  let mut sm = [0.0, 0.0]
+
+  if j < 4.0
+    let d_val = scales[int(j)]
+    let d = d_val - floor(d_val / 64.0) * 64.0
+    let m_val = scales[int(j + 4.0)]
+    let m = m_val - floor(m_val / 64.0) * 64.0
+    sm[0] = d
+    sm[1] = m
+  else
+    let qj4 = scales[int(j + 4.0)]
+    let qj_4 = scales[int(j - 4.0)]
+    let qj0 = scales[int(j)]
+    let low_d = qj4 - floor(qj4 / 16.0) * 16.0
+    let high_d = floor(qj_4 / 64.0)
+    sm[0] = low_d + high_d * 16.0
+    let low_m = floor(qj4 / 16.0)
+    let high_m = floor(qj0 / 64.0)
+    sm[1] = low_m + high_m * 16.0
+  end
+
+  return sm
+end
+
+fn prepare_q4k_block(block_bytes)
+  // Takes 144 raw bytes as array
+  // Returns flat array: [qs_bytes(128 floats) + params(16 floats)] = 144 elements
+  let d = read_f16_val(block_bytes[0], block_bytes[1])
+  let dmin = read_f16_val(block_bytes[2], block_bytes[3])
+
+  // Extract 12 scale bytes
+  let mut scales = []
+  let mut si = 0.0
+  while si < 12.0
+    push(scales, block_bytes[int(4.0 + si)])
+    si = si + 1.0
+  end
+
+  // Build result: first 128 = qs bytes as individual floats
+  let mut _q4k_prep = []
+  let mut qi = 0.0
+  while qi < 128.0
+    push(_q4k_prep, block_bytes[int(16.0 + qi)])
+    qi = qi + 1.0
+  end
+
+  // Next 16 = params: [d*sc0, dmin*mn0, d*sc1, dmin*mn1, ..., d*sc7, dmin*mn7]
+  let mut sb = 0.0
+  while sb < 8.0
+    let sm = get_scale_min_k4_bytes(sb, scales)
+    push(_q4k_prep, d * sm[0])
+    push(_q4k_prep, dmin * sm[1])
+    sb = sb + 1.0
+  end
+
+  return _q4k_prep
+end
+
+fn prepare_q6k_block(block_bytes)
+  // Takes 210 raw bytes as array
+  // Returns flat array: [raw_bytes(192 floats: 128 ql + 64 qh) + params(16 floats)] = 208 elements
+  let d = read_f16_val(block_bytes[208], block_bytes[209])
+
+  // Build result: first 128 = ql bytes, next 64 = qh bytes
+  let mut _q6k_prep = []
+  let mut qi = 0.0
+  while qi < 192.0
+    push(_q6k_prep, block_bytes[int(qi)])
+    qi = qi + 1.0
+  end
+
+  // Next 16 = params: d * signed_scale
+  let mut si = 0.0
+  while si < 16.0
+    let sv = block_bytes[int(192.0 + si)]
+    let mut signed_v = sv
+    if signed_v > 127.0
+      signed_v = signed_v - 256.0
+    end
+    push(_q6k_prep, d * signed_v)
+    si = si + 1.0
+  end
+
+  return _q6k_prep
+end

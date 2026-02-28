@@ -1,0 +1,22 @@
+// Phase 14: vec2/vec3/vec4 type demonstration
+// Vectors are scalar-decomposed: vec3(1,2,3) creates v.x, v.y, v.z
+
+// --- vec3: 3D position ---
+let pos = vec3(10.0, 20.0, 30.0)
+print("Position: ({pos.x}, {pos.y}, {pos.z})")
+
+// --- vec2: 2D coordinates ---
+let uv = vec2(0.5, 0.75)
+print("UV: ({uv.x:.2}, {uv.y:.2})")
+
+// --- vec4: RGBA color ---
+let color = vec4(1.0, 0.5, 0.2, 1.0)
+print("Color: rgba({color.x:.1}, {color.y:.1}, {color.z:.1}, {color.w:.1})")
+
+// --- Expressions in constructors ---
+let offset = vec3(pos.x + 5.0, pos.y * 2.0, sqrt(pos.z))
+print("Offset: ({offset.x:.2}, {offset.y:.2}, {offset.z:.2})")
+
+// --- Component math ---
+let dist = sqrt(pos.x * pos.x + pos.y * pos.y + pos.z * pos.z)
+print("Distance from origin: {dist:.2}")

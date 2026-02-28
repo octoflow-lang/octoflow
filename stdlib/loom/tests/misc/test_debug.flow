@@ -1,0 +1,155 @@
+// test_debug.flow — Verify debug.flow array-based functions
+// Run from stdlib/loom/: octoflow run test_debug.flow
+//
+// Tests the non-chain debug functions (no GPU runtime needed).
+
+use "../debug"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+print("=== DEBUG MODULE VERIFICATION ===")
+print(" ")
+
+// ── debug_assert_range ─────────────────────────────────────────
+print("--- debug_assert_range ---")
+let mut r1 = [1.0, 5.0, 10.0]
+let _c = check(counters, "range pass", debug_assert_range(r1, 0.0, 10.0, "r1"), 1.0)
+
+let mut r2 = [1.0, 5.0, 15.0]
+let _c = check(counters, "range fail", debug_assert_range(r2, 0.0, 10.0, "r2"), 0.0)
+
+let mut r3 = [-1.0, 5.0, 10.0]
+let _c = check(counters, "range below", debug_assert_range(r3, 0.0, 10.0, "r3"), 0.0)
+
+// ── debug_assert_sorted ────────────────────────────────────────
+print("--- debug_assert_sorted ---")
+let mut s1 = [1.0, 2.0, 3.0, 4.0]
+let _c = check(counters, "sorted pass", debug_assert_sorted(s1, "s1"), 1.0)
+
+let mut s2 = [1.0, 3.0, 2.0, 4.0]
+let _c = check(counters, "sorted fail", debug_assert_sorted(s2, "s2"), 0.0)
+
+let mut s3 = [5.0]
+let _c = check(counters, "sorted 1 elem", debug_assert_sorted(s3, "s3"), 1.0)
+
+// ── debug_assert_sum ───────────────────────────────────────────
+print("--- debug_assert_sum ---")
+let mut a1 = [1.0, 2.0, 3.0]
+let _c = check(counters, "sum pass", debug_assert_sum(a1, 6.0, 0.01, "a1"), 1.0)
+let _c = check(counters, "sum fail", debug_assert_sum(a1, 10.0, 0.01, "a1f"), 0.0)
+
+// ── debug_assert_nonzero ──────────────────────────────────────
+print("--- debug_assert_nonzero ---")
+let mut nz1 = [1.0, 2.0, 3.0]
+let _c = check(counters, "nonzero pass", debug_assert_nonzero(nz1, "nz1"), 1.0)
+
+let mut nz2 = [1.0, 0.0, 3.0]
+let _c = check(counters, "nonzero fail", debug_assert_nonzero(nz2, "nz2"), 0.0)
+
+// ── debug_assert_all_equal ────────────────────────────────────
+print("--- debug_assert_all_equal ---")
+let mut eq1 = [7.0, 7.0, 7.0]
+let _c = check(counters, "all_equal pass", debug_assert_all_equal(eq1, 7.0, "eq1"), 1.0)
+
+let mut eq2 = [7.0, 7.0, 8.0]
+let _c = check(counters, "all_equal fail", debug_assert_all_equal(eq2, 7.0, "eq2"), 0.0)
+
+// ── debug_assert_monotonic ────────────────────────────────────
+print("--- debug_assert_monotonic ---")
+let mut m1 = [1.0, 3.0, 5.0, 9.0]
+let _c = check(counters, "monotonic pass", debug_assert_monotonic(m1, "m1"), 1.0)
+
+let mut m2 = [1.0, 3.0, 3.0, 9.0]
+let _c = check(counters, "monotonic fail eq", debug_assert_monotonic(m2, "m2"), 0.0)
+
+let mut m3 = [1.0, 3.0, 2.0, 9.0]
+let _c = check(counters, "monotonic fail dec", debug_assert_monotonic(m3, "m3"), 0.0)
+
+// ── debug_assert_no_nan ───────────────────────────────────────
+print("--- debug_assert_no_nan ---")
+let mut nn1 = [1.0, 2.0, 3.0]
+let _c = check(counters, "no_nan pass", debug_assert_no_nan(nn1, "nn1"), 1.0)
+
+// NOTE: NaN does not survive array storage in OctoFlow.
+// 0.0/0.0 produces NaN for scalars (verified in B4), but
+// assigning NaN to an array element sanitizes it.
+// debug_assert_no_nan is still useful for GPU buffer downloads.
+let mut nn2 = [1.0, 0.0, 3.0]
+let _c = check(counters, "no_nan clean arr", debug_assert_no_nan(nn2, "nn2"), 1.0)
+
+// ── debug_assert_pairwise_equal ───────────────────────────────
+print("--- debug_assert_pairwise_equal ---")
+let mut pa = [1.0, 2.0, 3.0]
+let mut pb = [1.0, 2.0, 3.0]
+let _c = check(counters, "pairwise exact", debug_assert_pairwise_equal(pa, pb, 0.001, "pw1"), 1.0)
+
+let mut pc = [1.0, 2.01, 3.0]
+let _c = check(counters, "pairwise near", debug_assert_pairwise_equal(pa, pc, 0.1, "pw2"), 1.0)
+let _c = check(counters, "pairwise fail", debug_assert_pairwise_equal(pa, pc, 0.001, "pw3"), 0.0)
+
+let mut pd = [1.0, 2.0]
+let _c = check(counters, "pairwise len", debug_assert_pairwise_equal(pa, pd, 0.1, "pw4"), 0.0)
+
+// ── debug_inspect ──────────────────────────────────────────────
+print("--- debug_inspect ---")
+let mut di = [10.0, 20.0, 30.0]
+let di_n = debug_inspect(di, "test_arr")
+let _c = check(counters, "inspect count", di_n, 3.0)
+
+// ── debug_stats ────────────────────────────────────────────────
+print("--- debug_stats ---")
+let mut ds = [2.0, 4.0, 6.0]
+let ds_mean = debug_stats(ds, "test_stats")
+let _c = check(counters, "stats mean", ds_mean, 4.0)
+
+let mut empty = []
+let ds_empty = debug_stats(empty, "empty")
+let _c = check(counters, "stats empty", ds_empty, 0.0)
+
+// ── debug_timer ────────────────────────────────────────────────
+print("--- debug_timer ---")
+let t0 = debug_timer_start()
+// Small busy loop to burn some time
+let mut j = 0.0
+while j < 100.0
+  j = j + 1.0
+end
+let elapsed = debug_timer_end(t0, "busy_loop")
+// elapsed should be > 0 (any positive time)
+let mut timer_ok = 0.0
+if elapsed >= 0.0
+  timer_ok = 1.0
+end
+let _c = check(counters, "timer positive", timer_ok, 1.0)
+
+let t1 = debug_timer_start()
+let silent = debug_timer_end_silent(t1)
+let mut silent_ok = 0.0
+if silent >= 0.0
+  silent_ok = 1.0
+end
+let _c = check(counters, "timer silent", silent_ok, 1.0)
+
+// ── SUMMARY ────────────────────────────────────────────────────
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print(" ")
+print("=== DEBUG MODULE VERIFICATION SUMMARY ===")
+print("  pass: {pass}/{total}")
+print("  fail: {fail}")
+if fail == 0.0
+  print("  ALL PASS")
+else
+  print("  FAILURES DETECTED")
+end

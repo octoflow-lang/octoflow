@@ -1,0 +1,97 @@
+// emit_vm_where_gt.flow — VM WHERE Greater-Than + Masked Value Kernel
+//
+// For each row, if the column value exceeds a threshold, writes the column
+// value to the masked output AND 1.0 to the mask output. Otherwise writes 0.
+//
+//   masked[gid] = (col[gid] > threshold) ? col[gid] : 0.0
+//   mask[gid]   = (col[gid] > threshold) ? 1.0      : 0.0
+//
+// This is the GPU equivalent of: WHERE col > threshold
+// Writing both masked value and count mask enables SUM + COUNT in one pass.
+//
+// Data lives in globals (binding 2) — columnar table storage.
+// Results go to registers (binding 0) — working memory.
+//
+// Push constants:
+//   pc[0] = col_off       (float -> uint, column start index in globals)
+//   pc[1] = threshold     (float, comparison value — kept as float, NOT ftou)
+//   pc[2] = dst_val_off   (float -> uint, output start for masked values in registers)
+//   pc[3] = dst_mask_off  (float -> uint, output start for mask in registers)
+//   pc[4] = count         (float -> uint, number of rows)
+//
+// Binding layout (ir_input_count=3):
+//   Binding 0: registers (write masked values + mask)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (read column data)
+//   Binding 3: control   (unused)
+//
+// Dispatch: ceil(count / 256)
+//
+// Run: octoflow run stdlib/loom/emit_vm_where_gt.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_where_gt(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let match_blk  = ir_block("match")
+  let nomatch    = ir_block("nomatch")
+  let merge      = ir_block("merge")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: load gid, push constants, bounds check ───────────────────
+  let gid           = ir_load_gid(entry)
+  let pc_col_off    = ir_push_const(entry, 0.0)
+  let pc_threshold  = ir_push_const(entry, 1.0)
+  let pc_dst_val    = ir_push_const(entry, 2.0)
+  let pc_dst_mask   = ir_push_const(entry, 3.0)
+  let pc_cnt        = ir_push_const(entry, 4.0)
+  let cnt_u         = ir_ftou(entry, pc_cnt)
+  let oob           = ir_ugte(entry, gid, cnt_u)
+  let _sm           = ir_selection_merge(entry, exit_block)
+  let _br           = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: load column value, compare > threshold ────────────────────
+  let col_off_u  = ir_ftou(body, pc_col_off)
+  let col_idx    = ir_iadd(body, col_off_u, gid)
+  let val        = ir_load_input_at(body, 2.0, col_idx)   // globals[col_off + gid]
+  let is_gt      = ir_fogt(body, val, pc_threshold)        // val > threshold
+  let _sm2       = ir_selection_merge(body, merge)
+  let _br2       = ir_term_cond_branch(body, is_gt, match_blk, nomatch)
+
+  // ── Match: write value + 1.0 mask ──────────────────────────────────
+  let dst_val_u  = ir_ftou(match_blk, pc_dst_val)
+  let val_idx    = ir_iadd(match_blk, dst_val_u, gid)
+  let _s1        = ir_buf_store_f(match_blk, 0.0, val_idx, val)     // registers[dst_val + gid] = val
+
+  let dst_mask_u = ir_ftou(match_blk, pc_dst_mask)
+  let mask_idx   = ir_iadd(match_blk, dst_mask_u, gid)
+  let one_f      = ir_const_f(match_blk, 1.0)
+  let _s2        = ir_buf_store_f(match_blk, 0.0, mask_idx, one_f)  // registers[dst_mask + gid] = 1.0
+  let _br3       = ir_term_branch(match_blk, merge)
+
+  // ── No match: write 0.0 to both ────────────────────────────────────
+  let zero       = ir_const_f(nomatch, 0.0)
+  let dst_val_u2 = ir_ftou(nomatch, pc_dst_val)
+  let val_idx2   = ir_iadd(nomatch, dst_val_u2, gid)
+  let _s3        = ir_buf_store_f(nomatch, 0.0, val_idx2, zero)     // registers[dst_val + gid] = 0
+
+  let dst_mask_u2 = ir_ftou(nomatch, pc_dst_mask)
+  let mask_idx2   = ir_iadd(nomatch, dst_mask_u2, gid)
+  let _s4         = ir_buf_store_f(nomatch, 0.0, mask_idx2, zero)   // registers[dst_mask + gid] = 0
+  let _br4        = ir_term_branch(nomatch, merge)
+
+  // ── Merge + Exit ───────────────────────────────────────────────────
+  let _br5 = ir_term_branch(merge, exit_block)
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/ops/vm_where_gt.spv"
+let _r = emit_vm_where_gt(out)
+print("Emitted: {out}")

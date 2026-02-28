@@ -1,0 +1,62 @@
+// emit_sieve_init_offsets_v7.flow — Initialize Carry-Forward Sentinel
+//
+// Per-VM kernel. Writes 0xFFFFFFFF (sentinel) to all carry-forward slots.
+// The mark_v7_large kernel detects the sentinel on first dispatch and
+// computes the starting half_off from scratch (uint64). Subsequent
+// dispatches use the carry-forward residual (pure uint32).
+//
+// This design decouples init from the bucket sieve boundary, making
+// the carry-forward immune to f32 precision issues in sqrt/p² comparisons.
+//
+// Push constants (3):
+//   pc[0] = num_primes    (total slots to initialize)
+//   pc[1] = offset_base   (start of carry-forward area in B0)
+//   pc[2] = unused        (padding for consistent layout)
+//
+// Binding layout:
+//   B0 (uint): Write sentinel to [offset_base + gid]
+//
+// Dispatch: wg = ceil(num_primes / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_init_offsets_v7.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_init_offsets_v7(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────
+  let gid      = ir_load_gid(entry)
+  let pc_nump  = ir_push_const(entry, 0.0)   // num_primes
+  let pc_obase = ir_push_const(entry, 1.0)   // offset_base
+
+  let nump_u   = ir_ftou(entry, pc_nump)
+  let oob      = ir_ugte(entry, gid, nump_u)
+  let _sm      = ir_selection_merge(entry, exit_block)
+  let _br      = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: write sentinel 0xFFFFFFFF ───────────────────────
+  let c0       = ir_const_u(body, 0.0)
+  let sentinel = ir_not(body, c0)             // ~0 = 0xFFFFFFFF
+
+  let obase_u  = ir_ftou(body, pc_obase)
+  let store_idx = ir_iadd(body, obase_u, gid)
+  let _store   = ir_buf_store_u(body, 0.0, store_idx, sentinel)
+  let _br2     = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_init_offsets_v7.spv"
+let _r = emit_sieve_init_offsets_v7(out)
+print("Emitted: {out}")

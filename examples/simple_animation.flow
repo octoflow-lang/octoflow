@@ -1,0 +1,67 @@
+// simple_animation.flow — Simple Geometric Animation for GIF Demo
+//
+// "16 frames. Expanding circle. Fast generation. Clean visual."
+//
+// Demonstrates: .flow can create animated GIFs programmatically.
+// Output: expanding_circle.gif
+//
+// Run: octoflow run examples/simple_animation.flow --allow-read --allow-write
+
+use "../stdlib/media/gif_encode"
+
+let W = 64.0
+let H = 64.0
+let N_FRAMES = 16.0
+
+print("Creating {N_FRAMES}-frame expanding circle animation...")
+
+let mut all_pixels = []
+let mut delays = []
+
+let mut frame = 0.0
+while frame < N_FRAMES
+  let radius = (frame + 1.0) / N_FRAMES * 25.0
+
+  let mut y = 0.0
+  while y < H
+    let mut x = 0.0
+    while x < W
+      let cx = W / 2.0
+      let cy = H / 2.0
+      let dx = x - cx
+      let dy = y - cy
+      let dist = sqrt(dx * dx + dy * dy)
+
+      let mut r = 40.0
+      let mut g = 40.0
+      let mut b = 40.0
+
+      if dist < radius
+        if dist > radius - 2.0
+          r = 255.0
+          g = 200.0
+          b = 100.0
+        else
+          r = 100.0
+          g = 150.0
+          b = 255.0
+        end
+      end
+
+      push(all_pixels, r)
+      push(all_pixels, g)
+      push(all_pixels, b)
+
+      x = x + 1.0
+    end
+    y = y + 1.0
+  end
+
+  push(delays, 100.0)
+  frame = frame + 1.0
+end
+
+print("Encoding GIF...")
+gif_encode_frames(all_pixels, delays, N_FRAMES, W, H, "expanding_circle.gif")
+
+print("Saved: expanding_circle.gif")

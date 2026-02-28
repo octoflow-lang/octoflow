@@ -1,0 +1,250 @@
+// test_gpu_stats.flow — GPU Statistics Library Tests
+//
+// Tests for GPU-native statistical functions in stdlib/loom/math/stats.flow
+//
+// Run: octoflow run stdlib/tests/test_gpu_stats.flow --allow-ffi --allow-read
+
+use "../gpu/stats"
+use "../gpu/runtime"
+
+let mut test_counts = [0.0, 0.0]
+
+fn assert_eq(name, got, expected, tolerance)
+  test_counts[0] = test_counts[0] + 1.0
+  let diff = abs(got - expected)
+  if diff <= tolerance
+    print("  PASS: {name}")
+    test_counts[1] = test_counts[1] + 1.0
+  else
+    print("  FAIL: {name} — got {got}, expected {expected}, diff={diff}")
+  end
+  return 0.0
+end
+
+fn assert_array_eq(name, got, expected, tolerance)
+  test_counts[0] = test_counts[0] + 1.0
+  let n = len(got)
+  let mut all_match = 1.0
+
+  let n_expected = len(expected)
+  if n != n_expected
+    print("  FAIL: {name} — length mismatch (got {n}, expected {n_expected})")
+    return 0.0
+  end
+
+  let mut i = 0.0
+  while i < n
+    let diff = abs(got[int(i)] - expected[int(i)])
+    if diff > tolerance
+      all_match = 0.0
+    end
+    i = i + 1.0
+  end
+
+  if all_match == 1.0
+    print("  PASS: {name}")
+    test_counts[1] = test_counts[1] + 1.0
+  else
+    print("  FAIL: {name} — array elements differ")
+  end
+  return 0.0
+end
+
+print("")
+print("OctoFlow GPU Statistics Library Tests")
+print("======================================")
+
+rt_init()
+
+// ── Test 1: gpu_sum ──────────────────────────────────────────────────
+print("")
+print("Test 1: gpu_sum")
+
+let mut test_arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+let sum_result = gpu_sum(test_arr)
+assert_eq("sum([1,2,3,4,5])", sum_result, 15.0, 0.0001)
+
+// Larger array
+let mut large_arr = []
+let mut i = 1.0
+while i <= 1000.0
+  push(large_arr, i)
+  i = i + 1.0
+end
+let sum_large = gpu_sum(large_arr)
+let expected_sum = 1000.0 * 1001.0 / 2.0
+assert_eq("sum(1..1000)", sum_large, expected_sum, 1.0)
+
+// ── Test 2: gpu_mean ─────────────────────────────────────────────────
+print("")
+print("Test 2: gpu_mean")
+
+let mean_result = gpu_mean(test_arr)
+assert_eq("mean([1,2,3,4,5])", mean_result, 3.0, 0.0001)
+
+let mean_large = gpu_mean(large_arr)
+assert_eq("mean(1..1000)", mean_large, 500.5, 0.1)
+
+// ── Test 3: gpu_min and gpu_max ──────────────────────────────────────
+print("")
+print("Test 3: gpu_min and gpu_max")
+
+let mut minmax_arr = [7.0, 2.0, 9.0, 1.0, 5.0, 3.0, 8.0, 4.0, 6.0]
+let min_result = gpu_min(minmax_arr)
+let max_result = gpu_max(minmax_arr)
+
+assert_eq("min([7,2,9,1,5,3,8,4,6])", min_result, 1.0, 0.0001)
+assert_eq("max([7,2,9,1,5,3,8,4,6])", max_result, 9.0, 0.0001)
+
+// Negative values
+let mut neg_arr = [0.0 - 5.0, 0.0 - 10.0, 0.0 - 2.0, 0.0 - 8.0]
+let min_neg = gpu_min(neg_arr)
+let max_neg = gpu_max(neg_arr)
+
+assert_eq("min([-5,-10,-2,-8])", min_neg, 0.0 - 10.0, 0.0001)
+assert_eq("max([-5,-10,-2,-8])", max_neg, 0.0 - 2.0, 0.0001)
+
+// ── Test 4: gpu_variance and gpu_std ─────────────────────────────────
+print("")
+print("Test 4: gpu_variance and gpu_std")
+
+// Known variance example: [2, 4, 4, 4, 5, 5, 7, 9]
+// Mean = 5.0
+// Variance = sum((x-5)^2) / (N-1) = (9+1+1+1+0+0+4+16) / 7 = 32/7 = 4.571...
+// Std = sqrt(4.571...) = 2.138...
+let mut var_test = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
+let var_result = gpu_variance(var_test)
+let std_result = gpu_std(var_test)
+
+assert_eq("variance([2,4,4,4,5,5,7,9])", var_result, 4.571428, 0.001)
+assert_eq("std([2,4,4,4,5,5,7,9])", std_result, 2.138089, 0.001)
+
+// ── Test 5: gpu_median ───────────────────────────────────────────────
+print("")
+print("Test 5: gpu_median")
+
+// Odd-length array
+let mut med_odd = [1.0, 3.0, 5.0, 7.0, 9.0]
+let median_odd = gpu_median(med_odd)
+assert_eq("median([1,3,5,7,9])", median_odd, 5.0, 0.001)
+
+// Even-length array (interpolates)
+let mut med_even = [1.0, 2.0, 3.0, 4.0]
+let median_even = gpu_median(med_even)
+assert_eq("median([1,2,3,4])", median_even, 2.5, 0.001)
+
+// Unsorted input
+let mut med_unsorted = [9.0, 1.0, 5.0, 3.0, 7.0]
+let median_unsorted = gpu_median(med_unsorted)
+assert_eq("median([9,1,5,3,7])", median_unsorted, 5.0, 0.001)
+
+// ── Test 6: gpu_percentile ───────────────────────────────────────────
+print("")
+print("Test 6: gpu_percentile")
+
+let mut perc_arr = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+let p25 = gpu_percentile(perc_arr, 25.0)
+let p50 = gpu_percentile(perc_arr, 50.0)
+let p75 = gpu_percentile(perc_arr, 75.0)
+
+assert_eq("percentile(25%)", p25, 3.25, 0.1)
+assert_eq("percentile(50%)", p50, 5.5, 0.1)
+assert_eq("percentile(75%)", p75, 7.75, 0.1)
+
+// ── Test 7: gpu_histogram_counts ─────────────────────────────────────
+print("")
+print("Test 7: gpu_histogram_counts")
+
+// Uniform distribution: 100 values from 0 to 9.9
+let mut hist_arr = []
+let mut i = 0.0
+while i < 100.0
+  let val = (i / 100.0) * 10.0
+  push(hist_arr, val)
+  i = i + 1.0
+end
+
+let hist_counts = gpu_histogram_counts(hist_arr, 10.0)
+
+// Debug: print actual counts
+let mut i = 0.0
+while i < 10.0
+  let c = hist_counts[int(i)]
+  print("  bin[{i}] = {c}")
+  i = i + 1.0
+end
+
+// Each bin should have ~10 elements
+let mut hist_pass = 1.0
+let mut i = 0.0
+while i < 10.0
+  let count = hist_counts[int(i)]
+  if count < 8.0
+    hist_pass = 0.0
+  end
+  if count > 12.0
+    hist_pass = 0.0
+  end
+  i = i + 1.0
+end
+
+test_counts[0] = test_counts[0] + 1.0
+if hist_pass == 1.0
+  print("  PASS: histogram(10 bins)")
+  test_counts[1] = test_counts[1] + 1.0
+else
+  print("  FAIL: histogram(10 bins) — bin counts outside expected range")
+end
+
+// ── Test 8: gpu_correlation ──────────────────────────────────────────
+print("")
+print("Test 8: gpu_correlation")
+
+// Perfect positive correlation
+let mut x1 = [1.0, 2.0, 3.0, 4.0, 5.0]
+let mut y1 = [2.0, 4.0, 6.0, 8.0, 10.0]
+let corr1 = gpu_correlation(x1, y1)
+assert_eq("correlation(perfect positive)", corr1, 1.0, 0.001)
+
+// Perfect negative correlation
+let mut x2 = [1.0, 2.0, 3.0, 4.0, 5.0]
+let mut y2 = [10.0, 8.0, 6.0, 4.0, 2.0]
+let corr2 = gpu_correlation(x2, y2)
+assert_eq("correlation(perfect negative)", corr2, 0.0 - 1.0, 0.001)
+
+// No correlation
+let mut x3 = [1.0, 2.0, 3.0, 4.0, 5.0]
+let mut y3 = [3.0, 3.0, 3.0, 3.0, 3.0]
+let corr3 = gpu_correlation(x3, y3)
+assert_eq("correlation(no correlation)", corr3, 0.0, 0.001)
+
+// ── Test 9: gpu_zscore ───────────────────────────────────────────────
+print("")
+print("Test 9: gpu_zscore")
+
+let mut z_arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+let zscores = gpu_zscore(z_arr)
+
+// Mean = 3, Std = sqrt(2.5) = 1.581...
+// Z-scores: [(1-3)/1.581, (2-3)/1.581, 0, (4-3)/1.581, (5-3)/1.581]
+// = [-1.265, -0.632, 0, 0.632, 1.265]
+let mut expected_z = [0.0 - 1.265, 0.0 - 0.632, 0.0, 0.632, 1.265]
+assert_array_eq("zscore([1,2,3,4,5])", zscores, expected_z, 0.01)
+
+rt_cleanup()
+
+// ── Summary ──────────────────────────────────────────────────────────
+print("")
+print("======================================")
+let total_tests = test_counts[0]
+let passed_tests = test_counts[1]
+print("Test Summary: {passed_tests} / {total_tests} passed")
+
+if passed_tests == total_tests
+  print("ALL TESTS PASSED")
+else
+  let failed = total_tests - passed_tests
+  print("FAILURES: {failed}")
+end
+
+print("")

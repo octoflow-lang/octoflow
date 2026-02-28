@@ -1,0 +1,161 @@
+// emit_matmul_tiled.flow — Tiled Matrix Multiplication Kernel Emitter
+//
+// Optimized matmul using shared memory tiling for compute/memory reuse.
+// Targets 8-16× speedup over naive matmul for N >= 128.
+//
+// Algorithm:
+//   - 16×16 thread block (local size)
+//   - 16×16 shared memory tiles
+//   - Load A/B tiles → shared memory
+//   - Barrier
+//   - Each thread computes one C element from shared tiles
+//   - Repeat for K/16 tiles across shared dimension
+//
+// Input buffers:
+//   Binding 0: A (M×K matrix, row-major)
+//   Binding 1: B (K×N matrix, row-major)
+//   Binding 2: C (M×N output, row-major)
+//
+// Push constants:
+//   [0]: M (uint)
+//   [1]: K (uint)
+//   [2]: N (uint)
+
+use "../../compiler/ir"
+
+fn emit_matmul_tiled(out_path)
+  ir_new()
+  ir_input_count = 2.0
+  ir_shared_size = 512.0  // 2× 16×16 tiles (tile_a + tile_b)
+  ir_workgroup_size = 256.0  // 16×16 threads
+
+  let entry = ir_block("entry")
+
+  // Load thread indices
+  let lid = ir_load_local_id(entry)  // flattened: row*16 + col
+  let wgid = ir_load_workgroup_id(entry)
+
+  // Load push constants
+  let m_val = ir_push_const(entry, 0.0)
+  let k_val = ir_push_const(entry, 1.0)
+  let n_val = ir_push_const(entry, 2.0)
+
+  let m = ir_ftou(entry, m_val)
+  let k = ir_ftou(entry, k_val)
+  let n = ir_ftou(entry, n_val)
+
+  // Thread 2D coords within 16×16 block
+  let c16 = ir_const_u(entry, 16.0)
+  let local_row = ir_udiv(entry, lid, c16)
+  let local_col = ir_umod(entry, lid, c16)
+
+  // Workgroup 2D coords
+  // For 2D dispatch: wgid encodes both X and Y
+  // Simplified: assume 1D dispatch, wgid = row_block
+  let row_block = wgid
+  let c0 = ir_const_u(entry, 0.0)
+  let col_block = c0  // Single workgroup for MVP
+
+  // Global row/col for this thread
+  let c16f = ir_const_f(entry, 16.0)
+  let row_block_f = ir_utof(entry, row_block)
+  let local_row_f = ir_utof(entry, local_row)
+  let row_start_f = ir_fmul(entry, row_block_f, c16f)
+  let global_row_f = ir_fadd(entry, row_start_f, local_row_f)
+  let global_row = ir_ftou(entry, global_row_f)
+
+  let col_block_f = ir_utof(entry, col_block)
+  let local_col_f = ir_utof(entry, local_col)
+  let col_start_f = ir_fmul(entry, col_block_f, c16f)
+  let global_col_f = ir_fadd(entry, col_start_f, local_col_f)
+  let global_col = ir_ftou(entry, global_col_f)
+
+  // Accumulator for dot product
+  let c0f = ir_const_f(entry, 0.0)
+  let acc_init = c0f
+
+  // For MVP: single tile (no loop)
+  // Load A[global_row, 0..16] to shared_a[local_row*16 + 0..15]
+  // Load B[0..16, global_col] to shared_b[0..15*16 + local_col]
+
+  // Tile A: each thread loads one element
+  // A index: global_row * K + local_col
+  let k_f = ir_utof(entry, k)
+  let grow_f = ir_utof(entry, global_row)
+  let a_row_offset_f = ir_fmul(entry, grow_f, k_f)
+  let a_idx_f = ir_fadd(entry, a_row_offset_f, local_col_f)
+  let a_idx = ir_ftou(entry, a_idx_f)
+
+  let a_val = ir_load_input_at(entry, 0.0, a_idx)
+
+  // Store to shared_a[local_row * 16 + local_col]
+  let lrow16_f = ir_fmul(entry, local_row_f, c16f)
+  let shared_a_idx_f = ir_fadd(entry, lrow16_f, local_col_f)
+  let shared_a_idx = ir_ftou(entry, shared_a_idx_f)
+  ir_shared_store(entry, shared_a_idx, a_val)
+
+  // Tile B: each thread loads one element
+  // B index: local_row * N + global_col
+  let n_f = ir_utof(entry, n)
+  let b_row_offset_f = ir_fmul(entry, local_row_f, n_f)
+  let gcol_f = ir_utof(entry, global_col)
+  let b_idx_f = ir_fadd(entry, b_row_offset_f, gcol_f)
+  let b_idx = ir_ftou(entry, b_idx_f)
+
+  let b_val = ir_load_input_at(entry, 1.0, b_idx)
+
+  // Store to shared_b[local_row * 16 + local_col] (offset 256)
+  let c256u = ir_const_u(entry, 256.0)
+  let shared_b_base_idx_f = ir_fadd(entry, lrow16_f, local_col_f)
+  let shared_b_base_idx = ir_ftou(entry, shared_b_base_idx_f)
+  let shared_b_idx = ir_iadd(entry, shared_b_base_idx, c256u)
+  ir_shared_store(entry, shared_b_idx, b_val)
+
+  // Barrier: wait for all loads
+  ir_barrier(entry)
+
+  // Compute dot product: acc = sum(shared_a[local_row,k] * shared_b[k,local_col])
+  // For k=0..15
+  let c1 = ir_const_f(entry, 1.0)
+  let c15f = ir_const_f(entry, 15.0)
+
+  // Unroll dot product (16 iterations)
+  let mut acc = acc_init
+  let mut kidx_f = c0f
+
+  let mut unroll = 0.0
+  while unroll < 16.0
+    let kidx_u = ir_ftou(entry, kidx_f)
+
+    // A element: shared_a[local_row * 16 + kidx]
+    let a_sh_idx_f = ir_fadd(entry, lrow16_f, kidx_f)
+    let a_sh_idx = ir_ftou(entry, a_sh_idx_f)
+    let a_elem = ir_shared_load(entry, a_sh_idx)
+
+    // B element: shared_b[kidx * 16 + local_col] (offset 256)
+    let b_sh_row_f = ir_fmul(entry, kidx_f, c16f)
+    let b_sh_idx_base_f = ir_fadd(entry, b_sh_row_f, local_col_f)
+    let b_sh_idx_base = ir_ftou(entry, b_sh_idx_base_f)
+    let b_sh_idx = ir_iadd(entry, b_sh_idx_base, c256u)
+    let b_elem = ir_shared_load(entry, b_sh_idx)
+
+    // acc += a_elem * b_elem
+    let prod = ir_fmul(entry, a_elem, b_elem)
+    acc = ir_fadd(entry, acc, prod)
+
+    kidx_f = ir_fadd(entry, kidx_f, c1)
+    unroll = unroll + 1.0
+  end
+
+  // Store result to C[global_row, global_col]
+  // C index: global_row * N + global_col
+  let c_row_offset_f = ir_fmul(entry, grow_f, n_f)
+  let c_idx_f = ir_fadd(entry, c_row_offset_f, gcol_f)
+  let c_idx = ir_ftou(entry, c_idx_f)
+
+  ir_store_output_at(entry, c_idx, acc)
+  ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

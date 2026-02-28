@@ -1,0 +1,166 @@
+// gpu_database.flow — GPU Database Engine: Query Plan as Dispatch Chain
+//
+// "If GPU is the computer, query plan becomes dispatch chain."
+//
+// 65,536 employee records processed ENTIRELY on GPU.
+// 6 dispatches, 1 submission, 0 CPU row iterations.
+// Multi-pass parallel reduction (256 workgroups → 1 value).
+//
+// SQL equivalent:
+//   SELECT SUM(salary), COUNT(*) FROM employees WHERE salary > 32768
+//
+// GPU dispatch chain:
+//   [filter: gt_scalar] → [mask: mul_ab] →
+//   [reduce pass 1: 256→256] → [reduce pass 2: 256→1] →
+//   [reduce pass 1: 256→256] → [reduce pass 2: 256→1]
+//
+// Run: octoflow run examples/gpu_database.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N = 65536.0
+let BUF_BYTES = N * 4.0
+let WG_SIZE = 256.0
+let NUM_WG = N / WG_SIZE
+let THRESHOLD = 32768.0
+
+// Boot GPU
+rt_init()
+
+// Load kernels
+let pipe_gt = rt_load_pipeline("tests/gpu_shaders/15_gt_scalar.spv", 2.0, 4.0)
+let pipe_mul = rt_load_pipeline("tests/gpu_shaders/18_mul_ab.spv", 3.0, 0.0)
+let pipe_reduce = rt_load_pipeline("stdlib/loom/kernels/reduce/reduce_sum.spv", 2.0, 0.0)
+
+// Create data buffers
+let buf_salary = rt_create_buffer(BUF_BYTES)
+let buf_mask = rt_create_buffer(BUF_BYTES)
+let buf_masked = rt_create_buffer(BUF_BYTES)
+
+// Reduction buffers: 256 partial sums, then 1 final sum
+let PARTIAL_BYTES = NUM_WG * 4.0
+let buf_partial_sum = rt_create_buffer(PARTIAL_BYTES)
+let buf_partial_count = rt_create_buffer(PARTIAL_BYTES)
+let buf_result_sum = rt_create_buffer(1024.0)
+let buf_result_count = rt_create_buffer(1024.0)
+
+// Upload salary data: [1, 2, 3, ..., 65536]
+let mut salaries = []
+let mut i = 0.0
+while i < N
+  push(salaries, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(buf_salary, salaries)
+
+// Zero all working buffers
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_mask, zeros)
+rt_upload(buf_masked, zeros)
+
+// Zero partial and result buffers
+let mut pz = []
+let mut i = 0.0
+while i < NUM_WG
+  push(pz, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_partial_sum, pz)
+rt_upload(buf_partial_count, pz)
+rt_upload(buf_result_sum, pz)
+rt_upload(buf_result_count, pz)
+
+// ── Record query dispatch chain ──────────────────────────────────────
+let t0 = time()
+
+rt_chain_begin(6.0, 3.0)
+
+// Stage 1: FILTER — salary > 32768 → boolean mask [256 workgroups]
+let mut pc = [THRESHOLD]
+rt_chain_push_constants(pipe_gt, pc)
+let mut b1 = [buf_salary, buf_mask]
+rt_chain_dispatch(pipe_gt, b1, NUM_WG)
+
+// Stage 2: MASK — salary * mask → masked_salary [256 workgroups]
+let mut b2 = [buf_salary, buf_mask, buf_masked]
+rt_chain_dispatch(pipe_mul, b2, NUM_WG)
+
+// Stage 3: REDUCE SUM pass 1 — masked → 256 partial sums [256 workgroups]
+let mut b3 = [buf_masked, buf_partial_sum]
+rt_chain_dispatch(pipe_reduce, b3, NUM_WG)
+
+// Stage 4: REDUCE SUM pass 2 — 256 partials → 1 final sum [1 workgroup]
+let mut b4 = [buf_partial_sum, buf_result_sum]
+rt_chain_dispatch(pipe_reduce, b4, 1.0)
+
+// Stage 5: REDUCE COUNT pass 1 — mask → 256 partial counts [256 workgroups]
+let mut b5 = [buf_mask, buf_partial_count]
+rt_chain_dispatch(pipe_reduce, b5, NUM_WG)
+
+// Stage 6: REDUCE COUNT pass 2 — 256 partials → 1 final count [1 workgroup]
+let mut b6 = [buf_partial_count, buf_result_count]
+rt_chain_dispatch(pipe_reduce, b6, 1.0)
+
+rt_chain_end()
+let t1 = time()
+let record_ms = (t1 - t0) * 1000.0
+
+// ── Single submit — GPU processes entire query ───────────────────────
+let t2 = time()
+rt_chain_submit_wait()
+let t3 = time()
+let gpu_ms = (t3 - t2) * 1000.0
+
+// ── Download results (2 floats) ──────────────────────────────────────
+rt_download(buf_result_sum, 1.0)
+let gpu_sum = rt_result[0]
+
+rt_download(buf_result_count, 1.0)
+let gpu_count = rt_result[0]
+
+let gpu_avg = gpu_sum / gpu_count
+
+// CPU verification: salary > 32768 → salaries 32769..65536 → 32768 matches
+// SUM = sum(32769..65536) = (32769+65536)*32768/2 = 1,610,678,272
+// COUNT = 32768
+let expected_count = 32768.0
+let expected_sum = 1610678272.0
+let expected_avg = expected_sum / expected_count
+
+print("")
+print("OctoFlow GPU Database Engine")
+print("  Records: {N}")
+print("  Query: SELECT SUM(salary), COUNT(*) WHERE salary > {THRESHOLD}")
+print("  Dispatches: 6 (filter + mask + 2x reduce_sum + 2x reduce_count)")
+print("  Submissions: 1")
+print("  CPU row iterations: 0")
+print("  Record time: {record_ms} ms")
+print("  GPU time:    {gpu_ms} ms")
+print("  SUM:     {gpu_sum}  (expected {expected_sum})")
+print("  COUNT:   {gpu_count}  (expected {expected_count})")
+print("  AVG:     {gpu_avg}  (expected {expected_avg})")
+
+// Tolerance check (f32 precision at large sums)
+let sum_err = abs(gpu_sum - expected_sum)
+let count_err = abs(gpu_count - expected_count)
+let sum_rel = sum_err / expected_sum
+
+if count_err < 1.0 && sum_rel < 0.001
+  print("  MATCH (count exact, sum within 0.1%)")
+else
+  print("  MISMATCH")
+  if count_err >= 1.0
+    print("    COUNT error: {count_err}")
+  end
+  if sum_rel >= 0.001
+    print("    SUM relative error: {sum_rel}")
+  end
+end
+
+print("")
+rt_cleanup()

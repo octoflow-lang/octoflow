@@ -1,4 +1,8 @@
 // stdlib/game/physics2d.flow — Simple 2D physics engine
+//
+// Functions: phys_add_body, phys_gravity, phys_integrate, phys_bounce_walls,
+//            phys_dist_sq, phys_collide_pairs, phys_kinetic_energy
+//
 // Uses parallel arrays for body state (SoA layout for cache efficiency).
 // Arrays: bx, by (position), bvx, bvy (velocity), bmass, bradius
 

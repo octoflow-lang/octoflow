@@ -1,0 +1,105 @@
+// test_must_have.flow — Tests non-negotiable builtins for self-hosting compiler
+
+// ── float_to_bits / bits_to_float ──
+let b1 = float_to_bits(1.0)
+print("float_to_bits(1.0)={b1}")
+
+let f1 = bits_to_float(b1)
+print("bits_to_float back={f1}")
+
+let b2 = float_to_bits(2.5)
+print("float_to_bits(2.5)={b2}")
+
+let f2 = bits_to_float(b2)
+print("bits_to_float(2.5)={f2}")
+
+// ── float_byte ──
+let fb0 = float_byte(1.0, 0.0)
+let fb1 = float_byte(1.0, 1.0)
+let fb2 = float_byte(1.0, 2.0)
+let fb3 = float_byte(1.0, 3.0)
+print("float_byte(1.0): {fb0} {fb1} {fb2} {fb3}")
+
+// ── write_file ──
+write_file("_test_wf.tmp", "hello from flow")
+let wf_check = read_file("_test_wf.tmp")
+print("write_file: {wf_check}")
+
+// ── write_bytes (SPIR-V emission test) ──
+let mut spv = []
+push(spv, 3.0)
+push(spv, 2.0)
+push(spv, 35.0)
+push(spv, 7.0)
+write_bytes("_test_wb.tmp", spv)
+let wb_check = read_bytes("_test_wb.tmp")
+let wb0 = wb_check[0]
+let wb1 = wb_check[1]
+let wb2 = wb_check[2]
+let wb3 = wb_check[3]
+print("write_bytes: {wb0} {wb1} {wb2} {wb3}")
+
+// ── time ──
+let t1 = time()
+let mut t_ok = 0.0
+if t1 > 1000000000.0
+  t_ok = 1.0
+end
+print("time>{t_ok}")
+
+// ── random ──
+let r1 = random()
+let mut r_ok = 0.0
+if r1 >= 0.0 && r1 < 1.0
+  r_ok = 1.0
+end
+print("random_ok={r_ok}")
+
+// ── os_name ──
+let os = os_name()
+print("os_name={os}")
+
+// ── map_keys ──
+let mut m = map()
+map_set(m, "a", 1.0)
+map_set(m, "b", 2.0)
+map_set(m, "c", 3.0)
+let keys = map_keys(m)
+let nk = len(keys)
+print("map_keys count={nk}")
+
+// ── sort_array ──
+let mut arr = []
+push(arr, 3.0)
+push(arr, 1.0)
+push(arr, 2.0)
+let sorted = sort_array(arr)
+let s0 = sorted[0]
+let s1 = sorted[1]
+let s2 = sorted[2]
+print("sorted: {s0} {s1} {s2}")
+
+// ── reverse ──
+let mut arr2 = []
+push(arr2, 10.0)
+push(arr2, 20.0)
+push(arr2, 30.0)
+let rev = reverse(arr2)
+let rv0 = rev[0]
+let rv1 = rev[1]
+let rv2 = rev[2]
+print("reversed: {rv0} {rv1} {rv2}")
+
+// ── list_dir ──
+let files = list_dir("stdlib/compiler/examples")
+let nf = len(files)
+let mut has_files = 0.0
+if nf > 0.0
+  has_files = 1.0
+end
+print("list_dir found files={has_files}")
+
+// Cleanup temp files (using write_file to overwrite with empty)
+// exec not needed — just leave them
+
+print("MUST-HAVE DONE")

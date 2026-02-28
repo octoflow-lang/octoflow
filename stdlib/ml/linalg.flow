@@ -1,4 +1,9 @@
 // stdlib/ml/linalg.flow — Linear algebra operations
+//
+// Functions: mat_create, mat_identity, mat_get, mat_set, mat_mul,
+//            mat_transpose, mat_add, mat_scale, mat_det_2x2, mat_det_3x3,
+//            mat_inverse_2x2, outer_product, mat_trace, solve_2x2
+//
 // Matrices stored as flat arrays in row-major order
 
 fn mat_create(rows, cols, fill_val)

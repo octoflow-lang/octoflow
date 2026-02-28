@@ -1,0 +1,165 @@
+// Tests for Data Aggregation GPU Functions
+
+use "../gpu/aggregate.flow"
+
+let pass_count = 0.0
+let fail_count = 0.0
+
+fn test_group_by_sum()
+    print("Testing gpu_group_by_sum...")
+
+    let values = [10.0, 20.0, 30.0, 40.0, 50.0]
+    let keys = [0.0, 1.0, 0.0, 1.0, 0.0]
+    let num_groups = 2.0
+
+    let result = gpu_group_by_sum(values, keys, num_groups)
+
+    if len(result) == 2.0
+        // Group 0: 10+30+50 = 90
+        // Group 1: 20+40 = 60
+        print("  PASS: group_by_sum runs")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: group_by_sum wrong length")
+        let fail_count = fail_count + 1.0
+
+fn test_group_by_count()
+    print("Testing gpu_group_by_count...")
+
+    let keys = [0.0, 1.0, 0.0, 1.0, 0.0, 2.0]
+    let num_groups = 3.0
+
+    let result = gpu_group_by_count(keys, num_groups)
+
+    if len(result) == 3.0
+        print("  PASS: group_by_count runs")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: group_by_count")
+        let fail_count = fail_count + 1.0
+
+fn test_group_by_mean()
+    print("Testing gpu_group_by_mean...")
+
+    let values = [10.0, 20.0, 30.0, 40.0]
+    let keys = [0.0, 1.0, 0.0, 1.0]
+    let num_groups = 2.0
+
+    let result = gpu_group_by_mean(values, keys, num_groups)
+
+    if len(result) == 2.0
+        // Group 0: (10+30)/2 = 20
+        // Group 1: (20+40)/2 = 30
+        print("  PASS: group_by_mean runs")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: group_by_mean")
+        let fail_count = fail_count + 1.0
+
+fn test_binned_statistics()
+    print("Testing gpu_binned_statistics...")
+
+    let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let bins = [0.0, 3.0, 6.0, 10.0]
+
+    let counts = gpu_binned_statistics(data, bins, "count")
+
+    if len(counts) > 0.0
+        print("  PASS: binned_statistics runs")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: binned_statistics")
+        let fail_count = fail_count + 1.0
+
+fn test_rolling_sum()
+    print("Testing gpu_rolling_sum...")
+
+    let arr = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let window = 3.0
+
+    let result = gpu_rolling_sum(arr, window)
+
+    if len(result) > 0.0
+        // First window: 1+2+3 = 6
+        print("  PASS: rolling_sum runs")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: rolling_sum")
+        let fail_count = fail_count + 1.0
+
+fn test_rolling_mean()
+    print("Testing gpu_rolling_mean...")
+
+    let arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let window = 3.0
+
+    let result = gpu_rolling_mean(arr, window)
+
+    if len(result) > 0.0
+        print("  PASS: rolling_mean runs")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: rolling_mean")
+        let fail_count = fail_count + 1.0
+
+fn test_rolling_min()
+    print("Testing gpu_rolling_min...")
+
+    let arr = [5.0, 2.0, 8.0, 1.0, 9.0, 3.0]
+    let window = 3.0
+
+    let result = gpu_rolling_min(arr, window)
+
+    if len(result) > 0.0
+        print("  PASS: rolling_min runs")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: rolling_min")
+        let fail_count = fail_count + 1.0
+
+fn test_rolling_max()
+    print("Testing gpu_rolling_max...")
+
+    let arr = [5.0, 2.0, 8.0, 1.0, 9.0, 3.0]
+    let window = 3.0
+
+    let result = gpu_rolling_max(arr, window)
+
+    if len(result) > 0.0
+        print("  PASS: rolling_max runs")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: rolling_max")
+        let fail_count = fail_count + 1.0
+
+fn test_quantile_binned()
+    print("Testing gpu_quantile_binned...")
+
+    let arr = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+    let q = 0.5  // Median
+    let num_bins = 10.0
+
+    let result = gpu_quantile_binned(arr, q, num_bins)
+
+    // Should be around 5.5
+    if abs(result - 5.5) < 2.0
+        print("  PASS: quantile_binned approximate")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: quantile_binned: {result}")
+        let fail_count = fail_count + 1.0
+
+// Run tests
+print("=== Data Aggregation Tests ===")
+test_group_by_sum()
+test_group_by_count()
+test_group_by_mean()
+test_binned_statistics()
+test_rolling_sum()
+test_rolling_mean()
+test_rolling_min()
+test_rolling_max()
+test_quantile_binned()
+
+print("")
+print("Aggregate tests: {pass_count} passed, {fail_count} failed")

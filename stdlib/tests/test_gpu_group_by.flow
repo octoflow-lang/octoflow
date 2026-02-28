@@ -1,0 +1,171 @@
+// test_gpu_group_by.flow — GPU GROUP BY unit test
+// Query plan as dispatch fan-out. 24 dispatches, 1 submit, 0 CPU row iteration.
+//
+// Data: 256 employees, 4 departments
+//   dept[i] = floor(i / 64), salary[i] = i + 1
+//
+// Query: SELECT dept, SUM(salary), COUNT(*) FROM employees GROUP BY dept
+//
+// Expected (bit-exact in f32):
+//   dept 0: SUM=2080,  COUNT=64  (salaries 1-64)
+//   dept 1: SUM=6176,  COUNT=64  (salaries 65-128)
+//   dept 2: SUM=10272, COUNT=64  (salaries 129-192)
+//   dept 3: SUM=14368, COUNT=64  (salaries 193-256)
+//
+// Run: octoflow run stdlib/tests/test_gpu_group_by.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+let N = 256.0
+let K = 4.0
+let GROUP_SIZE = N / K
+let BUF_BYTES = N * 4.0
+
+rt_init()
+
+// Load kernels
+let pipe_eq = rt_load_pipeline("tests/gpu_shaders/17_eq_scalar.spv", 2.0, 4.0)
+let pipe_mul = rt_load_pipeline("tests/gpu_shaders/18_mul_ab.spv", 3.0, 0.0)
+let pipe_reduce = rt_load_pipeline("stdlib/loom/kernels/reduce_sum.spv", 2.0, 0.0)
+let pipe_store = rt_load_pipeline("tests/gpu_shaders/19_store_at.spv", 2.0, 4.0)
+
+// Create buffers
+let buf_dept = rt_create_buffer(BUF_BYTES)
+let buf_salary = rt_create_buffer(BUF_BYTES)
+let buf_mask = rt_create_buffer(BUF_BYTES)
+let buf_masked = rt_create_buffer(BUF_BYTES)
+let buf_temp = rt_create_buffer(1024.0)
+let buf_sums = rt_create_buffer(1024.0)
+let buf_counts = rt_create_buffer(1024.0)
+
+// Upload department and salary data
+let mut depts = []
+let mut salaries = []
+let mut i = 0.0
+while i < N
+  push(depts, floor(i / GROUP_SIZE))
+  push(salaries, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(buf_dept, depts)
+rt_upload(buf_salary, salaries)
+
+// Zero working buffers
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_mask, zeros)
+rt_upload(buf_masked, zeros)
+rt_upload(buf_temp, zeros)
+rt_upload(buf_sums, zeros)
+rt_upload(buf_counts, zeros)
+
+// ── GROUP BY dispatch chain ────────────────────────────────────────
+// 4 groups × 6 dispatches = 24 dispatches, 1 submit, 0 CPU row iteration
+rt_chain_begin(24.0, 3.0)
+
+let mut g = 0.0
+while g < K
+  // Stage 1: filter — dept == g → boolean mask
+  let mut pc_g = [g]
+  rt_chain_push_constants(pipe_eq, pc_g)
+  let mut b1 = [buf_dept, buf_mask]
+  rt_chain_dispatch(pipe_eq, b1, 1.0)
+
+  // Stage 2: mask multiply — salary × mask → masked_salary
+  let mut b2 = [buf_salary, buf_mask, buf_masked]
+  rt_chain_dispatch(pipe_mul, b2, 1.0)
+
+  // Stage 3: reduce — sum(masked_salary) → temp[0]
+  let mut b3 = [buf_masked, buf_temp]
+  rt_chain_dispatch(pipe_reduce, b3, 1.0)
+
+  // Stage 4: scatter — temp[0] → sums[g]
+  let mut pc_off = [g]
+  rt_chain_push_constants(pipe_store, pc_off)
+  let mut b4 = [buf_temp, buf_sums]
+  rt_chain_dispatch(pipe_store, b4, 1.0)
+
+  // Stage 5: reduce — sum(mask) → temp[0] (= count)
+  let mut b5 = [buf_mask, buf_temp]
+  rt_chain_dispatch(pipe_reduce, b5, 1.0)
+
+  // Stage 6: scatter — temp[0] → counts[g]
+  rt_chain_push_constants(pipe_store, pc_off)
+  let mut b6 = [buf_temp, buf_counts]
+  rt_chain_dispatch(pipe_store, b6, 1.0)
+
+  g = g + 1.0
+end
+
+rt_chain_end()
+rt_chain_submit_wait()
+
+// ── Download and verify ────────────────────────────────────────────
+rt_download(buf_sums, K)
+let sum_0 = rt_result[0]
+let sum_1 = rt_result[1]
+let sum_2 = rt_result[2]
+let sum_3 = rt_result[3]
+
+rt_download(buf_counts, K)
+let count_0 = rt_result[0]
+let count_1 = rt_result[1]
+let count_2 = rt_result[2]
+let count_3 = rt_result[3]
+
+// Expected: dept d gets salaries (d*64+1)..(d*64+64)
+// SUM_d = (first+last)*64/2
+let exp_sum_0 = 2080.0
+let exp_sum_1 = 6176.0
+let exp_sum_2 = 10272.0
+let exp_sum_3 = 14368.0
+
+print("GROUP BY results:")
+print("  dept 0: SUM={sum_0} COUNT={count_0}  (expected {exp_sum_0}, 64)")
+print("  dept 1: SUM={sum_1} COUNT={count_1}  (expected {exp_sum_1}, 64)")
+print("  dept 2: SUM={sum_2} COUNT={count_2}  (expected {exp_sum_2}, 64)")
+print("  dept 3: SUM={sum_3} COUNT={count_3}  (expected {exp_sum_3}, 64)")
+
+let mut pass = 1.0
+if sum_0 != exp_sum_0
+  print("FAIL: dept 0 SUM")
+  pass = 0.0
+end
+if sum_1 != exp_sum_1
+  print("FAIL: dept 1 SUM")
+  pass = 0.0
+end
+if sum_2 != exp_sum_2
+  print("FAIL: dept 2 SUM")
+  pass = 0.0
+end
+if sum_3 != exp_sum_3
+  print("FAIL: dept 3 SUM")
+  pass = 0.0
+end
+if count_0 != 64.0
+  print("FAIL: dept 0 COUNT")
+  pass = 0.0
+end
+if count_1 != 64.0
+  print("FAIL: dept 1 COUNT")
+  pass = 0.0
+end
+if count_2 != 64.0
+  print("FAIL: dept 2 COUNT")
+  pass = 0.0
+end
+if count_3 != 64.0
+  print("FAIL: dept 3 COUNT")
+  pass = 0.0
+end
+
+if pass == 1.0
+  print("PASS: gpu_group_by 24 dispatches, 1 submit, 0 CPU row iterations, BIT EXACT")
+end
+
+rt_cleanup()

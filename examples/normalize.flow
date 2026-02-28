@@ -1,0 +1,6 @@
+stream data = tap("test_data/input_10.csv")
+let mn = min(data)
+let mx = max(data)
+let range = mx - mn
+stream result = data |> subtract(mn) |> divide(range)
+emit(result, "test_data/output_normalize.csv")

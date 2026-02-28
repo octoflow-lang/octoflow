@@ -1,4 +1,7 @@
 // stdlib/encoding/hex.flow — Pure .flow hex encoder/decoder (byte-array level)
+//
+// Functions: hex_nibble, hex_val, bytes_to_hex, hex_to_bytes
+//
 // Lowercase hex output. All byte values are f32 floats in range 0-255.
 // Note: OctoFlow has built-in hex_encode/hex_decode for string-to-string.
 // These functions work at byte-array level: bytes_to_hex / hex_to_bytes.

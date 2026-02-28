@@ -1,0 +1,156 @@
+// test_descriptive.flow — Tests for stdlib/stats/descriptive.flow
+// Functions tested: mean, median, stddev, percentile, skewness, mode
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from stats/descriptive.flow --
+fn skewness(arr)
+  let n = len(arr)
+  let m = mean(arr)
+  let sd = stddev(arr)
+  if sd == 0.0
+    return 0.0
+  end
+  let mut s = 0.0
+  for x in arr
+    let d = (x - m) / sd
+    s = s + d * d * d
+  end
+  return s * n / ((n - 1.0) * (n - 2.0))
+end
+
+fn percentile(arr, p)
+  let sorted = sort_array(arr)
+  let n = len(sorted)
+  let mut idx = floor(n * p / 100.0)
+  if idx >= n
+    idx = n - 1.0
+  end
+  return sorted[idx]
+end
+
+fn mode(arr)
+  let mut counts = map()
+  let mut best = arr[0]
+  let mut best_count = 0.0
+  for x in arr
+    let key = str(x)
+    let mut c = 1.0
+    if map_has(counts, key)
+      c = float(map_get(counts, key)) + 1.0
+    end
+    map_set(counts, key, str(c))
+    if c > best_count
+      best_count = c
+      best = x
+    end
+  end
+  return best
+end
+
+// -- Tests --
+
+print("=== test_descriptive ===")
+
+let data = [1.0, 2.0, 3.0, 4.0, 5.0]
+
+// Test mean (builtin)
+let m = mean(data)
+let diff_m = abs(m - 3.0)
+if diff_m < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: mean expected 3.0 got {m}")
+  fail = fail + 1.0
+end
+
+// Test median (builtin)
+let med = median(data)
+let diff_med = abs(med - 3.0)
+if diff_med < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: median expected 3.0 got {med}")
+  fail = fail + 1.0
+end
+
+// Test median even count
+let data_even = [1.0, 2.0, 3.0, 4.0]
+let med_even = median(data_even)
+let diff_me = abs(med_even - 2.5)
+if diff_me < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: median even expected 2.5 got {med_even}")
+  fail = fail + 1.0
+end
+
+// Test stddev (builtin)
+let sd = stddev(data)
+let diff_sd = abs(sd - 1.5811)
+if diff_sd < 0.01
+  pass = pass + 1.0
+else
+  print("  FAIL: stddev expected ~1.5811 got {sd}")
+  fail = fail + 1.0
+end
+
+// Test variance (builtin)
+let v = variance(data)
+let diff_v = abs(v - 2.5)
+if diff_v < 0.01
+  pass = pass + 1.0
+else
+  print("  FAIL: variance expected 2.5 got {v}")
+  fail = fail + 1.0
+end
+
+// Test percentile
+let p25 = percentile(data, 25.0)
+if p25 == 2.0
+  pass = pass + 1.0
+else
+  print("  FAIL: percentile(25) expected 2.0 got {p25}")
+  fail = fail + 1.0
+end
+
+let p75 = percentile(data, 75.0)
+if p75 == 4.0
+  pass = pass + 1.0
+else
+  print("  FAIL: percentile(75) expected 4.0 got {p75}")
+  fail = fail + 1.0
+end
+
+// Test skewness (symmetric data => skewness ~ 0)
+let sk = skewness(data)
+let diff_sk = abs(sk)
+if diff_sk < 0.01
+  pass = pass + 1.0
+else
+  print("  FAIL: skewness expected ~0 got {sk}")
+  fail = fail + 1.0
+end
+
+// Test mode
+let mode_data = [1.0, 2.0, 2.0, 3.0, 2.0, 4.0]
+let mo = mode(mode_data)
+let diff_mo = abs(mo - 2.0)
+if diff_mo < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: mode expected 2.0 got {mo}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_descriptive ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

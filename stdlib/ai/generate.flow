@@ -1,0 +1,399 @@
+// stdlib/ai/generate.flow — Autoregressive Token Generation with KV Cache
+//
+// Full transformer inference with proper multi-head attention and KV cache.
+// Each token attends to ALL previous tokens via cached K,V values.
+// Includes RoPE (Rotary Position Embedding) for positional information.
+//
+// Usage:
+//   octoflow run stdlib/ai/generate.flow --allow-read --allow-ffi
+//
+// Architecture:
+//   - gguf_matvec: fused tensor-cache + GPU matvec dispatch (dequant once, GPU always)
+//   - gguf_load_tensor for bias/norm weights (small, F32, tensor-cached)
+//   - CPU for RMSNorm, SiLU, attention scores, softmax, RoPE
+//   - Flat-array KV cache: k_cache/v_cache[layer * max_seq * kv_dim + pos * kv_dim + d]
+
+use "../formats/gguf"
+
+// ── Configuration ───────────────────────────────────────────────────
+let max_tokens = 50.0
+let max_seq = 64.0
+let greedy = 1.0
+let temperature = 0.8
+let top_k = 40.0
+
+// ── CPU RMSNorm ─────────────────────────────────────────────────────
+fn rmsnorm_cpu(hidden, weight, n, eps)
+  let mut sum_sq = 0.0
+  let mut i = 0.0
+  while i < n
+    let val = hidden[int(i)]
+    sum_sq = sum_sq + val * val
+    i = i + 1.0
+  end
+  let rms = sqrt(sum_sq / n + eps)
+  let mut _rms_out = []
+  let mut j = 0.0
+  while j < n
+    push(_rms_out, hidden[int(j)] / rms * weight[int(j)])
+    j = j + 1.0
+  end
+  return _rms_out
+end
+
+// ── CPU vector add (for bias addition) ────────────────────────────────
+fn vec_add(a, b, n)
+  let mut _va_out = []
+  let mut i = 0.0
+  while i < n
+    push(_va_out, a[int(i)] + b[int(i)])
+    i = i + 1.0
+  end
+  return _va_out
+end
+
+// ── BPE token decode (GPT-2 byte encoding → text) ────────────────────
+fn bpe_decode(text)
+  let n = len(text)
+  let mut result = " "
+  let mut i = 0.0
+  while i < n
+    let c = char_at(text, i)
+    let o = ord(c)
+    if o < 256.0
+      result = result + c
+    else
+      // GPT-2 byte encoding: bytes 0-32 → codepoints 256-288
+      if o <= 288.0
+        let byte_val = o - 256.0
+        result = result + chr(byte_val)
+      elif o == 289.0
+        result = result + chr(127.0)
+      elif o <= 322.0
+        let byte_val = o - 290.0 + 128.0
+        result = result + chr(byte_val)
+      elif o == 323.0
+        result = result + chr(173.0)
+      else
+        result = result + c
+      end
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+// ── CPU SiLU activation ─────────────────────────────────────────────
+fn silu_cpu(arr, n)
+  let mut _silu_out = []
+  let mut i = 0.0
+  while i < n
+    let x = arr[int(i)]
+    push(_silu_out, x / (1.0 + exp(x * -1.0)))
+    i = i + 1.0
+  end
+  return _silu_out
+end
+
+// ── CPU RoPE (Rotary Position Embedding) ─────────────────────────────
+// Applies rotation to pairs of elements based on position.
+// vec: flat array of size n_heads * head_dim
+// pos: integer position in sequence
+// head_dim: dimension per head
+// n_heads: number of heads in this vector
+// rope_theta: base frequency (default 10000.0)
+fn rope_cpu(vec, pos, head_dim, n_heads, rope_theta)
+  let mut _rope_out = []
+  let mut h = 0.0
+  while h < n_heads
+    let base = h * head_dim
+    let mut i = 0.0
+    while i < head_dim
+      let pair_idx = floor(i / 2.0)
+      let theta = pos / pow(rope_theta, 2.0 * pair_idx / head_dim)
+      let cos_t = cos(theta)
+      let sin_t = sin(theta)
+      let even = i - floor(i / 2.0) * 2.0
+      if even == 0.0
+        // Even index: x*cos - y*sin
+        let x = vec[int(base + i)]
+        let y = vec[int(base + i + 1.0)]
+        push(_rope_out, x * cos_t - y * sin_t)
+      else
+        // Odd index: x*sin + y*cos
+        let x = vec[int(base + i - 1.0)]
+        let y = vec[int(base + i)]
+        push(_rope_out, x * sin_t + y * cos_t)
+      end
+      i = i + 1.0
+    end
+    h = h + 1.0
+  end
+  return _rope_out
+end
+
+// ══════════════════════════════════════════════════════════════════════
+// MAIN
+// ══════════════════════════════════════════════════════════════════════
+
+let model_path = "G:/ollama_models/blobs/sha256-29d8c98fa6b098e200069bfb88b9508dc3e85586d20cba59f8dda9a808165104"
+
+// ── Prompt ─────────────────────────────────────────────────────────────
+let prompt = "Write a hello world in Python"
+// Qwen2.5 special token IDs
+let im_start = 151644.0
+let im_end = 151645.0
+let nl_id = 198.0
+
+print("=== OctoFlow Text Generation (KV Cache + BPE) ===")
+print("Loading model into memory...")
+
+// Cache entire GGUF file in memory — eliminates per-tensor disk I/O
+let t_cache_0 = time()
+let cached_size = gguf_cache_file(model_path)
+let t_cache_1 = time()
+let cache_ms = (t_cache_1 - t_cache_0) * 1000.0
+let cache_mb = cached_size / 1048576.0
+print("  Cached {cache_mb} MB in {cache_ms} ms")
+
+let model = gguf_load_from_file(model_path)
+
+let n_embd = map_get(model, "n_embd")
+let n_head = map_get(model, "n_head")
+let mut n_kv_head = map_get(model, "n_kv_head")
+let n_ff = map_get(model, "n_ff")
+let n_layer = map_get(model, "n_layer")
+let vocab_size = map_get(model, "vocab_size")
+let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+let rope_theta = gguf_meta_default(model, "rope.freq_base", 10000.0)
+
+if n_kv_head == 0.0
+  n_kv_head = n_head
+end
+
+// eps and rope_theta are read from kv.* keys by gguf_infer_layer in Rust
+
+let head_dim = n_embd / n_head
+let kv_dim = n_kv_head * head_dim
+let heads_per_kv = n_head / n_kv_head
+let inv_sqrt_dh = 1.0 / sqrt(head_dim)
+
+let arch = map_get(model, "arch")
+print("  {arch} — {n_layer} layers, {n_embd} dim, {vocab_size} vocab")
+print("  head_dim={head_dim} n_kv_head={n_kv_head} heads_per_kv={heads_per_kv}")
+print("  rope_theta={rope_theta}")
+
+// Load vocabulary
+print("Loading vocabulary...")
+let vocab = gguf_load_vocab(model_path)
+
+// Build chat template: <|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n
+print("Tokenizing prompt (with chat template)...")
+let msg_toks = gguf_tokenize(model_path, prompt)
+let mut prompt_ids = []
+// <|im_start|>user\n
+push(prompt_ids, im_start)
+push(prompt_ids, 872.0)
+push(prompt_ids, nl_id)
+// message tokens
+let mut mi = 0.0
+while mi < len(msg_toks)
+  push(prompt_ids, msg_toks[int(mi)])
+  mi = mi + 1.0
+end
+// <|im_end|>\n<|im_start|>assistant\n
+push(prompt_ids, im_end)
+push(prompt_ids, nl_id)
+push(prompt_ids, im_start)
+push(prompt_ids, 77091.0)
+push(prompt_ids, nl_id)
+
+let n_prompt = len(prompt_ids)
+print("  Prompt: {prompt}")
+print("  Template tokens: {n_prompt}")
+let mut pi = 0.0
+while pi < n_prompt
+  let ptid = prompt_ids[int(pi)]
+  let pttext = vocab[int(ptid)]
+  print("    [{pi}] id={ptid} text={pttext}")
+  pi = pi + 1.0
+end
+
+// Load embedding table + output norm once
+print("Loading embedding table + output norm...")
+let actual_vocab = map_get(model, "t.token_embd.weight.dim1")
+let out_norm_w = gguf_load_tensor(model_path, model, "output_norm.weight")
+
+// Get EOS token
+let mut eos_id = 2.0
+if map_has(model, "kv.tokenizer.ggml.eos_token_id")
+  eos_id = map_get(model, "kv.tokenizer.ggml.eos_token_id")
+end
+
+// KV cache is managed in Rust (gguf_infer_layer auto-initializes on first call)
+print("KV cache: Rust-managed (auto-initialized)")
+
+// Total positions: prefill (n_prompt) + generate (max_tokens)
+let total_steps = n_prompt + max_tokens
+print(" ")
+print("--- Prefilling {n_prompt} prompt tokens + generating {max_tokens} tokens ---")
+
+// ── Main loop: prefill + generation ──────────────────────────────────
+// Positions 0..n_prompt-2: prefill (use next prompt token, skip logits)
+// Position n_prompt-1 and beyond: compute logits + sample
+let mut current_token = prompt_ids[0]
+let mut generated_text = " "
+let mut seq_pos = 0.0
+let mut gen_count = 0.0
+let mut done = 0.0
+
+while seq_pos < total_steps
+  if done == 1.0
+    seq_pos = total_steps
+  end
+  if seq_pos >= max_seq
+    print("  (max sequence length reached)")
+    seq_pos = total_steps
+  end
+  if seq_pos < total_steps
+
+  // 1. Load embedding for current token
+  let tok_emb = gguf_load_tensor(model_path, model, "token_embd.weight", current_token)
+  let mut hidden = []
+  let mut ei = 0.0
+  while ei < n_embd
+    push(hidden, tok_emb[int(ei)])
+    ei = ei + 1.0
+  end
+
+  // 2. Run transformer layers — all in Rust (zero .flow interpreter overhead)
+  let mut layer_idx = 0.0
+  while layer_idx < n_layer
+    let layer_out = gguf_infer_layer(model_path, model, hidden, layer_idx, seq_pos, max_seq)
+    let mut hi = 0.0
+    while hi < n_embd
+      hidden[int(hi)] = layer_out[int(hi)]
+      hi = hi + 1.0
+    end
+    layer_idx = layer_idx + 1.0
+  end
+
+  // 3. Post-transformer: prefill vs generation
+  let prefill_end = n_prompt - 1.0
+  if seq_pos < prefill_end
+    // Prefill: advance to next prompt token (skip logits)
+    let npos = seq_pos + 1.0
+    current_token = prompt_ids[int(npos)]
+    let ptext = vocab[int(current_token)]
+    print("  [prefill {npos}/{n_prompt}] token={current_token} text={ptext}")
+  else
+    // Last prefill position or generation: compute logits + select
+    let normed_out = rmsnorm_cpu(hidden, out_norm_w, n_embd, eps)
+    let logits = gguf_matvec(model_path, model, "token_embd.weight", normed_out)
+
+    let mut sampled_idx = 0.0
+    let mut sampled_logit = -999999.0
+
+    if greedy == 1.0
+      // Greedy: argmax over logits
+      let mut v = 0.0
+      while v < vocab_size
+        let lv = logits[int(v)]
+        if lv > sampled_logit
+          sampled_logit = lv
+          sampled_idx = v
+        end
+        v = v + 1.0
+      end
+    else
+      // Top-K sampling with temperature
+      let mut top_vals = []
+      let mut top_ids = []
+      let mut tk = 0.0
+      while tk < top_k
+        push(top_vals, -999999.0)
+        push(top_ids, 0.0)
+        tk = tk + 1.0
+      end
+      let mut v = 0.0
+      while v < vocab_size
+        let lv = logits[int(v)]
+        if lv > top_vals[int(top_k - 1.0)]
+          let mut ins_pos = top_k - 1.0
+          let mut scan = top_k - 2.0
+          while scan >= 0.0
+            if lv > top_vals[int(scan)]
+              ins_pos = scan
+            end
+            scan = scan - 1.0
+          end
+          let mut sh = top_k - 1.0
+          while sh > ins_pos
+            let prev_sh = sh - 1.0
+            top_vals[int(sh)] = top_vals[int(prev_sh)]
+            top_ids[int(sh)] = top_ids[int(prev_sh)]
+            sh = sh - 1.0
+          end
+          top_vals[int(ins_pos)] = lv
+          top_ids[int(ins_pos)] = v
+        end
+        v = v + 1.0
+      end
+      let mut samp_exp_sum = 0.0
+      let mut probs = []
+      let mut spi = 0.0
+      while spi < top_k
+        let e = exp((top_vals[int(spi)] - top_vals[0]) / temperature)
+        push(probs, e)
+        samp_exp_sum = samp_exp_sum + e
+        spi = spi + 1.0
+      end
+      let r = random() * samp_exp_sum
+      let mut cumsum = 0.0
+      sampled_idx = top_ids[0]
+      sampled_logit = top_vals[0]
+      let mut ssi = 0.0
+      while ssi < top_k
+        cumsum = cumsum + probs[int(ssi)]
+        if cumsum >= r
+          sampled_idx = top_ids[int(ssi)]
+          sampled_logit = top_vals[int(ssi)]
+          ssi = top_k
+        end
+        ssi = ssi + 1.0
+      end
+    end
+
+    // Decode token
+    let token_text = vocab[int(sampled_idx)]
+    generated_text = generated_text + token_text
+    gen_count = gen_count + 1.0
+    print("  [gen {gen_count}] pos={seq_pos} token={sampled_idx} logit={sampled_logit} text={token_text}")
+
+    // Check for EOS/im_end or max generation
+    if sampled_idx == eos_id
+      print("  (EOS token — stopping)")
+      done = 1.0
+    end
+    if sampled_idx == im_end
+      print("  (im_end token — stopping)")
+      done = 1.0
+    end
+    if gen_count >= max_tokens
+      done = 1.0
+    end
+
+    current_token = sampled_idx
+  end
+
+  end
+  seq_pos = seq_pos + 1.0
+end
+
+print("---")
+print("Prompt: {prompt}")
+print("Raw: {generated_text}")
+let decoded = bpe_decode(generated_text)
+print(" ")
+print("=== Output ===")
+print("{decoded}")

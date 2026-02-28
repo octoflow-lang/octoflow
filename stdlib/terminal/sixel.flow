@@ -1,0 +1,129 @@
+// stdlib/terminal/sixel.flow — Pure .flow Sixel graphics renderer
+// Sixel: each character encodes 6 vertical pixels for one color
+// Uses 216-color palette (6x6x6 RGB cube)
+//
+// Protocol: DCS q <palette> <data> ST
+// DCS = ESC P, ST = ESC \
+// Palette: #N;2;R;G;B (R,G,B as 0-100 percentages)
+// Data: #N selects color, then chars 63-126 encode 6-bit column patterns
+// '-' = newline (next 6-row band), '$' = carriage return (same band)
+
+fn _sx_n2s(n)
+  if n < 10.0
+    return chr(48.0 + n)
+  end
+  let d = floor(n / 10.0)
+  let r = n - d * 10.0
+  if d < 10.0
+    return chr(48.0 + d) + chr(48.0 + r)
+  end
+  let d2 = floor(d / 10.0)
+  let r2 = d - d2 * 10.0
+  return chr(48.0 + d2) + chr(48.0 + r2) + chr(48.0 + r)
+end
+
+// Quantize 0-255 to 0-5 (6 levels)
+fn _sx_q6(v)
+  let q = int(floor(v / 42.5))
+  if q > 5.0
+    return 5.0
+  end
+  return q
+end
+
+fn sixel_render(w, h, r, g, b)
+  let esc = chr(27)
+  let st = esc + chr(92)
+  let iw = int(w)
+  let ih = int(h)
+
+  // Start DCS sequence: ESC P 0;0;0 q
+  // "2" aspect ratio sets 1:1 pixels
+  let mut out = esc + "P0;0;0q" + chr(34) + "1;1;" + to_str(iw) + ";" + to_str(ih)
+
+  // Define 216-color palette (#idx;2;R%;G%;B%)
+  for ri in range(0, 6)
+    for gi in range(0, 6)
+      for bi in range(0, 6)
+        let idx = int(ri * 36.0 + gi * 6.0 + bi)
+        let rp = int(ri * 20.0)
+        let gp = int(gi * 20.0)
+        let bp = int(bi * 20.0)
+        out = out + "#" + _sx_n2s(idx) + ";2;" + _sx_n2s(rp) + ";" + _sx_n2s(gp) + ";" + _sx_n2s(bp)
+      end
+    end
+  end
+
+  // Quantize all pixels to palette indices
+  let total = iw * ih
+  let mut qidx = []
+  for i in range(0, total)
+    let ri = _sx_q6(r[i])
+    let gi = _sx_q6(g[i])
+    let bi = _sx_q6(b[i])
+    push(qidx, ri * 36.0 + gi * 6.0 + bi)
+  end
+
+  // Encode sixel data in 6-row bands
+  let bands = int(ceil(ih / 6.0))
+  for band in range(0, bands)
+    let y0 = int(band * 6.0)
+
+    // For each color used in this band, output its pattern
+    // Track which colors appear in this band
+    let mut used = []
+    for ci in range(0, 216)
+      let mut found = 0.0
+      for dy in range(0, 6)
+        let y = y0 + int(dy)
+        if y < ih
+          if found == 0.0
+            for x in range(0, iw)
+              if qidx[int(y * w + x)] == ci
+                found = 1.0
+              end
+            end
+          end
+        end
+      end
+      if found > 0.0
+        push(used, ci)
+      end
+    end
+
+    // For each used color, emit its sixel pattern row
+    for ui in range(0, int(len(used)))
+      let ci = used[ui]
+      out = out + "#" + _sx_n2s(int(ci))
+
+      for x in range(0, iw)
+        let mut bits = 0.0
+        for dy in range(0, 6)
+          let y = y0 + int(dy)
+          if y < ih
+            if qidx[int(y * w + x)] == ci
+              bits = bit_or(bits, bit_shl(1, int(dy)))
+            end
+          end
+        end
+        out = out + chr(63.0 + bits)
+      end
+
+      // Carriage return (same band) for next color, or newline for next band
+      if ui < int(len(used)) - 1.0
+        out = out + "$"
+      end
+    end
+
+    // Next band
+    if band < bands - 1.0
+      out = out + "-"
+    end
+  end
+
+  // End DCS
+  out = out + st
+  print_raw(out)
+  print("")
+  return 0.0
+end

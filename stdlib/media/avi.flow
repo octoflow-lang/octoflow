@@ -1,4 +1,7 @@
 // avi.flow — Pure OctoFlow AVI/RIFF container parser
+//
+// Functions: avi_u16le, avi_u32le, avi_fourcc, avi_pad, avi_parse, avi_get_frame
+//
 // Parses AVI files to extract video metadata and frame locations.
 // Frame data is raw bytes (typically MJPEG) — decoding is separate.
 //

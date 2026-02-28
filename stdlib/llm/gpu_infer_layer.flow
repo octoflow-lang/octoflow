@@ -1,0 +1,228 @@
+// stdlib/llm/gpu_infer_layer.flow — .flow-Level Transformer Layer
+//
+// Reimplements gguf_infer_layer in pure .flow code.
+// GPU matvec via gguf_matvec, CPU for norm/attention/activation.
+// KV cache managed in .flow arrays (passed by reference, copy-back semantics).
+//
+// This is the foundation for full GPU VM inference — individual operations
+// can be swapped from CPU to GPU dispatch as kernels mature.
+//
+// Architecture:
+//   GPU: gguf_matvec (weight dequant + GPU matvec) for 7 projections
+//   CPU: rmsnorm, rope, silu, attention, vec_add (from ops.flow)
+//
+// KV cache layout: flat array, k_cache[layer * max_seq * kv_dim + pos * kv_dim + d]
+//
+// NOTE: All array-returning functions must use 'let' (LetDecl), NOT assignment.
+// OctoFlow's RETURNED_ARRAY is only checked at LetDecl sites.
+
+use "gguf"
+use "ops"
+
+fn flow_infer_layer(model_path, model, hidden, layer_idx, pos, max_seq, k_cache, v_cache)
+  let n_embd = map_get(model, "n_embd")
+  let n_head = map_get(model, "n_head")
+  let mut n_kv_head = map_get(model, "n_kv_head")
+  let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+  let rope_theta = gguf_meta_default(model, "rope.freq_base", 10000.0)
+
+  if n_kv_head == 0.0
+    n_kv_head = n_head
+  end
+
+  let head_dim = n_embd / n_head
+  let kv_dim = n_kv_head * head_dim
+  let heads_per_kv = n_head / n_kv_head
+  let inv_sqrt_dh = 1.0 / sqrt(head_dim)
+
+  let li = int(layer_idx)
+  let lis = str(li)
+
+  // Build tensor names
+  let tn_an = "blk." + lis + ".attn_norm.weight"
+  let tn_q = "blk." + lis + ".attn_q.weight"
+  let tn_k = "blk." + lis + ".attn_k.weight"
+  let tn_v = "blk." + lis + ".attn_v.weight"
+  let tn_o = "blk." + lis + ".attn_output.weight"
+  let tn_fn = "blk." + lis + ".ffn_norm.weight"
+  let tn_g = "blk." + lis + ".ffn_gate.weight"
+  let tn_u = "blk." + lis + ".ffn_up.weight"
+  let tn_d = "blk." + lis + ".ffn_down.weight"
+
+  // Check for attention biases (Qwen2/2.5)
+  let has_qbias = gguf_has_tensor(model, "blk.0.attn_q.bias")
+
+  // ── 1. Attention sublayer ──────────────────────────────────────
+
+  // RMSNorm on hidden state
+  let attn_norm_w = gguf_load_tensor(model_path, model, tn_an)
+  let normed = rmsnorm_cpu(hidden, attn_norm_w, n_embd, eps)
+
+  // Q/K/V projections (GPU matvec via Rust builtin)
+  let q_raw = gguf_matvec(model_path, model, tn_q, normed)
+  let k_raw = gguf_matvec(model_path, model, tn_k, normed)
+  let v_raw = gguf_matvec(model_path, model, tn_v, normed)
+
+  // Materialize Q/K/V from GpuFloats to CPU arrays
+  // (needed for .flow-level operations: bias add, RoPE, attention)
+  let mut q = []
+  let mut mq = 0.0
+  while mq < n_embd
+    push(q, q_raw[int(mq)])
+    mq = mq + 1.0
+  end
+
+  let mut k = []
+  let mut mk = 0.0
+  while mk < kv_dim
+    push(k, k_raw[int(mk)])
+    mk = mk + 1.0
+  end
+
+  let mut v = []
+  let mut mv = 0.0
+  while mv < kv_dim
+    push(v, v_raw[int(mv)])
+    mv = mv + 1.0
+  end
+
+  // Add biases if present (Qwen2/2.5)
+  if has_qbias == 1.0
+    let tn_qb = "blk." + lis + ".attn_q.bias"
+    let tn_kb = "blk." + lis + ".attn_k.bias"
+    let tn_vb = "blk." + lis + ".attn_v.bias"
+    let qbias = gguf_load_tensor(model_path, model, tn_qb)
+    let kbias = gguf_load_tensor(model_path, model, tn_kb)
+    let vbias = gguf_load_tensor(model_path, model, tn_vb)
+
+    let mut bi = 0.0
+    while bi < n_embd
+      q[int(bi)] = q[int(bi)] + qbias[int(bi)]
+      bi = bi + 1.0
+    end
+    bi = 0.0
+    while bi < kv_dim
+      k[int(bi)] = k[int(bi)] + kbias[int(bi)]
+      bi = bi + 1.0
+    end
+    bi = 0.0
+    while bi < kv_dim
+      v[int(bi)] = v[int(bi)] + vbias[int(bi)]
+      bi = bi + 1.0
+    end
+  end
+
+  // RoPE on Q and K — use 'let' for array-returning functions
+  let q_r = rope_cpu(q, pos, head_dim, n_head, rope_theta)
+  let k_r = rope_cpu(k, pos, head_dim, n_kv_head, rope_theta)
+
+  // ── KV cache write ─────────────────────────────────────────────
+  let cache_base = layer_idx * max_seq * kv_dim
+  let write_start = cache_base + pos * kv_dim
+  let mut di = 0.0
+  while di < kv_dim
+    let idx = int(write_start + di)
+    k_cache[idx] = k_r[int(di)]
+    v_cache[idx] = v[int(di)]
+    di = di + 1.0
+  end
+
+  // ── Multi-head attention with GQA ──────────────────────────────
+  let seq_len = pos + 1.0
+  let mut attn_out = []
+  let mut h = 0.0
+  while h < n_head
+    let kvh = floor(h / heads_per_kv)
+    let q_start = h * head_dim
+
+    // Compute attention scores for all past positions
+    let mut scores = []
+    let mut max_score = -99999.0
+    let mut t = 0.0
+    while t < seq_len
+      let k_start = cache_base + t * kv_dim + kvh * head_dim
+      let mut dot = 0.0
+      let mut dd = 0.0
+      while dd < head_dim
+        dot = dot + q_r[int(q_start + dd)] * k_cache[int(k_start + dd)]
+        dd = dd + 1.0
+      end
+      let score = dot * inv_sqrt_dh
+      push(scores, score)
+      if score > max_score
+        max_score = score
+      end
+      t = t + 1.0
+    end
+
+    // Softmax with numerical stability
+    let mut exp_sum = 0.0
+    let mut si = 0.0
+    while si < seq_len
+      let e = exp(scores[int(si)] - max_score)
+      scores[int(si)] = e
+      exp_sum = exp_sum + e
+      si = si + 1.0
+    end
+
+    // Weighted sum of V
+    let mut dd2 = 0.0
+    while dd2 < head_dim
+      let mut weighted = 0.0
+      let mut t2 = 0.0
+      while t2 < seq_len
+        let v_start = cache_base + t2 * kv_dim + kvh * head_dim
+        weighted = weighted + scores[int(t2)] / exp_sum * v_cache[int(v_start + dd2)]
+        t2 = t2 + 1.0
+      end
+      push(attn_out, weighted)
+      dd2 = dd2 + 1.0
+    end
+
+    h = h + 1.0
+  end
+
+  // O projection (GPU matvec)
+  let projected = gguf_matvec(model_path, model, tn_o, attn_out)
+
+  // Residual connection
+  let mut hidden2 = []
+  let mut ri = 0.0
+  while ri < n_embd
+    push(hidden2, hidden[int(ri)] + projected[int(ri)])
+    ri = ri + 1.0
+  end
+
+  // ── 2. FFN sublayer ────────────────────────────────────────────
+
+  // RMSNorm
+  let ffn_norm_w = gguf_load_tensor(model_path, model, tn_fn)
+  let normed2 = rmsnorm_cpu(hidden2, ffn_norm_w, n_embd, eps)
+
+  // Gate and Up projections (GPU matvec)
+  let n_ff = map_get(model, "n_ff")
+  let gate = gguf_matvec(model_path, model, tn_g, normed2)
+  let up = gguf_matvec(model_path, model, tn_u, normed2)
+
+  // SiLU(gate) * up
+  let gate_act = silu_cpu(gate, n_ff)
+  let mut mid = []
+  let mut fi = 0.0
+  while fi < n_ff
+    push(mid, gate_act[int(fi)] * up[int(fi)])
+    fi = fi + 1.0
+  end
+
+  // Down projection (GPU matvec)
+  let ffn_out = gguf_matvec(model_path, model, tn_d, mid)
+
+  // Residual connection
+  let mut result = []
+  let mut ri2 = 0.0
+  while ri2 < n_embd
+    push(result, hidden2[int(ri2)] + ffn_out[int(ri2)])
+    ri2 = ri2 + 1.0
+  end
+
+  return result
+end

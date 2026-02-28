@@ -1,0 +1,9 @@
+let x = 5.0
+if x == 1.0
+  let a = "one"
+elif x == 5.0
+  let b = "five"
+else
+  let c = "other"
+end
+let y = "done"

@@ -1,0 +1,243 @@
+// stdlib/loom/dlb_scan_emit.flow
+// Decoupled Lookback Prefix Scan — SPIR-V Emitter
+//
+// Implements the Merrill & Garland (2016) single-pass parallel prefix scan.
+// Uses atomics for cross-workgroup coordination — one dispatch, no CPU round-trips.
+//
+// Buffer layout (5 bindings total):
+//   Binding 0: input[]    — float, N elements (read-only)
+//   Binding 1: status[]   — uint, wg_count elements (0=INVALID, 1=PREFIX, 2=AGGREGATE)
+//   Binding 2: values[]   — float, wg_count elements (aggregate or inclusive prefix)
+//   Binding 3: part_idx[] — uint, 1 element (atomic partition counter, init to 0)
+//   Binding 4: output[]   — float, N elements (result, auto-created by ir.flow)
+//
+// Algorithm: Hillis-Steele local scan (unrolled 8 iterations) + decoupled lookback
+// Workgroup size: 256 threads
+//
+// WARNING: Vulkan does NOT guarantee cross-workgroup forward progress.
+// Dispatch at most GPU concurrent workgroup capacity (e.g. ~896 for RTX 3060).
+// For larger arrays, fall back to multi-pass scan.
+
+use "../compiler/ir"
+
+// Status constants
+let STATUS_INVALID = 0.0
+let STATUS_PREFIX = 1.0
+let STATUS_AGGREGATE = 2.0
+
+fn emit_dlb_scan(out_path)
+  ir_new()
+  ir_input_count = 4.0
+  ir_shared_size = 256.0
+  ir_workgroup_size = 256.0
+
+  // Mark uint bindings (status=1, part_idx=3)
+  push(ir_uint_bindings, 1.0)
+  push(ir_uint_bindings, 3.0)
+
+  // =================== BLOCKS ===================
+  let entry = ir_block("entry")
+  let acquire_part = ir_block("acquire_part")
+  let after_acquire = ir_block("after_acquire")
+  let scan = ir_block("scan")
+  let after_pub_agg = ir_block("after_pub_agg")
+  let pub_agg = ir_block("pub_agg")
+  let after_pub_first = ir_block("after_pub_first")
+  let pub_first = ir_block("pub_first")
+  let after_lookback = ir_block("after_lookback")
+  let lookback_init = ir_block("lookback_init")
+  let lookback_header = ir_block("lookback_header")
+  let lookback_cond = ir_block("lookback_cond")
+  let lookback_process = ir_block("lookback_process")
+  let lookback_found = ir_block("lookback_found")
+  let lookback_was_agg = ir_block("lookback_was_agg")
+  let lookback_continue = ir_block("lookback_continue")
+  let lookback_done = ir_block("lookback_done")
+  let add_pfx = ir_block("add_pfx")
+  let done = ir_block("done")
+
+  // =================== ENTRY ===================
+  let lid = ir_load_local_id(entry)
+  let c0_entry = ir_const_u(entry, 0.0)
+  let is_t0_entry = ir_uequ(entry, lid, c0_entry)
+  // Thread 0 acquires partition; others skip
+  ir_selection_merge(entry, after_acquire)
+  ir_term_cond_branch(entry, is_t0_entry, acquire_part, after_acquire)
+
+  // =================== ACQUIRE_PART (thread 0 only) ===================
+  let part_raw_t0 = ir_buf_atomic_iadd(acquire_part, 3.0, ir_const_u(acquire_part, 0.0), ir_const_u(acquire_part, 1.0))
+  // Convert uint partition to float and store in shared[0] for broadcast
+  let part_f = ir_utof(acquire_part, part_raw_t0)
+  let c0_acq = ir_const_u(acquire_part, 0.0)
+  ir_shared_store(acquire_part, c0_acq, part_f)
+  ir_term_branch(acquire_part, after_acquire)
+
+  // =================== AFTER_ACQUIRE ===================
+  // Barrier: ensure thread 0's write to shared[0] is visible
+  ir_barrier(after_acquire)
+  // All threads read partition from shared[0]
+  let c0_aa = ir_const_u(after_acquire, 0.0)
+  let part_f_all = ir_shared_load(after_acquire, c0_aa)
+  let part_raw = ir_ftou(after_acquire, part_f_all)
+  // gid = part * 256 + lid
+  let c256 = ir_const_u(after_acquire, 256.0)
+  let wg_off = ir_imul(after_acquire, part_raw, c256)
+  let gid = ir_iadd(after_acquire, wg_off, lid)
+  // Load input[gid] → shared[lid]
+  let val_in = ir_load_input_at(after_acquire, 0.0, gid)
+  ir_shared_store(after_acquire, lid, val_in)
+  ir_barrier(after_acquire)
+  ir_term_branch(after_acquire, scan)
+
+  // =================== SCAN (Hillis-Steele, 8 unrolled) ===================
+  // Each iteration: read self, compute partner, read partner, add if active, barrier, write, barrier
+  let mut prev = 0.0
+  let mut stride = 1.0
+  let mut iter = 0.0
+  while iter < 8.0
+    let self_val = ir_shared_load(scan, lid)
+    let stride_u = ir_const_u(scan, stride)
+    let active = ir_ugte(scan, lid, stride_u)
+    let partner = ir_select(scan, IR_TYPE_UINT, active, ir_isub(scan, lid, stride_u), lid)
+    let other_val = ir_shared_load(scan, partner)
+    let sum_val = ir_fadd(scan, self_val, other_val)
+    let new_val = ir_select(scan, IR_TYPE_FLOAT, active, sum_val, self_val)
+    ir_barrier(scan)
+    ir_shared_store(scan, lid, new_val)
+    ir_barrier(scan)
+    stride = stride * 2.0
+    iter = iter + 1.0
+  end
+
+  // Read final scan result for this thread
+  let scan_val = ir_shared_load(scan, lid)
+  // Store to output[gid] (may be overwritten later with prefix-adjusted value)
+  ir_store_output_at(scan, gid, scan_val)
+
+  // Prepare constants for control flow
+  let c255 = ir_const_u(scan, 255.0)
+  let c0 = ir_const_u(scan, 0.0)
+  let c1 = ir_const_u(scan, 1.0)
+  let c2 = ir_const_u(scan, 2.0)
+  let is_t255 = ir_uequ(scan, lid, c255)
+
+  // Thread 255 publishes aggregate
+  ir_selection_merge(scan, after_pub_agg)
+  ir_term_cond_branch(scan, is_t255, pub_agg, after_pub_agg)
+
+  // =================== PUB_AGG (thread 255 only) ===================
+  // values[part] = scan_val (block's inclusive total)
+  ir_buf_store_f(pub_agg, 2.0, part_raw, scan_val)
+  // status[part] = AGGREGATE (2)
+  ir_buf_atomic_store(pub_agg, 1.0, part_raw, c2)
+  ir_term_branch(pub_agg, after_pub_agg)
+
+  // =================== AFTER_PUB_AGG ===================
+  // Check if thread 0 and first partition
+  let is_t0 = ir_uequ(after_pub_agg, lid, c0)
+  let is_first = ir_uequ(after_pub_agg, part_raw, c0)
+  let t0_first = ir_land(after_pub_agg, is_t0, is_first)
+  ir_selection_merge(after_pub_agg, after_pub_first)
+  ir_term_cond_branch(after_pub_agg, t0_first, pub_first, after_pub_first)
+
+  // =================== PUB_FIRST (thread 0, partition 0) ===================
+  // Publish inclusive prefix = shared[255] (block total)
+  let total_first = ir_shared_load(pub_first, c255)
+  ir_buf_store_f(pub_first, 2.0, c0, total_first)
+  // status[0] = PREFIX (1)
+  ir_buf_atomic_store(pub_first, 1.0, c0, c1)
+  ir_term_branch(pub_first, after_pub_first)
+
+  // =================== AFTER_PUB_FIRST ===================
+  // Check if thread 0 and NOT first partition → do lookback
+  let not_first = ir_ugte(after_pub_first, part_raw, c1)
+  let t0_notfirst = ir_land(after_pub_first, is_t0, not_first)
+  ir_selection_merge(after_pub_first, after_lookback)
+  ir_term_cond_branch(after_pub_first, t0_notfirst, lookback_init, after_lookback)
+
+  // =================== LOOKBACK_INIT ===================
+  let part_m1 = ir_isub(lookback_init, part_raw, c1)
+  let zero_f = ir_const_f(lookback_init, 0.0)
+  ir_term_branch(lookback_init, lookback_header)
+
+  // =================== LOOKBACK_HEADER (loop) ===================
+  // Phi: running_sum (starts 0.0, accumulates from aggregates/prefixes)
+  let sum_phi = ir_phi(lookback_header, IR_TYPE_FLOAT)
+  ir_phi_add(sum_phi, zero_f, lookback_init)
+  // Phi: look_idx (starts part-1, decrements)
+  let idx_phi = ir_phi(lookback_header, IR_TYPE_UINT)
+  ir_phi_add(idx_phi, part_m1, lookback_init)
+  ir_loop_merge(lookback_header, lookback_done, lookback_continue)
+  ir_term_branch(lookback_header, lookback_cond)
+
+  // =================== LOOKBACK_COND ===================
+  // Spin-read status[look_idx]
+  let s = ir_buf_atomic_load(lookback_cond, 1.0, idx_phi)
+  let is_invalid = ir_uequ(lookback_cond, s, c0)
+  // If INVALID → spin (continue), else → process
+  ir_term_cond_branch(lookback_cond, is_invalid, lookback_continue, lookback_process)
+
+  // =================== LOOKBACK_PROCESS ===================
+  // Load values[look_idx] (float buffer at binding 2)
+  let v = ir_load_input_at(lookback_process, 2.0, idx_phi)
+  let new_sum = ir_fadd(lookback_process, sum_phi, v)
+  let is_prefix = ir_uequ(lookback_process, s, c1)
+  ir_selection_merge(lookback_process, lookback_was_agg)
+  ir_term_cond_branch(lookback_process, is_prefix, lookback_found, lookback_was_agg)
+
+  // =================== LOOKBACK_FOUND (prefix found — publish and break) ===================
+  // Inclusive prefix for our partition = running_sum + block_total
+  let total_lb = ir_shared_load(lookback_found, c255)
+  let incl = ir_fadd(lookback_found, new_sum, total_lb)
+  ir_buf_store_f(lookback_found, 2.0, part_raw, incl)
+  // status[part] = PREFIX (1)
+  ir_buf_atomic_store(lookback_found, 1.0, part_raw, c1)
+  // Store exclusive prefix for all threads via shared[0]
+  ir_shared_store(lookback_found, c0, new_sum)
+  // Break out of loop → lookback_done
+  ir_term_branch(lookback_found, lookback_done)
+
+  // =================== LOOKBACK_WAS_AGG (aggregate — decrement and continue) ===================
+  let new_idx = ir_isub(lookback_was_agg, idx_phi, c1)
+  ir_term_branch(lookback_was_agg, lookback_continue)
+
+  // =================== LOOKBACK_CONTINUE ===================
+  // Phi for sum: spin case (no change) vs aggregate case (new_sum)
+  let sum_cont = ir_phi(lookback_continue, IR_TYPE_FLOAT)
+  ir_phi_add(sum_cont, sum_phi, lookback_cond)
+  ir_phi_add(sum_cont, new_sum, lookback_was_agg)
+  // Phi for idx: spin case (no change) vs aggregate case (decremented)
+  let idx_cont = ir_phi(lookback_continue, IR_TYPE_UINT)
+  ir_phi_add(idx_cont, idx_phi, lookback_cond)
+  ir_phi_add(idx_cont, new_idx, lookback_was_agg)
+  ir_term_branch(lookback_continue, lookback_header)
+
+  // Complete phi back-edges
+  ir_phi_add(sum_phi, sum_cont, lookback_continue)
+  ir_phi_add(idx_phi, idx_cont, lookback_continue)
+
+  // =================== LOOKBACK_DONE (loop merge) ===================
+  ir_term_branch(lookback_done, after_lookback)
+
+  // =================== AFTER_LOOKBACK ===================
+  // All threads sync — thread 0 may have written exclusive prefix to shared[0]
+  ir_barrier(after_lookback)
+  // Load exclusive prefix (shared[0] written by thread 0's lookback)
+  let excl = ir_shared_load(after_lookback, c0)
+  // Only add prefix for non-first partitions
+  let part_gt0 = ir_ugte(after_lookback, part_raw, c1)
+  ir_selection_merge(after_lookback, done)
+  ir_term_cond_branch(after_lookback, part_gt0, add_pfx, done)
+
+  // =================== ADD_PFX (non-first partitions) ===================
+  let final_val = ir_fadd(add_pfx, scan_val, excl)
+  ir_store_output_at(add_pfx, gid, final_val)
+  ir_term_branch(add_pfx, done)
+
+  // =================== DONE ===================
+  ir_term_return(done)
+
+  // =================== EMIT ===================
+  ir_emit_spirv(out_path)
+  return 0.0
+end

@@ -1,0 +1,7 @@
+// Run standalone generation
+// Usage: octoflow run stdlib/llm/run_generate.flow --allow-read --allow-ffi
+
+use "generate"
+
+let model_path = "G:/ollama_models/blobs/sha256-29d8c98fa6b098e200069bfb88b9508dc3e85586d20cba59f8dda9a808165104"
+let _r = run_generate(model_path, "Write a hello world in Python")

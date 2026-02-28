@@ -1,0 +1,96 @@
+// test_vm_db.flow — Step 6.5: VM-Native GPU Database Query
+//
+// Proves the VM can execute database queries: columnar data in globals,
+// WHERE filter + SUM/COUNT aggregation as a dispatch chain.
+//
+// Data:  salary[i] = i + 1 for i=0..255 → [1, 2, 3, ..., 256]
+// Query: SELECT SUM(salary), COUNT(*) WHERE salary > 128
+//
+// Expected: 128 matches (salaries 129-256)
+//   SUM   = (129+256)*128/2 = 24640.0  — exact in f32
+//   COUNT = 128.0                       — exact in f32
+//
+// Pipeline (3 dispatches, 1 vkQueueSubmit):
+//   [vm_where_gt] → BARRIER → [vm_reduce_sum (SUM)] → BARRIER → [vm_reduce_sum (COUNT)]
+//
+// vs old test_gpu_db.flow (4 dispatches via runtime.flow with separate buffers):
+//   [gt_scalar] → [mul_ab] → [reduce_sum] → [reduce_sum]
+//
+// VM improvement: 3 dispatches (vs 4), one unified descriptor set, columnar
+// globals as table storage, register scratchpad, metrics for aggregation.
+//
+// Memory layout:
+//   Globals (binding 2): salary column [0:256]
+//   Registers (binding 0): [0:256] = masked_salary, [256:512] = mask
+//   Metrics (binding 1): [0] = SUM, [1] = COUNT
+//
+// Run: octoflow run stdlib/loom/test_vm_db.flow --allow-ffi
+
+let N = 256.0
+let THRESHOLD = 128.0
+
+// reg_size=16 → total registers = 1 * 32 * 16 = 512 floats (256 masked + 256 mask)
+let reg_size = 16.0
+let vm = vm_boot(1.0, reg_size, N)
+
+// ── 1. Write salary column to globals [0:256] ──────────────────────────
+let mut salaries = []
+let mut i = 0.0
+while i < N
+  push(salaries, i + 1.0)
+  i = i + 1.0
+end
+let _ws = vm_write_globals(vm, 0.0, salaries)
+
+// ── 2. Build dispatch chain ─────────────────────────────────────────────
+// Stage 1: vm_where_gt — salary > 128 → masked_salary + mask
+//   col_off=0, threshold=128, dst_val_off=0, dst_mask_off=256, count=256
+let pc1 = [0.0, THRESHOLD, 0.0, N, N]
+let _d1 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_where_gt.spv", pc1, 1.0)
+
+// Stage 2: vm_reduce_sum — SUM(masked_salary) → metrics[0]
+//   in_off=0, scratch_off=0, count=256
+let pc2 = [0.0, 0.0, N]
+let _d2 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc2, 1.0)
+
+// Stage 3: vm_reduce_sum — COUNT(*) = SUM(mask) → metrics[1]
+//   in_off=256, scratch_off=1, count=256
+let pc3 = [N, 1.0, N]
+let _d3 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc3, 1.0)
+
+// Build and execute ONE command buffer
+let prog = vm_build(vm)
+let _e = vm_execute(prog)
+
+// ── 3. Read GPU aggregation results from metrics ────────────────────────
+let metrics = vm_read_metrics(vm, 0.0, 2.0)
+let gpu_sum   = metrics[0]
+let gpu_count = metrics[1]
+
+// ── 4. Verify ───────────────────────────────────────────────────────────
+let expected_sum   = 24640.0
+let expected_count = 128.0
+
+print("TEST: VM-Native GPU Database Query")
+print("  Query: SELECT SUM(salary), COUNT(*) WHERE salary > {THRESHOLD}")
+print("  Pipeline: vm_where_gt | vm_reduce_sum (SUM) | vm_reduce_sum (COUNT)")
+print("  GPU result:  SUM={gpu_sum}  COUNT={gpu_count}")
+print("  Expected:    SUM={expected_sum}  COUNT={expected_count}")
+
+let mut pass = 1.0
+if gpu_sum != expected_sum
+  pass = 0.0
+  print("  FAIL: SUM={gpu_sum} expected {expected_sum}")
+end
+if gpu_count != expected_count
+  pass = 0.0
+  print("  FAIL: COUNT={gpu_count} expected {expected_count}")
+end
+
+if pass == 1.0
+  print("TEST: PASS -- VM-native DB query, 3 dispatches, 1 vkQueueSubmit, BIT EXACT")
+else
+  print("TEST: FAIL")
+end
+
+let _sv = vm_shutdown(vm)

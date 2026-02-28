@@ -1,4 +1,6 @@
 // stdlib/sys/memory.flow — GPU memory info and management
+//
+// Functions: gpu_mem_total, gpu_mem_used, gpu_device_name, format_bytes
 
 fn gpu_mem_total()
   let info = gpu_info()

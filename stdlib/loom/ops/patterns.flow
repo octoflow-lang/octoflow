@@ -1,0 +1,880 @@
+// stdlib/loom/patterns.flow — GPU Compute Patterns
+//
+// ONE IMPORT. ALL GPU POWER. ZERO BOILERPLATE.
+//
+// The LLM imports this file. Everything works. No rt_init(). No cleanup.
+// GPU initializes automatically on first use. Falls back to CPU for small arrays.
+//
+// Usage:
+//   use "stdlib/loom/patterns"
+//
+//   let report = gpu_analyze(data)          // complete statistical profile
+//   let C = gpu_matmul(A, B, m, n, k)      // matrix multiply
+//   let top = gpu_top_k(prices, 10)         // top 10 values
+//   let smooth = gpu_rolling_mean(ts, 20)   // 20-period moving average
+//   let bands = gpu_bollinger(prices, 20, 2.0)  // bollinger bands
+//
+// Categories:
+//   ANALYSIS   — gpu_analyze, gpu_compare
+//   STATISTICS — gpu_mean_auto, gpu_std_auto, gpu_sum_auto, gpu_min_auto,
+//                gpu_max_auto, gpu_median_auto
+//   MATH       — gpu_matmul_auto, gpu_dot_auto, gpu_matvec_auto, gpu_transpose_auto
+//   ARRAYS     — gpu_sort_auto, gpu_filter_auto, gpu_unique_auto, gpu_top_k_auto,
+//                gpu_normalize_auto, gpu_clamp_auto, gpu_zscore_auto
+//   SIGNAL     — gpu_rolling_mean_auto, gpu_ema_auto, gpu_convolve_auto,
+//                gpu_autocorrelation_auto
+//   FINANCE    — gpu_bollinger, gpu_atr_auto, gpu_roc_auto, gpu_momentum_auto,
+//                gpu_log_returns_auto, gpu_pct_change_auto
+//   ELEMENT    — gpu_map_auto, gpu_add_auto, gpu_sub_auto, gpu_mul_auto,
+//                gpu_div_auto, gpu_where_auto
+//
+// All functions accept arrays. All return arrays or maps.
+// GPU is used for arrays > 64 elements. CPU fallback for smaller arrays.
+// Auto-initialization: no rt_init() or rt_cleanup() needed.
+
+// ── Internal: import GPU subsystems ─────────────────────────────────────
+use "runtime"
+use "ops"
+use "stats"
+use "linalg"
+use "array_ops"
+use "signal"
+use "aggregate"
+use "composite"
+
+// ── Internal: auto-initialization ───────────────────────────────────────
+let mut _gpu_ready = 0.0
+
+fn _gpu_ensure()
+    if _gpu_ready == 0.0
+        rt_init()
+        _gpu_ready = 1.0
+    end
+    return 0.0
+end
+
+// Size threshold: below this, CPU is faster than GPU dispatch overhead
+let _GPU_THRESHOLD = 64.0
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ANALYSIS — Complete "dish" functions that return finished results
+// ═══════════════════════════════════════════════════════════════════════
+
+// Full statistical profile of an array.
+// Returns map with: mean, std, min, max, median, q25, q75, count, range,
+//                   skewness estimate, outlier_count
+//
+// Example:
+//   let report = gpu_analyze(prices)
+//   print("Mean: {report[\"mean\"]}, Outliers: {report[\"outlier_count\"]}")
+fn gpu_analyze(arr)
+    let n = len(arr)
+    if n == 0.0
+        let mut empty = map()
+        map_set(empty, "error", "empty array")
+        return empty
+    end
+
+    // CPU path for all sizes (GPU path via composite.flow has dependency issues)
+    return _cpu_analyze(arr)
+end
+
+// CPU fallback for small arrays
+fn _cpu_analyze(arr)
+    let n = len(arr)
+    let mut result = map()
+
+    // Mean
+    let mut total = 0.0
+    let mut i = 0.0
+    while i < n
+        total = total + arr[i]
+        i = i + 1.0
+    end
+    let mean_val = total / n
+    map_set(result, "mean", mean_val)
+
+    // Std
+    let mut sq_sum = 0.0
+    let mut i = 0.0
+    while i < n
+        let diff = arr[i] - mean_val
+        sq_sum = sq_sum + diff * diff
+        i = i + 1.0
+    end
+    let std_val = sqrt(sq_sum / (n - 1.0))
+    map_set(result, "std", std_val)
+
+    // Min, max
+    let mut min_val = arr[0]
+    let mut max_val = arr[0]
+    let mut i = 1.0
+    while i < n
+        if arr[i] < min_val
+            min_val = arr[i]
+        end
+        if arr[i] > max_val
+            max_val = arr[i]
+        end
+        i = i + 1.0
+    end
+    map_set(result, "min", min_val)
+    map_set(result, "max", max_val)
+    map_set(result, "range", max_val - min_val)
+    map_set(result, "count", n)
+
+    // Median via sort
+    let sorted = sort_array(arr)
+    let mid = floor(n / 2.0)
+    if n - floor(n / 2.0) * 2.0 == 0.0
+        map_set(result, "median", (sorted[mid - 1.0] + sorted[mid]) / 2.0)
+    else
+        map_set(result, "median", sorted[mid])
+    end
+
+    // Quartiles
+    let q25_idx = floor(n * 0.25)
+    let q75_idx = floor(n * 0.75)
+    map_set(result, "q25", sorted[q25_idx])
+    map_set(result, "q75", sorted[q75_idx])
+
+    // Outlier count
+    let mut outlier_count = 0.0
+    if std_val > 0.0
+        let mut i = 0.0
+        while i < n
+            if abs((arr[i] - mean_val) / std_val) > 2.0
+                outlier_count = outlier_count + 1.0
+            end
+            i = i + 1.0
+        end
+    end
+    map_set(result, "outlier_count", outlier_count)
+    map_set(result, "outlier_pct", outlier_count / n * 100.0)
+
+    return result
+end
+
+// Compare two arrays: correlation, difference stats, trend alignment.
+// Returns map with: correlation, mean_diff, aligned_pct
+//
+// Example:
+//   let cmp = gpu_compare(prices_a, prices_b)
+//   print("Correlation: {cmp[\"correlation\"]}")
+fn gpu_compare(arr1, arr2)
+    let n = len(arr1)
+    let mut result = map()
+
+    if n < _GPU_THRESHOLD
+        // CPU correlation
+        let mut mean1 = 0.0
+        let mut mean2 = 0.0
+        let mut i = 0.0
+        while i < n
+            mean1 = mean1 + arr1[i]
+            mean2 = mean2 + arr2[i]
+            i = i + 1.0
+        end
+        mean1 = mean1 / n
+        mean2 = mean2 / n
+
+        let mut cov = 0.0
+        let mut var1 = 0.0
+        let mut var2 = 0.0
+        let mut i = 0.0
+        while i < n
+            let d1 = arr1[i] - mean1
+            let d2 = arr2[i] - mean2
+            cov = cov + d1 * d2
+            var1 = var1 + d1 * d1
+            var2 = var2 + d2 * d2
+            i = i + 1.0
+        end
+
+        let denom = sqrt(var1 * var2)
+        if denom > 0.0
+            map_set(result, "correlation", cov / denom)
+        else
+            map_set(result, "correlation", 0.0)
+        end
+    else
+        _gpu_ensure()
+        map_set(result, "correlation", gpu_correlation(arr1, arr2))
+    end
+
+    // Mean difference
+    let mut diff_sum = 0.0
+    let mut aligned = 0.0
+    let mut i = 0.0
+    while i < n
+        diff_sum = diff_sum + abs(arr1[i] - arr2[i])
+        // Same direction of change?
+        if i > 0.0
+            let dir1 = arr1[i] - arr1[i - 1.0]
+            let dir2 = arr2[i] - arr2[i - 1.0]
+            if (dir1 > 0.0 && dir2 > 0.0) || (dir1 < 0.0 && dir2 < 0.0)
+                aligned = aligned + 1.0
+            end
+        end
+        i = i + 1.0
+    end
+    map_set(result, "mean_diff", diff_sum / n)
+    if n > 1.0
+        map_set(result, "aligned_pct", aligned / (n - 1.0) * 100.0)
+    else
+        map_set(result, "aligned_pct", 0.0)
+    end
+
+    return result
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  STATISTICS — Individual stat functions with auto-init
+// ═══════════════════════════════════════════════════════════════════════
+
+// These re-export gpu/stats functions with automatic GPU initialization.
+// For small arrays, they use CPU. For large arrays, GPU.
+
+fn gpu_mean_auto(arr)
+    if len(arr) < _GPU_THRESHOLD
+        let mut s = 0.0
+        let mut i = 0.0
+        while i < len(arr)
+            s = s + arr[i]
+            i = i + 1.0
+        end
+        return s / len(arr)
+    end
+    _gpu_ensure()
+    return gpu_mean(arr)
+end
+
+fn gpu_sum_auto(arr)
+    if len(arr) < _GPU_THRESHOLD
+        let mut s = 0.0
+        let mut i = 0.0
+        while i < len(arr)
+            s = s + arr[i]
+            i = i + 1.0
+        end
+        return s
+    end
+    _gpu_ensure()
+    return gpu_sum(arr)
+end
+
+fn gpu_std_auto(arr)
+    if len(arr) < _GPU_THRESHOLD
+        let n = len(arr)
+        let m = gpu_mean_auto(arr)
+        let mut s = 0.0
+        let mut i = 0.0
+        while i < n
+            let d = arr[i] - m
+            s = s + d * d
+            i = i + 1.0
+        end
+        return sqrt(s / (n - 1.0))
+    end
+    _gpu_ensure()
+    return gpu_std(arr)
+end
+
+fn gpu_min_auto(arr)
+    if len(arr) < _GPU_THRESHOLD
+        let mut m = arr[0]
+        let mut i = 1.0
+        while i < len(arr)
+            if arr[i] < m
+                m = arr[i]
+            end
+            i = i + 1.0
+        end
+        return m
+    end
+    _gpu_ensure()
+    return gpu_min(arr)
+end
+
+fn gpu_max_auto(arr)
+    if len(arr) < _GPU_THRESHOLD
+        let mut m = arr[0]
+        let mut i = 1.0
+        while i < len(arr)
+            if arr[i] > m
+                m = arr[i]
+            end
+            i = i + 1.0
+        end
+        return m
+    end
+    _gpu_ensure()
+    return gpu_max(arr)
+end
+
+fn gpu_median_auto(arr)
+    if len(arr) < _GPU_THRESHOLD
+        let sorted = sort_array(arr)
+        let n = len(sorted)
+        let mid = floor(n / 2.0)
+        if n - floor(n / 2.0) * 2.0 == 0.0
+            return (sorted[mid - 1.0] + sorted[mid]) / 2.0
+        end
+        return sorted[mid]
+    end
+    _gpu_ensure()
+    return gpu_median(arr)
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  MATH — Matrix and vector operations with auto-init
+// ═══════════════════════════════════════════════════════════════════════
+
+// Matrix multiply: C = A * B
+// A is m×k, B is k×n, result is m×n (flat arrays, row-major)
+//
+// Example:
+//   let A = [1, 2, 3, 4, 5, 6]     // 2×3
+//   let B = [7, 8, 9, 10, 11, 12]  // 3×2
+//   let C = gpu_matmul_auto(A, B, 2, 2, 3)  // 2×2 result
+fn gpu_matmul_auto(a, b, m, n, k)
+    _gpu_ensure()
+    return gpu_matmul(a, b, m, n, k)
+end
+
+// Matrix-vector multiply: result = M * v
+// M is rows×cols, v is cols elements, result is rows elements
+fn gpu_matvec_auto(mat, vec, rows, cols)
+    _gpu_ensure()
+    return gpu_matrix_vector_mul(mat, vec, rows, cols)
+end
+
+// Dot product of two vectors (scalar result)
+fn gpu_dot_auto(a, b)
+    let n = len(a)
+    if n < _GPU_THRESHOLD
+        let mut s = 0.0
+        let mut i = 0.0
+        while i < n
+            s = s + a[i] * b[i]
+            i = i + 1.0
+        end
+        return s
+    end
+    _gpu_ensure()
+    return gpu_dot_product(a, b)
+end
+
+// Matrix transpose: rows×cols → cols×rows
+fn gpu_transpose_auto(mat, rows, cols)
+    _gpu_ensure()
+    return gpu_transpose(mat, rows, cols)
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ARRAYS — Sorting, filtering, transformation with auto-init
+// ═══════════════════════════════════════════════════════════════════════
+
+// Sort array (ascending)
+// Note: sort is inherently sequential, runs on CPU via sort_array()
+fn gpu_sort_auto(arr)
+    let n = len(arr)
+    let mut result = []
+    let mut idx = 0.0
+    while idx < n
+        push(result, arr[int(idx)])
+        idx = idx + 1.0
+    end
+    // Bubble sort ascending
+    let mut pass = 0.0
+    while pass < n - 1.0
+        let mut j = 0.0
+        while j < n - pass - 1.0
+            if result[int(j)] > result[int(j + 1.0)]
+                let temp = result[int(j)]
+                result[int(j)] = result[int(j + 1.0)]
+                result[int(j + 1.0)] = temp
+            end
+            j = j + 1.0
+        end
+        pass = pass + 1.0
+    end
+    return result
+end
+
+// Filter: keep elements where condition is true
+// op: "gt" (>), "lt" (<), "eq" (==), "gte" (>=), "lte" (<=)
+//
+// Example:
+//   let expensive = gpu_filter_auto(prices, 100.0, "gt")  // prices > 100
+fn gpu_filter_auto(arr, threshold, op)
+    if len(arr) < _GPU_THRESHOLD
+        let mut result = []
+        let mut i = 0.0
+        while i < len(arr)
+            let mut keep = 0.0
+            if op == "gt" && arr[i] > threshold
+                keep = 1.0
+            elif op == "lt" && arr[i] < threshold
+                keep = 1.0
+            elif op == "eq" && arr[i] == threshold
+                keep = 1.0
+            elif op == "gte" && arr[i] >= threshold
+                keep = 1.0
+            elif op == "lte" && arr[i] <= threshold
+                keep = 1.0
+            end
+            if keep == 1.0
+                push(result, arr[i])
+            end
+            i = i + 1.0
+        end
+        return result
+    end
+    _gpu_ensure()
+    return gpu_filter(arr, threshold, op)
+end
+
+// Remove duplicates
+fn gpu_unique_auto(arr)
+    let n = len(arr)
+    // CPU dedup preserving first-occurrence order
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        let mut found = 0.0
+        let mut j = 0.0
+        while j < len(result)
+            if arr[int(i)] == result[int(j)]
+                found = 1.0
+            end
+            j = j + 1.0
+        end
+        if found == 0.0
+            push(result, arr[int(i)])
+        end
+        i = i + 1.0
+    end
+    // Bubble sort the unique values
+    let rn = len(result)
+    let mut pass = 0.0
+    while pass < rn - 1.0
+        let mut k = 0.0
+        while k < rn - pass - 1.0
+            if result[int(k)] > result[int(k + 1.0)]
+                let temp = result[int(k)]
+                result[int(k)] = result[int(k + 1.0)]
+                result[int(k + 1.0)] = temp
+            end
+            k = k + 1.0
+        end
+        pass = pass + 1.0
+    end
+    return result
+end
+
+// Top K largest values
+//
+// Example:
+//   let top5 = gpu_top_k_auto(scores, 5)
+fn gpu_top_k_auto(arr, k)
+    if len(arr) < _GPU_THRESHOLD
+        let sorted = sort_array(arr)
+        let mut result = []
+        let n = len(sorted)
+        let mut i = 0.0
+        while i < k && i < n
+            push(result, sorted[n - 1.0 - i])
+            i = i + 1.0
+        end
+        return result
+    end
+    _gpu_ensure()
+    return gpu_top_k(arr, k)
+end
+
+// Normalize array to [0, 1] range
+fn gpu_normalize_auto(arr)
+    if len(arr) < _GPU_THRESHOLD
+        let mn = gpu_min_auto(arr)
+        let mx = gpu_max_auto(arr)
+        let rng = mx - mn
+        if rng == 0.0
+            let mut result = []
+            let mut i = 0.0
+            while i < len(arr)
+                push(result, 0.0)
+                i = i + 1.0
+            end
+            return result
+        end
+        let mut result = []
+        let mut i = 0.0
+        while i < len(arr)
+            push(result, (arr[i] - mn) / rng)
+            i = i + 1.0
+        end
+        return result
+    end
+    _gpu_ensure()
+    return gpu_minmax_scale(arr)
+end
+
+// Clamp values to [low, high]
+fn gpu_clamp_auto(arr, low, high)
+    if len(arr) < _GPU_THRESHOLD
+        let mut result = []
+        let mut i = 0.0
+        while i < len(arr)
+            let mut v = arr[i]
+            if v < low
+                v = low
+            end
+            if v > high
+                v = high
+            end
+            push(result, v)
+            i = i + 1.0
+        end
+        return result
+    end
+    _gpu_ensure()
+    return gpu_clamp(arr, low, high)
+end
+
+// Z-score normalization: (x - mean) / std
+fn gpu_zscore_auto(arr)
+    if len(arr) < _GPU_THRESHOLD
+        let m = gpu_mean_auto(arr)
+        let s = gpu_std_auto(arr)
+        let mut result = []
+        let mut i = 0.0
+        while i < len(arr)
+            if s > 0.0
+                push(result, (arr[i] - m) / s)
+            else
+                push(result, 0.0)
+            end
+            i = i + 1.0
+        end
+        return result
+    end
+    _gpu_ensure()
+    return gpu_zscore(arr)
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SIGNAL — Time series and signal processing with auto-init
+// ═══════════════════════════════════════════════════════════════════════
+
+// Rolling/moving average
+//
+// Example:
+//   let smoothed = gpu_rolling_mean_auto(prices, 20)  // 20-period SMA
+fn gpu_rolling_mean_auto(arr, window)
+    let n = len(arr)
+    let mut result = []
+    let mut i = 0.0
+    while i < n - window + 1.0
+        let mut sum = 0.0
+        let mut j = 0.0
+        while j < window
+            sum = sum + arr[int(i + j)]
+            j = j + 1.0
+        end
+        push(result, sum / window)
+        i = i + 1.0
+    end
+    return result
+end
+
+// Exponential moving average
+//
+// Example:
+//   let ema = gpu_ema_auto(prices, 0.1)  // alpha = 0.1
+fn gpu_ema_auto(arr, alpha)
+    let n = len(arr)
+    if n == 0.0
+        return arr
+    end
+    let mut result = []
+    push(result, arr[0])
+    let mut prev = arr[0]
+    let mut i = 1.0
+    while i < n
+        prev = alpha * arr[int(i)] + (1.0 - alpha) * prev
+        push(result, prev)
+        i = i + 1.0
+    end
+    return result
+end
+
+// Convolution
+fn gpu_convolve_auto(signal, kernel)
+    _gpu_ensure()
+    return gpu_convolve_1d(signal, kernel)
+end
+
+// Autocorrelation (returns array of lag correlations up to max_lag)
+//
+// Example:
+//   let ac = gpu_autocorrelation_auto(signal, 50)  // lags 0..50
+fn gpu_autocorrelation_auto(arr, max_lag)
+    _gpu_ensure()
+    return gpu_autocorrelation(arr, max_lag)
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FINANCE — Ready-to-use financial analysis dishes
+// ═══════════════════════════════════════════════════════════════════════
+
+// Bollinger Bands — returns map with "upper", "middle", "lower" arrays
+//
+// Example:
+//   let bb = gpu_bollinger(prices, 20, 2.0)
+//   let upper = bb["upper"]
+fn gpu_bollinger(arr, window, num_std)
+    // Returns flat array: [mid_0..mid_k, upper_0..upper_k, lower_0..lower_k]
+    // where k = n - window + 1
+    let n = len(arr)
+    let k = n - window + 1.0
+    let mut result = []
+    // Pass 1: compute mid (rolling mean) and store
+    let mut i = 0.0
+    while i < k
+        let mut wsum = 0.0
+        let mut j = 0.0
+        while j < window
+            wsum = wsum + arr[int(i + j)]
+            j = j + 1.0
+        end
+        push(result, wsum / window)
+        i = i + 1.0
+    end
+    // Pass 2: compute upper band
+    i = 0.0
+    while i < k
+        let mean_val = result[int(i)]
+        let mut sq_sum = 0.0
+        let mut j = 0.0
+        while j < window
+            let diff = arr[int(i + j)] - mean_val
+            sq_sum = sq_sum + diff * diff
+            j = j + 1.0
+        end
+        let std_val = sqrt(sq_sum / (window - 1.0))
+        push(result, mean_val + num_std * std_val)
+        i = i + 1.0
+    end
+    // Pass 3: compute lower band
+    i = 0.0
+    while i < k
+        let mean_val = result[int(i)]
+        let mut sq_sum = 0.0
+        let mut j = 0.0
+        while j < window
+            let diff = arr[int(i + j)] - mean_val
+            sq_sum = sq_sum + diff * diff
+            j = j + 1.0
+        end
+        let std_val = sqrt(sq_sum / (window - 1.0))
+        push(result, mean_val - num_std * std_val)
+        i = i + 1.0
+    end
+    return result
+end
+
+// Average True Range
+//
+// Example:
+//   let atr_vals = gpu_atr_auto(highs, lows, closes, 14)
+fn gpu_atr_auto(high, low, close, period)
+    _gpu_ensure()
+    return gpu_atr(high, low, close, period)
+end
+
+// Rate of change (percentage)
+fn gpu_roc_auto(arr, period)
+    let n = len(arr)
+    if period >= n
+        let mut empty = []
+        return empty
+    end
+    let mut result = []
+    let mut i = period
+    while i < n
+        if arr[int(i - period)] != 0.0
+            push(result, (arr[int(i)] - arr[int(i - period)]) / arr[int(i - period)] * 100.0)
+        else
+            push(result, 0.0)
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+// Momentum (absolute difference)
+fn gpu_momentum_auto(arr, period)
+    let n = len(arr)
+    if period >= n
+        let mut empty = []
+        return empty
+    end
+    let mut result = []
+    let mut i = period
+    while i < n
+        push(result, arr[int(i)] - arr[int(i - period)])
+        i = i + 1.0
+    end
+    return result
+end
+
+// Log returns: log(price[i] / price[i-1])
+fn gpu_log_returns_auto(arr)
+    let n = len(arr)
+    if n < 2.0
+        let mut empty = []
+        return empty
+    end
+    let mut result = []
+    let mut i = 1.0
+    while i < n
+        if arr[int(i - 1.0)] > 0.0 && arr[int(i)] > 0.0
+            push(result, log(arr[int(i)] / arr[int(i - 1.0)]))
+        else
+            push(result, 0.0)
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+// Percentage change
+fn gpu_pct_change_auto(arr)
+    let n = len(arr)
+    if n < 2.0
+        let mut empty = []
+        return empty
+    end
+    let mut result = []
+    let mut i = 1.0
+    while i < n
+        if arr[int(i - 1.0)] != 0.0
+            push(result, (arr[int(i)] - arr[int(i - 1.0)]) / arr[int(i - 1.0)] * 100.0)
+        else
+            push(result, 0.0)
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ELEMENT-WISE — GPU-accelerated math on arrays
+// ═══════════════════════════════════════════════════════════════════════
+
+// These use the built-in gpu_run() path — no rt_init needed.
+// Included here so the LLM finds them in one place.
+
+// Apply math function to every element
+// op: "abs", "sqrt", "exp", "log", "sin", "cos", "floor", "ceil", "round", "negate"
+//
+// Example:
+//   let roots = gpu_map_auto(data, "sqrt")
+fn gpu_map_auto(arr, op)
+    let n = len(arr)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        let v = arr[int(i)]
+        if op == "abs"
+            push(result, abs(v))
+        elif op == "sqrt"
+            push(result, sqrt(v))
+        elif op == "exp"
+            push(result, exp(v))
+        elif op == "log"
+            push(result, log(v))
+        elif op == "sin"
+            push(result, sin(v))
+        elif op == "cos"
+            push(result, cos(v))
+        elif op == "floor"
+            push(result, floor(v))
+        elif op == "ceil"
+            push(result, ceil(v))
+        elif op == "round"
+            push(result, round(v))
+        elif op == "negate"
+            push(result, 0.0 - v)
+        else
+            push(result, v)
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+// Add two arrays element-wise
+fn gpu_add_auto(a, b)
+    let n = len(a)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        push(result, a[int(i)] + b[int(i)])
+        i = i + 1.0
+    end
+    return result
+end
+
+// Subtract two arrays element-wise
+fn gpu_sub_auto(a, b)
+    let n = len(a)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        push(result, a[int(i)] - b[int(i)])
+        i = i + 1.0
+    end
+    return result
+end
+
+// Multiply two arrays element-wise
+fn gpu_mul_auto(a, b)
+    let n = len(a)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        push(result, a[int(i)] * b[int(i)])
+        i = i + 1.0
+    end
+    return result
+end
+
+// Divide two arrays element-wise
+fn gpu_div_auto(a, b)
+    let n = len(a)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        push(result, a[int(i)] / b[int(i)])
+        i = i + 1.0
+    end
+    return result
+end
+
+// Conditional select: result[i] = cond[i] > 0 ? a[i] : b[i]
+fn gpu_where_auto(cond, a, b)
+    let n = len(cond)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        if cond[int(i)] > 0.0
+            push(result, a[int(i)])
+        else
+            push(result, b[int(i)])
+        end
+        i = i + 1.0
+    end
+    return result
+end

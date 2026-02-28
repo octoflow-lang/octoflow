@@ -1,0 +1,72 @@
+// test_matmul.flow — GPU matrix multiplication test
+// C = A * B where A is m×k, B is k×n, C is m×n (row-major)
+
+// ── 2×2 test ──
+let mut a = []
+push(a, 1.0)
+push(a, 2.0)
+push(a, 3.0)
+push(a, 4.0)
+
+let mut b = []
+push(b, 5.0)
+push(b, 6.0)
+push(b, 7.0)
+push(b, 8.0)
+
+// [[1,2],[3,4]] * [[5,6],[7,8]] = [[19,22],[43,50]]
+let c = mat_mul(a, b, 2.0, 2.0, 2.0)
+let c0 = c[0]
+let c1 = c[1]
+let c2 = c[2]
+let c3 = c[3]
+print("2x2: {c0} {c1} {c2} {c3}")
+
+// ── 3×3 identity test ──
+let mut eye = []
+push(eye, 1.0)
+push(eye, 0.0)
+push(eye, 0.0)
+push(eye, 0.0)
+push(eye, 1.0)
+push(eye, 0.0)
+push(eye, 0.0)
+push(eye, 0.0)
+push(eye, 1.0)
+
+let mut m3 = []
+push(m3, 2.0)
+push(m3, 3.0)
+push(m3, 5.0)
+push(m3, 7.0)
+push(m3, 11.0)
+push(m3, 13.0)
+push(m3, 17.0)
+push(m3, 19.0)
+push(m3, 23.0)
+
+// m3 * I = m3
+let r = mat_mul(m3, eye, 3.0, 3.0, 3.0)
+let r0 = r[0]
+let r4 = r[4]
+let r8 = r[8]
+print("3x3 identity: {r0} {r4} {r8}")
+
+// ── Verify all elements ──
+let mut all_ok = 1.0
+let mut i = 0.0
+while i < 9.0
+  let ri = r[i]
+  let mi = m3[i]
+  let mut diff = ri - mi
+  if diff < 0.0
+    diff = 0.0 - diff
+  end
+  if diff > 0.1
+    all_ok = 0.0
+  end
+  i = i + 1.0
+end
+print("identity_check={all_ok}")
+
+print("MAT_MUL DONE")

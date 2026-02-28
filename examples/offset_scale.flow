@@ -1,0 +1,3 @@
+stream data = tap("test_data/input_10.csv")
+stream result = data |> add(-10.0) |> multiply(0.5)
+emit(result, "test_data/output_offset_scale.csv")

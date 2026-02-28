@@ -4,9 +4,9 @@
 
 ```
 $ octoflow repl
-OctoFlow v1.0.0 — GPU-native language
+OctoFlow v0.83.1 — GPU-native language
 GPU: NVIDIA GeForce GTX 1660 SUPER
-247 stdlib modules | :help | :time
+143 stdlib modules | :help | :time
 ```
 
 ## Commands

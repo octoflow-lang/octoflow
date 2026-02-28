@@ -1,0 +1,238 @@
+// test_transformer_kernels.flow — GPU Transformer Kernel Tests
+// Tests: SiLU, RMSNorm, RoPE, Softmax emission + dispatch
+// Run: octoflow run test_transformer_kernels.flow --allow-read --allow-write --allow-exec --allow-ffi
+
+use "../emit_silu"
+use "../emit_rmsnorm"
+use "../emit_rope"
+use "../emit_softmax"
+use "../runtime"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+fn check_near(counters, label, got, expected, tol)
+  let d = abs(got - expected)
+  if d < tol
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}, diff={d}")
+  return 0.0
+end
+
+print("=== TRANSFORMER KERNEL TESTS ===")
+print(" ")
+
+// ── Test 1: SiLU emission + validation ────────────────────────────────
+
+print("--- Test 1: SiLU kernel emission ---")
+let _e1 = emit_silu("test_silu.spv")
+let v1 = exec("spirv-val", "test_silu.spv")
+let _c1 = check(counters, "silu spirv-val", v1.ok, 1.0)
+if v1.ok != 1.0
+  print("  spirv-val error: {v1.error}")
+end
+
+// ── Test 2: RMSNorm emission + validation ─────────────────────────────
+
+print("--- Test 2: RMSNorm kernel emission ---")
+let _e2 = emit_rmsnorm("test_rmsnorm.spv")
+let v2 = exec("spirv-val", "test_rmsnorm.spv")
+let _c2 = check(counters, "rmsnorm spirv-val", v2.ok, 1.0)
+if v2.ok != 1.0
+  print("  spirv-val error: {v2.error}")
+end
+
+// ── Test 3: RoPE emission + validation ────────────────────────────────
+
+print("--- Test 3: RoPE kernel emission ---")
+let _e3 = emit_rope("test_rope.spv")
+let v3 = exec("spirv-val", "test_rope.spv")
+let _c3 = check(counters, "rope spirv-val", v3.ok, 1.0)
+if v3.ok != 1.0
+  print("  spirv-val error: {v3.error}")
+end
+
+// ── Test 4: Softmax emission + validation ─────────────────────────────
+
+print("--- Test 4: Softmax kernel emission ---")
+let _e4 = emit_softmax("test_softmax.spv")
+let v4 = exec("spirv-val", "test_softmax.spv")
+let _c4 = check(counters, "softmax spirv-val", v4.ok, 1.0)
+if v4.ok != 1.0
+  print("  spirv-val error: {v4.error}")
+end
+
+// ── Test 5: SiLU GPU dispatch ─────────────────────────────────────────
+
+print("--- Test 5: SiLU GPU dispatch ---")
+let _init = rt_init()
+
+// SiLU test: known values
+// silu(0) = 0, silu(1) ≈ 0.7311, silu(-1) ≈ -0.2689, silu(2) ≈ 1.7616
+let mut silu_in = [0.0, 1.0, -1.0, 2.0]
+let n_silu = 4.0
+
+let buf_si = rt_create_buffer(n_silu * 4.0)
+let buf_so = rt_create_buffer(n_silu * 4.0)
+let _us = rt_upload(buf_si, silu_in)
+
+let pipe_silu = rt_load_pipeline("test_silu.spv", 2.0, 0.0)
+let _cb5 = rt_chain_begin(1.0, 2.0)
+let mut bufs5 = []
+push(bufs5, buf_si)
+push(bufs5, buf_so)
+let _d5 = rt_chain_dispatch(pipe_silu, bufs5, 1.0)
+let _ce5 = rt_chain_end()
+let _sw5 = rt_chain_submit_wait()
+let _dl5 = rt_download(buf_so, n_silu)
+
+let _c5 = check_near(counters, "silu(0)=0", rt_result[0], 0.0, 0.01)
+let _c6 = check_near(counters, "silu(1)~0.731", rt_result[1], 0.7311, 0.02)
+let _c7 = check_near(counters, "silu(-1)~-0.269", rt_result[2], -0.2689, 0.02)
+let _c8 = check_near(counters, "silu(2)~1.762", rt_result[3], 1.7616, 0.02)
+
+// ── Test 6: RMSNorm GPU dispatch ──────────────────────────────────────
+
+print("--- Test 6: RMSNorm GPU dispatch ---")
+// Input: [3.0, 4.0, 0.0, 0.0] (256 elements padded with zeros)
+// Weight: [1.0, 1.0, 1.0, 1.0, ...] (all ones)
+// RMS = sqrt((9+16)/4 + eps) = sqrt(6.25001) ≈ 2.5
+// output[0] = 3.0/2.5 * 1.0 = 1.2, output[1] = 4.0/2.5 * 1.0 = 1.6
+
+let n_rms = 4.0
+let mut rms_x = []
+let mut rms_w = []
+let mut ri = 0.0
+while ri < 256.0
+  if ri < n_rms
+    push(rms_w, 1.0)
+  else
+    push(rms_w, 0.0)
+  end
+  push(rms_x, 0.0)
+  ri = ri + 1.0
+end
+rms_x[0] = 3.0
+rms_x[1] = 4.0
+
+let buf_rx = rt_create_buffer(1024.0)
+let buf_rw = rt_create_buffer(1024.0)
+let buf_ro = rt_create_buffer(1024.0)
+let _ur1 = rt_upload(buf_rx, rms_x)
+let _ur2 = rt_upload(buf_rw, rms_w)
+
+let pipe_rms = rt_load_pipeline("test_rmsnorm.spv", 3.0, 4.0)
+let _cb6 = rt_chain_begin(1.0, 3.0)
+let mut pc6 = []
+push(pc6, n_rms)
+let _pc6 = rt_chain_push_constants(pipe_rms, pc6)
+let mut bufs6 = []
+push(bufs6, buf_rx)
+push(bufs6, buf_rw)
+push(bufs6, buf_ro)
+let _d6 = rt_chain_dispatch(pipe_rms, bufs6, 1.0)
+let _ce6 = rt_chain_end()
+let _sw6 = rt_chain_submit_wait()
+let _dl6 = rt_download(buf_ro, 4.0)
+
+// RMS = sqrt((9+16+0+0)/4 + 1e-5) ≈ 2.5
+// output[0] = 3.0/2.5 = 1.2, output[1] = 4.0/2.5 = 1.6
+let _c9 = check_near(counters, "rmsnorm[0]~1.2", rt_result[0], 1.2, 0.05)
+let _c10 = check_near(counters, "rmsnorm[1]~1.6", rt_result[1], 1.6, 0.05)
+let _c11 = check_near(counters, "rmsnorm[2]~0.0", rt_result[2], 0.0, 0.01)
+
+// ── Test 7: Softmax GPU dispatch ──────────────────────────────────────
+
+print("--- Test 7: Softmax GPU dispatch ---")
+// Input: [1.0, 2.0, 3.0, 4.0] padded to 256
+// softmax([1,2,3,4]) = [0.0321, 0.0871, 0.2369, 0.6439]
+
+let mut sm_x = []
+let mut si2 = 0.0
+while si2 < 256.0
+  push(sm_x, -100000.0)
+  si2 = si2 + 1.0
+end
+sm_x[0] = 1.0
+sm_x[1] = 2.0
+sm_x[2] = 3.0
+sm_x[3] = 4.0
+
+let n_sm = 4.0
+let buf_smx = rt_create_buffer(1024.0)
+let buf_smo = rt_create_buffer(1024.0)
+let _usm = rt_upload(buf_smx, sm_x)
+
+let pipe_sm = rt_load_pipeline("test_softmax.spv", 2.0, 4.0)
+let _cb7 = rt_chain_begin(1.0, 2.0)
+let mut pc7 = []
+push(pc7, n_sm)
+let _pc7 = rt_chain_push_constants(pipe_sm, pc7)
+let mut bufs7 = []
+push(bufs7, buf_smx)
+push(bufs7, buf_smo)
+let _d7 = rt_chain_dispatch(pipe_sm, bufs7, 1.0)
+let _ce7 = rt_chain_end()
+let _sw7 = rt_chain_submit_wait()
+let _dl7 = rt_download(buf_smo, 4.0)
+
+let _c12 = check_near(counters, "softmax[0]~0.032", rt_result[0], 0.0321, 0.01)
+let _c13 = check_near(counters, "softmax[1]~0.087", rt_result[1], 0.0871, 0.01)
+let _c14 = check_near(counters, "softmax[2]~0.237", rt_result[2], 0.2369, 0.01)
+let _c15 = check_near(counters, "softmax[3]~0.644", rt_result[3], 0.6439, 0.01)
+
+// Check sum ≈ 1.0
+let sm_sum = rt_result[0] + rt_result[1] + rt_result[2] + rt_result[3]
+let _c16 = check_near(counters, "softmax sum~1.0", sm_sum, 1.0, 0.01)
+
+// ── Test 8: RoPE GPU dispatch ─────────────────────────────────────────
+
+print("--- Test 8: RoPE GPU dispatch ---")
+// Position 0: no rotation (theta=0, cos=1, sin=0)
+// x' = x (identity for position 0)
+let mut rope_x = [1.0, 2.0, 3.0, 4.0]
+let n_rope = 4.0
+
+let buf_rpx = rt_create_buffer(n_rope * 4.0)
+let buf_rpo = rt_create_buffer(n_rope * 4.0)
+let _urp = rt_upload(buf_rpx, rope_x)
+
+let pipe_rp = rt_load_pipeline("test_rope.spv", 2.0, 8.0)
+let _cb8 = rt_chain_begin(1.0, 2.0)
+let mut pc8 = []
+push(pc8, 0.0)  // position = 0
+push(pc8, 4.0)  // d_head = 4
+let _pc8 = rt_chain_push_constants(pipe_rp, pc8)
+let mut bufs8 = []
+push(bufs8, buf_rpx)
+push(bufs8, buf_rpo)
+let _d8 = rt_chain_dispatch(pipe_rp, bufs8, 1.0)
+let _ce8 = rt_chain_end()
+let _sw8 = rt_chain_submit_wait()
+let _dl8 = rt_download(buf_rpo, n_rope)
+
+// At position 0, theta=0 for all pairs, so cos=1, sin=0 → identity
+let _c17 = check_near(counters, "rope pos0 [0]=1", rt_result[0], 1.0, 0.01)
+let _c18 = check_near(counters, "rope pos0 [1]=2", rt_result[1], 2.0, 0.01)
+let _c19 = check_near(counters, "rope pos0 [2]=3", rt_result[2], 3.0, 0.01)
+let _c20 = check_near(counters, "rope pos0 [3]=4", rt_result[3], 4.0, 0.01)
+
+// ── Summary ──────────────────────────────────────────────────────────
+
+print(" ")
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print("=== RESULTS: {pass}/{total} passed ===")

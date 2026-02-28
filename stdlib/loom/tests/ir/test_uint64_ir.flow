@@ -1,0 +1,140 @@
+// test_uint64_ir.flow — Validate uint64 IR ops: OpCapability Int64, OpUConvert, 64-bit arithmetic
+//
+// Test: compute gid * 5000000000 in uint64 (overflows uint32 at gid ≥ 1),
+//       then narrow to uint32 via modulo + truncation.
+//
+// Expected results (gid * 5e9):
+//   gid=0: 0 × 5e9 = 0                  → low32 = 0
+//   gid=1: 1 × 5e9 = 5,000,000,000      → low32 = 705,032,704  (5e9 mod 2^32)
+//   gid=2: 2 × 5e9 = 10,000,000,000     → low32 = 1,410,065,408
+//   gid=3: 3 × 5e9 = 15,000,000,000     → low32 = 2,115,098,112
+//
+// The kernel emitter generates SPIR-V with OpCapability Int64.
+// We verify: spirv-val accepts it, GPU produces correct results.
+//
+// Run: octoflow run stdlib/loom/tests/test_uint64_ir.flow --allow-read --allow-write
+
+use "../../compiler/ir"
+
+fn emit_test_uint64(out_path)
+  ir_new()
+  ir_input_count = 1.0
+  ir_uses_uint64[0] = 0.0    // reset (array mutation propagates)
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: bounds check ──
+  let gid = ir_load_gid(entry)
+  let pc_count = ir_push_const(entry, 0.0)
+  let count_u  = ir_ftou(entry, pc_count)
+  let oob      = ir_ugte(entry, gid, count_u)
+  let _sm      = ir_selection_merge(entry, exit_block)
+  let _br      = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: compute gid * 5,000,000,000 in uint64, store low32 ──
+  // 5e9 = 5,000,000,000 which doesn't fit in uint32 (max 4,294,967,295)
+  // So we construct it: 5e9 = 4294 * 1000000 + 967296 + 32704
+  // Simpler: 5e9 = 1 * 2^32 + 705,032,704
+  // We'll build it from two uint32 halves using 64-bit arithmetic:
+  //   hi = 1, lo = 705032704
+  //   val64 = hi * 2^32 + lo = hi * 4294967296 + lo
+  // But 2^32 doesn't fit in uint32 either. Instead:
+  //   5e9 = 2500000000 * 2   (2.5e9 fits in uint32, then double in u64)
+
+  let c_half    = ir_const_u(body, 2500000000.0)  // 2.5×10^9 fits in uint32
+  let c2        = ir_const_u(body, 2.0)
+
+  // Widen to uint64
+  let gid64     = ir_u32_to_u64(body, gid)
+  let half64    = ir_u32_to_u64(body, c_half)
+  let c2_64     = ir_u32_to_u64(body, c2)
+
+  // 5e9 in uint64 = 2.5e9 * 2
+  let big64     = ir_imul64(body, half64, c2_64)
+
+  // result = gid * 5e9 (uint64 — no overflow)
+  let prod64    = ir_imul64(body, gid64, big64)
+
+  // Narrow to uint32 (truncates to low 32 bits)
+  let low32     = ir_u64_to_u32(body, prod64)
+
+  // Store
+  let _store    = ir_buf_store_u(body, 0.0, gid, low32)
+  let _br2      = ir_term_branch(body, exit_block)
+
+  // ── Exit ──
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+// ── Emit the kernel ──
+let out = "stdlib/loom/kernels/ops/_test_uint64.spv"
+let _r = emit_test_uint64(out)
+print("Emitted: {out}")
+
+// ── Boot VM, dispatch, verify ──
+let vm = vm_boot(1.0, 8.0, 16.0)  // 1 instance, 8 words in R0, 16 globals
+
+let pc = [4.0]  // process 4 threads (gid 0..3)
+let _d = vm_dispatch(vm, out, pc, 1.0)
+let prog = vm_build(vm)
+let _e = vm_execute(prog)
+
+// Read results
+let result = vm_read_register(vm, 0.0, 0.0, 8.0)
+
+// Expected: gid * 5e9 mod 2^32
+// gid=0: 0
+// gid=1: 5000000000 mod 4294967296 = 705032704
+// gid=2: 10000000000 mod 4294967296 = 1410065408
+// gid=3: 15000000000 mod 4294967296 = 2115098112
+
+let e0 = 0.0
+let e1 = 705032704.0
+let e2 = 1410065408.0
+let e3 = 2115098112.0
+
+// Read as uint via float_to_bits
+let r0 = float_to_bits(result[0])
+let r1 = float_to_bits(result[1])
+let r2 = float_to_bits(result[2])
+let r3 = float_to_bits(result[3])
+
+print("")
+print("  uint64 IR Test Results:")
+print("    gid=0: got {r0:.0} expected {e0:.0}")
+print("    gid=1: got {r1:.0} expected {e1:.0}")
+print("    gid=2: got {r2:.0} expected {e2:.0}")
+print("    gid=3: got {r3:.0} expected {e3:.0}")
+
+let mut pass = 1.0
+let d0 = r0 - e0
+let d1 = r1 - e1
+let d2 = r2 - e2
+let d3 = r3 - e3
+if d0 > 0.5 || d0 < -0.5
+  pass = 0.0
+end
+if d1 > 0.5 || d1 < -0.5
+  pass = 0.0
+end
+if d2 > 0.5 || d2 < -0.5
+  pass = 0.0
+end
+if d3 > 0.5 || d3 < -0.5
+  pass = 0.0
+end
+
+if pass > 0.5
+  print("    PASS: uint64 arithmetic correct on GPU")
+else
+  print("    FAIL: uint64 results mismatch")
+end
+print("")
+
+let _s = vm_shutdown(vm)

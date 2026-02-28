@@ -1,0 +1,92 @@
+// emit_vm_sum_sq.flow — VM Sum-of-Squares Kernel Emitter
+//
+// Computes sum(x[i]^2) for a register slice, writing the scalar result
+// to a scratch register slot. This is pass 1 of RMSNorm — separating the
+// two passes into two kernels avoids cross-loop SSA issues in SPIR-V.
+//
+// Push constants:
+//   pc[0] = in_off     (float -> uint, start index in registers SSBO, input)
+//   pc[1] = scratch_off (float -> uint, index in registers SSBO for result)
+//   pc[2] = count      (float -> uint, number of elements to scan)
+//
+// Thread 0 (gid==0) performs a sequential sum.
+//
+// Binding layout (ir_input_count=3):
+//   Binding 0: registers (read input, write scalar result)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (unused)
+//   Binding 3: control   (unused)
+//
+// Dispatch: wg=1
+//
+// Run: octoflow run stdlib/loom/emit_vm_sum_sq.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_sum_sq(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry       = ir_block("entry")
+  let pre_loop    = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body   = ir_block("loop_body")
+  let loop_cont   = ir_block("loop_cont")
+  let loop_merge  = ir_block("loop_merge")
+  let exit_block  = ir_block("exit")
+
+  // Entry: gid guard, push constants
+  let gid        = ir_load_gid(entry)
+  let pc_in      = ir_push_const(entry, 0.0)
+  let pc_scratch = ir_push_const(entry, 1.0)
+  let pc_cnt     = ir_push_const(entry, 2.0)
+  let in_off_u   = ir_ftou(entry, pc_in)
+  let scratch_u  = ir_ftou(entry, pc_scratch)
+  let count_u    = ir_ftou(entry, pc_cnt)
+  let one_u      = ir_const_u(entry, 1.0)
+  let not_t0     = ir_ugte(entry, gid, one_u)
+  let _sm_e      = ir_selection_merge(entry, exit_block)
+  let _br_e      = ir_term_cond_branch(entry, not_t0, exit_block, pre_loop)
+
+  // pre_loop: init j=0, sum=0
+  let zero_u1    = ir_const_u(pre_loop, 0.0)
+  let zero_f1    = ir_const_f(pre_loop, 0.0)
+  let _bpl       = ir_term_branch(pre_loop, loop_header)
+
+  // loop_header: phi(j, sum_sq)
+  let phi_j      = ir_phi(loop_header, 2.0)
+  let phi_sum    = ir_phi(loop_header, 1.0)
+  let _pj0       = ir_phi_add(phi_j,   zero_u1, pre_loop)
+  let _ps0       = ir_phi_add(phi_sum, zero_f1, pre_loop)
+  let j_done     = ir_ugte(loop_header, phi_j, count_u)
+  let _lm_inst   = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc        = ir_term_cond_branch(loop_header, j_done, loop_merge, loop_body)
+
+  // loop_body: load x, square, accumulate
+  let in_idx     = ir_iadd(loop_body, in_off_u, phi_j)
+  let val        = ir_load_input_at(loop_body, 0.0, in_idx)
+  let sq         = ir_fmul(loop_body, val, val)
+  let new_sum    = ir_fadd(loop_body, phi_sum, sq)
+  let _blb       = ir_term_branch(loop_body, loop_cont)
+
+  // loop_cont: j++, back-edge phis
+  let one_u2     = ir_const_u(loop_cont, 1.0)
+  let new_j      = ir_iadd(loop_cont, phi_j, one_u2)
+  let _blc       = ir_term_branch(loop_cont, loop_header)
+  let _pj1       = ir_phi_add(phi_j,   new_j,   loop_cont)
+  let _ps1       = ir_phi_add(phi_sum, new_sum, loop_cont)
+
+  // loop_merge: write sum_sq to registers[scratch_off]
+  let _store     = ir_buf_store_f(loop_merge, 0.0, scratch_u, phi_sum)
+  let _blm       = ir_term_branch(loop_merge, exit_block)
+
+  // exit
+  let _ret       = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/nn/vm_sum_sq.spv"
+let _r = emit_vm_sum_sq(out)
+print("Emitted: {out}")

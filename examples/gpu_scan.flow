@@ -1,0 +1,193 @@
+// gpu_scan.flow — GPU Prefix Sum (Multi-Pass Scan)
+//
+// "65536 elements. Inclusive prefix sum. 3-pass pipeline. 0 CPU additions."
+//
+// Multi-pass Blelloch scan:
+//   Pass 1: Scan each 512-element block independently (128 workgroups)
+//   Pass 2: Extract & scan the 128 block totals (1 workgroup)
+//   Pass 3: Add scanned block totals back to each block (fixup)
+//
+// Run: octoflow run examples/gpu_scan.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N = 65536.0
+let BLOCK = 512.0
+let N_BLOCKS = N / BLOCK
+
+rt_init()
+
+let pipe_scan = rt_load_pipeline("tests/gpu_shaders/32_scan_sum.spv", 2.0, 4.0)
+let pipe_fixup = rt_load_pipeline("tests/gpu_shaders/33_scan_add_offset.spv", 2.0, 4.0)
+
+// ── Input: [1, 1, 1, ..., 1] — prefix sum should give [1, 2, 3, ..., N] ──
+let mut input = []
+let mut i = 0.0
+while i < N
+  push(input, 1.0)
+  i = i + 1.0
+end
+
+let buf_input = rt_create_buffer(N * 4.0)
+let buf_scanned = rt_create_buffer(N * 4.0)
+rt_upload(buf_input, input)
+
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_scanned, zeros)
+
+// Buffer for block totals (128 values)
+let buf_totals = rt_create_buffer(BLOCK * 4.0)
+let buf_totals_scanned = rt_create_buffer(BLOCK * 4.0)
+
+let mut zeros_small = []
+let mut i = 0.0
+while i < BLOCK
+  push(zeros_small, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_totals, zeros_small)
+rt_upload(buf_totals_scanned, zeros_small)
+
+// ── Pass 1: Scan each block independently ────────────────────────────
+let t0 = time()
+
+rt_chain_begin(1.0, 2.0)
+let mut pc1 = [N]
+rt_chain_push_constants(pipe_scan, pc1)
+let mut bufs1 = [buf_input, buf_scanned]
+rt_chain_dispatch(pipe_scan, bufs1, N_BLOCKS)
+rt_chain_end()
+rt_chain_submit_wait()
+
+// ── Extract block totals (last element of each scanned block) ────────
+// Block k's total = scanned[k * BLOCK + BLOCK - 1]
+rt_download(buf_scanned, N)
+
+let mut totals = []
+let mut k = 0.0
+while k < N_BLOCKS
+  let idx = k * BLOCK + BLOCK - 1.0
+  push(totals, rt_result[int(idx)])
+  k = k + 1.0
+end
+
+// Pad totals to BLOCK size
+let mut i = N_BLOCKS
+while i < BLOCK
+  push(totals, 0.0)
+  i = i + 1.0
+end
+
+rt_upload(buf_totals, totals)
+rt_upload(buf_totals_scanned, zeros_small)
+
+// ── Pass 2: Scan the block totals ────────────────────────────────────
+rt_chain_begin(1.0, 2.0)
+let mut pc2 = [N_BLOCKS]
+rt_chain_push_constants(pipe_scan, pc2)
+let mut bufs2 = [buf_totals, buf_totals_scanned]
+rt_chain_dispatch(pipe_scan, bufs2, 1.0)
+rt_chain_end()
+rt_chain_submit_wait()
+
+// ── Pass 3: Add scanned totals back to each block ────────────────────
+// The fixup kernel expects 512-element blocks
+// Each thread in block k adds scanned_totals[k-1]
+// We need to re-dispatch with the scan_add_offset kernel
+// But this kernel reads 1 element per thread at global index
+// So we need N/256 workgroups (not N/512) since kernel has local_size=256
+rt_chain_begin(1.0, 2.0)
+let mut pc3 = [N]
+rt_chain_push_constants(pipe_fixup, pc3)
+let mut bufs3 = [buf_scanned, buf_totals_scanned]
+rt_chain_dispatch(pipe_fixup, bufs3, N / 256.0)
+rt_chain_end()
+rt_chain_submit_wait()
+
+let t1 = time()
+let total_ms = (t1 - t0) * 1000.0
+
+// ── Verify ───────────────────────────────────────────────────────────
+rt_download(buf_scanned, N)
+
+// Check first few elements
+let v0 = rt_result[0]
+let v511 = rt_result[511]
+let v512 = rt_result[512]
+let v1023 = rt_result[1023]
+let vlast = rt_result[int(N - 1.0)]
+
+// Verify exact values at block boundaries
+let mut pass = 1.0
+
+// First block should be [1, 2, 3, ..., 512]
+if v0 != 1.0
+  print("FAIL: element 0 = {v0}, expected 1")
+  pass = 0.0
+end
+if v511 != 512.0
+  print("FAIL: element 511 = {v511}, expected 512")
+  pass = 0.0
+end
+// Second block should continue: element 512 = 513
+if v512 != 513.0
+  print("FAIL: element 512 = {v512}, expected 513")
+  pass = 0.0
+end
+if v1023 != 1024.0
+  print("FAIL: element 1023 = {v1023}, expected 1024")
+  pass = 0.0
+end
+// Last element should be N
+if vlast != N
+  print("FAIL: element {N}-1 = {vlast}, expected {N}")
+  pass = 0.0
+end
+
+// Spot check: every 1000th element
+let mut spot_pass = 1.0
+let mut i = 0.0
+while i < N
+  let got = rt_result[int(i)]
+  let exp = i + 1.0
+  if got != exp
+    spot_pass = 0.0
+  end
+  i = i + 1000.0
+end
+
+// ── Report ───────────────────────────────────────────────────────────
+print("")
+print("OctoFlow GPU Prefix Sum (Multi-Pass Scan)")
+print("  Elements: {N}")
+print("  Block size: {BLOCK}")
+print("  Blocks: {N_BLOCKS}")
+print("  Passes: 3 (block scan + total scan + fixup)")
+print("  CPU additions: 0")
+print("  Total time: {total_ms} ms")
+print("")
+print("  Verification:")
+print("    scan[0] = {v0} (expected 1)")
+print("    scan[511] = {v511} (expected 512)")
+print("    scan[512] = {v512} (expected 513)")
+print("    scan[1023] = {v1023} (expected 1024)")
+print("    scan[65535] = {vlast} (expected 65536)")
+print("    Spot check (every 1000): {spot_pass}")
+
+if pass == 1.0
+  if spot_pass == 1.0
+    print("  PASS: {N}-element multi-pass prefix sum BIT EXACT")
+  else
+    print("  FAIL: spot check failed")
+  end
+else
+  print("  FAIL: boundary check failed")
+end
+
+print("")
+rt_cleanup()

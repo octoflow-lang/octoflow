@@ -1,0 +1,165 @@
+// emit_sieve_mark_v3_large.flow — Prime-Centric Mark Kernel (Large Primes)
+//
+// Each thread handles ONE large prime and clears all its multiples in the segment.
+// Uses OpAtomicAnd to safely clear bits when multiple threads target the same word.
+//
+// Thread gid:
+//   prime_idx = gid + prime_start
+//   if prime_idx >= prime_end: exit
+//   prime = globals[prime_idx]
+//   For each odd multiple of prime in segment: atomic_and(R0[word], ~(1 << bit))
+//
+// This is the inverse of v2's word-centric approach:
+//   v2: each thread = one word, loops over ALL primes (wasteful for large primes)
+//   v3: each thread = one prime, loops over its multiples (efficient for large primes)
+//
+// Push constants:
+//   pc[0] = seg_idx      (segment index)
+//   pc[1] = num_words    (bitmap words, 31250)
+//   pc[2] = prime_start  (index in globals array)
+//   pc[3] = prime_end    (index in globals array)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read+write R0 bitmap as uint32, via atomic AND)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (read primes list as float)
+//   Binding 3: control   (unused)
+//
+// Dispatch: wg = ceil((prime_end - prime_start) / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_mark_v3_large.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_mark_v3_large(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let pre_loop   = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body  = ir_block("loop_body")
+  let loop_cont  = ir_block("loop_cont")
+  let loop_merge = ir_block("loop_merge")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────
+  let gid      = ir_load_gid(entry)
+  let pc_seg   = ir_push_const(entry, 0.0)   // seg_idx
+  let pc_words = ir_push_const(entry, 1.0)   // num_words
+  let pc_pst   = ir_push_const(entry, 2.0)   // prime_start
+  let pc_pen   = ir_push_const(entry, 3.0)   // prime_end
+
+  // Compute prime_idx = gid + prime_start
+  let pstart_u = ir_ftou(entry, pc_pst)
+  let pend_u   = ir_ftou(entry, pc_pen)
+  let prime_idx = ir_iadd(entry, gid, pstart_u)
+
+  // Bounds check: prime_idx >= prime_end → exit
+  let oob      = ir_ugte(entry, prime_idx, pend_u)
+  let _sm      = ir_selection_merge(entry, exit_block)
+  let _br      = ir_term_cond_branch(entry, oob, exit_block, pre_loop)
+
+  // ── pre_loop: load prime, compute segment range, find first multiple ──
+  let seg_u    = ir_ftou(pre_loop, pc_seg)
+
+  let c0       = ir_const_u(pre_loop, 0.0)
+  let c1       = ir_const_u(pre_loop, 1.0)
+  let c2       = ir_const_u(pre_loop, 2.0)
+  let c32      = ir_const_u(pre_loop, 32.0)
+  let c64      = ir_const_u(pre_loop, 64.0)
+
+  // SEG_RANGE = num_words * 64 (dynamic, each word = 32 odd = 64 actual numbers)
+  let words_u   = ir_ftou(pre_loop, pc_words)
+  let seg_range = ir_imul(pre_loop, words_u, c64)
+
+  // Compute seg_start = seg_idx * SEG_RANGE + 1 (uint32, exact)
+  let seg_base  = ir_imul(pre_loop, seg_u, seg_range)
+  let seg_start = ir_iadd(pre_loop, seg_base, c1)
+
+  // seg_end_val: last odd candidate value in segment
+  // Last candidate = seg_start + (num_words*32 - 1)*2
+  let words32   = ir_imul(pre_loop, words_u, c32)
+  // seg_end_candidate = seg_start + (words32 - 1) * 2
+  let w32m1     = ir_isub(pre_loop, words32, c1)
+  let seg_end_off = ir_imul(pre_loop, w32m1, c2)
+  let seg_end_val = ir_iadd(pre_loop, seg_start, seg_end_off)
+
+  // Load prime from globals (as float → uint)
+  let prime_f   = ir_load_input_at(pre_loop, 2.0, prime_idx)
+  let prime_u   = ir_ftou(pre_loop, prime_f)
+
+  // Step = 2 * prime (distance between consecutive odd multiples)
+  let step      = ir_imul(pre_loop, prime_u, c2)
+
+  // p_sq = prime * prime
+  let p_sq      = ir_imul(pre_loop, prime_u, prime_u)
+
+  // start_pt = max(p_sq, seg_start)
+  let use_psq   = ir_ugte(pre_loop, p_sq, seg_start)
+  let start_pt  = ir_select(pre_loop, IR_TYPE_UINT, use_psq, p_sq, seg_start)
+
+  // Find first multiple of prime >= start_pt
+  // rem = start_pt % prime
+  // gap = (prime - rem) % prime   (handles rem==0 → gap=0)
+  // first_m = start_pt + gap
+  let rem       = ir_umod(pre_loop, start_pt, prime_u)
+  let gap_raw   = ir_isub(pre_loop, prime_u, rem)
+  let gap       = ir_umod(pre_loop, gap_raw, prime_u)
+  let first_m   = ir_iadd(pre_loop, start_pt, gap)
+
+  // If first_m is even, add prime to get odd multiple
+  let is_even   = ir_uequ(pre_loop, ir_bit_and(pre_loop, first_m, c1), c0)
+  let first_m_adj = ir_iadd(pre_loop, first_m, prime_u)
+  let mult_init = ir_select(pre_loop, IR_TYPE_UINT, is_even, first_m_adj, first_m)
+
+  let _bpl      = ir_term_branch(pre_loop, loop_header)
+
+  // ── Loop: iterate over odd multiples of prime in segment ──
+  let phi_m     = ir_phi(loop_header, 2.0)    // uint: current multiple
+  let _pm0      = ir_phi_add(phi_m, mult_init, pre_loop)
+
+  // Check: mult > seg_end_val → done
+  let m_past    = ir_ugte(loop_header, phi_m, ir_iadd(loop_header, seg_end_val, c1))
+  let _lm       = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc       = ir_term_cond_branch(loop_header, m_past, loop_merge, loop_body)
+
+  // ── loop_body: compute word index and bit position, atomic AND ──
+  // offset = (mult - seg_start) / 2   (index among odd candidates)
+  let offset    = ir_isub(loop_body, phi_m, seg_start)
+  let half_off  = ir_udiv(loop_body, offset, c2)
+
+  // word_idx = half_off / 32
+  let word_idx  = ir_udiv(loop_body, half_off, c32)
+
+  // bit_pos = half_off % 32
+  let bit_pos   = ir_umod(loop_body, half_off, c32)
+
+  // mask = ~(1 << bit_pos)
+  let one_shl   = ir_shl(loop_body, c1, bit_pos)
+  let mask      = ir_not(loop_body, one_shl)
+
+  // Atomic AND: R0[word_idx] &= mask (clears the bit)
+  let _atomic   = ir_buf_atomic_and(loop_body, 0.0, word_idx, mask)
+
+  let _br_lb    = ir_term_branch(loop_body, loop_cont)
+
+  // ── loop_cont: advance mult by step (2 * prime) ──
+  let next_m    = ir_iadd(loop_cont, phi_m, step)
+  let _br_lc    = ir_term_branch(loop_cont, loop_header)
+  let _pm1      = ir_phi_add(phi_m, next_m, loop_cont)
+
+  // ── loop_merge: done with this prime ──
+  let _br_lm    = ir_term_branch(loop_merge, exit_block)
+
+  // ── exit ──
+  let _ret      = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_mark_v3_large.spv"
+let _r = emit_sieve_mark_v3_large(out)
+print("Emitted: {out}")

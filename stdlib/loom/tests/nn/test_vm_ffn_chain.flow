@@ -1,0 +1,167 @@
+// test_vm_ffn_chain.flow — Step 6.1: GPU-Autonomous FFN Sub-Block
+//
+// Proves that the FULL FFN sub-block runs as a SINGLE vkQueueSubmit:
+//
+//   [sum_sq_b1] → BARRIER → [rmsnorm_apply_b1] → BARRIER →
+//   [gate_matvec] → BARRIER → [up_matvec] → BARRIER →
+//   [silu_mul] → BARRIER → [down_matvec] → BARRIER → [add]
+//
+// 7 dispatches, 6 barriers, ONE command buffer, ONE vkQueueSubmit.
+// GPU executes the entire FFN sub-block autonomously. CPU only writes input
+// and reads output. No intermediate CPU round-trips.
+//
+// Dimensions: n_embd=4, n_ff=4 (small for easy verification)
+// Weights: identity matrices (matvec = identity transform)
+//
+// Register layout (reg_size=8, flat offsets):
+//   R0 (0):  hidden state input     [1, 2, 3, 4, ...]
+//   R1 (8):  normed hidden           (after rmsnorm)
+//   R2 (16): gate matvec output      (gate_W × normed)
+//   R3 (24): up matvec output        (up_W × normed)
+//   R4 (32): SiLU(gate) × up         (silu_mul output)
+//   R5 (40): down matvec output      (down_W × silu_out)
+//   R6 (48): residual = hidden + down (final output)
+//
+// Globals layout (flat):
+//   [0:4]   = norm weights   [1, 1, 1, 1]
+//   [4:20]  = gate_W         4×4 identity
+//   [20:36] = up_W           4×4 identity
+//   [36:52] = down_W         4×4 identity
+//
+// Run: octoflow run stdlib/loom/test_vm_ffn_chain.flow --allow-ffi
+
+let reg_size = 8.0
+let n_inst   = 1.0
+let n_embd   = 4.0
+let n_ff     = 4.0
+let eps      = 0.00001
+
+// Globals: norm_w(4) + gate_W(16) + up_W(16) + down_W(16) = 52 floats
+let globals_size = 52.0
+let vm = vm_boot(n_inst, reg_size, globals_size)
+
+// ── 1. Write hidden state to R0 ──────────────────────────────────────────
+let hidden = [1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0]
+let _wh = vm_write_register(vm, 0.0, 0.0, hidden)
+
+// ── 2. Write all weights to globals ──────────────────────────────────────
+// norm_w at globals[0:4]
+let norm_w = [1.0, 1.0, 1.0, 1.0]
+let _wn = vm_write_globals(vm, 0.0, norm_w)
+
+// gate_W at globals[4:20] — 4×4 identity (row-major)
+let gate_w = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+let _wgw = vm_write_globals(vm, 4.0, gate_w)
+
+// up_W at globals[20:36] — 4×4 identity
+let up_w = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+let _wuw = vm_write_globals(vm, 20.0, up_w)
+
+// down_W at globals[36:52] — 4×4 identity
+let down_w = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+let _wdw = vm_write_globals(vm, 36.0, down_w)
+
+// ── 3. Build the FFN dispatch chain (7 kernels, 1 command buffer) ────────
+
+// Stage 1: sum_sq_b1 — sum(hidden²) → metrics[0]
+let pc1 = [0.0, 0.0, n_embd]
+let _d1 = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_sum_sq_b1.spv", pc1, 1.0)
+
+// Stage 2: rmsnorm_apply_b1 — normed = hidden * scale * w
+//   in_off=0, out_off=8, wgt_off=0, scratch_off=0, count=4, eps
+let pc2 = [0.0, 8.0, 0.0, 0.0, n_embd, eps]
+let _d2 = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_rmsnorm_apply_b1.spv", pc2, 1.0)
+
+// Stage 3: gate matvec — gate_out = gate_W × normed
+//   M=4, K=4, weight_off=4, input_off=8, output_off=16
+let pc3 = [n_ff, n_embd, 4.0, 8.0, 16.0]
+let _d3 = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_matvec.spv", pc3, 1.0)
+
+// Stage 4: up matvec — up_out = up_W × normed
+//   M=4, K=4, weight_off=20, input_off=8, output_off=24
+let pc4 = [n_ff, n_embd, 20.0, 8.0, 24.0]
+let _d4 = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_matvec.spv", pc4, 1.0)
+
+// Stage 5: silu_mul — SiLU(gate) × up
+//   gate_off=16, up_off=24, dst_off=32, count=4
+let pc5 = [16.0, 24.0, 32.0, n_ff]
+let _d5 = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_silu_mul.spv", pc5, 1.0)
+
+// Stage 6: down matvec — down_out = down_W × silu_out
+//   M=4, K=4, weight_off=36, input_off=32, output_off=40
+let pc6 = [n_embd, n_ff, 36.0, 32.0, 40.0]
+let _d6 = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_matvec.spv", pc6, 1.0)
+
+// Stage 7: residual add — result = hidden + down_out
+//   a_off=0, b_off=40, dst_off=48, count=4
+let pc7 = [0.0, 40.0, 48.0, n_embd]
+let _d7 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_add.spv", pc7, 1.0)
+
+// Build and execute ONE command buffer
+let prog = vm_build(vm)
+let _e = vm_execute(prog)
+
+// ── 4. Read GPU output ───────────────────────────────────────────────────
+let result = vm_read_register(vm, 0.0, 6.0, n_embd)
+let r0 = result[0]
+let r1 = result[1]
+let r2 = result[2]
+let r3 = result[3]
+
+// ── 5. CPU reference computation ─────────────────────────────────────────
+// Step 1: RMSNorm
+let sum_sq = 1.0*1.0 + 2.0*2.0 + 3.0*3.0 + 4.0*4.0
+let mean_sq = sum_sq / n_embd
+let rms = sqrt(mean_sq + eps)
+let sc = 1.0 / rms
+
+let n0 = 1.0 * sc
+let n1 = 2.0 * sc
+let n2 = 3.0 * sc
+let n3 = 4.0 * sc
+
+// Step 2+3: gate = normed (identity), up = normed (identity)
+// Step 4: SiLU(gate) × up = SiLU(normed) × normed
+let e_c = 2.71828182845
+let silu0 = (n0 / (1.0 + pow(e_c, 0.0 - n0))) * n0
+let silu1 = (n1 / (1.0 + pow(e_c, 0.0 - n1))) * n1
+let silu2 = (n2 / (1.0 + pow(e_c, 0.0 - n2))) * n2
+let silu3 = (n3 / (1.0 + pow(e_c, 0.0 - n3))) * n3
+
+// Step 5: down = silu_out (identity)
+// Step 6: result = hidden + down
+let ref0 = 1.0 + silu0
+let ref1 = 2.0 + silu1
+let ref2 = 3.0 + silu2
+let ref3 = 4.0 + silu3
+
+// ── 6. Compare ───────────────────────────────────────────────────────────
+print("TEST: GPU-Autonomous FFN Chain (7 dispatches, 1 vkQueueSubmit)")
+print("  Pipeline: sum_sq_b1 | rmsnorm_apply_b1 | gate_matvec | up_matvec | silu_mul | down_matvec | add")
+print("  GPU result:  [{r0}, {r1}, {r2}, {r3}]")
+print("  CPU ref:     [{ref0}, {ref1}, {ref2}, {ref3}]")
+
+let mut pass = 1.0
+if abs(r0 - ref0) > 0.01
+  pass = 0.0
+  print("  FAIL: r[0] {r0} != {ref0}")
+end
+if abs(r1 - ref1) > 0.01
+  pass = 0.0
+  print("  FAIL: r[1] {r1} != {ref1}")
+end
+if abs(r2 - ref2) > 0.01
+  pass = 0.0
+  print("  FAIL: r[2] {r2} != {ref2}")
+end
+if abs(r3 - ref3) > 0.01
+  pass = 0.0
+  print("  FAIL: r[3] {r3} != {ref3}")
+end
+if pass == 1.0
+  print("TEST: PASS -- Full FFN sub-block, GPU-autonomous, single vkQueueSubmit")
+else
+  print("TEST: FAIL")
+end
+
+let _sv = vm_shutdown(vm)

@@ -1,0 +1,129 @@
+// test_gpu_nbody.flow — GPU N-body simulation unit test
+//
+// 4 particles in a symmetric configuration. After 1 step,
+// verify energy conservation and symmetry properties.
+//
+// Initial state (unit square corners):
+//   P0: (0, 0), P1: (1, 0), P2: (0, 1), P3: (1, 1)
+//   All velocities = 0
+//
+// By symmetry after 1 step:
+//   - Center of mass stays at (0.5, 0.5)
+//   - P0 and P3 should mirror across center
+//   - P1 and P2 should mirror across center
+//
+// Run: octoflow run stdlib/tests/test_gpu_nbody.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+rt_init()
+
+// 3 push constants: n_particles (4B), dt (4B), softening (4B) = 12 bytes
+let pipe_nbody = rt_load_pipeline("tests/gpu_shaders/27_nbody.spv", 2.0, 12.0)
+
+let N = 4.0
+let DT = 0.001
+let SOFT = 0.01
+
+// Initial state: 4 floats per particle [x, y, vx, vy]
+// Particles at unit square corners, zero velocity
+let mut state = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]
+
+let buf_in = rt_create_buffer(N * 4.0 * 4.0)
+let buf_out = rt_create_buffer(N * 4.0 * 4.0)
+rt_upload(buf_in, state)
+
+// Zero output
+let mut zeros = []
+let mut i = 0.0
+while i < N * 4.0
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_out, zeros)
+
+// Dispatch: 1 step, 1 workgroup (4 particles < 256)
+rt_chain_begin(1.0, 2.0)
+let mut pc = [N, DT, SOFT]
+rt_chain_push_constants(pipe_nbody, pc)
+let mut bufs = [buf_in, buf_out]
+rt_chain_dispatch(pipe_nbody, bufs, 1.0)
+rt_chain_end()
+rt_chain_submit_wait()
+
+// Download result
+rt_download(buf_out, N * 4.0)
+
+let x0 = rt_result[0]
+let y0 = rt_result[1]
+let x1 = rt_result[4]
+let y1 = rt_result[5]
+let x2 = rt_result[8]
+let y2 = rt_result[9]
+let x3 = rt_result[12]
+let y3 = rt_result[13]
+
+// Verify center of mass = (0.5, 0.5)
+let cx = (x0 + x1 + x2 + x3) / 4.0
+let cy = (y0 + y1 + y2 + y3) / 4.0
+
+let cx_err = abs(cx - 0.5)
+let cy_err = abs(cy - 0.5)
+
+// Verify symmetry: P0+P3 should average to center, P1+P2 should too
+let sym03_x = abs((x0 + x3) / 2.0 - 0.5)
+let sym03_y = abs((y0 + y3) / 2.0 - 0.5)
+let sym12_x = abs((x1 + x2) / 2.0 - 0.5)
+let sym12_y = abs((y1 + y2) / 2.0 - 0.5)
+
+// Verify particles moved (not stuck at initial position)
+let moved = abs(x0 - 0.0) + abs(y0 - 0.0)
+
+print("GPU N-body (4 particles, 1 step):")
+print("  P0: ({x0}, {y0})")
+print("  P1: ({x1}, {y1})")
+print("  P2: ({x2}, {y2})")
+print("  P3: ({x3}, {y3})")
+print("  Center of mass: ({cx}, {cy})")
+print("  CoM error: ({cx_err}, {cy_err})")
+print("  Symmetry 0-3: ({sym03_x}, {sym03_y})")
+print("  Symmetry 1-2: ({sym12_x}, {sym12_y})")
+print("  Movement: {moved}")
+
+let mut pass = 1.0
+let tol = 0.0001
+
+if cx_err > tol
+  print("FAIL: center of mass X drifted")
+  pass = 0.0
+end
+if cy_err > tol
+  print("FAIL: center of mass Y drifted")
+  pass = 0.0
+end
+if sym03_x > tol
+  print("FAIL: P0-P3 X symmetry broken")
+  pass = 0.0
+end
+if sym03_y > tol
+  print("FAIL: P0-P3 Y symmetry broken")
+  pass = 0.0
+end
+if sym12_x > tol
+  print("FAIL: P1-P2 X symmetry broken")
+  pass = 0.0
+end
+if sym12_y > tol
+  print("FAIL: P1-P2 Y symmetry broken")
+  pass = 0.0
+end
+if moved < 0.000001
+  print("FAIL: particles did not move")
+  pass = 0.0
+end
+
+if pass == 1.0
+  print("PASS: gpu_nbody symmetry and conservation verified")
+end
+
+rt_cleanup()

@@ -1,0 +1,131 @@
+// indirect_dispatch.flow — GPU Self-Scheduling: Tier 2 Autonomy Proof
+//
+// TWO dispatches in a single VkCommandBuffer, single vkQueueSubmit.
+// Dispatch 1: GPU reads data, computes workgroup count, writes to indirect buffer.
+// Dispatch 2: GPU reads workgroup count from indirect buffer, processes data.
+// CPU NEVER sees the workgroup count. The scheduling decision was made on-GPU.
+//
+// This proves GPU SELF-SCHEDULING — the GPU decides its own workload.
+// Tier 1 proved sequential autonomy (CPU scheduled, GPU executed).
+// Tier 2 proves the GPU makes scheduling decisions without CPU involvement.
+//
+// Verification is BIT-EXACT: input [1, 2, 3, ..., 256] doubled = [2, 4, 6, ..., 512].
+// Integer values within f32 range — zero floating-point ambiguity.
+//
+// Architecture:
+//   Language → IR → SPIR-V (compute: what to do)
+//   Language → Vulkan commands (scheduling: when and how much)
+//   Dispatch 1 WRITES the "how much" — GPU owns both compute AND scheduling.
+//
+// Run: octoflow run examples/indirect_dispatch.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N = 256.0
+let BUF_BYTES = N * 4.0
+
+// Boot GPU (single init, never again)
+rt_init()
+
+// Load shaders
+// 12_set_dispatch: reads float count from input[0], writes VkDispatchIndirectCommand
+// 01_double: output[i] = input[i] * 2.0
+let pipe_set = rt_load_pipeline("tests/gpu_shaders/12_set_dispatch.spv", 2.0, 0.0)
+let pipe_double = rt_load_pipeline("tests/gpu_shaders/01_double.spv", 2.0, 0.0)
+
+// Create buffers
+let data_buf = rt_create_buffer(BUF_BYTES)
+let result_buf = rt_create_buffer(BUF_BYTES)
+let indirect_buf = rt_create_indirect_buffer(12.0)
+
+// Upload data: [256.0, 2.0, 3.0, ..., 256.0]
+// data[0] = 256.0 is the element count — the set_dispatch shader reads this
+let mut data = []
+push(data, N)
+let mut i = 1.0
+while i < N
+  push(data, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(data_buf, data)
+
+// Zero result buffer
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(result_buf, zeros)
+
+// Zero indirect buffer
+let mut ind_zeros = [0.0, 0.0, 0.0]
+rt_upload_u32(indirect_buf, ind_zeros)
+
+// ── Record 2 dispatches ───────────────────────────────────────────
+let t0 = time()
+
+rt_chain_begin(2.0, 2.0)
+
+// Dispatch 1 (DIRECT, 1 workgroup): set_dispatch reads data[0]=256.0,
+// computes ceil(256/256)=1 workgroup, writes {1, 1, 1} to indirect buffer.
+// CPU does NOT know what the shader will compute.
+let mut bufs_set = [data_buf, indirect_buf]
+rt_chain_dispatch(pipe_set, bufs_set, 1.0)
+
+// Dispatch 2 (INDIRECT): double reads data_buf, writes result_buf.
+// Workgroup count comes from indirect_buf — written by dispatch 1.
+// GPU self-scheduled: the GPU decided how many workgroups to launch.
+let mut bufs_double = [data_buf, result_buf]
+rt_chain_dispatch_indirect(pipe_double, bufs_double, indirect_buf)
+
+rt_chain_end()
+let t1 = time()
+let record_ms = (t1 - t0) * 1000.0
+
+// ── Single submit — GPU takes over ───────────────────────────────
+let t2 = time()
+rt_chain_submit_wait()
+let t3 = time()
+let gpu_ms = (t3 - t2) * 1000.0
+
+// ── Verify result (bit-exact) ────────────────────────────────────
+rt_download(result_buf, 4.0)
+
+// data = [256, 2, 3, 4, ...] → doubled = [512, 4, 6, 8, ...]
+let expected_0 = N * 2.0
+let expected_1 = 4.0
+let expected_2 = 6.0
+let expected_3 = 8.0
+
+let v0 = rt_result[0]
+let v1 = rt_result[1]
+let v2 = rt_result[2]
+let v3 = rt_result[3]
+
+print("")
+print("OctoFlow GPU Autonomy — Tier 2 Proof")
+print("  Pipeline:")
+print("    Dispatch 1: GPU analyzes data[0]=256 → writes workgroup count")
+print("    Dispatch 2: GPU reads workgroup count → doubles all elements")
+print("  Submissions: 1")
+print("  CPU decisions: 0 (GPU self-scheduled)")
+print("  Record time: {record_ms} ms")
+print("  GPU time:    {gpu_ms} ms")
+print("  Result[0..3]: [{v0}, {v1}, {v2}, {v3}]")
+print("  Expected:     [{expected_0}, {expected_1}, {expected_2}, {expected_3}]")
+
+if v0 == expected_0 && v1 == expected_1 && v2 == expected_2 && v3 == expected_3
+  print("  EXACT MATCH")
+else
+  print("  MISMATCH")
+  if v0 != expected_0
+    print("    v0: got {v0}, expected {expected_0}")
+  end
+  if v1 != expected_1
+    print("    v1: got {v1}, expected {expected_1}")
+  end
+end
+
+print("")
+rt_cleanup()

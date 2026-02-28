@@ -1,0 +1,188 @@
+// test_nn.flow — Tests for stdlib/ml/nn.flow
+// Functions tested: relu_forward, sigmoid_forward, softmax, mse_loss, dense_forward
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from ml/nn.flow --
+fn relu_forward(arr)
+  let mut result = []
+  for x in arr
+    if x > 0.0
+      push(result, x)
+    else
+      push(result, 0.0)
+    end
+  end
+  return result
+end
+
+fn sigmoid_forward(arr)
+  let mut result = []
+  for x in arr
+    push(result, 1.0 / (1.0 + exp(-1.0 * x)))
+  end
+  return result
+end
+
+fn softmax(arr)
+  let n = len(arr)
+  let mut mx = arr[0]
+  for x in arr
+    if x > mx
+      mx = x
+    end
+  end
+  let mut exp_sum = 0.0
+  let mut exps = []
+  for x in arr
+    let e = exp(x - mx)
+    push(exps, e)
+    exp_sum = exp_sum + e
+  end
+  let mut result = []
+  for e in exps
+    push(result, e / exp_sum)
+  end
+  return result
+end
+
+fn mse_loss(predicted, target)
+  let n = len(predicted)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n
+    let d = predicted[i] - target[i]
+    sum = sum + d * d
+    i = i + 1.0
+  end
+  return sum / n
+end
+
+fn dense_forward(input, weights, bias, n_in, n_out)
+  let mut output = []
+  let mut j = 0.0
+  while j < n_out
+    let mut sum = bias[j]
+    let mut i = 0.0
+    while i < n_in
+      sum = sum + input[i] * weights[i * n_out + j]
+      i = i + 1.0
+    end
+    push(output, sum)
+    j = j + 1.0
+  end
+  return output
+end
+
+// -- Tests --
+
+print("=== test_nn ===")
+
+// relu_forward: negatives become 0, positives pass through
+let mut relu_in = []
+push(relu_in, 0.0 - 2.0)
+push(relu_in, 0.0 - 1.0)
+push(relu_in, 0.0)
+push(relu_in, 1.0)
+push(relu_in, 2.0)
+let r = relu_forward(relu_in)
+if r[0] == 0.0 && r[1] == 0.0 && r[2] == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: relu negatives expected 0")
+  fail = fail + 1.0
+end
+
+if r[3] == 1.0 && r[4] == 2.0
+  pass = pass + 1.0
+else
+  print("  FAIL: relu positives expected [1,2] got [{r[3]},{r[4]}]")
+  fail = fail + 1.0
+end
+
+// sigmoid_forward: sigmoid(0) = 0.5
+let sig_in1 = [0.0]
+let sig = sigmoid_forward(sig_in1)
+let diff_s = abs(sig[0] - 0.5)
+if diff_s < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: sigmoid(0) expected 0.5 got {sig[0]}")
+  fail = fail + 1.0
+end
+
+// sigmoid: large positive -> ~1.0, large negative -> ~0.0
+let mut sig_in2 = []
+push(sig_in2, 0.0 - 10.0)
+push(sig_in2, 10.0)
+let sig2 = sigmoid_forward(sig_in2)
+if sig2[0] < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: sigmoid(-10) expected ~0 got {sig2[0]}")
+  fail = fail + 1.0
+end
+
+if sig2[1] > 0.999
+  pass = pass + 1.0
+else
+  print("  FAIL: sigmoid(10) expected ~1 got {sig2[1]}")
+  fail = fail + 1.0
+end
+
+// softmax: outputs sum to 1.0
+let sm_in = [1.0, 2.0, 3.0]
+let sm = softmax(sm_in)
+let sm_sum = sm[0] + sm[1] + sm[2]
+let diff_sm = abs(sm_sum - 1.0)
+if diff_sm < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: softmax sum expected 1.0 got {sm_sum}")
+  fail = fail + 1.0
+end
+
+// softmax: largest input gets largest probability
+if sm[2] > sm[1] && sm[1] > sm[0]
+  pass = pass + 1.0
+else
+  print("  FAIL: softmax order expected sm[2]>sm[1]>sm[0]")
+  fail = fail + 1.0
+end
+
+// mse_loss: perfect prediction = 0
+let mse_pred = [1.0, 2.0, 3.0]
+let mse_tgt = [1.0, 2.0, 3.0]
+let mse = mse_loss(mse_pred, mse_tgt)
+if mse < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: mse_loss perfect expected 0 got {mse}")
+  fail = fail + 1.0
+end
+
+// dense_forward: simple 2-in, 1-out layer
+// weights=[1, 1], bias=[0], input=[3, 4] => output = 3+4 = 7
+let dense_input = [3.0, 4.0]
+let dense_weights = [1.0, 1.0]
+let dense_bias = [0.0]
+let out = dense_forward(dense_input, dense_weights, dense_bias, 2.0, 1.0)
+let diff_d = abs(out[0] - 7.0)
+if diff_d < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: dense_forward expected 7.0 got {out[0]}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_nn ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

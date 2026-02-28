@@ -1,0 +1,28 @@
+// gui.flow — OctoFlow GUI Widget Toolkit (Facade)
+//
+// Backward-compatible facade that imports all GUI sub-modules.
+// Existing code using `use "gui"` works unchanged.
+//
+// Sub-modules:
+//   gui_core  — State arrays, constants, drawing primitives
+//   theme     — Color theme presets (dark/light/ocean)
+//   widgets   — 16 widget types + queries
+//   canvas    — Canvas drawing API
+//   window    — Init, event loop, software renderer
+//
+// Usage:
+//   use "gui"
+//   let app = gui_init(800.0, 600.0, "My App")
+//   let btn = gui_button(10.0, 10.0, 120.0, 36.0, "Click Me")
+//   while gui_running() == 1.0
+//     gui_update()
+//     if gui_clicked(btn) == 1.0
+//       print("Button clicked!")
+//     end
+//   end
+
+use "gui_core"
+use "theme"
+use "widgets"
+use "canvas"
+use "window"

@@ -1,0 +1,400 @@
+// stdlib/data/json.flow — Pure .flow recursive-descent JSON parser
+// Parses JSON objects into OctoFlow maps. Nested objects use dot-notation
+// keys (e.g., {"a":{"b":1}} -> map with key "a.b" = 1.0), matching the
+// Rust json_io.rs flatten behavior. Lays groundwork for Rust deletion.
+//
+// Arrays use indexed keys: {"items":["a","b"]} -> "items.0"="a", "items.1"="b", "items._len"="2"
+// Use json_get_array(map, "items") to reconstruct as a real OctoFlow array.
+//
+// Limitations:
+//   - Top-level value must be an object { ... }
+//   - Nested objects are flattened to dot-notation keys
+
+// ── Parser state ───────────────────────────────────────────────────
+// pos[0] = current cursor position in text (array for mutation across fns)
+
+// ── json_skip_ws ───────────────────────────────────────────────────
+// Advance pos[0] past whitespace characters.
+fn json_skip_ws(text, pos)
+  let n = len(text)
+  while pos[0] < n
+    let c = char_at(text, pos[0])
+    let code = ord(c)
+    // space=32, tab=9, newline=10, carriage-return=13
+    if code == 32.0 || code == 9.0 || code == 10.0 || code == 13.0
+      pos[0] = pos[0] + 1.0
+    else
+      break
+    end
+  end
+  return 0.0
+end
+
+// ── json_parse_string ──────────────────────────────────────────────
+// Parse a JSON string value. pos[0] should point at opening quote.
+// Returns the string content (unescaped).
+fn json_parse_string(text, pos)
+  let n = len(text)
+  // skip opening double-quote
+  pos[0] = pos[0] + 1.0
+  let mut result = " "
+  let mut first = 1.0
+  while pos[0] < n
+    let c = char_at(text, pos[0])
+    let code = ord(c)
+    if code == 34.0
+      // closing double-quote
+      pos[0] = pos[0] + 1.0
+      if first == 1.0
+        return " "
+      end
+      return result
+    elif code == 92.0
+      // backslash — handle JSON escape sequences
+      pos[0] = pos[0] + 1.0
+      if pos[0] < n
+        let esc = char_at(text, pos[0])
+        let esc_code = ord(esc)
+        let mut ch = esc
+        if esc == "n"
+          ch = chr(10.0)
+        elif esc == "t"
+          ch = chr(9.0)
+        elif esc == "r"
+          ch = chr(13.0)
+        elif esc_code == 34.0
+          ch = chr(34.0)
+        elif esc_code == 92.0
+          ch = chr(92.0)
+        elif esc == "/"
+          ch = "/"
+        end
+        if first == 1.0
+          result = ch
+          first = 0.0
+        else
+          result = result + ch
+        end
+        pos[0] = pos[0] + 1.0
+      end
+    else
+      if first == 1.0
+        result = c
+        first = 0.0
+      else
+        result = result + c
+      end
+      pos[0] = pos[0] + 1.0
+    end
+  end
+  if first == 1.0
+    return " "
+  end
+  return result
+end
+
+// ── json_parse_number ──────────────────────────────────────────────
+// Parse a JSON number. pos[0] should point at first digit or minus.
+// Returns the number as a string (caller converts with float()).
+fn json_parse_number(text, pos)
+  let n = len(text)
+  let mut numstr = " "
+  let mut first = 1.0
+  while pos[0] < n
+    let c = char_at(text, pos[0])
+    let code = ord(c)
+    // digits 0-9 = 48-57, minus=45, plus=43, dot=46, e=101, E=69
+    let mut is_num_char = 0.0
+    if code >= 48.0 && code <= 57.0
+      is_num_char = 1.0
+    elif code == 45.0 || code == 43.0 || code == 46.0
+      is_num_char = 1.0
+    elif code == 101.0 || code == 69.0
+      is_num_char = 1.0
+    end
+    if is_num_char == 1.0
+      if first == 1.0
+        numstr = c
+        first = 0.0
+      else
+        numstr = numstr + c
+      end
+      pos[0] = pos[0] + 1.0
+    else
+      break
+    end
+  end
+  return numstr
+end
+
+// ── jparse_array ───────────────────────────────────────────────
+// Parse a JSON array. Stores elements as indexed keys in result map:
+//   "prefix.0", "prefix.1", ..., "prefix._len"
+// Nested objects inside arrays are flattened with dot-notation.
+fn jparse_array(text, pos, result, prefix)
+  let n = len(text)
+  // skip opening [
+  pos[0] = pos[0] + 1.0
+  let mut count = 0.0
+  let _ws = json_skip_ws(text, pos)
+  // check for empty array
+  if pos[0] < n
+    let peek = char_at(text, pos[0])
+    if peek == "]"
+      pos[0] = pos[0] + 1.0
+      map_set(result, prefix + "._len", "0")
+      return 0.0
+    end
+  end
+  while pos[0] < n
+    let _ws = json_skip_ws(text, pos)
+    let c = char_at(text, pos[0])
+    if c == "]"
+      pos[0] = pos[0] + 1.0
+      break
+    end
+    if c == ","
+      pos[0] = pos[0] + 1.0
+      let _ws = json_skip_ws(text, pos)
+    end
+    let elem_key = prefix + "." + str(count)
+    // peek at current value type
+    let vc = char_at(text, pos[0])
+    let vcode = ord(vc)
+    if vcode == 34.0
+      let val = json_parse_string(text, pos)
+      map_set(result, elem_key, val)
+    elif vc == "{"
+      // nested object inside array
+      let _rp = json_parse_object(text, pos, result, elem_key, 1.0)
+    elif vc == "["
+      // nested array
+      let _rp = jparse_array(text, pos, result, elem_key)
+    elif vcode >= 48.0 && vcode <= 57.0
+      let ns = json_parse_number(text, pos)
+      map_set(result, elem_key, ns)
+    elif vcode == 45.0
+      let ns = json_parse_number(text, pos)
+      map_set(result, elem_key, ns)
+    elif vc == "t"
+      map_set(result, elem_key, "true")
+      pos[0] = pos[0] + 4.0
+    elif vc == "f"
+      map_set(result, elem_key, "false")
+      pos[0] = pos[0] + 5.0
+    elif vc == "n"
+      map_set(result, elem_key, "null")
+      pos[0] = pos[0] + 4.0
+    else
+      // skip unknown
+      pos[0] = pos[0] + 1.0
+    end
+    count = count + 1.0
+  end
+  map_set(result, prefix + "._len", str(count))
+  return 0.0
+end
+
+// ── json_make_key ─────────────────────────────────────────────────
+// Build the full key: if depth > 0 (nested), prepend prefix + dot.
+// At top level (depth == 0), just return the key.
+fn json_make_key(prefix, key, depth)
+  if depth == 0.0
+    return key
+  end
+  return prefix + "." + key
+end
+
+// ── json_parse_object ──────────────────────────────────────────────
+// Parse a JSON object into a map. Nested objects are flattened using
+// dot-notation keys (e.g., {"a":{"b":1}} -> key "a.b").
+// prefix = parent key path, depth = nesting level (0 = top-level).
+fn json_parse_object(text, pos, result, prefix, depth)
+  let n = len(text)
+  // skip opening {
+  pos[0] = pos[0] + 1.0
+  let _ws = json_skip_ws(text, pos)
+  // check for empty object
+  if pos[0] < n
+    let peek = char_at(text, pos[0])
+    if peek == "}"
+      pos[0] = pos[0] + 1.0
+      return 0.0
+    end
+  end
+  while pos[0] < n
+    let _ws = json_skip_ws(text, pos)
+    let c = char_at(text, pos[0])
+    if c == "}"
+      pos[0] = pos[0] + 1.0
+      break
+    end
+    if c == ","
+      pos[0] = pos[0] + 1.0
+      let _ws = json_skip_ws(text, pos)
+    end
+    // Parse key (must be a string)
+    let key = json_parse_string(text, pos)
+    let full_key = json_make_key(prefix, key, depth)
+    let _ws = json_skip_ws(text, pos)
+    // skip colon
+    if pos[0] < n
+      pos[0] = pos[0] + 1.0
+    end
+    let _ws = json_skip_ws(text, pos)
+    // Parse value
+    if pos[0] >= n
+      break
+    end
+    let vc = char_at(text, pos[0])
+    let vcode = ord(vc)
+    if vcode == 34.0
+      // string value
+      let val = json_parse_string(text, pos)
+      map_set(result, full_key, val)
+    elif vc == "{"
+      // nested object -> flatten with dot prefix
+      let new_depth = depth + 1.0
+      let _rp = json_parse_object(text, pos, result, full_key, new_depth)
+    elif vc == "["
+      // array -> store as indexed keys (key.0, key.1, ..., key._len)
+      let _rp = jparse_array(text, pos, result, full_key)
+    elif vc == "t"
+      // true
+      map_set(result, full_key, "true")
+      pos[0] = pos[0] + 4.0
+    elif vc == "f"
+      // false
+      map_set(result, full_key, "false")
+      pos[0] = pos[0] + 5.0
+    elif vc == "n"
+      // null
+      map_set(result, full_key, "null")
+      pos[0] = pos[0] + 4.0
+    else
+      // number
+      let numstr = json_parse_number(text, pos)
+      let numval = float(numstr)
+      map_set(result, full_key, str(numval))
+    end
+  end
+  return 0.0
+end
+
+// ── json_decode ────────────────────────────────────────────────────
+// Parse a JSON object string into a map.
+// Nested objects use dot-notation keys.
+// Example: {"name":"Alice","age":30} -> map with name=Alice, age=30
+fn json_decode(text)
+  let mut pos = [0.0]
+  let mut result = map()
+  let _ws = json_skip_ws(text, pos)
+  if pos[0] < len(text)
+    let c = char_at(text, pos[0])
+    if c == "{"
+      let _rp = json_parse_object(text, pos, result, "_", 0.0)
+    end
+  end
+  return result
+end
+
+// ── json_get_array ────────────────────────────────────────────────
+// Reconstruct an OctoFlow array from indexed keys in a decoded JSON map.
+// Usage: let items = json_get_array(data, "items")
+fn json_get_array(m, key)
+  let len_key = key + "._len"
+  if map_has(m, len_key) == 0.0
+    return []
+  end
+  let n = float(map_get(m, len_key))
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    let elem_key = key + "." + str(i)
+    if map_has(m, elem_key)
+      push(result, map_get(m, elem_key))
+    else
+      push(result, "null")
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+// ── json_has_array ───────────────────────────────────────────────
+// Check if a key holds an array (has a ._len entry). Returns 1.0 or 0.0.
+fn json_has_array(m, key)
+  return map_has(m, key + "._len")
+end
+
+// ── json_needs_quote ───────────────────────────────────────────────
+// Check if a value looks like a number or boolean/null keyword.
+// Returns 0.0 if it looks numeric or is a keyword, 1.0 if it needs quotes.
+fn json_needs_quote(val)
+  if val == "true" || val == "false" || val == "null"
+    return 0.0
+  end
+  // Check if val is numeric
+  let n = len(val)
+  if n == 0.0
+    return 1.0
+  end
+  let mut i = 0.0
+  let first = char_at(val, 0.0)
+  if first == "-" || first == "+"
+    i = 1.0
+  end
+  let mut has_digit = 0.0
+  let mut has_dot = 0.0
+  while i < n
+    let code = ord(char_at(val, i))
+    if code >= 48.0 && code <= 57.0
+      has_digit = 1.0
+    elif code == 46.0 && has_dot == 0.0
+      has_dot = 1.0
+    else
+      return 1.0
+    end
+    i = i + 1.0
+  end
+  if has_digit == 1.0
+    return 0.0
+  end
+  return 1.0
+end
+
+// ── json_encode ────────────────────────────────────────────────────
+// Serialize a flat map to a JSON object string.
+// Float values and keywords (true/false/null) are unquoted.
+// String values are quoted with internal quotes escaped.
+fn json_encode(m)
+  let dq = chr(34.0)
+  let bs = chr(92.0)
+  let keys_str = map_keys(m)
+  let keys = split(keys_str, ",")
+  let nkeys = len(keys)
+  let mut out = "{"
+  let mut i = 0.0
+  while i < nkeys
+    let k = keys[i]
+    let v = map_get(m, k)
+    if i > 0.0
+      out = out + ","
+    end
+    // key is always quoted
+    out = out + dq + k + dq + ":"
+    // value: check if it needs quoting
+    let needs_q = json_needs_quote(v)
+    if needs_q == 1.0
+      // Escape backslashes and double-quotes in value
+      let v2 = replace(v, bs, bs + bs)
+      let v3 = replace(v2, dq, bs + dq)
+      out = out + dq + v3 + dq
+    else
+      out = out + v
+    end
+    i = i + 1.0
+  end
+  out = out + "}"
+  return out
+end

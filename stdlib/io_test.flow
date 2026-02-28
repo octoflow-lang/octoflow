@@ -1,0 +1,104 @@
+// stdlib/io_test.flow — Test FFI-based I/O module
+// Requires: --allow-ffi --allow-write --allow-read
+//
+// Tests: file write, file read, append, file size, remove, console output.
+// All I/O goes through msvcrt.dll FFI — no Rust builtins.
+
+use io
+
+let mut pass = 0.0
+let mut fail = 0.0
+let test_file = "_io_ffi_test.txt"
+
+// ── Test 1: Write file ────────────────────────────────────────────────
+let test_content = "Hello from FFI I/O!"
+let written = io_write_file(test_file, test_content)
+if written == 19.0
+    pass = pass + 1.0
+else
+    print("FAIL write: expected 19, got {written}")
+    fail = fail + 1.0
+end
+
+// ── Test 2: Read file ─────────────────────────────────────────────────
+let content = io_read_file(test_file)
+if content == test_content
+    pass = pass + 1.0
+else
+    print("FAIL read: got '{content}'")
+    fail = fail + 1.0
+end
+
+// ── Test 3: File size ─────────────────────────────────────────────────
+let sz = io_file_size(test_file)
+if sz == 19.0
+    pass = pass + 1.0
+else
+    print("FAIL file_size: expected 19, got {sz}")
+    fail = fail + 1.0
+end
+
+// ── Test 4: Append ────────────────────────────────────────────────────
+let appended = io_append_file(test_file, " More text.")
+if appended == 11.0
+    pass = pass + 1.0
+else
+    print("FAIL append: expected 11, got {appended}")
+    fail = fail + 1.0
+end
+
+let content2 = io_read_file(test_file)
+if content2 == "Hello from FFI I/O! More text."
+    pass = pass + 1.0
+else
+    print("FAIL append read: got '{content2}'")
+    fail = fail + 1.0
+end
+
+// ── Test 5: Console output via FFI ────────────────────────────────────
+io_puts("io_puts: console output works")
+pass = pass + 1.0
+
+// ── Test 6: Overwrite ─────────────────────────────────────────────────
+let _w2 = io_write_file(test_file, "new content")
+let content3 = io_read_file(test_file)
+if content3 == "new content"
+    pass = pass + 1.0
+else
+    print("FAIL overwrite: got '{content3}'")
+    fail = fail + 1.0
+end
+
+// ── Test 7: Read non-existent file ────────────────────────────────────
+let bad = io_read_file("_nonexistent_file_xyz.txt")
+if bad == ""
+    pass = pass + 1.0
+else
+    print("FAIL nonexistent: expected empty, got '{bad}'")
+    fail = fail + 1.0
+end
+
+// ── Test 8: Remove file ───────────────────────────────────────────────
+let rm = io_remove(test_file)
+if rm == 0.0
+    pass = pass + 1.0
+else
+    print("FAIL remove: code {rm}")
+    fail = fail + 1.0
+end
+
+// Verify removed
+let after_rm = io_read_file(test_file)
+if after_rm == ""
+    pass = pass + 1.0
+else
+    print("FAIL remove verify: file still readable")
+    fail = fail + 1.0
+end
+
+// ── Summary ───────────────────────────────────────────────────────────
+if fail == 0.0
+    print("FFI I/O: ALL PASS ({pass} tests)")
+else
+    print("FFI I/O: {fail} FAIL / {pass} PASS")
+end

@@ -1,0 +1,259 @@
+// test_gpu_linalg.flow — GPU Linear Algebra Tests
+// Tests GPU-accelerated matrix and vector operations
+
+use "../gpu/linalg"
+use "../gpu/runtime"
+
+print("=== GPU Linear Algebra Tests ===")
+
+rt_init()
+
+// ── Test 1: Matrix Multiplication (2×2) ──────────────────────────────────
+print("\n[1] gpu_matmul 2x2")
+let mut a = []
+push(a, 1.0)
+push(a, 2.0)
+push(a, 3.0)
+push(a, 4.0)
+
+let mut b = []
+push(b, 5.0)
+push(b, 6.0)
+push(b, 7.0)
+push(b, 8.0)
+
+// [[1,2],[3,4]] * [[5,6],[7,8]] = [[19,22],[43,50]]
+let c = gpu_matmul(a, b, 2.0, 2.0, 2.0)
+let c0 = c[0]
+let c1 = c[1]
+let c2 = c[2]
+let c3 = c[3]
+print("Result: [{c0}, {c1}, {c2}, {c3}]")
+print("Expected: [19, 22, 43, 50]")
+
+let mut ok1 = 1.0
+if abs(c0 - 19.0) > 0.01
+  ok1 = 0.0
+end
+if abs(c1 - 22.0) > 0.01
+  ok1 = 0.0
+end
+if abs(c2 - 43.0) > 0.01
+  ok1 = 0.0
+end
+if abs(c3 - 50.0) > 0.01
+  ok1 = 0.0
+end
+print("PASS={ok1}")
+
+// ── Test 2: Matrix Transpose ─────────────────────────────────────────────
+print("\n[2] gpu_transpose 2x3")
+let mut mat = []
+push(mat, 1.0)
+push(mat, 2.0)
+push(mat, 3.0)
+push(mat, 4.0)
+push(mat, 5.0)
+push(mat, 6.0)
+
+// [[1,2,3],[4,5,6]] transpose = [[1,4],[2,5],[3,6]]
+let trans = gpu_transpose(mat, 2.0, 3.0)
+let t0 = trans[0]
+let t1 = trans[1]
+let t2 = trans[2]
+let t3 = trans[3]
+let t4 = trans[4]
+let t5 = trans[5]
+print("Result: [{t0}, {t1}, {t2}, {t3}, {t4}, {t5}]")
+print("Expected: [1, 4, 2, 5, 3, 6]")
+
+let mut ok2 = 1.0
+if abs(t0 - 1.0) > 0.01
+  ok2 = 0.0
+end
+if abs(t1 - 4.0) > 0.01
+  ok2 = 0.0
+end
+if abs(t2 - 2.0) > 0.01
+  ok2 = 0.0
+end
+if abs(t3 - 5.0) > 0.01
+  ok2 = 0.0
+end
+if abs(t4 - 3.0) > 0.01
+  ok2 = 0.0
+end
+if abs(t5 - 6.0) > 0.01
+  ok2 = 0.0
+end
+print("PASS={ok2}")
+
+// ── Test 3: Dot Product ──────────────────────────────────────────────────
+print("\n[3] gpu_dot_product")
+let mut v1 = []
+push(v1, 1.0)
+push(v1, 2.0)
+push(v1, 3.0)
+push(v1, 4.0)
+
+let mut v2 = []
+push(v2, 5.0)
+push(v2, 6.0)
+push(v2, 7.0)
+push(v2, 8.0)
+
+// 1*5 + 2*6 + 3*7 + 4*8 = 5 + 12 + 21 + 32 = 70
+let dot = gpu_dot_product(v1, v2)
+print("Result: {dot}")
+print("Expected: 70")
+
+let mut ok3 = 1.0
+if abs(dot - 70.0) > 0.01
+  ok3 = 0.0
+end
+print("PASS={ok3}")
+
+// ── Test 4: Vector Addition ──────────────────────────────────────────────
+print("\n[4] gpu_vector_add")
+let mut va = []
+push(va, 1.0)
+push(va, 2.0)
+push(va, 3.0)
+
+let mut vb = []
+push(vb, 10.0)
+push(vb, 20.0)
+push(vb, 30.0)
+
+let vsum = gpu_vector_add(va, vb)
+let vs0 = vsum[0]
+let vs1 = vsum[1]
+let vs2 = vsum[2]
+print("Result: [{vs0}, {vs1}, {vs2}]")
+print("Expected: [11, 22, 33]")
+
+let mut ok4 = 1.0
+if abs(vs0 - 11.0) > 0.01
+  ok4 = 0.0
+end
+if abs(vs1 - 22.0) > 0.01
+  ok4 = 0.0
+end
+if abs(vs2 - 33.0) > 0.01
+  ok4 = 0.0
+end
+print("PASS={ok4}")
+
+// ── Test 5: Vector Scale ─────────────────────────────────────────────────
+print("\n[5] gpu_vector_scale")
+let mut vs = []
+push(vs, 2.0)
+push(vs, 4.0)
+push(vs, 6.0)
+
+let scaled = gpu_vector_scale(vs, 3.0)
+let sc0 = scaled[0]
+let sc1 = scaled[1]
+let sc2 = scaled[2]
+print("Result: [{sc0}, {sc1}, {sc2}]")
+print("Expected: [6, 12, 18]")
+
+let mut ok5 = 1.0
+if abs(sc0 - 6.0) > 0.01
+  ok5 = 0.0
+end
+if abs(sc1 - 12.0) > 0.01
+  ok5 = 0.0
+end
+if abs(sc2 - 18.0) > 0.01
+  ok5 = 0.0
+end
+print("PASS={ok5}")
+
+// ── Test 6: Matrix-Vector Multiplication ─────────────────────────────────
+print("\n[6] gpu_matrix_vector_mul")
+let mut matmv = []
+push(matmv, 1.0)
+push(matmv, 2.0)
+push(matmv, 3.0)
+push(matmv, 4.0)
+push(matmv, 5.0)
+push(matmv, 6.0)
+
+let mut vecmv = []
+push(vecmv, 7.0)
+push(vecmv, 8.0)
+push(vecmv, 9.0)
+
+// [[1,2,3],[4,5,6]] * [7,8,9] = [1*7+2*8+3*9, 4*7+5*8+6*9] = [50, 122]
+let mvres = gpu_matrix_vector_mul(matmv, vecmv, 2.0, 3.0)
+let mv0 = mvres[0]
+let mv1 = mvres[1]
+print("Result: [{mv0}, {mv1}]")
+print("Expected: [50, 122]")
+
+let mut ok6 = 1.0
+if abs(mv0 - 50.0) > 0.01
+  ok6 = 0.0
+end
+if abs(mv1 - 122.0) > 0.01
+  ok6 = 0.0
+end
+print("PASS={ok6}")
+
+// ── Test 7: Outer Product ────────────────────────────────────────────────
+print("\n[7] gpu_outer_product")
+let mut oa = []
+push(oa, 2.0)
+push(oa, 3.0)
+
+let mut ob = []
+push(ob, 5.0)
+push(ob, 7.0)
+push(ob, 11.0)
+
+// [2,3] ⊗ [5,7,11] = [[10,14,22],[15,21,33]]
+let outer = gpu_outer_product(oa, ob)
+let o0 = outer[0]
+let o1 = outer[1]
+let o2 = outer[2]
+let o3 = outer[3]
+let o4 = outer[4]
+let o5 = outer[5]
+print("Result: [{o0}, {o1}, {o2}, {o3}, {o4}, {o5}]")
+print("Expected: [10, 14, 22, 15, 21, 33]")
+
+let mut ok7 = 1.0
+if abs(o0 - 10.0) > 0.01
+  ok7 = 0.0
+end
+if abs(o1 - 14.0) > 0.01
+  ok7 = 0.0
+end
+if abs(o2 - 22.0) > 0.01
+  ok7 = 0.0
+end
+if abs(o3 - 15.0) > 0.01
+  ok7 = 0.0
+end
+if abs(o4 - 21.0) > 0.01
+  ok7 = 0.0
+end
+if abs(o5 - 33.0) > 0.01
+  ok7 = 0.0
+end
+print("PASS={ok7}")
+
+// ── Summary ──────────────────────────────────────────────────────────────
+print("\n=== Summary ===")
+let total_pass = ok1 + ok2 + ok3 + ok4 + ok5 + ok6 + ok7
+print("Tests passed: {total_pass}/7")
+
+let mut all_pass = 0.0
+if total_pass == 7.0
+  all_pass = 1.0
+end
+print("ALL_TESTS_PASS={all_pass}")
+
+rt_cleanup()
+print("\nGPU_LINALG_TESTS_COMPLETE")

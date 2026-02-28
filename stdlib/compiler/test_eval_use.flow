@@ -1,0 +1,16 @@
+use io
+
+let w = io_write_file("_eval_use_test.txt", "hello use!")
+print("written={w}")
+
+let c = io_read_file("_eval_use_test.txt")
+print("content={c}")
+
+if c == "hello use!"
+  print("USE IO: PASS")
+else
+  print("USE IO: FAIL")
+end
+
+let _rm = io_remove("_eval_use_test.txt")
+print("USE IO: DONE")

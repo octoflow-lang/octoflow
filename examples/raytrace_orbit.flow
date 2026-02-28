@@ -1,0 +1,117 @@
+// raytrace_orbit.flow — GPU Ray Tracing Camera Orbit Animation
+// Smooth camera orbit around the scene, rendered in real-time.
+// Each frame: gpu_run with different push constants → GPU unpack → terminal render
+//
+// Usage:
+//   octoflow run examples/raytrace_orbit.flow --allow-read --allow-write
+//   octoflow run examples/raytrace_orbit.flow --allow-read --allow-write --set frames=60
+//   octoflow run examples/raytrace_orbit.flow --allow-read --allow-write --set mode=sixel
+//   octoflow run examples/raytrace_orbit.flow --allow-read --allow-write --set delay=150
+
+use "../stdlib/loom/raytrace_emit"
+use "../stdlib/terminal/render"
+
+// Configuration (overridable via --set)
+let mut mode = "halfblock"
+let mut frames = 36.0
+let mut delay = 80.0
+
+// Resolution based on protocol
+// Halfblock: 1 pixel = 1 char column, keep under terminal width
+// Sixel/Kitty: pixel-based, can go larger
+let mut w = 80.0
+let mut h = 60.0
+if mode == "sixel"
+  w = 240.0
+  h = 180.0
+elif mode == "kitty"
+  w = 320.0
+  h = 240.0
+end
+
+let total = int(w * h)
+let pi = 3.14159265
+
+// Text rows output by each renderer (for cursor-up overwrite)
+let mut text_rows = int(h / 2.0)
+if mode == "digits"
+  text_rows = int(h)
+elif mode == "sixel"
+  text_rows = int(ceil(h / 6.0)) + 1.0
+elif mode == "kitty"
+  text_rows = int(ceil(h / 20.0)) + 1.0
+end
+
+// Compile kernels (cached)
+if file_exists("raytrace.spv") == 0.0
+  emit_raytrace_kernel()
+end
+if file_exists("unpack_rgb.spv") == 0.0
+  emit_unpack_rgb_kernel()
+end
+
+// Pre-allocate input buffer (reused every frame)
+let mut input = []
+for i in range(0, total)
+  push(input, 0.0)
+end
+
+// Camera orbit parameters
+// Camera orbits at radius 4.0 from scene center (0, 0, 3)
+// Height oscillates between 0.5 and 1.3
+let orbit_r = 4.0
+let center_z = 3.0
+
+print("GPU Ray Tracing — Camera Orbit Animation")
+print("Resolution: {w}x{h}, Frames: {frames}, Protocol: {mode}")
+print("")
+
+let t_start = now_ms()
+
+for f in range(0, int(frames))
+  let t = f / frames
+  let angle = t * 2.0 * pi
+
+  // Orbit: camera Z oscillates in front of scene
+  // cam_z goes from -1.5 (close) to -4.5 (far) in a sine wave
+  let cam_z = 0.0 - center_z + orbit_r * cos(angle)
+  // cam_y oscillates between 0.5 and 1.3
+  let cam_y = 0.9 + 0.4 * sin(angle)
+
+  // GPU dispatch with push constants
+  let t0 = now_ms()
+  let result = gpu_run("raytrace.spv", input, w, h, cam_y, cam_z)
+  let r = gpu_run("unpack_rgb.spv", result, 0.0)
+  let g = gpu_run("unpack_rgb.spv", result, 1.0)
+  let b = gpu_run("unpack_rgb.spv", result, 2.0)
+  let t1 = now_ms()
+  let dt = t1 - t0
+
+  // Move cursor up to overwrite previous frame (skip on first frame)
+  if f > 0.0
+    // +1 for the status line we print after each frame
+    let up = text_rows + 1.0
+    term_up(up)
+  end
+
+  // Render frame (pure .flow renderer)
+  term_render(w, h, r, g, b, mode)
+
+  // Status line
+  let frame_num = f + 1.0
+  let deg = int(t * 360.0)
+  print("Frame {frame_num}/{frames} | {dt} ms | cam_y={cam_y} cam_z={cam_z} | {deg} deg   ")
+
+  // Frame pacing (overridable: --set delay=100)
+  if delay > dt
+    sleep(delay - dt)
+  end
+end
+
+let t_end = now_ms()
+let total_ms = t_end - t_start
+let avg_ms = total_ms / frames
+let fps = 1000.0 / avg_ms
+print("")
+print("Animation complete: {frames} frames in {total_ms} ms")
+print("Average: {avg_ms} ms/frame ({fps} fps)")

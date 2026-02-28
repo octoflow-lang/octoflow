@@ -1,0 +1,11 @@
+// Cinematic warm filter using vanilla ops + module import
+use filters
+
+stream pixels = tap("test_data/input_10.csv")
+
+// Apply brightness boost, then gamma lift, then clamp to range
+stream warm = pixels |> filters.brightness(15.0)
+stream graded = warm |> gamma(0.95)
+stream final = graded |> clamp(0.0, 255.0)
+
+emit(final, "test_data/output_cinematic.csv")

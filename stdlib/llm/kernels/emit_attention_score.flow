@@ -1,0 +1,111 @@
+// emit_attention_score.flow — Attention Score Kernel Emitter
+//
+// Computes dot product of one query head Q against all cached K positions.
+// scores[t] = (sum_d Q[d] * K_cache[t * kv_stride + kv_offset + d]) * inv_sqrt_dk
+//
+// Each thread handles one past position (t = global_id.x).
+// Inner loop over head_dim elements for the dot product.
+//
+// Binding 0: Q vector (head_dim floats, for one query head)
+// Binding 1: K cache (flat: seq_len * kv_stride floats)
+// Binding 2: output scores (max_seq floats)
+//
+// Push constants:
+//   [0]: head_dim (float, number of elements per head)
+//   [1]: seq_len (float, number of valid past positions)
+//   [2]: kv_offset (float, offset within each position's kv_dim for this KV head)
+//   [3]: kv_stride (float, total kv_dim = n_kv_head * head_dim)
+//   [4]: inv_sqrt_dk (float, 1 / sqrt(head_dim))
+//
+// Dispatch: ceil(seq_len / 256) workgroups x 256 threads
+
+use "../../compiler/ir"
+
+fn emit_attention_score(out_path)
+  ir_new()
+  ir_input_count = 2.0
+  ir_workgroup_size = 256.0
+
+  // ── Entry block: load constants, bounds check ──
+  let entry = ir_block("entry")
+
+  let gid = ir_load_gid(entry)
+  let head_dim_f = ir_push_const(entry, 0.0)
+  let seq_len_f = ir_push_const(entry, 1.0)
+  let kv_offset_f = ir_push_const(entry, 2.0)
+  let kv_stride_f = ir_push_const(entry, 3.0)
+  let inv_sqrt_f = ir_push_const(entry, 4.0)
+
+  let head_dim = ir_ftou(entry, head_dim_f)
+  let seq_len = ir_ftou(entry, seq_len_f)
+  let kv_offset = ir_ftou(entry, kv_offset_f)
+  let kv_stride = ir_ftou(entry, kv_stride_f)
+
+  // Bounds check: gid < seq_len
+  let in_bounds = ir_ulte(entry, gid, seq_len)
+
+  // Create all blocks for structured control flow
+  let compute_blk = ir_block("compute")
+  let loop_header = ir_block("loop_header")
+  let loop_cond = ir_block("loop_cond")
+  let loop_body = ir_block("loop_body")
+  let loop_cont = ir_block("loop_continue")
+  let loop_merge = ir_block("loop_merge")
+  let done_blk = ir_block("done")
+
+  // Selection merge for bounds check
+  let _sm = ir_selection_merge(entry, done_blk)
+  let _cb = ir_term_cond_branch(entry, in_bounds, compute_blk, done_blk)
+
+  // ── Compute block: set up base index for this position ──
+  // k_base = gid * kv_stride + kv_offset
+  let pos_offset = ir_imul(compute_blk, gid, kv_stride)
+  let k_base = ir_iadd(compute_blk, pos_offset, kv_offset)
+
+  let c0 = ir_const_f(compute_blk, 0.0)
+  let c0u = ir_const_u(compute_blk, 0.0)
+  let c1u = ir_const_u(compute_blk, 1.0)
+
+  let _br1 = ir_term_branch(compute_blk, loop_header)
+
+  // ── Loop header: phi for d and accumulator ──
+  let d_phi = ir_phi(loop_header, 2.0)
+  let sum_phi = ir_phi(loop_header, 1.0)
+
+  let _lm = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _br2 = ir_term_branch(loop_header, loop_cond)
+
+  // ── Loop condition: d < head_dim ──
+  let cond_check = ir_ulte(loop_cond, d_phi, head_dim)
+  let _br3 = ir_term_cond_branch(loop_cond, cond_check, loop_body, loop_merge)
+
+  // ── Loop body: accumulate Q[d] * K[k_base + d] ──
+  let q_val = ir_load_input_at(loop_body, 0.0, d_phi)
+  let k_idx = ir_iadd(loop_body, k_base, d_phi)
+  let k_val = ir_load_input_at(loop_body, 1.0, k_idx)
+  let prod = ir_fmul(loop_body, q_val, k_val)
+  let new_sum = ir_fadd(loop_body, sum_phi, prod)
+
+  let new_d = ir_iadd(loop_body, d_phi, c1u)
+  let _br4 = ir_term_branch(loop_body, loop_cont)
+
+  // ── Loop continue: update phi values ──
+  let _br5 = ir_term_branch(loop_cont, loop_header)
+
+  // Wire phi back-edges
+  let _p1a = ir_phi_add(d_phi, c0u, compute_blk)
+  let _p1b = ir_phi_add(d_phi, new_d, loop_cont)
+  let _p2a = ir_phi_add(sum_phi, c0, compute_blk)
+  let _p2b = ir_phi_add(sum_phi, new_sum, loop_cont)
+
+  // ── Loop merge: scale by inv_sqrt and store ──
+  let scaled = ir_fmul(loop_merge, sum_phi, inv_sqrt_f)
+  let _s = ir_store_output_at(loop_merge, gid, scaled)
+  let _br6 = ir_term_branch(loop_merge, done_blk)
+
+  // ── Done block: return ──
+  let _ret = ir_term_return(done_blk)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

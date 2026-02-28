@@ -1,0 +1,79 @@
+// Phase 32: String Operations + Type Conversion Demo
+// Run with: flowgpu-cli run examples/string_ops_demo.flow
+
+// ── Type Conversion ────────────────────────────────────────────
+let x = 3.14
+let s = str(x)
+print("float to string: {s}")
+
+let back = float(s)
+print("string to float: {back}")
+
+let whole = int(3.7)
+print("int(3.7) = {whole}")
+
+let parsed = int("42.9")
+print("int(\"42.9\") = {parsed}")
+
+// ── String Manipulation ────────────────────────────────────────
+let greeting = "  Hello, World!  "
+let trimmed = trim(greeting)
+print("trimmed: [{trimmed}]")
+
+let upper = to_upper(trimmed)
+print("upper: {upper}")
+
+let lower = to_lower(trimmed)
+print("lower: {lower}")
+
+// ── Search and Test ────────────────────────────────────────────
+let text = "XAUUSD,2651.30,BUY,0.01"
+
+let has_buy = contains(text, "BUY")
+print("contains BUY: {has_buy}")
+
+let starts = starts_with(text, "XAU")
+print("starts with XAU: {starts}")
+
+let ends = ends_with(text, "0.01")
+print("ends with 0.01: {ends}")
+
+let pos = index_of(text, "BUY")
+print("BUY at position: {pos}")
+
+// ── Extraction and Building ────────────────────────────────────
+let ch = char_at(text, 0)
+print("first char: {ch}")
+
+let sub = substr(text, 0, 6)
+print("symbol: {sub}")
+
+let replaced = replace(text, "BUY", "SELL")
+print("replaced: {replaced}")
+
+let dashes = repeat("-", 40)
+print("{dashes}")
+
+// ── CSV Processing Pipeline ────────────────────────────────────
+let csv_row = "EURUSD,1.0842,SELL,0.10"
+let fields = split(csv_row, ",")
+let symbol = fields[0]
+let price_str = fields[1]
+let price = float(price_str)
+let side = fields[2]
+let lots_str = fields[3]
+let lots = float(lots_str)
+
+print("Trade: {side} {lots} lots of {symbol} @ {price}")
+
+// ── String Building in Loops ───────────────────────────────────
+let symbols = split("XAUUSD,EURUSD,GBPUSD,USDJPY", ",")
+for sym in symbols
+  let is_gold = starts_with(sym, "XAU")
+  if is_gold == 1.0
+    print("{sym} is a gold pair")
+  else
+    let pair = substr(sym, 0, 3) + "/" + substr(sym, 3, 3)
+    print("{sym} = {pair}")
+  end
+end

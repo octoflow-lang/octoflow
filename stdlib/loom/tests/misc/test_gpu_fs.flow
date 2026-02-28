@@ -1,0 +1,40 @@
+// Phase 80: GPU filesystem test
+// Tests: gpu_save_binary → gpu_load_binary → gpu_save_csv → gpu_load_csv
+// Verifies full roundtrip: GPU VRAM → disk → GPU VRAM → compute → verify
+
+// Create data on GPU
+let a = gpu_fill(3.14, 1000)
+let b = gpu_range(1.0, 1001.0, 1.0)
+
+// Save to binary (raw f32, fastest)
+let n1 = gpu_save_binary(a, "_test_gpu_fs_a.bin")
+let n2 = gpu_save_binary(b, "_test_gpu_fs_b.bin")
+print("saved_binary: {n1} {n2}")
+
+// Load back from binary → GPU
+let a2 = gpu_load_binary("_test_gpu_fs_a.bin")
+let b2 = gpu_load_binary("_test_gpu_fs_b.bin")
+
+// Verify roundtrip: sum should match
+let sa = gpu_sum(a2)
+let sb = gpu_sum(b2)
+print("binary_roundtrip_a: {sa}")
+print("binary_roundtrip_b: {sb}")
+
+// Save to CSV (text format)
+let n3 = gpu_save_csv(a, "_test_gpu_fs_a.csv")
+print("saved_csv: {n3}")
+
+// Load from CSV → GPU
+let a3 = gpu_load_csv("_test_gpu_fs_a.csv")
+let sa3 = gpu_sum(a3)
+print("csv_roundtrip: {sa3}")
+
+// Chain: load → compute → save
+let c = gpu_add(a2, b2)
+let sc = gpu_sum(c)
+print("chain_sum: {sc}")
+let n4 = gpu_save_binary(c, "_test_gpu_fs_c.bin")
+let c2 = gpu_load_binary("_test_gpu_fs_c.bin")
+let sc2 = gpu_sum(c2)
+print("chain_roundtrip: {sc2}")

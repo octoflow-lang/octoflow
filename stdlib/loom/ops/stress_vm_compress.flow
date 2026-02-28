@@ -1,0 +1,508 @@
+// stress_vm_compress.flow — Edge case + stress tests for DB compression kernels
+//
+// Tests boundary conditions that the basic tests don't cover:
+//   TEST 5:  Delta encode/decode N=1 (minimal case)
+//   TEST 6:  Delta encode/decode with negative and descending values
+//   TEST 7:  Delta encode/decode with all-identical values (deltas all 0)
+//   TEST 8:  Delta encode/decode N=512 (crosses workgroup boundary at 256)
+//   TEST 9:  Delta encode/decode with non-integer floats
+//   TEST 10: Dict lookup — single-entry dictionary (all same output)
+//   TEST 11: Dict lookup — max index + repeated indices
+//   TEST 12: Compressed query with zero matches (COUNT=0, SUM=0)
+//   TEST 13: Compressed query with ALL matches
+//
+// Run: octoflow run stdlib/loom/stress_vm_compress.flow --allow-ffi
+
+let mut total_pass = 0.0
+let mut total_tests = 0.0
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 5: Delta encode/decode N=1 (minimal case)
+// ══════════════════════════════════════════════════════════════════════
+// Single element: encode should copy value, decode should recover it.
+
+let vm5 = vm_boot(1.0, 1.0, 2.0)
+let one_val = [42.0]
+let _wr5 = vm_write_register(vm5, 0.0, 0.0, one_val)
+
+// Encode: Registers[0] → Globals[0], count=1
+let pc5e = [0.0, 0.0, 1.0]
+let _d5e = vm_dispatch(vm5, "stdlib/loom/kernels/ops/vm_delta_encode.spv", pc5e, 1.0)
+let p5a = vm_build(vm5)
+let _e5a = vm_execute(p5a)
+
+let enc5 = vm_read_globals(vm5, 0.0, 1.0)
+
+// Decode: Globals[0] → Globals[1], count=1
+let pc5d = [0.0, 1.0, 1.0]
+let _d5d = vm_dispatch(vm5, "stdlib/loom/kernels/ops/vm_delta_decode.spv", pc5d, 1.0)
+let p5b = vm_build(vm5)
+let _e5b = vm_execute(p5b)
+
+let dec5 = vm_read_globals(vm5, 1.0, 1.0)
+
+let enc5v = enc5[0]
+let dec5v = dec5[0]
+let mut pass5 = 1.0
+if abs(enc5v - 42.0) > 0.001
+  pass5 = 0.0
+  print("  FAIL: encoded={enc5v} expected 42")
+end
+if abs(dec5v - 42.0) > 0.001
+  pass5 = 0.0
+  print("  FAIL: decoded={dec5v} expected 42")
+end
+if pass5 == 1.0
+  print("TEST 5:  PASS -- N=1 delta round-trip (42 -> [42] -> 42)")
+  total_pass = total_pass + 1.0
+else
+  print("TEST 5:  FAIL")
+end
+total_tests = total_tests + 1.0
+let _sv5 = vm_shutdown(vm5)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 6: Negative and descending values
+// ══════════════════════════════════════════════════════════════════════
+// Data: [50, 30, 10, -5, -20]  (descending, crosses zero)
+// Expected deltas: [50, -20, -20, -15, -15]
+
+let N6 = 5.0
+let vm6 = vm_boot(1.0, 5.0, 10.0)
+let desc_vals = [50.0, 30.0, 10.0, -5.0, -20.0]
+let _wr6 = vm_write_register(vm6, 0.0, 0.0, desc_vals)
+
+let pc6e = [0.0, 0.0, N6]
+let _d6e = vm_dispatch(vm6, "stdlib/loom/kernels/ops/vm_delta_encode.spv", pc6e, 1.0)
+let p6a = vm_build(vm6)
+let _e6a = vm_execute(p6a)
+
+let enc6 = vm_read_globals(vm6, 0.0, N6)
+
+// Decode
+let pc6d = [0.0, N6, N6]
+let _d6d = vm_dispatch(vm6, "stdlib/loom/kernels/ops/vm_delta_decode.spv", pc6d, 1.0)
+let p6b = vm_build(vm6)
+let _e6b = vm_execute(p6b)
+
+let dec6 = vm_read_globals(vm6, N6, N6)
+
+let mut pass6 = 1.0
+let exp_del6 = [50.0, -20.0, -20.0, -15.0, -15.0]
+let mut i6 = 0.0
+while i6 < N6
+  let ed = exp_del6[i6]
+  let gd = enc6[i6]
+  if abs(ed - gd) > 0.001
+    pass6 = 0.0
+    let idx6 = i6
+    print("  FAIL: delta[{idx6}]={gd} expected {ed}")
+  end
+  let ov = desc_vals[i6]
+  let dv = dec6[i6]
+  if abs(ov - dv) > 0.001
+    pass6 = 0.0
+    let idx6b = i6
+    print("  FAIL: decoded[{idx6b}]={dv} expected {ov}")
+  end
+  i6 = i6 + 1.0
+end
+if pass6 == 1.0
+  print("TEST 6:  PASS -- Negative + descending values, round-trip correct")
+  total_pass = total_pass + 1.0
+else
+  print("TEST 6:  FAIL")
+end
+total_tests = total_tests + 1.0
+let _sv6 = vm_shutdown(vm6)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 7: All-identical values (deltas all 0 except first)
+// ══════════════════════════════════════════════════════════════════════
+// Data: [7, 7, 7, 7, 7, 7]
+// Expected deltas: [7, 0, 0, 0, 0, 0]
+
+let N7 = 6.0
+let vm7 = vm_boot(1.0, 6.0, 12.0)
+let same_vals = [7.0, 7.0, 7.0, 7.0, 7.0, 7.0]
+let _wr7 = vm_write_register(vm7, 0.0, 0.0, same_vals)
+
+let pc7e = [0.0, 0.0, N7]
+let _d7e = vm_dispatch(vm7, "stdlib/loom/kernels/ops/vm_delta_encode.spv", pc7e, 1.0)
+let p7a = vm_build(vm7)
+let _e7a = vm_execute(p7a)
+let enc7 = vm_read_globals(vm7, 0.0, N7)
+
+let pc7d = [0.0, N7, N7]
+let _d7d = vm_dispatch(vm7, "stdlib/loom/kernels/ops/vm_delta_decode.spv", pc7d, 1.0)
+let p7b = vm_build(vm7)
+let _e7b = vm_execute(p7b)
+let dec7 = vm_read_globals(vm7, N7, N7)
+
+let mut pass7 = 1.0
+let e7_0 = enc7[0]
+let e7_1 = enc7[1]
+let e7_5 = enc7[5]
+if abs(e7_0 - 7.0) > 0.001
+  pass7 = 0.0
+  print("  FAIL: delta[0]={e7_0} expected 7")
+end
+if abs(e7_1) > 0.001
+  pass7 = 0.0
+  print("  FAIL: delta[1]={e7_1} expected 0")
+end
+if abs(e7_5) > 0.001
+  pass7 = 0.0
+  print("  FAIL: delta[5]={e7_5} expected 0")
+end
+let mut i7 = 0.0
+while i7 < N7
+  let dv7 = dec7[i7]
+  if abs(dv7 - 7.0) > 0.001
+    pass7 = 0.0
+    let idx7 = i7
+    print("  FAIL: decoded[{idx7}]={dv7} expected 7")
+  end
+  i7 = i7 + 1.0
+end
+if pass7 == 1.0
+  print("TEST 7:  PASS -- All-identical values [7,7,7,7,7,7], deltas=[7,0,0,0,0,0]")
+  total_pass = total_pass + 1.0
+else
+  print("TEST 7:  FAIL")
+end
+total_tests = total_tests + 1.0
+let _sv7 = vm_shutdown(vm7)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 8: N=512, crosses workgroup boundary (256 threads/wg)
+// ══════════════════════════════════════════════════════════════════════
+// Data: [1, 2, 3, ..., 512]
+// Deltas: [1, 1, 1, ..., 1]  (all 1 except first)
+// This tests that delta_encode dispatches with 2 workgroups correctly,
+// and delta_decode handles 512 iterations in its sequential loop.
+
+let N8 = 512.0
+let vm8 = vm_boot(1.0, 512.0, 1024.0)
+
+// Build ascending sequence
+let mut asc_vals = []
+let mut a8 = 0.0
+while a8 < N8
+  push(asc_vals, a8 + 1.0)
+  a8 = a8 + 1.0
+end
+let _wr8 = vm_write_register(vm8, 0.0, 0.0, asc_vals)
+
+// Encode with 2 workgroups: ceil(512/256) = 2
+let pc8e = [0.0, 0.0, N8]
+let _d8e = vm_dispatch(vm8, "stdlib/loom/kernels/ops/vm_delta_encode.spv", pc8e, 2.0)
+let p8a = vm_build(vm8)
+let _e8a = vm_execute(p8a)
+
+let enc8 = vm_read_globals(vm8, 0.0, N8)
+
+// Check: first delta = 1, all others = 1
+let mut pass8 = 1.0
+let e8_0 = enc8[0]
+if abs(e8_0 - 1.0) > 0.001
+  pass8 = 0.0
+  print("  FAIL: delta[0]={e8_0} expected 1")
+end
+// Check element at workgroup boundary (index 256 — first thread of WG 1)
+let e8_256 = enc8[256]
+if abs(e8_256 - 1.0) > 0.001
+  pass8 = 0.0
+  print("  FAIL: delta[256]={e8_256} expected 1 (workgroup boundary)")
+end
+let e8_511 = enc8[511]
+if abs(e8_511 - 1.0) > 0.001
+  pass8 = 0.0
+  print("  FAIL: delta[511]={e8_511} expected 1")
+end
+// Spot check a few random positions
+let e8_100 = enc8[100]
+let e8_255 = enc8[255]
+let e8_257 = enc8[257]
+if abs(e8_100 - 1.0) > 0.001
+  pass8 = 0.0
+  print("  FAIL: delta[100]={e8_100} expected 1")
+end
+if abs(e8_255 - 1.0) > 0.001
+  pass8 = 0.0
+  print("  FAIL: delta[255]={e8_255} expected 1")
+end
+if abs(e8_257 - 1.0) > 0.001
+  pass8 = 0.0
+  print("  FAIL: delta[257]={e8_257} expected 1")
+end
+
+// Decode
+let pc8d = [0.0, N8, N8]
+let _d8d = vm_dispatch(vm8, "stdlib/loom/kernels/ops/vm_delta_decode.spv", pc8d, 1.0)
+let p8b = vm_build(vm8)
+let _e8b = vm_execute(p8b)
+let dec8 = vm_read_globals(vm8, N8, N8)
+
+// Check: decoded should be [1, 2, 3, ..., 512]
+let d8_0 = dec8[0]
+let d8_255 = dec8[255]
+let d8_256 = dec8[256]
+let d8_511 = dec8[511]
+if abs(d8_0 - 1.0) > 0.001
+  pass8 = 0.0
+  print("  FAIL: decoded[0]={d8_0} expected 1")
+end
+if abs(d8_255 - 256.0) > 0.001
+  pass8 = 0.0
+  print("  FAIL: decoded[255]={d8_255} expected 256")
+end
+if abs(d8_256 - 257.0) > 0.001
+  pass8 = 0.0
+  print("  FAIL: decoded[256]={d8_256} expected 257")
+end
+if abs(d8_511 - 512.0) > 0.001
+  pass8 = 0.0
+  print("  FAIL: decoded[511]={d8_511} expected 512")
+end
+
+if pass8 == 1.0
+  print("TEST 8:  PASS -- N=512 delta round-trip, 2 workgroups, boundary correct")
+  total_pass = total_pass + 1.0
+else
+  print("TEST 8:  FAIL")
+end
+total_tests = total_tests + 1.0
+let _sv8 = vm_shutdown(vm8)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 9: Non-integer floats
+// ══════════════════════════════════════════════════════════════════════
+// Data: [1.5, 2.7, 4.1, 3.3]
+// Deltas: [1.5, 1.2, 1.4, -0.8]
+
+let N9 = 4.0
+let vm9 = vm_boot(1.0, 4.0, 8.0)
+let float_vals = [1.5, 2.7, 4.1, 3.3]
+let _wr9 = vm_write_register(vm9, 0.0, 0.0, float_vals)
+
+let pc9e = [0.0, 0.0, N9]
+let _d9e = vm_dispatch(vm9, "stdlib/loom/kernels/ops/vm_delta_encode.spv", pc9e, 1.0)
+let p9a = vm_build(vm9)
+let _e9a = vm_execute(p9a)
+let enc9 = vm_read_globals(vm9, 0.0, N9)
+
+let pc9d = [0.0, N9, N9]
+let _d9d = vm_dispatch(vm9, "stdlib/loom/kernels/ops/vm_delta_decode.spv", pc9d, 1.0)
+let p9b = vm_build(vm9)
+let _e9b = vm_execute(p9b)
+let dec9 = vm_read_globals(vm9, N9, N9)
+
+let mut pass9 = 1.0
+let exp_del9 = [1.5, 1.2, 1.4, -0.8]
+let mut i9 = 0.0
+while i9 < N9
+  let ed9 = exp_del9[i9]
+  let gd9 = enc9[i9]
+  if abs(ed9 - gd9) > 0.01
+    pass9 = 0.0
+    let idx9 = i9
+    print("  FAIL: delta[{idx9}]={gd9} expected {ed9}")
+  end
+  let ov9 = float_vals[i9]
+  let dv9 = dec9[i9]
+  if abs(ov9 - dv9) > 0.01
+    pass9 = 0.0
+    let idx9b = i9
+    print("  FAIL: decoded[{idx9b}]={dv9} expected {ov9}")
+  end
+  i9 = i9 + 1.0
+end
+if pass9 == 1.0
+  print("TEST 9:  PASS -- Non-integer floats [1.5, 2.7, 4.1, 3.3] round-trip")
+  total_pass = total_pass + 1.0
+else
+  print("TEST 9:  FAIL")
+end
+total_tests = total_tests + 1.0
+let _sv9 = vm_shutdown(vm9)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 10: Dict lookup — single-entry dictionary
+// ══════════════════════════════════════════════════════════════════════
+// Dict: [999.0]
+// Indices: [0, 0, 0, 0]  → all map to 999.0
+
+let N10 = 4.0
+let vm10 = vm_boot(1.0, 4.0, N10)
+let dict10 = [999.0]
+let _sh10 = vm_set_heap(vm10, dict10)
+let idx10 = [0.0, 0.0, 0.0, 0.0]
+let _wg10 = vm_write_globals(vm10, 0.0, idx10)
+
+let pc10 = [0.0, 0.0, 0.0, N10]
+let _d10 = vm_dispatch(vm10, "stdlib/loom/kernels/ops/vm_dict_lookup.spv", pc10, 1.0)
+let p10 = vm_build(vm10)
+let _e10 = vm_execute(p10)
+let res10 = vm_read_register(vm10, 0.0, 0.0, N10)
+
+let mut pass10 = 1.0
+let mut i10 = 0.0
+while i10 < N10
+  let v10 = res10[i10]
+  if abs(v10 - 999.0) > 0.001
+    pass10 = 0.0
+    let idx10b = i10
+    print("  FAIL: lookup[{idx10b}]={v10} expected 999")
+  end
+  i10 = i10 + 1.0
+end
+if pass10 == 1.0
+  print("TEST 10: PASS -- Single-entry dict [999], all indices=0, all outputs=999")
+  total_pass = total_pass + 1.0
+else
+  print("TEST 10: FAIL")
+end
+total_tests = total_tests + 1.0
+let _sv10 = vm_shutdown(vm10)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 11: Dict lookup — max index + boundary
+// ══════════════════════════════════════════════════════════════════════
+// Dict: [10, 20, 30, 40, 50, 60, 70, 80] (8 entries)
+// Indices: [7, 0, 7, 0]  → [80, 10, 80, 10]
+// Tests: first entry (0), last entry (7), repeated lookups
+
+let N11 = 4.0
+let vm11 = vm_boot(1.0, 4.0, N11)
+let dict11 = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+let _sh11 = vm_set_heap(vm11, dict11)
+let idx11 = [7.0, 0.0, 7.0, 0.0]
+let _wg11 = vm_write_globals(vm11, 0.0, idx11)
+
+let pc11 = [0.0, 0.0, 0.0, N11]
+let _d11 = vm_dispatch(vm11, "stdlib/loom/kernels/ops/vm_dict_lookup.spv", pc11, 1.0)
+let p11 = vm_build(vm11)
+let _e11 = vm_execute(p11)
+let res11 = vm_read_register(vm11, 0.0, 0.0, N11)
+
+let exp11 = [80.0, 10.0, 80.0, 10.0]
+let mut pass11 = 1.0
+let mut i11 = 0.0
+while i11 < N11
+  let e11 = exp11[i11]
+  let g11 = res11[i11]
+  if abs(e11 - g11) > 0.001
+    pass11 = 0.0
+    let idx11b = i11
+    print("  FAIL: lookup[{idx11b}]={g11} expected {e11}")
+  end
+  i11 = i11 + 1.0
+end
+if pass11 == 1.0
+  print("TEST 11: PASS -- Max index (7) + boundary, [80, 10, 80, 10]")
+  total_pass = total_pass + 1.0
+else
+  print("TEST 11: FAIL")
+end
+total_tests = total_tests + 1.0
+let _sv11 = vm_shutdown(vm11)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 12: Compressed query — zero matches
+// ══════════════════════════════════════════════════════════════════════
+// Salary: delta-encoded [10, 5, 5, 5] → decoded [10, 15, 20, 25]
+// Query: WHERE salary > 100 → 0 matches
+// Expected: SUM=0, COUNT=0
+
+let N12 = 4.0
+let vm12 = vm_boot(1.0, 8.0, 8.0)
+let del12 = [10.0, 5.0, 5.0, 5.0]
+let _wg12 = vm_write_globals(vm12, 0.0, del12)
+
+// decode → globals[4:8]
+let pc12_1 = [0.0, N12, N12]
+let _d12_1 = vm_dispatch(vm12, "stdlib/loom/kernels/ops/vm_delta_decode.spv", pc12_1, 1.0)
+// where_gt(col=globals[4], threshold=100, dst_val=0, dst_mask=4, count=4)
+let pc12_2 = [N12, 100.0, 0.0, N12, N12]
+let _d12_2 = vm_dispatch(vm12, "stdlib/loom/kernels/ops/vm_where_gt.spv", pc12_2, 1.0)
+// sum(in=0, out_idx=0, count=4)
+let pc12_3 = [0.0, 0.0, N12]
+let _d12_3 = vm_dispatch(vm12, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc12_3, 1.0)
+// count(in=4, out_idx=1, count=4)
+let pc12_4 = [N12, 1.0, N12]
+let _d12_4 = vm_dispatch(vm12, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc12_4, 1.0)
+
+let p12 = vm_build(vm12)
+let _e12 = vm_execute(p12)
+let m12 = vm_read_metrics(vm12, 0.0, 2.0)
+let s12 = m12[0]
+let c12 = m12[1]
+
+let mut pass12 = 1.0
+if abs(s12) > 0.001
+  pass12 = 0.0
+  print("  FAIL: SUM={s12} expected 0")
+end
+if abs(c12) > 0.001
+  pass12 = 0.0
+  print("  FAIL: COUNT={c12} expected 0")
+end
+if pass12 == 1.0
+  print("TEST 12: PASS -- Zero matches, SUM=0, COUNT=0")
+  total_pass = total_pass + 1.0
+else
+  print("TEST 12: FAIL")
+end
+total_tests = total_tests + 1.0
+let _sv12 = vm_shutdown(vm12)
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 13: Compressed query — ALL matches
+// ══════════════════════════════════════════════════════════════════════
+// Salary: delta-encoded [100, 100, 100, 100] → decoded [100, 200, 300, 400]
+// Query: WHERE salary > 0 → all 4 match
+// Expected: SUM=100+200+300+400=1000, COUNT=4
+
+let N13 = 4.0
+let vm13 = vm_boot(1.0, 8.0, 8.0)
+let del13 = [100.0, 100.0, 100.0, 100.0]
+let _wg13 = vm_write_globals(vm13, 0.0, del13)
+
+let pc13_1 = [0.0, N13, N13]
+let _d13_1 = vm_dispatch(vm13, "stdlib/loom/kernels/ops/vm_delta_decode.spv", pc13_1, 1.0)
+let pc13_2 = [N13, 0.0, 0.0, N13, N13]
+let _d13_2 = vm_dispatch(vm13, "stdlib/loom/kernels/ops/vm_where_gt.spv", pc13_2, 1.0)
+let pc13_3 = [0.0, 0.0, N13]
+let _d13_3 = vm_dispatch(vm13, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc13_3, 1.0)
+let pc13_4 = [N13, 1.0, N13]
+let _d13_4 = vm_dispatch(vm13, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc13_4, 1.0)
+
+let p13 = vm_build(vm13)
+let _e13 = vm_execute(p13)
+let m13 = vm_read_metrics(vm13, 0.0, 2.0)
+let s13 = m13[0]
+let c13 = m13[1]
+
+let mut pass13 = 1.0
+if abs(s13 - 1000.0) > 0.1
+  pass13 = 0.0
+  print("  FAIL: SUM={s13} expected 1000")
+end
+if abs(c13 - 4.0) > 0.1
+  pass13 = 0.0
+  print("  FAIL: COUNT={c13} expected 4")
+end
+if pass13 == 1.0
+  print("TEST 13: PASS -- All matches, SUM=1000, COUNT=4")
+  total_pass = total_pass + 1.0
+else
+  print("TEST 13: FAIL")
+end
+total_tests = total_tests + 1.0
+let _sv13 = vm_shutdown(vm13)
+
+// ══════════════════════════════════════════════════════════════════════
+// Summary
+// ══════════════════════════════════════════════════════════════════════
+print("STRESS SUMMARY: {total_pass}/{total_tests} passed")

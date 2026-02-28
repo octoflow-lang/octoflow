@@ -1,0 +1,144 @@
+// stdlib/loom/test_vm_dispatch.flow -- End-to-end GPU VM dispatch chain test
+//
+// Tests: vm_boot → vm_write_register → vm_dispatch → vm_build → vm_execute → vm_read_register
+//
+// Kernels used:
+//   vm_scale.spv — registers[off + gid] *= scale  (pc[0]=offset, pc[1]=scale, pc[2]=count)
+//   vm_copy.spv  — registers[dst + gid] = registers[src + gid]  (pc[0]=src, pc[1]=dst, pc[2]=count)
+//
+// Dispatch: ceil(count / 256) workgroups — bounds guard in kernel prevents OOB writes
+//
+// Pre-req: run emit_vm_scale.flow and emit_vm_copy.flow first
+
+print("=== GPU VM Dispatch Chain Test ===")
+
+// Boot VM: 1 instance, 8 floats per register, 4 globals
+let reg_size = 8.0
+let wg = floor((reg_size + 255.0) / 256.0)
+let vm = vm_boot(1.0, reg_size, 4.0)
+print("  vm_boot OK, handle={vm}")
+
+// Write test data to R0: [1, 2, 3, 4, 5, 6, 7, 8]
+let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let _w = vm_write_register(vm, 0.0, 0.0, data)
+print("  Wrote R0: [1..8]")
+
+// ── Test 1: Scale R0 by 3.0 on GPU ─────────────────────────────────
+print(" ")
+print("--- Test 1: vm_scale (R0 *= 3.0) ---")
+
+// Push constants: [offset, scale, count]
+// R0 of instance 0: offset = (0 * 32 * reg_size + 0 * reg_size) = 0
+let scale_pc = [0.0, 3.0, reg_size]
+let _d1 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_scale.spv", scale_pc, wg)
+let prog1 = vm_build(vm)
+print("  vm_build OK, program={prog1}")
+
+let _e1 = vm_execute(prog1)
+print("  vm_execute OK")
+
+// Read back R0
+let r0_after = vm_read_register(vm, 0.0, 0.0, reg_size)
+let mut pass1 = 1.0
+let mut i = 0.0
+while i < reg_size
+  let expected = (i + 1.0) * 3.0
+  let actual = r0_after[int(i)]
+  if actual != expected
+    print("  FAIL: R0[{i}] = {actual}, expected {expected}")
+    pass1 = 0.0
+  end
+  i = i + 1.0
+end
+
+if pass1 == 1.0
+  print("  PASS: R0 scaled correctly [3, 6, 9, 12, 15, 18, 21, 24]")
+else
+  print("  FAIL: R0 scale mismatch")
+end
+
+// ── Test 2: Copy R0 → R1 on GPU ────────────────────────────────────
+print(" ")
+print("--- Test 2: vm_copy (R0 → R1) ---")
+
+// Push constants: [src_offset, dst_offset, count]
+// R0 offset = 0 * reg_size = 0
+// R1 offset = 1 * reg_size = 8
+let r0_off = 0.0
+let r1_off = reg_size
+let copy_pc = [r0_off, r1_off, reg_size]
+let _d2 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_copy.spv", copy_pc, wg)
+let prog2 = vm_build(vm)
+print("  vm_build OK, program={prog2}")
+
+let _e2 = vm_execute(prog2)
+print("  vm_execute OK")
+
+// Read back R1
+let r1_after = vm_read_register(vm, 0.0, 1.0, reg_size)
+let mut pass2 = 1.0
+i = 0.0
+while i < reg_size
+  let exp2 = (i + 1.0) * 3.0
+  let act2 = r1_after[int(i)]
+  if act2 != exp2
+    print("  FAIL: R1[{i}] = {act2}, expected {exp2}")
+    pass2 = 0.0
+  end
+  i = i + 1.0
+end
+
+if pass2 == 1.0
+  print("  PASS: R1 copied correctly from R0 [3, 6, 9, ..., 24]")
+else
+  print("  FAIL: R1 copy mismatch")
+end
+
+// ── Test 3: Multi-op chain (scale R1 by 0.5, then copy R1 → R2) ───
+print(" ")
+print("--- Test 3: Multi-op chain (scale R1 * 0.5, copy R1 → R2) ---")
+
+// Two dispatches in one build
+let r2_off = reg_size * 2.0
+let scale_r1_pc = [r1_off, 0.5, reg_size]
+let _d3a = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_scale.spv", scale_r1_pc, wg)
+let copy_r1_r2_pc = [r1_off, r2_off, reg_size]
+let _d3b = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_copy.spv", copy_r1_r2_pc, wg)
+let prog3 = vm_build(vm)
+print("  vm_build OK (2-op chain), program={prog3}")
+
+let _e3 = vm_execute(prog3)
+print("  vm_execute OK")
+
+// R1 should now be [1.5, 3, 4.5, 6, 7.5, 9, 10.5, 12]
+let r1_check = vm_read_register(vm, 0.0, 1.0, reg_size)
+// R2 should be copy of R1 after scale = same values
+let r2_check = vm_read_register(vm, 0.0, 2.0, reg_size)
+
+let mut pass3 = 1.0
+i = 0.0
+while i < reg_size
+  let exp3 = (i + 1.0) * 1.5
+  let a1 = r1_check[int(i)]
+  let a2 = r2_check[int(i)]
+  if a1 != exp3
+    print("  FAIL: R1[{i}] = {a1}, expected {exp3}")
+    pass3 = 0.0
+  end
+  if a2 != exp3
+    print("  FAIL: R2[{i}] = {a2}, expected {exp3}")
+    pass3 = 0.0
+  end
+  i = i + 1.0
+end
+
+if pass3 == 1.0
+  print("  PASS: Multi-op chain correct (R1=R2=[1.5, 3, 4.5, ..., 12])")
+else
+  print("  FAIL: Multi-op chain mismatch")
+end
+
+// Cleanup
+let _s = vm_shutdown(vm)
+print(" ")
+print("=== DONE ===")

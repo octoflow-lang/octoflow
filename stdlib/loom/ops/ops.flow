@@ -1,0 +1,59 @@
+// stdlib/loom/ops.flow — GPU compute operations via gpu_run()
+//
+// Architecture C: .flow wrappers around gpu_run() with pre-compiled .spv kernels.
+// Each function loads a kernel from stdlib/loom/kernels/math/ and dispatches on the GPU.
+//
+// Usage:
+//   use "stdlib/loom/ops.flow"
+//   let result = gpu_add(a, b)
+
+// ── Element-wise unary operations ───────────────────────────────────
+fn gpu_abs_run(arr):
+    return gpu_run("stdlib/loom/kernels/math/abs.spv", arr)
+
+fn gpu_sqrt_run(arr):
+    return gpu_run("stdlib/loom/kernels/math/sqrt.spv", arr)
+
+fn gpu_exp_run(arr):
+    return gpu_run("stdlib/loom/kernels/math/exp.spv", arr)
+
+fn gpu_log_run(arr):
+    return gpu_run("stdlib/loom/kernels/math/log.spv", arr)
+
+fn gpu_negate_run(arr):
+    return gpu_run("stdlib/loom/kernels/math/negate.spv", arr)
+
+fn gpu_floor_run(arr):
+    return gpu_run("stdlib/loom/kernels/math/floor.spv", arr)
+
+fn gpu_ceil_run(arr):
+    return gpu_run("stdlib/loom/kernels/math/ceil.spv", arr)
+
+fn gpu_round_run(arr):
+    return gpu_run("stdlib/loom/kernels/math/round.spv", arr)
+
+fn gpu_sin_run(arr):
+    return gpu_run("stdlib/loom/kernels/math/sin.spv", arr)
+
+fn gpu_cos_run(arr):
+    return gpu_run("stdlib/loom/kernels/math/cos.spv", arr)
+
+fn gpu_double(arr):
+    return gpu_run("stdlib/loom/kernels/math/double.spv", arr)
+
+// ── Element-wise binary operations ──────────────────────────────────
+fn gpu_add_run(a, b):
+    return gpu_run("stdlib/loom/kernels/math/add.spv", a, b)
+
+fn gpu_sub_run(a, b):
+    return gpu_run("stdlib/loom/kernels/math/sub.spv", a, b)
+
+fn gpu_mul_run(a, b):
+    return gpu_run("stdlib/loom/kernels/math/mul.spv", a, b)
+
+fn gpu_div_run(a, b):
+    return gpu_run("stdlib/loom/kernels/math/div.spv", a, b)
+
+// ── Conditional select ──────────────────────────────────────────────
+fn gpu_where_run(cond, a, b):
+    return gpu_run("stdlib/loom/kernels/math/where.spv", cond, a, b)

@@ -1,0 +1,165 @@
+// test_matmul_tiled.flow — Tiled Matmul Tests
+// Run from stdlib/loom/: octoflow run test_matmul_tiled.flow --allow-read --allow-write --allow-exec --allow-ffi
+
+use "../emit_matmul_tiled"
+use "../runtime"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+fn check_near(counters, label, got, expected, tol)
+  let d = abs(got - expected)
+  if d < tol
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}, diff={d}")
+  return 0.0
+end
+
+print("=== TILED MATMUL KERNEL TEST ===")
+print(" ")
+
+// ── Test 1: Emit from modular emitter ────────────────────────────────
+
+print("--- Test 1: Modular kernel emission ---")
+let _r = emit_matmul_tiled("test_matmul_tiled.spv")
+let _c = check(counters, "kernel emitted", 1.0, 1.0)
+
+// Validate
+let vr = exec("spirv-val", "test_matmul_tiled.spv")
+let _c2 = check(counters, "spirv-val", vr.ok, 1.0)
+if vr.ok != 1.0
+  print("  spirv-val error: {vr.error}")
+end
+
+// ── Test 2: Emit from wrapper function (nested call) ─────────────────
+
+fn emit_from_wrapper(path)
+  let _r = emit_matmul_tiled(path)
+  return 0.0
+end
+
+print("--- Test 2: Nested module emit ---")
+let _w = emit_from_wrapper("test_matmul_tiled_nested.spv")
+let vr2 = exec("spirv-val", "test_matmul_tiled_nested.spv")
+let _c3 = check(counters, "nested spirv-val", vr2.ok, 1.0)
+
+// ── Test 3: GPU dispatch — identity × identity = identity ────────────
+
+print("--- Test 3: GPU dispatch identity ---")
+let _init = rt_init()
+
+let m = 16.0
+let n = 16.0
+let k = 16.0
+
+// Create identity matrices
+let mut a_data = []
+let mut b_data = []
+let mut i = 0.0
+while i < 256.0
+  let row = floor(i / 16.0)
+  let col = i - row * 16.0
+  if row == col
+    push(a_data, 1.0)
+    push(b_data, 1.0)
+  else
+    push(a_data, 0.0)
+    push(b_data, 0.0)
+  end
+  i = i + 1.0
+end
+
+let buf_a = rt_create_buffer(1024.0)
+let buf_b = rt_create_buffer(1024.0)
+let buf_c = rt_create_buffer(1024.0)
+
+let _u1 = rt_upload(buf_a, a_data)
+let _u2 = rt_upload(buf_b, b_data)
+
+let pipe = rt_load_pipeline("test_matmul_tiled.spv", 3.0, 12.0)
+
+let _cb = rt_chain_begin(1.0, 3.0)
+let mut pc = []
+push(pc, m)
+push(pc, k)
+push(pc, n)
+let _pcc = rt_chain_push_constants(pipe, pc)
+let mut bufs = []
+push(bufs, buf_a)
+push(bufs, buf_b)
+push(bufs, buf_c)
+let _d = rt_chain_dispatch(pipe, bufs, 1.0)
+let _ce = rt_chain_end()
+let _sw = rt_chain_submit_wait()
+
+let _dl = rt_download(buf_c, 256.0)
+
+// Check diagonal: should be 1.0
+let _c4 = check_near(counters, "C[0,0]=1", rt_result[0], 1.0, 0.01)
+let _c5 = check_near(counters, "C[1,1]=1", rt_result[17], 1.0, 0.01)
+let _c6 = check_near(counters, "C[15,15]=1", rt_result[255], 1.0, 0.01)
+// Check off-diagonal: should be 0.0
+let _c7 = check_near(counters, "C[0,1]=0", rt_result[1], 0.0, 0.01)
+let _c8 = check_near(counters, "C[1,0]=0", rt_result[16], 0.0, 0.01)
+
+// ── Test 4: GPU dispatch — known product ─────────────────────────────
+
+print("--- Test 4: GPU dispatch 2×2 product ---")
+// A = [[1, 2], [3, 4]] (padded to 16×16)
+// B = [[5, 6], [7, 8]] (padded to 16×16)
+// C = [[19, 22], [43, 50]]
+
+let mut a2 = []
+let mut b2 = []
+let mut j = 0.0
+while j < 256.0
+  push(a2, 0.0)
+  push(b2, 0.0)
+  j = j + 1.0
+end
+// A[0,0]=1, A[0,1]=2, A[1,0]=3, A[1,1]=4
+a2[0] = 1.0
+a2[1] = 2.0
+a2[16] = 3.0
+a2[17] = 4.0
+// B[0,0]=5, B[0,1]=6, B[1,0]=7, B[1,1]=8
+b2[0] = 5.0
+b2[1] = 6.0
+b2[16] = 7.0
+b2[17] = 8.0
+
+let _u3 = rt_upload(buf_a, a2)
+let _u4 = rt_upload(buf_b, b2)
+
+let _cb2 = rt_chain_begin(1.0, 3.0)
+let _pcc2 = rt_chain_push_constants(pipe, pc)
+let _d2 = rt_chain_dispatch(pipe, bufs, 1.0)
+let _ce2 = rt_chain_end()
+let _sw2 = rt_chain_submit_wait()
+
+let _dl2 = rt_download(buf_c, 256.0)
+
+let _c9 = check_near(counters, "C[0,0]=19", rt_result[0], 19.0, 0.1)
+let _c10 = check_near(counters, "C[0,1]=22", rt_result[1], 22.0, 0.1)
+let _c11 = check_near(counters, "C[1,0]=43", rt_result[16], 43.0, 0.1)
+let _c12 = check_near(counters, "C[1,1]=50", rt_result[17], 50.0, 0.1)
+
+// ── Summary ──────────────────────────────────────────────────────────
+
+print(" ")
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print("=== RESULTS: {pass}/{total} passed ===")

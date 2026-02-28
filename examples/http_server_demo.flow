@@ -1,0 +1,39 @@
+-- Phase 46: HTTP server demo — pure OctoFlow HTTP/1.1 over TCP
+-- Run: octoflow http_server_demo.flow --allow-net
+-- Then in another terminal: curl http://localhost:8080/hello
+
+-- Start listening on port 8080
+let srv = http_listen(8080)
+print("Server listening on port 8080 (accepting 3 requests)")
+
+-- Handle 3 requests then exit
+let i = 0
+loop
+  if i >= 3 then break
+
+  -- Accept next connection (blocks until request arrives)
+  let fd = http_accept(srv)
+
+  -- Inspect the request
+  let method = http_method(fd)
+  let path   = http_path(fd)
+  let query  = http_query(fd)
+  let body   = http_body(fd)
+
+  print("Request: {method} {path}")
+  if query != "" then print("  Query: {query}")
+  if body  != "" then print("  Body:  {body}")
+
+  -- Route on path
+  if path == "/hello" then
+    http_respond(fd, 200.0, "Hello from OctoFlow!")
+  if path == "/echo" then
+    http_respond_json(fd, 200.0, body)
+  if path != "/hello" then
+    if path != "/echo" then
+      http_respond(fd, 404.0, "Not Found")
+
+  let i = i + 1
+
+tcp_close(srv)
+print("Server shut down after 3 requests.")

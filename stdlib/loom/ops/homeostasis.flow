@@ -1,0 +1,162 @@
+// stdlib/loom/homeostasis.flow — GPU Self-Regulation
+//
+// Runtime-level thermal and power management for sustained 24/7 workloads.
+// The GPU monitors its own state and adjusts dispatch pacing to maintain
+// sustainable operation below thermal throttle points.
+//
+// Module-level state (arrays for scalar snapshot semantics):
+//   homeo_state[0] = target_temp
+//   homeo_state[1] = target_power
+//   homeo_state[2] = current_temp
+//   homeo_state[3] = current_power
+//   homeo_state[4] = delay_ms
+//   homeo_state[5] = total_checks
+//   homeo_state[6] = total_delays
+//
+// Functions:
+//   homeo_init(target_temp, target_power)
+//     Initialize homeostasis
+//
+//   homeo_check_and_pace() → delay_ms
+//     Check GPU state, return delay before next dispatch
+//
+//   homeo_report()
+//     Print current status
+//
+// Philosophy:
+//   Steady 92% beats spiking 100%→60%→100%→60%.
+//
+// Requirements: --allow-exec (for nvidia-smi)
+// Usage:
+//   use "stdlib/loom/homeostasis"
+//   homeo_init(75.0, 150.0)
+//   while running
+//     let delay = homeo_check_and_pace()
+//     homeo_sleep(delay)
+//     ... dispatch work ...
+//   end
+
+// Module state (initialized by homeo_init)
+let mut homeo_state = []
+
+// Configuration constants
+let TEMP_MARGIN = 5.0
+let POWER_MARGIN = 10.0
+let BASE_DELAY_MS = 1.0
+let MAX_DELAY_MS = 50.0
+
+// ── Thermal Query ───────────────────────────────────────────────────
+
+fn query_gpu_temp()
+  let result = exec("nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits")
+
+  if result.ok == 1.0
+    let temp_str = result.output
+    let temp_val = float(temp_str)
+    return temp_val
+  end
+
+  return 65.0
+end
+
+fn query_gpu_power()
+  let result = exec("nvidia-smi", "--query-gpu=power.draw", "--format=csv,noheader,nounits")
+
+  if result.ok == 1.0
+    let power_str = result.output
+    let power_val = float(power_str)
+    return power_val
+  end
+
+  return 100.0
+end
+
+// ── Homeostasis Control ─────────────────────────────────────────────
+
+fn homeo_init(target_temp, target_power)
+  // Initialize state array
+  while len(homeo_state) > 0.0
+    pop(homeo_state)
+  end
+
+  push(homeo_state, target_temp)   // 0
+  push(homeo_state, target_power)  // 1
+  push(homeo_state, 0.0)            // 2: current_temp
+  push(homeo_state, 0.0)            // 3: current_power
+  push(homeo_state, 0.0)            // 4: delay_ms
+  push(homeo_state, 0.0)            // 5: total_checks
+  push(homeo_state, 0.0)            // 6: total_delays
+
+  return 0.0
+end
+
+fn homeo_check_and_pace()
+  let temp = query_gpu_temp()
+  let power = query_gpu_power()
+
+  homeo_state[2] = temp
+  homeo_state[3] = power
+  homeo_state[5] = homeo_state[5] + 1.0
+
+  let target_temp = homeo_state[0]
+  let target_power = homeo_state[1]
+
+  // Thermal pacing
+  let temp_headroom = target_temp - temp
+  let mut temp_factor = 0.0
+  if temp_headroom < TEMP_MARGIN
+    temp_factor = (TEMP_MARGIN - temp_headroom) / TEMP_MARGIN
+  end
+
+  // Power pacing
+  let power_headroom = target_power - power
+  let mut power_factor = 0.0
+  if power_headroom < POWER_MARGIN
+    power_factor = (POWER_MARGIN - power_headroom) / POWER_MARGIN
+  end
+
+  // Max factor
+  let mut pace_factor = temp_factor
+  if power_factor > temp_factor
+    pace_factor = power_factor
+  end
+
+  // Delay
+  let delay = BASE_DELAY_MS + (pace_factor * (MAX_DELAY_MS - BASE_DELAY_MS))
+  homeo_state[4] = delay
+
+  if delay > BASE_DELAY_MS
+    homeo_state[6] = homeo_state[6] + 1.0
+  end
+
+  return delay
+end
+
+fn homeo_report()
+  let temp = homeo_state[2]
+  let power = homeo_state[3]
+  let target_temp = homeo_state[0]
+  let target_power = homeo_state[1]
+  let delay = homeo_state[4]
+  let checks = homeo_state[5]
+  let delays = homeo_state[6]
+
+  print("=== Homeostasis Status ===")
+  print("  Temperature: {temp}C (target {target_temp}C)")
+  print("  Power: {power}W (target {target_power}W)")
+  print("  Current delay: {delay}ms")
+  print("  Checks: {checks}, Paced: {delays}")
+
+  let pace_ratio = delays / checks
+  print("  Pace ratio: {pace_ratio}")
+
+  return 0.0
+end
+
+fn homeo_sleep(ms)
+  let target = now_ms() + ms
+  while now_ms() < target
+    // Busy wait
+  end
+  return 0.0
+end

@@ -1,0 +1,43 @@
+// Lex a file via read_file
+let input_path = env("FLOW_INPUT")
+let src = read_file(input_path)
+let n = len(src)
+let mut pos = 0.0
+let mut tok_types = []
+let mut tok_values = []
+let NL  = 10.0
+let SP  = 32.0
+
+while pos < n
+  let c = char_at(src, pos)
+  let co = ord(c)
+  if co == SP
+    pos = pos + 1.0
+  elif co == NL
+    push(tok_types, "nl")
+    push(tok_values, "NL")
+    pos = pos + 1.0
+  elif is_match(c, "[a-zA-Z_]")
+    let mut word = ""
+    while pos < n && is_match(char_at(src, pos), "[a-zA-Z_0-9]")
+      word = word + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    push(tok_types, "ident")
+    push(tok_values, word)
+  else
+    push(tok_types, "op")
+    push(tok_values, c)
+    pos = pos + 1.0
+  end
+end
+
+let count = len(tok_types)
+print("tokens: {count}")
+let mut i = 0.0
+while i < count
+  let t = tok_types[i]
+  let v = tok_values[i]
+  print("[{i}] {t} {v}")
+  i = i + 1.0
+end

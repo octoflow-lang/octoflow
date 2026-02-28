@@ -1,0 +1,107 @@
+// emit_dequant_q4k.flow — Q4_K Dequantization Kernel Emitter
+//
+// Q4_K format (GGUF quantization):
+// - 256 weights per block
+// - 4 bits per weight (packed 2 per byte)
+// - 1 float scale per 32-element sub-block (8 scales per 256-block)
+// - 1 float min per 32-element sub-block (8 mins per 256-block)
+// - Total: 128 bytes weights + 32 bytes scales + 32 bytes mins = 192 bytes per 256 weights
+// - Effective: 6 bits per weight
+//
+// Dequantization:
+//   float_val = (q4_val * scale) + min
+//
+// This emitter builds a SPIR-V kernel that reads packed Q4_K data
+// and writes fp32 output.
+
+use "../compiler/ir"
+
+fn emit_dequant_q4k(out_path)
+  ir_new()
+  ir_input_count = 1.0  // Input: packed Q4_K bytes
+
+  let entry = ir_block("entry")
+
+  // Load global invocation ID
+  let gid = ir_load_gid(entry)
+
+  // Each thread dequantizes one weight
+  // weight_idx = gid
+  // block_idx = gid / 256
+  // sub_block_idx = (gid % 256) / 32  (which of 8 sub-blocks)
+  // weight_in_sub = gid % 32
+
+  let c256 = ir_const_u(entry, 256.0)
+  let c32 = ir_const_u(entry, 32.0)
+  let c2 = ir_const_u(entry, 2.0)
+  let c128 = ir_const_u(entry, 128.0)
+  let c0 = ir_const_u(entry, 0.0)
+  let c15 = ir_const_u(entry, 15.0)
+  let c4 = ir_const_u(entry, 4.0)
+
+  // block_idx = gid / 256
+  let block_idx = ir_udiv(entry, gid, c256)
+
+  // local_idx = gid % 256
+  let local_idx = ir_umod(entry, gid, c256)
+
+  // sub_block_idx = local_idx / 32
+  let sub_idx = ir_udiv(entry, local_idx, c32)
+
+  // weight_in_sub = local_idx % 32
+  let w_in_sub = ir_umod(entry, local_idx, c32)
+
+  // Byte offset in packed data for this weight
+  // block_offset = block_idx * 192  (192 bytes per block)
+  let c192 = ir_const_u(entry, 192.0)
+  let block_offset = ir_imul(entry, block_idx, c192)
+
+  // Weights are first 128 bytes, then 32 bytes scales, then 32 bytes mins
+  // byte_idx_in_block = local_idx / 2  (2 weights per byte)
+  let byte_idx_rel = ir_udiv(entry, local_idx, c2)
+  let byte_idx = ir_iadd(entry, block_offset, byte_idx_rel)
+
+  // Read packed byte
+  let packed_byte = ir_load_input_at(entry, 0.0, byte_idx)
+  let packed_u = ir_ftou(entry, packed_byte)
+
+  // Extract 4-bit value: low nibble if even, high nibble if odd
+  // is_odd = local_idx % 2
+  let is_odd = ir_umod(entry, local_idx, c2)
+  let is_even_cond = ir_uequ(entry, is_odd, c0)
+
+  // low_nibble = packed & 15
+  let low_nibble = ir_umod(entry, packed_u, c15)
+  // high_nibble = packed >> 4
+  let high_nibble = ir_udiv(entry, packed_u, c15)
+
+  // Select based on even/odd
+  let q4_val_u = ir_select(entry, 2.0, is_even_cond, low_nibble, high_nibble)
+  let q4_val = ir_utof(entry, q4_val_u)
+
+  // Load scale and min for this sub-block
+  // scale_offset = block_offset + 128 + (sub_idx * 4)
+  let scale_base = ir_iadd(entry, block_offset, c128)
+  let sub_offset_scale = ir_imul(entry, sub_idx, c4)
+  let scale_idx = ir_iadd(entry, scale_base, sub_offset_scale)
+  let scale_byte = ir_load_input_at(entry, 0.0, scale_idx)
+
+  // min_offset = block_offset + 160 + (sub_idx * 4)
+  let c160 = ir_const_u(entry, 160.0)
+  let min_base = ir_iadd(entry, block_offset, c160)
+  let sub_offset_min = ir_imul(entry, sub_idx, c4)
+  let min_idx = ir_iadd(entry, min_base, sub_offset_min)
+  let min_byte = ir_load_input_at(entry, 0.0, min_idx)
+
+  // Dequantize: val = (q4 * scale) + min
+  let scaled = ir_fmul(entry, q4_val, scale_byte)
+  let dequant = ir_fadd(entry, scaled, min_byte)
+
+  // Store result
+  ir_store_output(entry, dequant)
+  ir_term_return(entry)
+
+  // Emit SPIR-V
+  ir_emit_spirv(out_path)
+  return 0.0
+end

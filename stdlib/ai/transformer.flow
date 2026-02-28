@@ -1,0 +1,67 @@
+// stdlib/ai/transformer.flow — GPU Transformer Layer
+//
+// RMSNorm → Attention → Residual → RMSNorm → FFN → Residual
+//
+// transformer_layer(hidden, attn_norm_w, wq, wk, wv, wo, ffn_norm_w,
+//                   w_gate, w_up, w_down, pos, n_head, n_kv_head,
+//                   n_embd, n_ff, eps)
+//
+// All weight arrays passed explicitly (no map — OctoFlow maps can't store arrays).
+// eps parameter for adaptive RMSNorm (read from GGUF metadata).
+// n_kv_head for GQA support (n_kv_head < n_head).
+
+use "../gpu/runtime"
+use "../gpu/attention"
+use "../gpu/ffn"
+
+fn transformer_layer(hidden, attn_norm_w, wq, wk, wv, wo, ffn_norm_w, w_gate, w_up, w_down, pos, n_head, n_kv_head, n_embd, n_ff, eps)
+  // 1. Pre-attention RMSNorm (CPU — adaptive eps)
+  let normed_attn = rmsnorm_cpu(hidden, attn_norm_w, eps)
+
+  // 2. Self-Attention (GPU — adaptive GQA)
+  let attn_out = gpu_attention(normed_attn, wq, wk, wv, wo, pos, n_head, n_kv_head, n_embd)
+
+  // 3. Residual connection
+  let mut h_post_attn = []
+  let mut j = 0.0
+  while j < n_embd
+    push(h_post_attn, hidden[int(j)] + attn_out[int(j)])
+    j = j + 1.0
+  end
+
+  // 4. Pre-FFN RMSNorm (CPU — adaptive eps)
+  let normed_ffn = rmsnorm_cpu(h_post_attn, ffn_norm_w, eps)
+
+  // 5. FFN (GPU — SwiGLU)
+  let ffn_out = gpu_ffn(normed_ffn, w_gate, w_up, w_down, n_embd, n_ff)
+
+  // 6. Residual connection
+  let mut h_final = []
+  let mut k = 0.0
+  while k < n_embd
+    push(h_final, h_post_attn[int(k)] + ffn_out[int(k)])
+    k = k + 1.0
+  end
+
+  return h_final
+end
+
+// CPU RMSNorm with adaptive epsilon
+fn rmsnorm_cpu(hidden, weight, eps)
+  let n = len(hidden)
+  let mut sum_sq = 0.0
+  let mut i = 0.0
+  while i < n
+    let val = hidden[int(i)]
+    sum_sq = sum_sq + (val * val)
+    i = i + 1.0
+  end
+  let rms = sqrt(sum_sq / n + eps)
+  let mut result = []
+  let mut j = 0.0
+  while j < n
+    push(result, (hidden[int(j)] / rms) * weight[int(j)])
+    j = j + 1.0
+  end
+  return result
+end

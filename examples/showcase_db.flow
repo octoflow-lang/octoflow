@@ -1,0 +1,151 @@
+// ─── GPU Columnar Database — 100K Records ────────────────────────────
+// SQL-like queries on GPU-accelerated columnar storage
+// Run: octoflow run examples/showcase_db.flow
+
+let esc = chr(27)
+let bold = esc + "[1m"
+let cyan = esc + "[36m"
+let green = esc + "[32m"
+let yellow = esc + "[33m"
+let reset = esc + "[0m"
+
+let title = bold + cyan + "GPU Columnar Database" + reset
+print("{title}")
+print("────────────────────────────────────────")
+
+// ─── Generate 100,000 employee records ────────────────────────────────
+let N = 100000
+let t0 = now_ms()
+
+let ids = gpu_range(1.0, N + 1, 1.0)
+
+// Salaries: 30K-150K range
+let rand_sal = gpu_random(N)
+let sal_range = gpu_scale(rand_sal, 120000.0)
+let sal_base = gpu_fill(30000.0, N)
+let salaries = gpu_add(sal_range, sal_base)
+
+// Departments: 0-9 (Engineering, Sales, Marketing, HR, Finance, Legal, Support, Research, Ops, Executive)
+let rand_dept = gpu_random(N)
+let dept_scaled = gpu_scale(rand_dept, 10.0)
+let departments = gpu_floor(dept_scaled)
+
+// Years employed: 0-30
+let rand_yrs = gpu_random(N)
+let yrs_scaled = gpu_scale(rand_yrs, 30.0)
+let years = gpu_floor(yrs_scaled)
+
+let t_gen = now_ms() - t0
+let sg = str(int(t_gen))
+let sn = str(int(N))
+let gen_msg = sn + " records generated in " + sg + " ms"
+print("{gen_msg}")
+print("")
+
+let dept_names = ["Engineering", "Sales", "Marketing", "HR", "Finance", "Legal", "Support", "Research", "Operations", "Executive"]
+let one = gpu_fill(1.0, N)
+
+// ─── Query 1: SELECT COUNT(*), AVG(salary) WHERE salary > 80000 ──────
+let t1 = now_ms()
+let threshold = gpu_fill(80000.0, N)
+let above = gpu_sub(salaries, threshold)
+let mask_above = gpu_clamp(above, 0.0, 1.0)
+let mask_above = gpu_ceil(mask_above)
+let high_count = gpu_sum(mask_above)
+let sal_filtered = gpu_mul(salaries, mask_above)
+let high_total = gpu_sum(sal_filtered)
+let high_avg = high_total / high_count
+let t1e = now_ms() - t1
+
+let q1 = bold + "Query 1: " + reset + "SELECT COUNT(*), AVG(salary) WHERE salary > 80000"
+print("{q1}")
+let shc = str(int(high_count))
+let sha = str(int(high_avg))
+let st1 = str(int(t1e))
+let r1 = "  Result: " + green + shc + reset + " employees, avg salary $" + green + sha + reset + "  (" + st1 + " ms)"
+print("{r1}")
+print("")
+
+// ─── Query 2: GROUP BY department → AVG(salary), COUNT(*) ─────────────
+let t2 = now_ms()
+let q2 = bold + "Query 2: " + reset + "SELECT dept, COUNT(*), AVG(salary) GROUP BY department"
+print("{q2}")
+let header = "  ┌──────────────┬────────┬────────────┐"
+print("{header}")
+let hdr = "  │ Department    │ Count  │ Avg Salary │"
+print("{hdr}")
+let sep = "  ├──────────────┼────────┼────────────┤"
+print("{sep}")
+
+for d in range(0, 10)
+    let d_arr = gpu_fill(d, N)
+    let diff = gpu_sub(departments, d_arr)
+    let abs_diff = gpu_abs(diff)
+    let cl = gpu_clamp(abs_diff, 0.0, 1.0)
+    let nonzero = gpu_ceil(cl)
+    let eq_mask = gpu_sub(one, nonzero)
+    let dept_count = gpu_sum(eq_mask)
+    let sal_masked = gpu_mul(salaries, eq_mask)
+    let dept_total = gpu_sum(sal_masked)
+    let dept_avg = dept_total / dept_count
+
+    let dname = dept_names[int(d)]
+    let pad_name = dname + repeat(" ", 13 - len(dname))
+    let sdc = str(int(dept_count))
+    let pad_count = repeat(" ", 6 - len(sdc)) + sdc
+    let sda = "$" + str(int(dept_avg))
+    let pad_avg = repeat(" ", 10 - len(sda)) + sda
+    let row = "  │ " + pad_name + "│" + pad_count + " │" + pad_avg + " │"
+    print("{row}")
+end
+
+let foot = "  └──────────────┴────────┴────────────┘"
+print("{foot}")
+let t2e = now_ms() - t2
+let st2 = str(int(t2e))
+let q2t = "  Query time: " + st2 + " ms"
+print("{q2t}")
+print("")
+
+// ─── Query 3: TOP 5 highest salaries ──────────────────────────────────
+let t3 = now_ms()
+let q3 = bold + "Query 3: " + reset + "SELECT id, salary ORDER BY salary DESC LIMIT 5"
+print("{q3}")
+
+// Find max 5 times (mark each found as -1)
+let mut remaining = salaries
+for rank in range(1, 6)
+    let mx = gpu_max(remaining)
+    // Find which index has this salary (first match)
+    let mx_arr = gpu_fill(mx, N)
+    let diff_mx = gpu_sub(remaining, mx_arr)
+    let abs_mx = gpu_abs(diff_mx)
+    let cl_mx = gpu_clamp(abs_mx, 0.0, 1.0)
+    let cl_mx_ceil = gpu_ceil(cl_mx)
+    let is_max = gpu_sub(one, cl_mx_ceil)
+
+    // Get the ID (first match)
+    let id_masked = gpu_mul(ids, is_max)
+    let emp_id = gpu_max(id_masked)
+
+    let sr = str(int(rank))
+    let si = str(int(emp_id))
+    let ss = "$" + str(int(mx))
+    let row3 = "  #" + sr + "  Employee " + si + "  salary: " + green + ss + reset
+    print("{row3}")
+
+    // Zero out this salary for next iteration
+    let inv_max = gpu_sub(one, is_max)
+    let remaining = gpu_mul(remaining, inv_max)
+    let _f = remaining[0]
+end
+
+let t3e = now_ms() - t3
+let st3 = str(int(t3e))
+let q3t = "  Query time: " + st3 + " ms"
+print("{q3t}")
+
+print("")
+let total = str(int(now_ms() - t0))
+let fin = bold + "Total: " + total + " ms" + reset + " — 100K records, 3 queries, all on GPU"
+print("{fin}")

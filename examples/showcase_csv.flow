@@ -1,0 +1,253 @@
+// ─── CSV Data Analysis ──────────────────────────────────────────────
+// Generate 2,000 sales records → analyze with stats and grouping
+// Run: octoflow run examples/showcase_csv.flow --allow-write --allow-read
+//
+// Demonstrates: CSV I/O, descriptive stats, group-by aggregation,
+// filtering, sorting — the workflow data scientists reach for first.
+
+let esc = chr(27)
+let bold = esc + "[1m"
+let cyan = esc + "[36m"
+let green = esc + "[32m"
+let red = esc + "[31m"
+let reset = esc + "[0m"
+
+let title = bold + cyan + "CSV Data Analysis" + reset
+print("{title}")
+print("────────────────────────────────────────")
+let t0 = now_ms()
+
+// ─── Generate 2,000 sales records ───────────────────────────────────
+let N = 2000
+let regions = ["North", "South", "East", "West"]
+let products = ["Widget", "Gadget", "Gizmo", "Doohickey", "Thingamajig"]
+let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+let nl = chr(10)
+let mut csv = "month,region,product,quantity,revenue" + nl
+
+let mut all_revenue = []
+let mut all_quantity = []
+let mut region_rev = [0.0, 0.0, 0.0, 0.0]
+let mut region_cnt = [0.0, 0.0, 0.0, 0.0]
+let mut product_qty = [0.0, 0.0, 0.0, 0.0, 0.0]
+let mut month_rev = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+let mut i = 0.0
+while i < N
+    let mi = int(floor(random() * 12.0))
+    let ri = int(floor(random() * 4.0))
+    let pi = int(floor(random() * 5.0))
+    let qty = floor(random() * 95.0) + 5.0
+    let price = floor(random() * 180.0) + 20.0
+    let rev = qty * price
+
+    let month = months[mi]
+    let region = regions[ri]
+    let product = products[pi]
+    csv = csv + month + "," + region + "," + product + "," + str(int(qty)) + "," + str(int(rev)) + nl
+
+    push(all_revenue, rev)
+    push(all_quantity, qty)
+    region_rev[ri] = region_rev[ri] + rev
+    region_cnt[ri] = region_cnt[ri] + 1.0
+    product_qty[pi] = product_qty[pi] + qty
+    month_rev[mi] = month_rev[mi] + rev
+
+    i = i + 1.0
+end
+
+// Write CSV
+write_file("sales_data.csv", csv)
+let t_gen = str(int(now_ms() - t0))
+let gen_msg = str(int(N)) + " records generated and saved in " + t_gen + " ms"
+print("{gen_msg}")
+print("")
+
+// ─── Descriptive Statistics ─────────────────────────────────────────
+let t_stats = now_ms()
+let rev_mean = mean(all_revenue)
+let rev_med = median(all_revenue)
+let rev_sd = stddev(all_revenue)
+let rev_sorted = sort_array(all_revenue)
+let rev_min = rev_sorted[0]
+let rev_max = rev_sorted[int(N - 1.0)]
+let q1_idx = int(floor(N * 0.25))
+let q3_idx = int(floor(N * 0.75))
+let rev_q1 = rev_sorted[q1_idx]
+let rev_q3 = rev_sorted[q3_idx]
+
+let hdr1 = bold + "Revenue Statistics" + reset
+print("{hdr1}")
+print("  ┌────────────┬──────────────┐")
+print("  │ Metric     │ Value        │")
+print("  ├────────────┼──────────────┤")
+
+let sm = "$" + str(int(rev_mean))
+let pad_m = repeat(" ", 12 - len(sm)) + sm
+let row_m = "  │ Mean       │" + pad_m + " │"
+print("{row_m}")
+
+let smd = "$" + str(int(rev_med))
+let pad_md = repeat(" ", 12 - len(smd)) + smd
+let row_md = "  │ Median     │" + pad_md + " │"
+print("{row_md}")
+
+let ssd = "$" + str(int(rev_sd))
+let pad_sd = repeat(" ", 12 - len(ssd)) + ssd
+let row_sd = "  │ Std Dev    │" + pad_sd + " │"
+print("{row_sd}")
+
+let smn = "$" + str(int(rev_min))
+let pad_mn = repeat(" ", 12 - len(smn)) + smn
+let row_mn = "  │ Min        │" + pad_mn + " │"
+print("{row_mn}")
+
+let smx = "$" + str(int(rev_max))
+let pad_mx = repeat(" ", 12 - len(smx)) + smx
+let row_mx = "  │ Max        │" + pad_mx + " │"
+print("{row_mx}")
+
+let sq1 = "$" + str(int(rev_q1))
+let pad_q1 = repeat(" ", 12 - len(sq1)) + sq1
+let row_q1 = "  │ Q1 (25%)   │" + pad_q1 + " │"
+print("{row_q1}")
+
+let sq3 = "$" + str(int(rev_q3))
+let pad_q3 = repeat(" ", 12 - len(sq3)) + sq3
+let row_q3 = "  │ Q3 (75%)   │" + pad_q3 + " │"
+print("{row_q3}")
+
+print("  └────────────┴──────────────┘")
+let st_stats = str(int(now_ms() - t_stats))
+let t_msg1 = "  Computed in " + st_stats + " ms"
+print("{t_msg1}")
+print("")
+
+// ─── Revenue by Region (GROUP BY) ───────────────────────────────────
+let t_grp = now_ms()
+let hdr2 = bold + "Revenue by Region" + reset
+print("{hdr2}")
+print("  ┌──────────┬──────────┬────────────┬──────────────┐")
+print("  │ Region   │ Records  │ Total Rev  │ Avg Rev/Sale │")
+print("  ├──────────┼──────────┼────────────┼──────────────┤")
+
+for ri in range(0, 4)
+    let rname = regions[int(ri)]
+    let pad_rn = rname + repeat(" ", 8 - len(rname))
+    let cnt = region_cnt[int(ri)]
+    let scnt = str(int(cnt))
+    let pad_cnt = repeat(" ", 8 - len(scnt)) + scnt
+    let tot = region_rev[int(ri)]
+    let stot = "$" + str(int(tot))
+    let pad_tot = repeat(" ", 10 - len(stot)) + stot
+    let avg = tot / cnt
+    let savg = "$" + str(int(avg))
+    let pad_avg = repeat(" ", 12 - len(savg)) + savg
+    let row_out = "  │ " + pad_rn + "│" + pad_cnt + " │" + pad_tot + " │" + pad_avg + " │"
+    print("{row_out}")
+end
+
+print("  └──────────┴──────────┴────────────┴──────────────┘")
+let st_grp = str(int(now_ms() - t_grp))
+let t_msg2 = "  Computed in " + st_grp + " ms"
+print("{t_msg2}")
+print("")
+
+// ─── Top Products by Quantity ───────────────────────────────────────
+let t_prod = now_ms()
+let hdr3 = bold + "Products by Quantity Sold" + reset
+print("{hdr3}")
+
+// Find rank order (simple selection)
+let mut used = [0.0, 0.0, 0.0, 0.0, 0.0]
+for rank in range(1, 6)
+    let mut best = -1.0
+    let mut best_idx = 0.0
+    for pi in range(0, 5)
+        if used[int(pi)] == 0.0 && product_qty[int(pi)] > best
+            best = product_qty[int(pi)]
+            best_idx = pi
+        end
+    end
+    used[int(best_idx)] = 1.0
+    let pname = products[int(best_idx)]
+    let sqty = str(int(best))
+
+    // Bar chart
+    let bar_len = int(best / 500.0)
+    let mut bar = ""
+    for bi in range(0, bar_len)
+        bar = bar + chr(9608)
+    end
+
+    let sr = str(int(rank))
+    let pad_pn = pname + repeat(" ", 13 - len(pname))
+    let pad_qty = repeat(" ", 7 - len(sqty)) + sqty
+    let row_out = "  #" + sr + "  " + pad_pn + pad_qty + "  " + green + bar + reset
+    print("{row_out}")
+end
+
+let st_prod = str(int(now_ms() - t_prod))
+let t_msg3 = "  Computed in " + st_prod + " ms"
+print("{t_msg3}")
+print("")
+
+// ─── Monthly Trend ──────────────────────────────────────────────────
+let t_trend = now_ms()
+let hdr4 = bold + "Monthly Revenue Trend" + reset
+print("{hdr4}")
+
+// Find max for normalization
+let mut max_month = 0.0
+for mi in range(0, 12)
+    if month_rev[int(mi)] > max_month
+        max_month = month_rev[int(mi)]
+    end
+end
+
+for mi in range(0, 12)
+    let mname = months[int(mi)]
+    let mrev = month_rev[int(mi)]
+    let smr = "$" + str(int(mrev))
+    let bar_len = int(mrev / max_month * 30.0)
+    let mut bar = ""
+    for bi in range(0, bar_len)
+        bar = bar + chr(9608)
+    end
+    let pad_name = mname + repeat(" ", 4 - len(mname))
+    let pad_rev = repeat(" ", 9 - len(smr)) + smr
+    let row_out = "  " + pad_name + pad_rev + " " + cyan + bar + reset
+    print("{row_out}")
+end
+
+let st_trend = str(int(now_ms() - t_trend))
+let t_msg4 = "  Computed in " + st_trend + " ms"
+print("{t_msg4}")
+print("")
+
+// ─── Outlier Detection ──────────────────────────────────────────────
+let threshold = rev_mean + 2.0 * rev_sd
+let mut outlier_count = 0.0
+for x in all_revenue
+    if x > threshold
+        outlier_count = outlier_count + 1.0
+    end
+end
+
+let sigma = chr(963)
+let hdr5 = bold + "Outlier Detection" + reset + " (revenue > mean + 2" + sigma + ")"
+print("{hdr5}")
+let sthr = "$" + str(int(threshold))
+let sout = str(int(outlier_count))
+let spct = str(int(outlier_count / N * 1000.0) / 10.0)
+let out_msg = "  Threshold: " + sthr + "  |  Outliers: " + red + sout + reset + " (" + spct + "%)"
+print("{out_msg}")
+print("")
+
+// ─── Summary ────────────────────────────────────────────────────────
+let total = str(int(now_ms() - t0))
+let sn = str(int(N))
+let final_msg = bold + "Total: " + total + " ms" + reset + " --- " + sn + " records, 5 analyses"
+print("{final_msg}")
+print("Data saved: sales_data.csv")

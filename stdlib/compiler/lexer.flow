@@ -1,0 +1,212 @@
+// stdlib/compiler/lexer.flow
+// OctoFlow Self-Hosting Lexer
+// Phase 50: OctoFlow tokenizing OctoFlow source.
+//
+// Reads a .flow source file and produces a parallel token stream:
+//   tok_types[i]  : "kw" | "ident" | "float" | "str" | "op" | "nl" | "eof"
+//   tok_values[i] : raw text of the token
+//
+// Note: OctoFlow strings have no escape sequences.
+// Special chars are expressed via ord():
+//   ord(c) == 10.0   newline
+//   ord(c) == 9.0    tab
+//   ord(c) == 13.0   carriage return
+//   ord(c) == 34.0   double-quote
+//
+// Usage:
+//   FLOW_INPUT=program.flow octoflow run stdlib/compiler/lexer.flow --allow-read
+
+// Input
+let input_path = env("FLOW_INPUT")
+let src = read_file(input_path)
+let n = len(src)
+let mut pos = 0.0
+
+// Token output (parallel arrays)
+let mut tok_types = []
+let mut tok_values = []
+
+// Keyword table
+let mut kw_set = map()
+map_set(kw_set, "let", 1.0)
+map_set(kw_set, "mut", 1.0)
+map_set(kw_set, "fn", 1.0)
+map_set(kw_set, "end", 1.0)
+map_set(kw_set, "if", 1.0)
+map_set(kw_set, "elif", 1.0)
+map_set(kw_set, "else", 1.0)
+map_set(kw_set, "while", 1.0)
+map_set(kw_set, "for", 1.0)
+map_set(kw_set, "in", 1.0)
+map_set(kw_set, "return", 1.0)
+map_set(kw_set, "break", 1.0)
+map_set(kw_set, "continue", 1.0)
+map_set(kw_set, "stream", 1.0)
+map_set(kw_set, "emit", 1.0)
+map_set(kw_set, "print", 1.0)
+map_set(kw_set, "use", 1.0)
+map_set(kw_set, "struct", 1.0)
+map_set(kw_set, "extern", 1.0)
+map_set(kw_set, "then", 1.0)
+
+// ASCII code constants (no escape sequences in FlowGPU strings)
+let NL  = 10.0
+let TAB = 9.0
+let CR  = 13.0
+let QT  = 34.0
+let SP  = 32.0
+
+// Main scan loop
+while pos < n
+  let c = char_at(src, pos)
+  let co = ord(c)
+  let npos = pos + 1.0
+
+  // Skip whitespace: space, tab, carriage return (not newlines)
+  if co == SP || co == TAB || co == CR
+    pos = pos + 1.0
+
+  // Newline: statement terminator in OctoFlow
+  elif co == NL
+    push(tok_types, "nl")
+    push(tok_values, "NL")
+    pos = pos + 1.0
+
+  // Line comment: // to end of line, or single / operator
+  elif co == 47.0
+    if npos < n
+      let nc = char_at(src, npos)
+      if nc == "/"
+        while pos < n && ord(char_at(src, pos)) != NL
+          pos = pos + 1.0
+        end
+      else
+        push(tok_types, "op")
+        push(tok_values, c)
+        pos = pos + 1.0
+      end
+    else
+      push(tok_types, "op")
+      push(tok_values, c)
+      pos = pos + 1.0
+    end
+
+  // Float literal: starts with digit
+  elif co >= 48.0 && co <= 57.0
+    let mut num = ""
+    while pos < n && contains("0123456789.", char_at(src, pos))
+      num = num + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    push(tok_types, "float")
+    push(tok_values, num)
+
+  // String literal: " ... " (no escapes, newline terminates)
+  elif co == QT
+    pos = pos + 1.0
+    let mut s = ""
+    while pos < n && ord(char_at(src, pos)) != QT && ord(char_at(src, pos)) != NL
+      s = s + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    if pos < n
+      let c_close_ch = char_at(src, pos)
+      let c_close = ord(c_close_ch)
+      if c_close == QT
+        pos = pos + 1.0
+      end
+    end
+    push(tok_types, "str")
+    push(tok_values, s)
+
+  // Identifier or keyword: [a-zA-Z_][a-zA-Z0-9_]*
+  elif is_match(c, "[a-zA-Z_]")
+    let mut word = ""
+    while pos < n && is_match(char_at(src, pos), "[a-zA-Z_0-9]")
+      word = word + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    if map_has(kw_set, word)
+      push(tok_types, "kw")
+    else
+      push(tok_types, "ident")
+    end
+    push(tok_values, word)
+
+  // Two-character operators
+  elif npos < n
+    let c2 = char_at(src, npos)
+    if c == "=" && c2 == "="
+      push(tok_types, "op")
+      push(tok_values, "==")
+      pos = pos + 2.0
+    elif c == "!" && c2 == "="
+      push(tok_types, "op")
+      push(tok_values, "!=")
+      pos = pos + 2.0
+    elif c == "<" && c2 == "="
+      push(tok_types, "op")
+      push(tok_values, "<=")
+      pos = pos + 2.0
+    elif c == ">" && c2 == "="
+      push(tok_types, "op")
+      push(tok_values, ">=")
+      pos = pos + 2.0
+    elif c == "<" && c2 == "<"
+      push(tok_types, "op")
+      push(tok_values, "<<")
+      pos = pos + 2.0
+    elif c == ">" && c2 == ">"
+      push(tok_types, "op")
+      push(tok_values, ">>")
+      pos = pos + 2.0
+    elif c == "|" && c2 == ">"
+      push(tok_types, "op")
+      push(tok_values, "|>")
+      pos = pos + 2.0
+    elif c == "|" && c2 == "|"
+      push(tok_types, "op")
+      push(tok_values, "||")
+      pos = pos + 2.0
+    elif c == "&" && c2 == "&"
+      push(tok_types, "op")
+      push(tok_values, "&&")
+      pos = pos + 2.0
+    elif c == "*" && c2 == "*"
+      push(tok_types, "op")
+      push(tok_values, "**")
+      pos = pos + 2.0
+    elif c == "-" && c2 == ">"
+      push(tok_types, "op")
+      push(tok_values, "->")
+      pos = pos + 2.0
+    else
+      push(tok_types, "op")
+      push(tok_values, c)
+      pos = pos + 1.0
+    end
+
+  // Single-character token
+  else
+    push(tok_types, "op")
+    push(tok_values, c)
+    pos = pos + 1.0
+  end
+end
+
+// EOF sentinel
+push(tok_types, "eof")
+push(tok_values, "EOF")
+
+// Report
+let count = len(tok_types)
+print("--- OctoFlow Self-Hosting Lexer ---")
+print("source: {input_path}")
+print("tokens: {count}")
+let mut i = 0.0
+while i < count
+  let t = tok_types[i]
+  let v = tok_values[i]
+  print("[{i}] {t}  {v}")
+  i = i + 1.0
+end

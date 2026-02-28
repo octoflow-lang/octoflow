@@ -1,0 +1,40 @@
+// stdlib/compiler/examples/benchmark_1m.flow
+// Phase 52c: OctoFlow GPU Benchmark — 1 Million Elements, No CSV
+//
+// Computes sigmoid(x) = 1 / (1 + exp(-x)) on 1M random floats.
+// Uses random_stream() — native Rust RNG, no file I/O, no CSV overhead.
+//
+// Usage:
+//   octoflow run stdlib/compiler/examples/benchmark_1m.flow
+
+let N = 1000000.0
+
+print("=== OctoFlow GPU Benchmark — 1 Million Elements ===")
+print("  sigmoid(x) = 1 / (1 + exp(-x))")
+print("  N = {N}")
+print("")
+
+// ---- CPU baseline: OctoFlow scalar loop on pre-generated data ----------
+// Uses random_stream as an array via read trick — actually just time the GPU
+// We time the GPU pipeline and CPU differently:
+
+// ---- GPU pipeline (fused, no CSV) --------------------------------------
+// random_stream generates 1M floats [-4, 4] in Rust — microseconds, not seconds.
+// All 4 sigmoid ops fuse into ONE SPIR-V kernel (no intermediate buffers).
+print("[1] GPU pipeline: random_stream |> negate |> exp |> add(1) |> pow(-1) |> sum")
+let t_gpu0 = now_ms()
+stream sigmoid = random_stream(N, -4.0, 4.0) |> negate() |> exp() |> add(1.0) |> pow(-1.0)
+let gpu_sum = sum(sigmoid)
+let t_gpu1 = now_ms()
+let t_gpu = t_gpu1 - t_gpu0
+print("  sum(sigmoid(x)) = {gpu_sum:.4}")
+print("  time: {t_gpu:.1} ms  (Vulkan GPU, fused kernel, no CSV)")
+print("")
+
+// ---- Summary -----------------------------------------------------------
+print("=== RESULT ===")
+print("  OctoFlow GPU (fused, no CSV): {t_gpu:.1} ms")
+print("  Python Numba CUDA:             6.1 ms  (from benchmark_python.py)")
+print("  Python NumPy CPU:              6.7 ms  (from benchmark_python.py)")
+print("")
+print("  Both include: data generation + compute + result download")

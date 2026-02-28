@@ -1,0 +1,399 @@
+// gif_encode.flow — Pure OctoFlow GIF encoder
+// Encodes GIF89a animated files from RGB pixel arrays
+// Supports: LZW compression, fixed 256-color palette, multi-frame animation
+// Architecture: GPU for RGB→palette conversion, CPU for LZW (sequential algorithm)
+//
+// Usage:
+//   use gif_encode
+//   // Concatenate all frames into one array: [frame0_rgb..., frame1_rgb..., ...]
+//   let all_pixels = []  // frame_count * width * height * 3 floats
+//   let delays = [100.0, 100.0, ...]  // delay per frame in ms
+//   gif_encode_frames(all_pixels, delays, frame_count, width, height, "output.gif")
+
+// ─── Fixed 256-color palette (web-safe 6x6x6 cube + 40 grays) ───
+
+fn gif_palette_init()
+  let mut pal = []
+  // Web-safe 216 colors: 6x6x6 RGB cube (0, 51, 102, 153, 204, 255)
+  for r in range(0, 6)
+    for g in range(0, 6)
+      for b in range(0, 6)
+        let rv = r * 51.0
+        let gv = g * 51.0
+        let bv = b * 51.0
+        push(pal, rv)
+        push(pal, gv)
+        push(pal, bv)
+      end
+    end
+  end
+  // 40 grayscale entries to fill to 256
+  for i in range(0, 40)
+    let gray = i * 6.0
+    push(pal, gray)
+    push(pal, gray)
+    push(pal, gray)
+  end
+  return pal
+end
+
+// ─── RGB to palette index (nearest color) ───────────────────────
+
+fn gif_rgb_to_index(r, g, b, palette)
+  let mut best_idx = 0.0
+  let mut best_dist = 1000000.0
+  let pal_len = len(palette)
+  let pal_entries = pal_len / 3.0
+
+  for i in range(0, int(pal_entries))
+    let pi = i * 3.0
+    let pr = palette[int(pi)]
+    let pg = palette[int(pi + 1.0)]
+    let pb = palette[int(pi + 2.0)]
+    let dr = r - pr
+    let dg = g - pg
+    let db = b - pb
+    let dist = dr * dr + dg * dg + db * db
+    if dist < best_dist
+      best_dist = dist
+      best_idx = i
+    end
+  end
+  return best_idx
+end
+
+// Convert RGB frame to indexed (GPU-ready version would be parallel)
+fn gif_frame_to_indices(rgb, palette)
+  let pix_count = len(rgb) / 3.0
+  let mut indices = []
+  for i in range(0, int(pix_count))
+    let pi = i * 3.0
+    let r = rgb[int(pi)]
+    let g = rgb[int(pi + 1.0)]
+    let b = rgb[int(pi + 2.0)]
+    let idx = gif_rgb_to_index(r, g, b, palette)
+    push(indices, idx)
+  end
+  return indices
+end
+
+// ─── LZW Encoder ────────────────────────────────────────────────
+
+fn gif_lzw_encode(indices, min_code_size)
+  let clear_code = bit_shl(1.0, min_code_size)
+  let eoi_code = clear_code + 1.0
+  let first_entry = clear_code + 2.0
+
+  // Dictionary: map string→code using parallel arrays
+  // We store: prev_code, suffix byte → new code
+  // Use 3 arrays: tbl_prefix, tbl_suffix, tbl_code
+  let mut tbl_prefix = []
+  let mut tbl_suffix = []
+  let mut tbl_code = []
+
+  // Initialize single-byte entries (0..clear_code-1)
+  for i in range(0, int(clear_code))
+    push(tbl_prefix, -1.0)
+    push(tbl_suffix, i)
+    push(tbl_code, i)
+  end
+
+  let mut code_size = min_code_size + 1.0
+  let mut next_code = first_entry
+  let max_code = 4096.0
+
+  // Output codes
+  let mut codes = []
+  push(codes, clear_code)
+
+  let idx_len = len(indices)
+  if idx_len == 0.0
+    push(codes, eoi_code)
+    return gif_pack_codes(codes, min_code_size)
+  end
+
+  // Start with first byte
+  let mut current_code = indices[0]
+
+  for i in range(1, int(idx_len))
+    let k = indices[int(i)]
+
+    // Check if current_code+k is in dictionary
+    let mut found = 0.0
+    let mut found_code = 0.0
+    let tbl_len = len(tbl_code)
+
+    for ti in range(0, int(tbl_len))
+      if tbl_prefix[int(ti)] == current_code
+        if tbl_suffix[int(ti)] == k
+          found = 1.0
+          found_code = tbl_code[int(ti)]
+          break
+        end
+      end
+    end
+
+    if found == 1.0
+      // String is in dictionary — extend current string
+      current_code = found_code
+    else
+      // String not in dictionary
+      // Output current_code
+      push(codes, current_code)
+
+      // Add current_code+k to dictionary
+      if next_code < max_code
+        push(tbl_prefix, current_code)
+        push(tbl_suffix, k)
+        push(tbl_code, next_code)
+        next_code = next_code + 1.0
+
+        // Increase code size when we reach the limit
+        let code_limit = bit_shl(1.0, code_size)
+        if next_code >= code_limit
+          if code_size < 12.0
+            code_size = code_size + 1.0
+          end
+        end
+      end
+
+      // Check if dictionary is full — emit clear code
+      if next_code >= max_code
+        push(codes, clear_code)
+        // Reset dictionary
+        while len(tbl_prefix) > clear_code + 2.0
+          pop(tbl_prefix)
+          pop(tbl_suffix)
+          pop(tbl_code)
+        end
+        code_size = min_code_size + 1.0
+        next_code = first_entry
+      end
+
+      // Start new string with k
+      current_code = k
+    end
+  end
+
+  // Output final code
+  push(codes, current_code)
+  push(codes, eoi_code)
+
+  return gif_pack_codes(codes, min_code_size)
+end
+
+// Pack codes into bytes (LSB-first bit packing)
+fn gif_pack_codes(codes, min_code_size)
+  let mut bytes = []
+  let mut bit_buf = 0.0
+  let mut bit_cnt = 0.0
+
+  let clear_code = bit_shl(1.0, min_code_size)
+  let mut code_size = min_code_size + 1.0
+  let mut next_code = clear_code + 2.0
+
+  let code_len = len(codes)
+  for i in range(0, int(code_len))
+    let code = codes[int(i)]
+
+    // Update code_size tracking (must match encoder logic)
+    if code == clear_code
+      code_size = min_code_size + 1.0
+      next_code = clear_code + 2.0
+    end
+
+    // Pack code into bit buffer (LSB first)
+    bit_buf = bit_or(bit_buf, bit_shl(code, bit_cnt))
+    bit_cnt = bit_cnt + code_size
+
+    // Extract complete bytes
+    while bit_cnt >= 8.0
+      let byte_val = bit_and(bit_buf, 255.0)
+      push(bytes, byte_val)
+      bit_buf = bit_shr(bit_buf, 8.0)
+      bit_cnt = bit_cnt - 8.0
+    end
+
+    // Track next_code for code_size changes (skip clear/eoi)
+    let eoi_code = clear_code + 1.0
+    if code != clear_code
+      if code != eoi_code
+        next_code = next_code + 1.0
+        let code_limit = bit_shl(1.0, code_size)
+        if next_code >= code_limit
+          if code_size < 12.0
+            code_size = code_size + 1.0
+          end
+        end
+      end
+    end
+  end
+
+  // Flush remaining bits
+  if bit_cnt > 0.0
+    push(bytes, bit_buf)
+  end
+
+  return bytes
+end
+
+// ─── Sub-block writer ───────────────────────────────────────────
+
+fn gif_write_sub_blocks(lzw_data, out)
+  let lzw_len = len(lzw_data)
+  let mut pos = 0.0
+
+  while pos < lzw_len
+    let remaining = lzw_len - pos
+    let mut block_size = 255.0
+    if remaining < block_size
+      block_size = remaining
+    end
+
+    push(out, block_size)
+    for i in range(0, int(block_size))
+      push(out, lzw_data[int(pos + i)])
+    end
+    pos = pos + block_size
+  end
+
+  // Terminator
+  push(out, 0.0)
+  return 0.0
+end
+
+// ─── Helper: write 16-bit little-endian ─────────────────────────
+
+fn gif_write_u16le(out, val)
+  let lo = bit_and(val, 255.0)
+  let hi = bit_and(bit_shr(val, 8.0), 255.0)
+  push(out, lo)
+  push(out, hi)
+  return 0.0
+end
+
+// ─── Main Encoder ───────────────────────────────────────────────
+
+fn gif_encode_frames(all_pixels, delays, frame_count, width, height, output_path)
+  let mut out = []
+
+  // Generate palette
+  let palette = gif_palette_init()
+
+  // Header: GIF89a
+  push(out, 71.0)   // G
+  push(out, 73.0)   // I
+  push(out, 70.0)   // F
+  push(out, 56.0)   // 8
+  push(out, 57.0)   // 9
+  push(out, 97.0)   // a
+
+  // Logical Screen Descriptor
+  gif_write_u16le(out, width)
+  gif_write_u16le(out, height)
+
+  // Packed byte: GCT=1, color_res=7, sort=0, gct_size=7 (256 colors)
+  // GCT flag = 1 (bit 7)
+  // Color resolution = 111 (bits 4-6) = 7 bits per primary
+  // Sort flag = 0 (bit 3)
+  // GCT size = 111 (bits 0-2) = 2^(7+1) = 256 entries
+  let packed = 247.0  // 0b11110111
+  push(out, packed)
+
+  push(out, 0.0)  // Background color index
+  push(out, 0.0)  // Pixel aspect ratio
+
+  // Global Color Table (256 entries * 3 bytes)
+  let pal_len = len(palette)
+  for i in range(0, int(pal_len))
+    push(out, palette[int(i)])
+  end
+
+  // Netscape application extension for looping (optional but standard)
+  push(out, 33.0)   // Extension introducer
+  push(out, 255.0)  // Application extension label
+  push(out, 11.0)   // Block size
+  // NETSCAPE2.0
+  push(out, 78.0)   // N
+  push(out, 69.0)   // E
+  push(out, 84.0)   // T
+  push(out, 83.0)   // S
+  push(out, 67.0)   // C
+  push(out, 65.0)   // A
+  push(out, 80.0)   // P
+  push(out, 69.0)   // E
+  push(out, 50.0)   // 2
+  push(out, 46.0)   // .
+  push(out, 48.0)   // 0
+  // Data sub-block: loop count
+  push(out, 3.0)    // Sub-block size
+  push(out, 1.0)    // Block ID
+  push(out, 0.0)    // Loop count low (0 = infinite)
+  push(out, 0.0)    // Loop count high
+  push(out, 0.0)    // Block terminator
+
+  // Encode each frame
+  let frame_size = width * height * 3.0
+  for f in range(0, int(frame_count))
+    let delay = delays[int(f)]
+
+    // Extract frame RGB from concatenated array
+    let frame_start = f * frame_size
+    let mut frame_rgb = []
+    for i in range(0, int(frame_size))
+      push(frame_rgb, all_pixels[int(frame_start + i)])
+    end
+
+    // Convert RGB to indices
+    let indices = gif_frame_to_indices(frame_rgb, palette)
+
+    // Graphics Control Extension
+    push(out, 33.0)   // Extension introducer
+    push(out, 249.0)  // Graphic control label
+    push(out, 4.0)    // Block size
+
+    // Packed byte: disposal=0, user_input=0, transparent=0
+    push(out, 0.0)
+
+    // Delay time (in 1/100 seconds)
+    let delay_cs = delay / 10.0  // convert ms to centiseconds
+    gif_write_u16le(out, delay_cs)
+
+    push(out, 0.0)  // Transparent color index (not used)
+    push(out, 0.0)  // Block terminator
+
+    // Image Descriptor
+    push(out, 44.0)  // Image separator
+    gif_write_u16le(out, 0.0)  // Left position
+    gif_write_u16le(out, 0.0)  // Top position
+    gif_write_u16le(out, width)
+    gif_write_u16le(out, height)
+    push(out, 0.0)   // Packed: no LCT, no interlace
+
+    // LZW minimum code size (8 bits for 256-color palette)
+    push(out, 8.0)
+
+    // LZW compress indices
+    let lzw_data = gif_lzw_encode(indices, 8.0)
+
+    // Write as sub-blocks
+    gif_write_sub_blocks(lzw_data, out)
+  end
+
+  // Trailer
+  push(out, 59.0)  // 0x3B
+
+  // Write to file
+  write_bytes(output_path, out)
+
+  print("Encoded {frame_count} frames to {output_path}")
+  return 0.0
+end
+
+// ─── Convenience: Single frame encoder ─────────────────────────
+
+fn gif_encode(pixels, width, height, output_path)
+  // Single frame with 0ms delay
+  let delays = [0.0]
+  return gif_encode_frames(pixels, delays, 1.0, width, height, output_path)
+end

@@ -1,0 +1,91 @@
+// emit_sieve_count.flow — Sieve Count Kernel Emitter
+//
+// Thread 0 sequential sum: count primes in segment bitmap R0.
+//   result = sum(registers[src_off + i]) for i in 0..count
+//   stores result to registers[dst_off]
+//
+// Push constants:
+//   pc[0] = src_off    (float → uint, start of R0 in registers SSBO)
+//   pc[1] = dst_off    (float → uint, R2[0] destination in registers SSBO)
+//   pc[2] = count      (float → uint, number of elements to sum)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read R0, write R2[0])
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (unused)
+//   Binding 3: control   (unused)
+//
+// Dispatch: wg = 1
+//
+// Pattern: identical to emit_vm_reduce_sum.flow but writes to binding 0
+//
+// Run: octoflow run stdlib/loom/emit_sieve_count.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_count(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry       = ir_block("entry")
+  let pre_loop    = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body   = ir_block("loop_body")
+  let loop_cont   = ir_block("loop_cont")
+  let loop_merge  = ir_block("loop_merge")
+  let exit_block  = ir_block("exit")
+
+  // ── Entry: gid guard (thread 0 only), push constants ──────
+  let gid        = ir_load_gid(entry)
+  let pc_src     = ir_push_const(entry, 0.0)
+  let pc_dst     = ir_push_const(entry, 1.0)
+  let pc_cnt     = ir_push_const(entry, 2.0)
+  let src_off_u  = ir_ftou(entry, pc_src)
+  let dst_off_u  = ir_ftou(entry, pc_dst)
+  let count_u    = ir_ftou(entry, pc_cnt)
+  let one_u      = ir_const_u(entry, 1.0)
+  let not_t0     = ir_ugte(entry, gid, one_u)
+  let _sm_e      = ir_selection_merge(entry, exit_block)
+  let _br_e      = ir_term_cond_branch(entry, not_t0, exit_block, pre_loop)
+
+  // ── pre_loop: init j=0, sum=0.0 ──────────────────────────
+  let zero_u1    = ir_const_u(pre_loop, 0.0)
+  let zero_f1    = ir_const_f(pre_loop, 0.0)
+  let _bpl       = ir_term_branch(pre_loop, loop_header)
+
+  // ── loop_header: phi(j, sum), check j < count ─────────────
+  let phi_j      = ir_phi(loop_header, 2.0)     // uint
+  let phi_sum    = ir_phi(loop_header, 1.0)      // float
+  let _pj0       = ir_phi_add(phi_j,   zero_u1, pre_loop)
+  let _ps0       = ir_phi_add(phi_sum, zero_f1, pre_loop)
+  let j_done     = ir_ugte(loop_header, phi_j, count_u)
+  let _lm_inst   = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc        = ir_term_cond_branch(loop_header, j_done, loop_merge, loop_body)
+
+  // ── loop_body: load val, accumulate ───────────────────────
+  let in_idx     = ir_iadd(loop_body, src_off_u, phi_j)
+  let val        = ir_load_input_at(loop_body, 0.0, in_idx)    // registers[src_off+j]
+  let new_sum    = ir_fadd(loop_body, phi_sum, val)             // sum += val
+  let _blb       = ir_term_branch(loop_body, loop_cont)
+
+  // ── loop_cont: j++, back-edge phis ────────────────────────
+  let one_u2     = ir_const_u(loop_cont, 1.0)
+  let new_j      = ir_iadd(loop_cont, phi_j, one_u2)
+  let _blc       = ir_term_branch(loop_cont, loop_header)
+  let _pj1       = ir_phi_add(phi_j,   new_j,   loop_cont)
+  let _ps1       = ir_phi_add(phi_sum, new_sum, loop_cont)
+
+  // ── loop_merge: write sum to registers[dst_off] ───────────
+  let _store     = ir_buf_store_f(loop_merge, 0.0, dst_off_u, phi_sum)
+  let _blm       = ir_term_branch(loop_merge, exit_block)
+
+  // ── exit ──────────────────────────────────────────────────
+  let _ret       = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_count.spv"
+let _r = emit_sieve_count(out)
+print("Emitted: {out}")

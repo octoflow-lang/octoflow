@@ -1,0 +1,120 @@
+// ─── GPU Prime Sieve ─────────────────────────────────────────────────
+// Sieve of Eratosthenes: 1,000,000 elements marked in parallel on GPU
+// Run: octoflow run examples/showcase_primes.flow
+
+let N = 1000000
+let t0 = now_ms()
+
+let idx = gpu_range(0.0, N, 1.0)
+let one = gpu_fill(1.0, N)
+let mut sieve = gpu_fill(1.0, N)
+
+// Mark 0 and 1 as not prime
+let two_arr = gpu_fill(2.0, N)
+let diff_01 = gpu_sub(two_arr, idx)
+let cl_01 = gpu_clamp(diff_01, 0.0, 1.0)
+let mask_01 = gpu_ceil(cl_01)
+let keep_01 = gpu_sub(one, mask_01)
+let sieve = gpu_mul(sieve, keep_01)
+let _f = sieve[0]
+
+// Sieve: for each candidate p, mark all multiples as composite
+// Only check up to sqrt(1,000,000) = 1000
+let limit = 1000.0
+let mut p = 2.0
+
+while p <= limit
+    let p_arr = gpu_fill(p, N)
+
+    // Compute idx % p = idx - floor(idx / p) * p
+    let div = gpu_div(idx, p_arr)
+    let fl = gpu_floor(div)
+    let prod = gpu_mul(fl, p_arr)
+    let rem = gpu_sub(idx, prod)
+
+    // Mask: 1.0 where remainder is zero (divisible by p)
+    let abs_rem = gpu_abs(rem)
+    let cl_rem = gpu_clamp(abs_rem, 0.0, 1.0)
+    let nonzero = gpu_ceil(cl_rem)
+    let is_div = gpu_sub(one, nonzero)
+
+    // Mask: 1.0 where idx > p (don't mark p itself as composite)
+    let diff_p = gpu_sub(idx, p_arr)
+    let cl_p = gpu_clamp(diff_p, 0.0, 1.0)
+    let gt_p = gpu_ceil(cl_p)
+
+    // Composite = divisible by p AND index > p
+    let composite = gpu_mul(is_div, gt_p)
+    let keep = gpu_sub(one, composite)
+    let sieve = gpu_mul(sieve, keep)
+
+    // Flush GPU pipeline each iteration (data dependency)
+    let _f = sieve[0]
+
+    if p == 2.0
+        p = 3.0
+    else
+        p = p + 2.0
+    end
+end
+
+let count = gpu_sum(sieve)
+let t_sieve = now_ms() - t0
+
+// ─── Display ──────────────────────────────────────────────────────────
+
+let esc = chr(27)
+let bold = esc + "[1m"
+let cyan = esc + "[36m"
+let green = esc + "[32m"
+let reset = esc + "[0m"
+
+let title = bold + cyan + "GPU Prime Sieve" + reset
+print("{title}")
+print("────────────────────────────────────────")
+
+let sc = str(int(count))
+let sn = str(int(N))
+let st = str(int(t_sieve))
+let r1 = green + sc + reset + " primes below " + bold + sn + reset
+print("{r1}")
+let r2 = "Computed in " + bold + st + " ms" + reset + " on GPU"
+print("{r2}")
+print("")
+
+// First 25 primes
+let mut first_line = "First 25:  "
+let mut found = 0.0
+let mut i = 0.0
+while found < 25.0 && i < N
+    let v = sieve[int(i)]
+    if v == 1.0
+        let si = str(int(i))
+        first_line = first_line + si + " "
+        found = found + 1.0
+    end
+    i = i + 1.0
+end
+print("{first_line}")
+
+// Last 10 primes (scan backward from N)
+let mut last_line = "Last 10:   "
+let mut found2 = 0.0
+let mut j = N - 1.0
+let mut last_primes = ""
+while found2 < 10.0 && j > 1.0
+    let v = sieve[int(j)]
+    if v == 1.0
+        let sj = str(int(j))
+        last_primes = sj + " " + last_primes
+        found2 = found2 + 1.0
+    end
+    j = j - 1.0
+end
+let last_out = last_line + last_primes
+print("{last_out}")
+
+let total_ms = str(int(now_ms() - t0))
+print("")
+let fin = "Total time: " + total_ms + " ms (sieve: " + st + " ms, display: " + str(int(now_ms() - t0 - t_sieve)) + " ms)"
+print("{fin}")

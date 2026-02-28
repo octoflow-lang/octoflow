@@ -1,4 +1,7 @@
 // stdlib/data/transform.flow — Data transformations (CPU + GPU)
+//
+// Functions: normalize, standardize, one_hot, clip, interpolate_missing,
+//            resample, bin_data, scale_to_range
 
 fn normalize(arr)
   // Min-max normalization to [0, 1]

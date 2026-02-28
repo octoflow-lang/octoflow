@@ -1,0 +1,201 @@
+// test_bitwise_ir.flow — Test 6 bitwise IR ops on GPU
+//
+// Emits a kernel that computes all 6 bitwise ops on known uint32 inputs,
+// stores results to registers, then reads back and verifies.
+//
+// Kernel layout:
+//   Thread 0 only. Push constants: pc[0]=A, pc[1]=B (as floats, ftou'd)
+//   Outputs to R0 via buf_store_u:
+//     R0[0] = A & B           (BIT_AND)
+//     R0[1] = A | B           (BIT_OR)
+//     R0[2] = A << B          (SHL)
+//     R0[3] = A >> B          (SHR)
+//     R0[4] = popcount(A)     (BITCOUNT)
+//     R0[5] = A & ~B          (NOT, tested indirectly: ~B stays in GPU, only small result read back)
+//     R0[6] = popcount(~A)    (NOT cross-check: 32 - popcount(A))
+//
+// Note: ~A for small A produces uint32 values in the NaN range (exponent=0xFF).
+// Reading such values back as f32 causes NaN canonicalization, destroying the bits.
+// We test NOT indirectly through AND-NOT and popcount(NOT).
+//
+// Run: octoflow run stdlib/loom/tests/test_bitwise_ir.flow --allow-read --allow-write
+
+use "../../compiler/ir"
+
+print("=== Test: Bitwise IR Ops on GPU ===")
+print("")
+
+// ── Emit kernel ────────────────────────────────────────────────────
+
+fn emit_bitwise_test(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // Thread 0 guard
+  let gid    = ir_load_gid(entry)
+  let one_u  = ir_const_u(entry, 1.0)
+  let not_t0 = ir_ugte(entry, gid, one_u)
+  let _sm    = ir_selection_merge(entry, exit_block)
+  let _br    = ir_term_cond_branch(entry, not_t0, exit_block, body)
+
+  // Load A and B from push constants
+  let pc_a = ir_push_const(body, 0.0)
+  let pc_b = ir_push_const(body, 1.0)
+  let a    = ir_ftou(body, pc_a)
+  let b    = ir_ftou(body, pc_b)
+
+  // 6 bitwise ops
+  let r_and      = ir_bit_and(body, a, b)
+  let r_or       = ir_bit_or(body, a, b)
+  let r_shl      = ir_shl(body, a, b)
+  let r_shr      = ir_shr(body, a, b)
+  let r_bitcount = ir_bitcount(body, a)
+  let r_not_b    = ir_not(body, b)
+  let r_and_not  = ir_bit_and(body, a, r_not_b)   // A & ~B (indirect NOT test)
+  let r_not_a    = ir_not(body, a)
+  let r_bc_not   = ir_bitcount(body, r_not_a)      // popcount(~A) = 32 - popcount(A)
+
+  // Store results to R0[0..6]
+  let idx0 = ir_const_u(body, 0.0)
+  let idx1 = ir_const_u(body, 1.0)
+  let idx2 = ir_const_u(body, 2.0)
+  let idx3 = ir_const_u(body, 3.0)
+  let idx4 = ir_const_u(body, 4.0)
+  let idx5 = ir_const_u(body, 5.0)
+  let idx6 = ir_const_u(body, 6.0)
+  let _s0 = ir_buf_store_u(body, 0.0, idx0, r_and)
+  let _s1 = ir_buf_store_u(body, 0.0, idx1, r_or)
+  let _s2 = ir_buf_store_u(body, 0.0, idx2, r_shl)
+  let _s3 = ir_buf_store_u(body, 0.0, idx3, r_shr)
+  let _s4 = ir_buf_store_u(body, 0.0, idx4, r_bitcount)
+  let _s5 = ir_buf_store_u(body, 0.0, idx5, r_and_not)
+  let _s6 = ir_buf_store_u(body, 0.0, idx6, r_bc_not)
+
+  let _br2 = ir_term_branch(body, exit_block)
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let spv_path = "stdlib/loom/kernels/ops/test_bitwise.spv"
+let _e = emit_bitwise_test(spv_path)
+print("  Emitted: {spv_path}")
+
+// ── Helper ─────────────────────────────────────────────────────────
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+fn check(name, got, expected)
+  if got > expected - 0.5 && got < expected + 0.5
+    print("  PASS: {name} = {got:.0}")
+    return 1.0
+  else
+    print("  FAIL: {name} = {got:.0} (expected {expected:.0})")
+    return 0.0
+  end
+end
+
+fn tally(result)
+  if result > 0.5
+    pass = pass + 1.0
+  else
+    fail = fail + 1.0
+  end
+  return 0.0
+end
+
+// ── Boot VM ────────────────────────────────────────────────────────
+
+let reg_size = 16.0
+let vm = vm_boot(1.0, reg_size, 4.0)
+
+// ── Test case 1: A=255 (0xFF), B=4 ────────────────────────────────
+print("")
+print("  Test 1: A=255, B=4")
+
+let pc1 = [255.0, 4.0, 0.0, 0.0]
+let _d1 = vm_dispatch(vm, spv_path, pc1, 1.0)
+let prog1 = vm_build(vm)
+let _ex1 = vm_execute(prog1)
+let r1 = vm_read_register(vm, 0.0, 0.0, 7.0)
+
+// 255 = 0xFF = 11111111, B=4
+// AND:        0xFF & 4 = 4
+// OR:         0xFF | 4 = 255
+// SHL:        0xFF << 4 = 4080
+// SHR:        0xFF >> 4 = 15
+// BITCOUNT:   popcount(255) = 8
+// AND_NOT:    255 & ~4 = 255 & 0xFFFFFFFB = 251
+// BC_NOT:     popcount(~255) = 32 - 8 = 24
+let _t = tally(check("AND", float_to_bits(r1[0]), 4.0))
+let _t = tally(check("OR", float_to_bits(r1[1]), 255.0))
+let _t = tally(check("SHL", float_to_bits(r1[2]), 4080.0))
+let _t = tally(check("SHR", float_to_bits(r1[3]), 15.0))
+let _t = tally(check("BITCOUNT", float_to_bits(r1[4]), 8.0))
+let _t = tally(check("AND_NOT", float_to_bits(r1[5]), 251.0))
+let _t = tally(check("BC_NOT", float_to_bits(r1[6]), 24.0))
+
+// ── Test case 2: A=31 (0x1F), B=1 ─────────────────────────────────
+print("")
+print("  Test 2: A=31, B=1")
+
+let pc2 = [31.0, 1.0, 0.0, 0.0]
+let _d2 = vm_dispatch(vm, spv_path, pc2, 1.0)
+let prog2 = vm_build(vm)
+let _ex2 = vm_execute(prog2)
+let r2 = vm_read_register(vm, 0.0, 0.0, 7.0)
+
+// 31 = 0x1F = 11111, B=1
+// AND:        31 & 1 = 1
+// OR:         31 | 1 = 31
+// SHL:        31 << 1 = 62
+// SHR:        31 >> 1 = 15
+// BITCOUNT:   popcount(31) = 5
+// AND_NOT:    31 & ~1 = 31 & 0xFFFFFFFE = 30
+// BC_NOT:     popcount(~31) = 32 - 5 = 27
+let _t = tally(check("AND2", float_to_bits(r2[0]), 1.0))
+let _t = tally(check("OR2", float_to_bits(r2[1]), 31.0))
+let _t = tally(check("SHL2", float_to_bits(r2[2]), 62.0))
+let _t = tally(check("SHR2", float_to_bits(r2[3]), 15.0))
+let _t = tally(check("BITCOUNT2", float_to_bits(r2[4]), 5.0))
+let _t = tally(check("AND_NOT2", float_to_bits(r2[5]), 30.0))
+let _t = tally(check("BC_NOT2", float_to_bits(r2[6]), 27.0))
+
+// ── Test case 3: A=0, B=0 (edge case) ─────────────────────────────
+print("")
+print("  Test 3: A=0, B=0 (edge)")
+
+let pc3 = [0.0, 0.0, 0.0, 0.0]
+let _d3 = vm_dispatch(vm, spv_path, pc3, 1.0)
+let prog3 = vm_build(vm)
+let _ex3 = vm_execute(prog3)
+let r3 = vm_read_register(vm, 0.0, 0.0, 7.0)
+
+// AND: 0, OR: 0, SHL: 0, SHR: 0, BITCOUNT: 0
+// AND_NOT: 0 & ~0 = 0 & 0xFFFFFFFF = 0
+// BC_NOT:  popcount(~0) = 32
+let _t = tally(check("AND3", float_to_bits(r3[0]), 0.0))
+let _t = tally(check("OR3", float_to_bits(r3[1]), 0.0))
+let _t = tally(check("SHL3", float_to_bits(r3[2]), 0.0))
+let _t = tally(check("SHR3", float_to_bits(r3[3]), 0.0))
+let _t = tally(check("BITCOUNT3", float_to_bits(r3[4]), 0.0))
+let _t = tally(check("AND_NOT3", float_to_bits(r3[5]), 0.0))
+let _t = tally(check("BC_NOT3", float_to_bits(r3[6]), 32.0))
+
+let _s = vm_shutdown(vm)
+
+print("")
+print("  Results: {pass:.0} passed, {fail:.0} failed")
+if fail < 0.5
+  print("  ALL PASS")
+else
+  print("  SOME FAILED")
+end
+print("")

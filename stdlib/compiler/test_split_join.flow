@@ -1,0 +1,20 @@
+// test_split_join.flow — split, for-each on split result, join
+let csv = "apple,banana,cherry,date"
+let parts = split(csv, ",")
+let n = len(parts)
+print("count={n}")
+
+// for-each on split array
+let mut upper_parts = []
+for p in parts
+  let u = p + "!"
+  push(upper_parts, u)
+end
+
+// join result
+let joined = join(upper_parts, "|")
+print("joined={joined}")
+
+// contains check
+let has_banana = contains(csv, "banana")
+print("has_banana={has_banana}")

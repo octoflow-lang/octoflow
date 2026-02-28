@@ -1,0 +1,798 @@
+// ttf.flow — Pure OctoFlow TrueType Font (TTF) parser
+// Parses TTF files and extracts quadratic bezier segments for SDF rendering.
+// Supports: table directory, head, maxp, hhea, hmtx, cmap (format 4), loca, glyf.
+//
+// Usage:
+//   let _r = ttf_parse_all_ascii("font.ttf")
+//   // ttf_seg_data   = flat bezier segments (6 floats each: p0x,p0y,p1x,p1y,p2x,p2y)
+//   // ttf_seg_counts = segments per glyph (95 entries for ASCII 32-126)
+//   // ttf_seg_offsets = cumulative segment offsets (95 entries)
+//   // ttf_metrics    = 95 * 6 floats: advance_w, bearing_x, bearing_y, glyph_w, glyph_h, atlas_off
+//   // ttf_font_info  = [ascent, descent, line_gap, units_per_em]
+
+// ─── Big-Endian Byte Readers ─────────────────────────────────
+
+fn ttf_u8(bytes, pos)
+  return bytes[int(pos)]
+end
+
+fn ttf_u16(bytes, pos)
+  let b0 = bytes[int(pos)]
+  let b1 = bytes[int(pos + 1.0)]
+  return b0 * 256.0 + b1
+end
+
+fn ttf_u32(bytes, pos)
+  let b0 = bytes[int(pos)]
+  let b1 = bytes[int(pos + 1.0)]
+  let b2 = bytes[int(pos + 2.0)]
+  let b3 = bytes[int(pos + 3.0)]
+  return b0 * 16777216.0 + b1 * 65536.0 + b2 * 256.0 + b3
+end
+
+// Signed 16-bit: if value >= 32768, wrap to negative
+fn ttf_i16(bytes, pos)
+  let u = ttf_u16(bytes, pos)
+  let mut v = u
+  if u >= 32768.0
+    v = u - 65536.0
+  end
+  return v
+end
+
+// Read 4-byte tag as concatenated string
+fn ttf_tag(bytes, pos)
+  let c0 = chr(bytes[int(pos)])
+  let c1 = chr(bytes[int(pos + 1.0)])
+  let c2 = chr(bytes[int(pos + 2.0)])
+  let c3 = chr(bytes[int(pos + 3.0)])
+  return c0 + c1 + c2 + c3
+end
+
+// Extract a single bit from a value without bitwise AND.
+// Returns 1.0 if bit at bit_pos is set, 0.0 otherwise.
+fn ttf_bit(val, bit_pos)
+  let shifted = floor(val / pow(2.0, bit_pos))
+  let bit = shifted - floor(shifted / 2.0) * 2.0
+  return bit
+end
+
+// ─── Module-Level Arrays ─────────────────────────────────────
+
+// Intermediate: advances and bearings indexed by glyph ID
+let mut ttf_advances = []
+let mut ttf_bearings = []
+
+// cmap result: 95 entries (ASCII 32-126), index i = char_code - 32
+let mut ttf_char_to_glyph = []
+
+// loca result: num_glyphs + 1 offsets into glyf table
+let mut ttf_glyph_offsets = []
+
+// Per-glyph parse workspace (cleared before each glyph)
+let mut ttf_gx = []
+let mut ttf_gy = []
+let mut ttf_gflags = []
+let mut ttf_gend_pts = []
+let mut ttf_gn_contours = [0.0]
+
+// Final output
+let mut ttf_seg_data = []
+let mut ttf_seg_counts = []
+let mut ttf_seg_offsets = []
+let mut ttf_metrics = []
+let mut ttf_font_info = []
+
+// ─── Table Directory Parser ───────────────────────────────────
+// Returns map: tag (4-char string) → byte offset in file
+
+fn ttf_parse_tables(bytes)
+  let mut tables = map()
+  // TTF offset table: sfVersion(4) numTables(2) searchRange(2) entrySelector(2) rangeShift(2)
+  let num_tables = ttf_u16(bytes, 4.0)
+  let mut i = 0.0
+  while i < num_tables
+    // Each record: tag(4) checksum(4) offset(4) length(4) = 16 bytes
+    let rec_pos = 12.0 + i * 16.0
+    let tag = ttf_tag(bytes, rec_pos)
+    let off = ttf_u32(bytes, rec_pos + 8.0)
+    map_set(tables, tag, off)
+    i = i + 1.0
+  end
+  return tables
+end
+
+// ─── head Table ──────────────────────────────────────────────
+// Returns map: units_per_em, loca_format
+
+fn ttf_parse_head(bytes, off)
+  let mut head = map()
+  // version (4) fontRevision (4) checkSumAdjust (4) magicNumber (4)
+  // flags (2) unitsPerEm (2) → at off+18
+  let upm = ttf_u16(bytes, off + 18.0)
+  // created(8) modified(8) xMin(2) yMin(2) xMax(2) yMax(2) macStyle(2) lowestRecPPEM(2)
+  // fontDirectionHint(2) indexToLocFormat(2) → at off+50
+  let loca_fmt = ttf_i16(bytes, off + 50.0)
+  map_set(head, "units_per_em", upm)
+  map_set(head, "loca_format", loca_fmt)
+  return head
+end
+
+// ─── maxp Table ──────────────────────────────────────────────
+// Returns numGlyphs (at off+4, u16)
+
+fn ttf_parse_maxp(bytes, off)
+  let num_glyphs = ttf_u16(bytes, off + 4.0)
+  return num_glyphs
+end
+
+// ─── hhea Table ──────────────────────────────────────────────
+// Returns map: ascent, descent, line_gap, num_hmetrics
+
+fn ttf_parse_hhea(bytes, off)
+  let mut hhea = map()
+  // version(4) Ascender(2) Descender(2) LineGap(2) → at off+4, off+6, off+8
+  let ascent    = ttf_i16(bytes, off + 4.0)
+  let descent   = ttf_i16(bytes, off + 6.0)
+  let line_gap  = ttf_i16(bytes, off + 8.0)
+  // ... many fields ... numberOfHMetrics at off+34
+  let num_hm = ttf_u16(bytes, off + 34.0)
+  map_set(hhea, "ascent",       ascent)
+  map_set(hhea, "descent",      descent)
+  map_set(hhea, "line_gap",     line_gap)
+  map_set(hhea, "num_hmetrics", num_hm)
+  return hhea
+end
+
+// ─── hmtx Table ──────────────────────────────────────────────
+// Populates ttf_advances[] and ttf_bearings[] (indexed by glyph ID).
+// First num_hmetrics records: u16 advance + i16 lsb (4 bytes each).
+// Remaining glyphs (num_glyphs - num_hmetrics): only i16 lsb, reuse last advance.
+
+fn ttf_parse_hmtx(bytes, off, num_hmetrics, num_glyphs)
+  // Clear output arrays
+  while len(ttf_advances) > 0.0
+    pop(ttf_advances)
+  end
+  while len(ttf_bearings) > 0.0
+    pop(ttf_bearings)
+  end
+
+  let mut last_advance = 0.0
+  let mut i = 0.0
+  while i < num_hmetrics
+    let p = off + i * 4.0
+    let adv = ttf_u16(bytes, p)
+    let lsb = ttf_i16(bytes, p + 2.0)
+    push(ttf_advances, adv)
+    push(ttf_bearings, lsb)
+    last_advance = adv
+    i = i + 1.0
+  end
+
+  // Remaining glyphs: only bearing stored, advance reuses last
+  let mono_base = off + num_hmetrics * 4.0
+  let extra = num_glyphs - num_hmetrics
+  let mut j = 0.0
+  while j < extra
+    let p = mono_base + j * 2.0
+    let lsb = ttf_i16(bytes, p)
+    push(ttf_advances, last_advance)
+    push(ttf_bearings, lsb)
+    j = j + 1.0
+  end
+  return 0.0
+end
+
+// ─── cmap Table — Format 4 ───────────────────────────────────
+// Finds the platform=3 encoding=1 (Windows Unicode BMP) subtable.
+// Parses Format 4 segment arrays to build char→glyph mapping.
+// Populates ttf_char_to_glyph[]: 95 entries for ASCII 32-126.
+
+fn ttf_parse_cmap(bytes, off)
+  // Clear output
+  while len(ttf_char_to_glyph) > 0.0
+    pop(ttf_char_to_glyph)
+  end
+  // Pre-fill with zeros (glyph 0 = .notdef)
+  let mut ci = 0.0
+  while ci < 95.0
+    push(ttf_char_to_glyph, 0.0)
+    ci = ci + 1.0
+  end
+
+  // cmap header: version(2) numTables(2)
+  let num_sub = ttf_u16(bytes, off + 2.0)
+
+  // Find subtable: platform=3, encoding=1
+  let mut sub_off = 0.0
+  let mut found = 0.0
+  let mut ti = 0.0
+  while ti < num_sub
+    // Each encoding record: platformID(2) encodingID(2) offset(4) = 8 bytes
+    let rec = off + 4.0 + ti * 8.0
+    let plat = ttf_u16(bytes, rec)
+    let enc  = ttf_u16(bytes, rec + 2.0)
+    if found == 0.0
+      if plat == 3.0
+        if enc == 1.0
+          sub_off = off + ttf_u32(bytes, rec + 4.0)
+          found = 1.0
+        end
+      end
+    end
+    ti = ti + 1.0
+  end
+
+  if found == 0.0
+    // No Windows Unicode subtable found — leave defaults (all .notdef)
+    return 0.0
+  end
+
+  // Format 4 subtable
+  // format(2) length(2) language(2) segCountX2(2)
+  let fmt = ttf_u16(bytes, sub_off)
+  if fmt != 4.0
+    return 0.0
+  end
+  let seg_count_x2 = ttf_u16(bytes, sub_off + 6.0)
+  let seg_count = seg_count_x2 / 2.0
+
+  // Arrays start positions in file:
+  // endCode[segCount]       at sub_off + 14
+  // reservedPad(2)          at sub_off + 14 + segCountX2
+  // startCode[segCount]     at sub_off + 16 + segCountX2
+  // idDelta[segCount]       at sub_off + 16 + segCountX2*2
+  // idRangeOffset[segCount] at sub_off + 16 + segCountX2*3
+  // glyphIdArray[]          at sub_off + 16 + segCountX2*4
+
+  let end_code_base    = sub_off + 14.0
+  let start_code_base  = sub_off + 16.0 + seg_count_x2
+  let id_delta_base    = sub_off + 16.0 + seg_count_x2 * 2.0
+  let id_range_base    = sub_off + 16.0 + seg_count_x2 * 3.0
+
+  // Load segment arrays into local arrays for easy access
+  let mut end_codes   = []
+  let mut start_codes = []
+  let mut id_deltas   = []
+  let mut id_ranges   = []
+  let mut si = 0.0
+  while si < seg_count
+    push(end_codes,   ttf_u16(bytes, end_code_base   + si * 2.0))
+    push(start_codes, ttf_u16(bytes, start_code_base + si * 2.0))
+    push(id_deltas,   ttf_i16(bytes, id_delta_base   + si * 2.0))
+    push(id_ranges,   ttf_u16(bytes, id_range_base   + si * 2.0))
+    si = si + 1.0
+  end
+
+  // Map each printable ASCII character (32-126) to a glyph ID
+  let mut char_code = 32.0
+  while char_code <= 126.0
+    let arr_idx = char_code - 32.0
+    let mut glyph_id = 0.0
+
+    // Find segment where startCode <= charCode <= endCode
+    let mut seg_i = 0.0
+    let mut seg_found = 0.0
+    while seg_i < seg_count
+      if seg_found == 0.0
+        let ec = end_codes[int(seg_i)]
+        let sc = start_codes[int(seg_i)]
+        if char_code >= sc
+          if char_code <= ec
+            seg_found = 1.0
+            let delta  = id_deltas[int(seg_i)]
+            let roff   = id_ranges[int(seg_i)]
+            if roff == 0.0
+              // glyphId = (charCode + idDelta) mod 65536
+              let raw = char_code + delta
+              let m = raw - floor(raw / 65536.0) * 65536.0
+              glyph_id = m
+            else
+              // Indirect lookup via glyphIdArray
+              // The idRangeOffset value is a byte offset FROM ITS OWN POSITION
+              // in the idRangeOffset array. So the glyph address is:
+              //   (id_range_base + seg_i*2) + roff + (charCode - startCode)*2
+              let range_off_pos = id_range_base + seg_i * 2.0
+              let glyph_addr = range_off_pos + roff + (char_code - sc) * 2.0
+              let gid = ttf_u16(bytes, glyph_addr)
+              if gid == 0.0
+                glyph_id = 0.0
+              else
+                let raw2 = gid + delta
+                let m2 = raw2 - floor(raw2 / 65536.0) * 65536.0
+                glyph_id = m2
+              end
+            end
+          end
+        end
+      end
+      seg_i = seg_i + 1.0
+    end
+
+    ttf_char_to_glyph[int(arr_idx)] = glyph_id
+    char_code = char_code + 1.0
+  end
+
+  return 0.0
+end
+
+// ─── loca Table ──────────────────────────────────────────────
+// Populates ttf_glyph_offsets[]: num_glyphs+1 entries.
+// Short format (loca_format=0): u16 values * 2.
+// Long format (loca_format=1): u32 values (absolute).
+
+fn ttf_parse_loca(bytes, off, loca_format, num_glyphs)
+  while len(ttf_glyph_offsets) > 0.0
+    pop(ttf_glyph_offsets)
+  end
+  let count = num_glyphs + 1.0
+  let mut i = 0.0
+  if loca_format == 0.0
+    // Short format: u16 * 2
+    while i < count
+      let v = ttf_u16(bytes, off + i * 2.0)
+      push(ttf_glyph_offsets, v * 2.0)
+      i = i + 1.0
+    end
+  else
+    // Long format: u32
+    while i < count
+      let v = ttf_u32(bytes, off + i * 4.0)
+      push(ttf_glyph_offsets, v)
+      i = i + 1.0
+    end
+  end
+  return 0.0
+end
+
+// ─── glyf Table — Single Simple Glyph ───────────────────────
+// Parses one glyph at glyf_off + glyph_off.
+// next_off is the next glyph's offset (to detect empty glyphs).
+// Populates: ttf_gx, ttf_gy, ttf_gflags, ttf_gend_pts, ttf_gn_contours.
+// Returns number of points (0 for composite or empty).
+
+fn ttf_parse_glyph(bytes, glyf_off, glyph_off, next_off)
+  // Clear workspace arrays
+  while len(ttf_gx) > 0.0
+    pop(ttf_gx)
+  end
+  while len(ttf_gy) > 0.0
+    pop(ttf_gy)
+  end
+  while len(ttf_gflags) > 0.0
+    pop(ttf_gflags)
+  end
+  while len(ttf_gend_pts) > 0.0
+    pop(ttf_gend_pts)
+  end
+  ttf_gn_contours[0] = 0.0
+
+  // Empty glyph: loca entry equals next entry
+  if glyph_off == next_off
+    return 0.0
+  end
+
+  let base = glyf_off + glyph_off
+  let n_contours = ttf_i16(bytes, base)
+
+  // Composite glyph: numberOfContours < 0 — skip
+  if n_contours < 0.0
+    return 0.0
+  end
+
+  // Empty glyph: 0 contours
+  if n_contours == 0.0
+    return 0.0
+  end
+
+  ttf_gn_contours[0] = n_contours
+
+  // Bounding box (we read but don't store here; used in metrics pass)
+  // xMin at base+2, yMin at base+4, xMax at base+6, yMax at base+8
+
+  // endPtsOfContours[n_contours]: u16 array at base+10
+  let ep_base = base + 10.0
+  let mut ci = 0.0
+  while ci < n_contours
+    let ep = ttf_u16(bytes, ep_base + ci * 2.0)
+    push(ttf_gend_pts, ep)
+    ci = ci + 1.0
+  end
+
+  // Number of points = last endpoint + 1
+  let n_pts = ttf_gend_pts[int(n_contours - 1.0)] + 1.0
+
+  // instructionLength at base+10+n_contours*2
+  let instr_len_pos = ep_base + n_contours * 2.0
+  let instr_len = ttf_u16(bytes, instr_len_pos)
+
+  // flags[] start after instructions
+  let flags_base = instr_len_pos + 2.0 + instr_len
+
+  // Read flags with repeat handling (flag bit 3 = repeat flag)
+  let mut flag_pos = flags_base
+  let mut fi = 0.0
+  while fi < n_pts
+    let flag = ttf_u8(bytes, flag_pos)
+    flag_pos = flag_pos + 1.0
+    push(ttf_gflags, flag)
+    fi = fi + 1.0
+    // Bit 3 = repeat: next byte is repeat count
+    let repeat_bit = ttf_bit(flag, 3.0)
+    if repeat_bit == 1.0
+      let repeat_count = ttf_u8(bytes, flag_pos)
+      flag_pos = flag_pos + 1.0
+      let mut ri = 0.0
+      while ri < repeat_count
+        push(ttf_gflags, flag)
+        fi = fi + 1.0
+        ri = ri + 1.0
+      end
+    end
+  end
+
+  // xCoordinates[]: delta-encoded
+  // Bit 1 of flag = x-Short (1 byte if set, 2 bytes signed if clear)
+  // Bit 4 of flag = x-Same (if x-Short: 1=positive, 0=negative; if !x-Short: same as previous)
+  let mut coord_pos = flag_pos
+  let mut x_cur = 0.0
+  let mut pi = 0.0
+  while pi < n_pts
+    let flag = ttf_gflags[int(pi)]
+    let x_short = ttf_bit(flag, 1.0)
+    let x_same  = ttf_bit(flag, 4.0)
+    let mut dx = 0.0
+    if x_short == 1.0
+      dx = ttf_u8(bytes, coord_pos)
+      coord_pos = coord_pos + 1.0
+      // Bit 4: 1=positive delta, 0=negative delta
+      if x_same == 0.0
+        dx = 0.0 - dx
+      end
+    else
+      if x_same == 1.0
+        // Same as previous: delta = 0
+        dx = 0.0
+      else
+        // Signed 16-bit delta
+        dx = ttf_i16(bytes, coord_pos)
+        coord_pos = coord_pos + 2.0
+      end
+    end
+    x_cur = x_cur + dx
+    push(ttf_gx, x_cur)
+    pi = pi + 1.0
+  end
+
+  // yCoordinates[]: delta-encoded
+  // Bit 2 = y-Short, Bit 5 = y-Same
+  let mut y_cur = 0.0
+  let mut qi = 0.0
+  while qi < n_pts
+    let flag = ttf_gflags[int(qi)]
+    let y_short = ttf_bit(flag, 2.0)
+    let y_same  = ttf_bit(flag, 5.0)
+    let mut dy = 0.0
+    if y_short == 1.0
+      dy = ttf_u8(bytes, coord_pos)
+      coord_pos = coord_pos + 1.0
+      if y_same == 0.0
+        dy = 0.0 - dy
+      end
+    else
+      if y_same == 1.0
+        dy = 0.0
+      else
+        dy = ttf_i16(bytes, coord_pos)
+        coord_pos = coord_pos + 2.0
+      end
+    end
+    y_cur = y_cur + dy
+    push(ttf_gy, y_cur)
+    qi = qi + 1.0
+  end
+
+  return n_pts
+end
+
+// ─── Bezier Extraction ───────────────────────────────────────
+// Reads from ttf_gx, ttf_gy, ttf_gflags, ttf_gend_pts.
+// Converts each contour's points to quadratic bezier segments.
+// Appends to ttf_seg_data[] (6 floats per segment: p0x,p0y,p1x,p1y,p2x,p2y).
+// All coordinates are normalized by dividing by units_per_em.
+// Returns number of segments emitted.
+
+fn ttf_extract_beziers(units_per_em)
+  let n_pts = len(ttf_gx)
+  if n_pts == 0.0
+    return 0.0
+  end
+  let n_contours = ttf_gn_contours[0.0]
+  let upm = units_per_em
+  let mut seg_count = 0.0
+
+  let mut con_start = 0.0
+  let mut ki = 0.0
+  while ki < n_contours
+    let con_end = ttf_gend_pts[int(ki)]
+    let con_len = con_end - con_start + 1.0
+
+    // Walk contour points and emit bezier segments.
+    // We process the contour as a circular list.
+    // Strategy: find the first on-curve point to use as start anchor.
+    // on-curve = bit 0 of flag set.
+
+    // Find first on-curve point in this contour
+    let mut first_on = con_start
+    let mut found_on = 0.0
+    let mut search_i = con_start
+    while search_i <= con_end
+      if found_on == 0.0
+        let fl = ttf_gflags[int(search_i)]
+        let on_bit = ttf_bit(fl, 0.0)
+        if on_bit == 1.0
+          first_on = search_i
+          found_on = 1.0
+        end
+      end
+      search_i = search_i + 1.0
+    end
+
+    // If no on-curve points at all, skip this contour
+    if found_on == 0.0
+      ki = ki + 1.0
+      con_start = con_end + 1.0
+    else
+      // Walk all points starting from first_on, wrapping around.
+      // We collect runs of off-curve points separated by on-curve anchors.
+
+      // Current anchor: the starting on-curve point
+      let start_x = ttf_gx[int(first_on)] / upm
+      let start_y = ttf_gy[int(first_on)] / upm
+      let mut cur_x = start_x
+      let mut cur_y = start_y
+
+      // We walk from first_on+1 for con_len steps (wrap around contour)
+      let mut step = 0.0
+      // We may accumulate an off-curve "pending" control point
+      let mut has_ctrl = 0.0
+      let mut ctrl_x = 0.0
+      let mut ctrl_y = 0.0
+
+      while step < con_len
+        // Compute actual point index (circular within contour)
+        let raw_idx = first_on + 1.0 + step
+        let rel = raw_idx - con_start
+        let wrapped_rel = rel - floor(rel / con_len) * con_len
+        let pt_idx = con_start + wrapped_rel
+
+        let px = ttf_gx[int(pt_idx)] / upm
+        let py = ttf_gy[int(pt_idx)] / upm
+        let fl = ttf_gflags[int(pt_idx)]
+        let on_bit = ttf_bit(fl, 0.0)
+
+        if on_bit == 1.0
+          // On-curve point
+          if has_ctrl == 0.0
+            // on → on: line segment (degenerate bezier: control at midpoint)
+            let mid_x = (cur_x + px) * 0.5
+            let mid_y = (cur_y + py) * 0.5
+            push(ttf_seg_data, cur_x)
+            push(ttf_seg_data, cur_y)
+            push(ttf_seg_data, mid_x)
+            push(ttf_seg_data, mid_y)
+            push(ttf_seg_data, px)
+            push(ttf_seg_data, py)
+            seg_count = seg_count + 1.0
+          else
+            // on → off → on: standard quadratic bezier
+            push(ttf_seg_data, cur_x)
+            push(ttf_seg_data, cur_y)
+            push(ttf_seg_data, ctrl_x)
+            push(ttf_seg_data, ctrl_y)
+            push(ttf_seg_data, px)
+            push(ttf_seg_data, py)
+            seg_count = seg_count + 1.0
+            has_ctrl = 0.0
+          end
+          cur_x = px
+          cur_y = py
+        else
+          // Off-curve point
+          if has_ctrl == 0.0
+            // First off-curve: just record as pending control
+            has_ctrl = 1.0
+            ctrl_x = px
+            ctrl_y = py
+          else
+            // Two consecutive off-curve: emit implicit on-curve at midpoint
+            let mid_x = (ctrl_x + px) * 0.5
+            let mid_y = (ctrl_y + py) * 0.5
+            // Emit bezier: cur → ctrl → implicit_mid
+            push(ttf_seg_data, cur_x)
+            push(ttf_seg_data, cur_y)
+            push(ttf_seg_data, ctrl_x)
+            push(ttf_seg_data, ctrl_y)
+            push(ttf_seg_data, mid_x)
+            push(ttf_seg_data, mid_y)
+            seg_count = seg_count + 1.0
+            cur_x = mid_x
+            cur_y = mid_y
+            // New control point is the current off-curve point
+            ctrl_x = px
+            ctrl_y = py
+          end
+        end
+
+        step = step + 1.0
+      end
+
+      // Close contour: connect back to start_x, start_y
+      if has_ctrl == 0.0
+        // cur → start: line segment
+        let mid_x = (cur_x + start_x) * 0.5
+        let mid_y = (cur_y + start_y) * 0.5
+        push(ttf_seg_data, cur_x)
+        push(ttf_seg_data, cur_y)
+        push(ttf_seg_data, mid_x)
+        push(ttf_seg_data, mid_y)
+        push(ttf_seg_data, start_x)
+        push(ttf_seg_data, start_y)
+        seg_count = seg_count + 1.0
+      else
+        // cur → ctrl → start
+        push(ttf_seg_data, cur_x)
+        push(ttf_seg_data, cur_y)
+        push(ttf_seg_data, ctrl_x)
+        push(ttf_seg_data, ctrl_y)
+        push(ttf_seg_data, start_x)
+        push(ttf_seg_data, start_y)
+        seg_count = seg_count + 1.0
+      end
+
+      ki = ki + 1.0
+      con_start = con_end + 1.0
+    end
+  end
+
+  return seg_count
+end
+
+// ─── Top-Level: Parse All ASCII Glyphs ───────────────────────
+// Loads TTF from file, parses all tables, extracts bezier segments
+// for each printable ASCII character (32-126).
+// Returns 0.0 on success.
+
+fn ttf_parse_all_ascii(ttf_path)
+  let bytes = read_bytes(ttf_path)
+  let n = len(bytes)
+  if n < 12.0
+    print("TTF: file too small")
+    return 1.0
+  end
+
+  // ── Parse table directory ─────────────────────────────────
+  let tables = ttf_parse_tables(bytes)
+
+  // ── head table ───────────────────────────────────────────
+  let head_off = map_get(tables, "head")
+  let head = ttf_parse_head(bytes, head_off)
+  let upm = map_get(head, "units_per_em")
+  let loca_fmt = map_get(head, "loca_format")
+
+  // ── maxp table ───────────────────────────────────────────
+  let maxp_off = map_get(tables, "maxp")
+  let num_glyphs = ttf_parse_maxp(bytes, maxp_off)
+
+  // ── hhea table ───────────────────────────────────────────
+  let hhea_off = map_get(tables, "hhea")
+  let hhea = ttf_parse_hhea(bytes, hhea_off)
+  let ascent    = map_get(hhea, "ascent")
+  let descent   = map_get(hhea, "descent")
+  let line_gap  = map_get(hhea, "line_gap")
+  let num_hm    = map_get(hhea, "num_hmetrics")
+
+  // ── hmtx table ───────────────────────────────────────────
+  let hmtx_off = map_get(tables, "hmtx")
+  let _hr = ttf_parse_hmtx(bytes, hmtx_off, num_hm, num_glyphs)
+
+  // ── cmap table ───────────────────────────────────────────
+  let cmap_off = map_get(tables, "cmap")
+  let _cr = ttf_parse_cmap(bytes, cmap_off)
+
+  // ── loca table ───────────────────────────────────────────
+  let loca_off = map_get(tables, "loca")
+  let _lr = ttf_parse_loca(bytes, loca_off, loca_fmt, num_glyphs)
+
+  // ── glyf table base offset ───────────────────────────────
+  let glyf_base = map_get(tables, "glyf")
+
+  // ── Clear output arrays ───────────────────────────────────
+  while len(ttf_seg_data) > 0.0
+    pop(ttf_seg_data)
+  end
+  while len(ttf_seg_counts) > 0.0
+    pop(ttf_seg_counts)
+  end
+  while len(ttf_seg_offsets) > 0.0
+    pop(ttf_seg_offsets)
+  end
+  while len(ttf_metrics) > 0.0
+    pop(ttf_metrics)
+  end
+  while len(ttf_font_info) > 0.0
+    pop(ttf_font_info)
+  end
+
+  // Store font-level metrics
+  push(ttf_font_info, ascent)
+  push(ttf_font_info, descent)
+  push(ttf_font_info, line_gap)
+  push(ttf_font_info, upm)
+
+  // ── Process each ASCII character ──────────────────────────
+  let cell_size = 64.0
+  let grid_cols = 10.0
+  let mut cumulative_segs = 0.0
+
+  let mut char_idx = 0.0
+  while char_idx < 95.0
+    let glyph_id  = ttf_char_to_glyph[int(char_idx)]
+
+    // Get glyph offset from loca (relative to glyf table)
+    let glyph_off  = ttf_glyph_offsets[int(glyph_id)]
+    let next_id    = glyph_id + 1.0
+    let next_off   = ttf_glyph_offsets[int(next_id)]
+
+    // Parse the glyph into workspace arrays
+    let n_pts = ttf_parse_glyph(bytes, glyf_base, glyph_off, next_off)
+
+    // Read bounding box from glyf header for width/height metrics
+    let mut glyph_w = 0.0
+    let mut glyph_h = 0.0
+    let mut glyph_ymax = 0.0
+    if n_pts > 0.0
+      let base = glyf_base + glyph_off
+      let xmin = ttf_i16(bytes, base + 2.0)
+      let ymin = ttf_i16(bytes, base + 4.0)
+      let xmax = ttf_i16(bytes, base + 6.0)
+      let ymax = ttf_i16(bytes, base + 8.0)
+      // Normalize to atlas cell space (multiply by cell_size/upm, leave padding to renderer)
+      glyph_w = (xmax - xmin) * cell_size / upm
+      glyph_h = (ymax - ymin) * cell_size / upm
+      glyph_ymax = ymax
+    end
+
+    // Extract bezier segments from workspace into ttf_seg_data
+    let seg_offset = cumulative_segs
+    push(ttf_seg_offsets, seg_offset)
+    let segs_this = ttf_extract_beziers(upm)
+    push(ttf_seg_counts, segs_this)
+    cumulative_segs = cumulative_segs + segs_this
+
+    // Advance and bearing for this glyph
+    let adv_raw = ttf_advances[int(glyph_id)]
+    let lsb_raw = ttf_bearings[int(glyph_id)]
+    let advance_w  = adv_raw / upm
+    let bearing_x  = lsb_raw / upm
+    let bearing_y  = glyph_ymax / upm
+
+    // Atlas layout: 10-column grid, 64px cells
+    let row = floor(char_idx / grid_cols)
+    let col = char_idx - row * grid_cols
+    let atlas_offset = row * 640.0 + col * 64.0
+
+    // Append metrics: 6 floats per glyph
+    push(ttf_metrics, advance_w)
+    push(ttf_metrics, bearing_x)
+    push(ttf_metrics, bearing_y)
+    push(ttf_metrics, glyph_w)
+    push(ttf_metrics, glyph_h)
+    push(ttf_metrics, atlas_offset)
+
+    char_idx = char_idx + 1.0
+  end
+
+  return 0.0
+end

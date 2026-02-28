@@ -1,0 +1,69 @@
+// test_vocab.flow — Test gguf_load_vocab builtin
+// Run: octoflow run stdlib/ai/test_vocab.flow --allow-read
+
+let model_path = "G:/ollama_models/blobs/sha256-29d8c98fa6b098e200069bfb88b9508dc3e85586d20cba59f8dda9a808165104"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, cond)
+  if cond == 1.0
+    counters[0] = counters[0] + 1.0
+  else
+    counters[1] = counters[1] + 1.0
+    print("  FAIL: {label}")
+  end
+  return 0.0
+end
+
+print("=== GGUF Vocab Loader Test ===")
+print(" ")
+
+// Test 1: Load vocab
+print("--- Test 1: Load vocabulary ---")
+let t0 = time()
+let vocab = gguf_load_vocab(model_path)
+let t1 = time()
+let ms = (t1 - t0) * 1000.0
+let vlen = len(vocab)
+print("  Vocab size: {vlen}")
+print("  Load time: {ms}ms")
+let _c1 = check(counters, "vocab size > 100000", vlen > 100000.0)
+let _c2 = check(counters, "vocab size = 151936", vlen == 151936.0)
+
+// Test 2: Check known tokens
+print(" ")
+print("--- Test 2: Known token checks ---")
+
+// Token 0 is usually special (e.g., "!")
+let tok0 = vocab[0]
+print("  Token 0: {tok0}")
+
+// BOS token (151643 for Qwen2.5)
+let bos = vocab[151643]
+print("  Token 151643 (BOS): {bos}")
+
+// Token 74403 — our inference prediction
+let pred = vocab[74403]
+print("  Token 74403 (predicted): {pred}")
+
+// Check a few ASCII tokens
+let tok_a = vocab[64]
+print("  Token 64: {tok_a}")
+
+// Some common tokens
+let tok10 = vocab[10]
+let tok100 = vocab[100]
+let tok1000 = vocab[1000]
+print("  Token 10: {tok10}")
+print("  Token 100: {tok100}")
+print("  Token 1000: {tok1000}")
+
+// Sanity: tokens should be strings (non-empty for most)
+let _c3 = check(counters, "tok0 is string", len(tok0) > 0.0)
+
+// Summary
+print(" ")
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print("=== RESULTS: {pass}/{total} passed ===")

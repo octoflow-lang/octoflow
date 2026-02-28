@@ -1,0 +1,69 @@
+// stdlib/terminal/kitty.flow — GPU-Accelerated Kitty Graphics Protocol Renderer
+// Base64 encoding runs ENTIRELY on GPU via SPIR-V compute shader.
+// Only the final byte stream crosses to CPU for stdout (OS boundary).
+//
+// Protocol: ESC _G a=T,f=24,s=W,v=H,t=d,m=1,q=2; BASE64 ESC \
+// f=24 = RGB (3 bytes per pixel)
+// Data chunked at 4096 base64 chars
+// m=1 = more chunks, m=0 = last chunk
+
+use "../gpu/b64_emit"
+
+fn kitty_render(w, h, r, g, b)
+  let esc = chr(27)
+  let st = esc + chr(92)
+  let total = int(w * h)
+  let b64_len = total * 4
+
+  // Compile base64 kernel (cached)
+  if file_exists("b64_encode.spv") == 0.0
+    emit_b64_kernel()
+  end
+
+  // Dummy array (size 4N = output size)
+  let mut dummy = []
+  for i in range(0, b64_len)
+    push(dummy, 0.0)
+  end
+
+  // GPU dispatch: R,G,B → base64 ASCII bytes (ALL on GPU)
+  let b64 = gpu_run("b64_encode.spv", dummy, r, g, b)
+
+  // Emit kitty protocol via print_bytes (OS boundary: stdout)
+  let chunk_sz = 4096.0
+  let num_chunks = int(ceil(b64_len / chunk_sz))
+
+  for ci in range(0, num_chunks)
+    let cstart = int(ci * chunk_sz)
+    let mut cend = int((ci + 1.0) * chunk_sz)
+    if cend > b64_len
+      cend = b64_len
+    end
+
+    let mut more = "1"
+    if ci == num_chunks - 1.0
+      more = "0"
+    end
+
+    // Header
+    if ci == 0.0
+      let ws = to_str(int(w))
+      let hs = to_str(int(h))
+      print_raw(esc + "_Ga=T,f=24,s=" + ws + ",v=" + hs + ",t=d,m=" + more + ",q=2;")
+    else
+      print_raw(esc + "_Gm=" + more + ";")
+    end
+
+    // Write base64 chunk via byte array (no string concat!)
+    let mut chunk = []
+    for j in range(cstart, cend)
+      push(chunk, b64[j])
+    end
+    print_bytes(chunk)
+
+    // String terminator
+    print_raw(st)
+  end
+  print("")
+  return 0.0
+end

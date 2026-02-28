@@ -1,0 +1,40 @@
+// Test if/elif chain with is_match and &&
+let src = "a 1 /"
+let n = len(src)
+let mut pos = 0.0
+let mut results = []
+let SP = 32.0
+let NL = 10.0
+
+while pos < n
+  let c = char_at(src, pos)
+  let co = ord(c)
+  if co == SP
+    push(results, "sp")
+    pos = pos + 1.0
+  elif co == NL
+    push(results, "nl")
+    pos = pos + 1.0
+  elif co >= 48.0 && co <= 57.0
+    push(results, "digit")
+    pos = pos + 1.0
+  elif is_match(c, "[a-zA-Z_]")
+    push(results, "alpha")
+    pos = pos + 1.0
+  elif c == "/"
+    push(results, "slash")
+    pos = pos + 1.0
+  else
+    push(results, "other")
+    pos = pos + 1.0
+  end
+end
+
+let cnt = len(results)
+print("count={cnt}")
+let mut i = 0.0
+while i < cnt
+  let r = results[i]
+  print("[{i}] {r}")
+  i = i + 1.0
+end

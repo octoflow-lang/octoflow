@@ -1,0 +1,135 @@
+// emit_vm_dequant_q4k.flow — VM Q4_K Dequantization Kernel (Heap→Globals)
+//
+// Reads quantized Q4_K data from Heap (binding 4), writes fp32 weights
+// to Globals (binding 2). Hybrid approach: CPU pre-decodes d*scale and
+// dmin*min into a params buffer; GPU handles nibble extraction only.
+//
+// Heap layout (loaded via vm_set_heap):
+//   [qs_offset .. qs_offset + n_blocks*128): qs bytes as floats (1 byte per float)
+//   [params_offset .. params_offset + n_blocks*16): pre-decoded params
+//     Per block: [d*sc0, dmin*mn0, d*sc1, dmin*mn1, ..., d*sc7, dmin*mn7]
+//
+// Push constants:
+//   pc[0] = qs_offset     (float→uint, start of qs data in Heap)
+//   pc[1] = params_offset (float→uint, start of params in Heap)
+//   pc[2] = out_offset    (float→uint, start of output in Globals)
+//   pc[3] = n_weights     (float→uint, total output weights)
+//
+// Q4_K block (256 weights from 128 qs bytes):
+//   4 groups of 64 weights, each split into lo/hi 32-weight halves
+//   sub_block (0-7) indexes into 16 params per block
+//   nibble = lo or hi 4 bits of qs byte
+//   output = d*scale * nibble - dmin*min
+//
+// Binding layout (VM 5-SSBO, ir_input_count=4):
+//   Binding 0: registers (unused)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (write dequantized output)
+//   Binding 3: control   (unused, declared uint for VM compatibility)
+//   Binding 4: heap      (read qs + params — "output" binding in ir.flow)
+//
+// Dispatch: ceil(n_weights / 256) workgroups
+//
+// Run: octoflow run stdlib/loom/emit_vm_dequant_q4k.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_dequant_q4k(out_path)
+  ir_new()
+  ir_input_count = 4.0
+  // Binding 3 = control, declare as uint for VM binding compatibility
+  push(ir_uint_bindings, 3.0)
+
+  let entry = ir_block("entry")
+  let body  = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ─────────────────────
+  let gid     = ir_load_gid(entry)
+  let pc_qs   = ir_push_const(entry, 0.0)
+  let pc_par  = ir_push_const(entry, 1.0)
+  let pc_out  = ir_push_const(entry, 2.0)
+  let pc_n    = ir_push_const(entry, 3.0)
+  let n_u     = ir_ftou(entry, pc_n)
+
+  let oob = ir_ugte(entry, gid, n_u)
+  let _sm = ir_selection_merge(entry, exit_block)
+  let _br = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: dequantize one weight ──────────────────────────────────
+  let gid_f  = ir_utof(body, gid)
+
+  // Float constants
+  let f0     = ir_const_f(body, 0.0)
+  let f2     = ir_const_f(body, 2.0)
+  let f16c   = ir_const_f(body, 16.0)
+  let f32c   = ir_const_f(body, 32.0)
+  let f64c   = ir_const_f(body, 64.0)
+  let f128c  = ir_const_f(body, 128.0)
+  let f256c  = ir_const_f(body, 256.0)
+
+  // block = floor(gid / 256)
+  let div256  = ir_fdiv(body, gid_f, f256c)
+  let block_f = ir_floor(body, div256)
+  // local = gid - block * 256
+  let local_f = ir_fsub(body, gid_f, ir_fmul(body, block_f, f256c))
+
+  // j = floor(local / 64) — which 64-weight group (0-3)
+  let j_f = ir_floor(body, ir_fdiv(body, local_f, f64c))
+  // in_64 = local - j * 64
+  let in_64 = ir_fsub(body, local_f, ir_fmul(body, j_f, f64c))
+  // is_hi = floor(in_64 / 32) — low (0) or high (1) nibble half
+  let is_hi_f = ir_floor(body, ir_fdiv(body, in_64, f32c))
+  // in_32 = in_64 - is_hi * 32
+  let in_32 = ir_fsub(body, in_64, ir_fmul(body, is_hi_f, f32c))
+
+  // sub_block = j * 2 + is_hi (0-7)
+  let sub_block = ir_fadd(body, ir_fmul(body, j_f, f2), is_hi_f)
+
+  // ── Load params from Heap (binding 4 = "output" in ir.flow) ──────
+  // param_idx = params_offset + block * 16 + sub_block * 2
+  let p_base_f = ir_fadd(body, pc_par, ir_fadd(body, ir_fmul(body, block_f, f16c), ir_fmul(body, sub_block, f2)))
+  let p_base_u = ir_ftou(body, p_base_f)
+  let one_u    = ir_const_u(body, 1.0)
+  let p_next_u = ir_iadd(body, p_base_u, one_u)
+  // ir_load_output_at reads from binding 4 (heap)
+  let d_scale  = ir_load_output_at(body, p_base_u)
+  let dmin_mn  = ir_load_output_at(body, p_next_u)
+
+  // ── Load qs byte from Heap ───────────────────────────────────────
+  // qs_idx = qs_offset + block * 128 + j * 32 + in_32
+  let qs_idx_f = ir_fadd(body, pc_qs, ir_fadd(body, ir_fmul(body, block_f, f128c), ir_fadd(body, ir_fmul(body, j_f, f32c), in_32)))
+  let qs_idx_u = ir_ftou(body, qs_idx_f)
+  let byte_val = ir_load_output_at(body, qs_idx_u)
+
+  // ── Extract nibble (float arithmetic) ────────────────────────────
+  // hi_nib = floor(byte / 16), lo_nib = byte - hi_nib * 16
+  let div16   = ir_fdiv(body, byte_val, f16c)
+  let hi_nib  = ir_floor(body, div16)
+  let lo_nib  = ir_fsub(body, byte_val, ir_fmul(body, hi_nib, f16c))
+
+  // nibble = (is_hi == 0) ? lo_nib : hi_nib
+  let is_lo   = ir_foeq(body, is_hi_f, f0)
+  let nibble  = ir_select(body, 1.0, is_lo, lo_nib, hi_nib)
+
+  // ── Dequantize: output = d_scale * nibble - dmin_mn ──────────────
+  let scaled  = ir_fmul(body, d_scale, nibble)
+  let dequant = ir_fsub(body, scaled, dmin_mn)
+
+  // ── Store to Globals (binding 2) ─────────────────────────────────
+  let out_off_u = ir_ftou(body, pc_out)
+  let dst_idx   = ir_iadd(body, out_off_u, gid)
+  let _sw       = ir_buf_store_f(body, 2.0, dst_idx, dequant)
+
+  let _br2 = ir_term_branch(body, exit_block)
+
+  // ── Exit ─────────────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/nn/vm_dequant_q4k.spv"
+let _r = emit_vm_dequant_q4k(out)
+print("Emitted: {out}")

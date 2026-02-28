@@ -1,0 +1,96 @@
+// emit_vm_dict_lookup.flow — VM Dictionary Lookup (Gather from Heap)
+//
+// Parallel gather: each thread reads an encoded index from Globals (binding 2),
+// looks up the corresponding value from a dictionary in Heap (binding 4),
+// and writes the decoded value to Registers (binding 0).
+//
+// Dictionary encoding stores unique values once (in Heap, immutable) and
+// replaces column data with small integer indices (in Globals, mutable).
+// Lookup is a single parallel scatter-free gather — O(1) per element.
+//
+// Example:
+//   Dictionary (Heap): [100.0, 200.0, 300.0, 400.0]
+//   Indices (Globals):  [2, 0, 3, 1, 0, 2]
+//   Output (Registers): [300.0, 100.0, 400.0, 200.0, 100.0, 300.0]
+//
+// Push constants:
+//   pc[0] = dict_off  (float→uint, start of dictionary in Heap)
+//   pc[1] = idx_off   (float→uint, start of encoded indices in Globals)
+//   pc[2] = dst_off   (float→uint, start of decoded output in Registers)
+//   pc[3] = count     (float→uint, number of elements to decode)
+//
+// Binding layout (ir_input_count=4, 5 SSBOs):
+//   Binding 0: registers (write decoded values)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (read encoded indices)
+//   Binding 3: control   (unused, declared uint for VM compatibility)
+//   Binding 4: heap      (read dictionary — "output" binding in ir.flow)
+//
+// Dispatch: ceil(count / 256) workgroups
+//
+// Dictionary is loaded into Heap via vm_set_heap() at boot time.
+// Indices are stored as float values in Globals (truncated to uint for lookup).
+// Out-of-bounds index reads past dictionary → NVIDIA returns 0 (undefined).
+// Caller must ensure all indices < dictionary size.
+//
+// reg_size must be >= count for vm_read_register to retrieve all results.
+//
+// Validated edge cases:
+//   Single-entry dictionary, max index, repeated indices,
+//   first/last entry boundary
+//
+// Performance: O(1) per element (fully parallel). Perfect GPU utilization.
+//
+// Run: octoflow run stdlib/loom/emit_vm_dict_lookup.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_dict_lookup(out_path)
+  ir_new()
+  ir_input_count = 4.0
+  push(ir_uint_bindings, 3.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ─────────────────────
+  let gid        = ir_load_gid(entry)
+  let pc_dict    = ir_push_const(entry, 0.0)
+  let pc_idx     = ir_push_const(entry, 1.0)
+  let pc_dst     = ir_push_const(entry, 2.0)
+  let pc_cnt     = ir_push_const(entry, 3.0)
+  let count_u    = ir_ftou(entry, pc_cnt)
+  let oob        = ir_ugte(entry, gid, count_u)
+  let _sm        = ir_selection_merge(entry, exit_block)
+  let _br        = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: read index, gather from dictionary, store ──────────────
+  // Read encoded index from Globals: idx = globals[idx_off + gid]
+  let idx_off_u  = ir_ftou(body, pc_idx)
+  let idx_addr   = ir_iadd(body, idx_off_u, gid)
+  let idx_f      = ir_load_input_at(body, 2.0, idx_addr)
+  let idx_u      = ir_ftou(body, idx_f)
+
+  // Gather from Heap dictionary: val = heap[dict_off + idx]
+  let dict_off_u = ir_ftou(body, pc_dict)
+  let dict_addr  = ir_iadd(body, dict_off_u, idx_u)
+  let val        = ir_load_output_at(body, dict_addr)
+
+  // Write to Registers: registers[dst_off + gid] = val
+  let dst_off_u  = ir_ftou(body, pc_dst)
+  let dst_addr   = ir_iadd(body, dst_off_u, gid)
+  let _store     = ir_buf_store_f(body, 0.0, dst_addr, val)
+
+  let _br2       = ir_term_branch(body, exit_block)
+
+  // ── Exit ─────────────────────────────────────────────────────────
+  let _ret       = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/ops/vm_dict_lookup.spv"
+let _r = emit_vm_dict_lookup(out)
+print("Emitted: {out}")

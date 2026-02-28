@@ -1,0 +1,8 @@
+// Phase 18: Read .octo binary data back
+// Demonstrates that tap() auto-detects .octo format
+
+stream data = tap("test_data/normalized.octo")
+let mn = min(data)
+let mx = max(data)
+let n = count(data)
+print("Read {n} values from .octo: {mn:.4} to {mx:.4}")

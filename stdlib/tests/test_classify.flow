@@ -1,0 +1,128 @@
+// test_classify.flow — Tests for stdlib/ml/classify.flow
+// Functions tested: knn_predict
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from ml/classify.flow --
+fn knn_predict(x_train, y_train, x_test, k)
+  let n_train = len(x_train)
+  let n_test = len(x_test)
+  let mut predictions = []
+  let mut ti = 0.0
+  while ti < n_test
+    let mut dists = []
+    let mut labels = []
+    let mut i = 0.0
+    while i < n_train
+      let d = abs(x_test[ti] - x_train[i])
+      if len(dists) < k
+        push(dists, d)
+        push(labels, y_train[i])
+      elif d < dists[len(dists) - 1.0]
+        dists[len(dists) - 1.0] = d
+        labels[len(labels) - 1.0] = y_train[i]
+      end
+      let nd = len(dists)
+      let mut j = nd - 1.0
+      while j > 0.0
+        if dists[j] < dists[j - 1.0]
+          let tmp_d = dists[j]
+          dists[j] = dists[j - 1.0]
+          dists[j - 1.0] = tmp_d
+          let tmp_l = labels[j]
+          labels[j] = labels[j - 1.0]
+          labels[j - 1.0] = tmp_l
+        end
+        j = j - 1.0
+      end
+      i = i + 1.0
+    end
+    let mut votes = map()
+    let mut best_label = labels[0]
+    let mut best_count = 0.0
+    let mut ki = 0.0
+    while ki < k && ki < len(labels)
+      let key = str(labels[ki])
+      let mut c = 1.0
+      if map_has(votes, key)
+        c = float(map_get(votes, key)) + 1.0
+      end
+      map_set(votes, key, str(c))
+      if c > best_count
+        best_count = c
+        best_label = labels[ki]
+      end
+      ki = ki + 1.0
+    end
+    push(predictions, best_label)
+    ti = ti + 1.0
+  end
+  return predictions
+end
+
+// -- Tests --
+
+print("=== test_classify ===")
+
+// Two clusters: class 0 near 1.0, class 1 near 10.0
+let x_train = [1.0, 1.5, 2.0, 9.0, 10.0, 10.5]
+let y_train = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+
+// Test point near cluster 0
+let test1 = [1.2]
+let p1 = knn_predict(x_train, y_train, test1, 3.0)
+if p1[0] == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: knn near cluster 0 expected 0.0 got {p1[0]}")
+  fail = fail + 1.0
+end
+
+// Test point near cluster 1
+let test2 = [9.5]
+let p2 = knn_predict(x_train, y_train, test2, 3.0)
+if p2[0] == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: knn near cluster 1 expected 1.0 got {p2[0]}")
+  fail = fail + 1.0
+end
+
+// Multiple test points
+let test3 = [0.5, 11.0]
+let p3 = knn_predict(x_train, y_train, test3, 3.0)
+if p3[0] == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: knn multi[0] expected 0.0 got {p3[0]}")
+  fail = fail + 1.0
+end
+
+if p3[1] == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: knn multi[1] expected 1.0 got {p3[1]}")
+  fail = fail + 1.0
+end
+
+// k=1 nearest neighbor — exact training point
+let test4 = [1.0]
+let p4 = knn_predict(x_train, y_train, test4, 1.0)
+if p4[0] == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: knn k=1 exact expected 0.0 got {p4[0]}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_classify ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

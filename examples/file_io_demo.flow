@@ -1,0 +1,59 @@
+// Phase 31: File I/O Demonstration
+// Run with: flowgpu-cli run examples/file_io_demo.flow --allow-read --allow-write
+
+// ── Path utilities (no security check needed) ────────────────
+let ext = file_ext("data/prices.csv")
+print("Extension: {ext}")
+
+let name = file_name("data/prices.csv")
+print("Filename: {name}")
+
+let dir = file_dir("data/prices.csv")
+print("Directory: {dir}")
+
+let joined = path_join("output", "result.csv")
+print("Joined: {joined}")
+
+// ── File system queries ──────────────────────────────────────
+let exists = file_exists("Cargo.toml")
+print("Cargo.toml exists: {exists}")
+
+let is_dir = is_directory("examples")
+print("examples/ is directory: {is_dir}")
+
+let size = file_size("Cargo.toml")
+print("Cargo.toml size: {size} bytes")
+
+// ── Write and read ───────────────────────────────────────────
+write_file("examples/_demo_output.txt", "Hello from OctoFlow!\nLine 2\nLine 3\n")
+let content = read_file("examples/_demo_output.txt")
+print("Read back: {content}")
+
+// ── Read lines into array ────────────────────────────────────
+let lines = read_lines("examples/_demo_output.txt")
+let n = len(lines)
+print("Lines read: {n}")
+
+for line in lines
+  print("  > {line}")
+end
+
+// ── String splitting ─────────────────────────────────────────
+let csv_row = "XAUUSD,2651.30,BUY,0.01"
+let fields = split(csv_row, ",")
+let num_fields = len(fields)
+print("CSV fields: {num_fields}")
+
+for f in fields
+  print("  field: {f}")
+end
+
+// ── Append file ──────────────────────────────────────────────
+append_file("examples/_demo_output.txt", "Appended line\n")
+let updated = read_file("examples/_demo_output.txt")
+print("After append: {updated}")
+
+// ── List directory ───────────────────────────────────────────
+let files = list_dir("examples")
+let file_count = len(files)
+print("Files in examples/: {file_count}")

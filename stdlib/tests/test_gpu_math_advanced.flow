@@ -1,0 +1,182 @@
+// Tests for Advanced Math GPU Functions
+
+use "../gpu/math_advanced.flow"
+
+let pass_count = 0.0
+let fail_count = 0.0
+
+fn test_softmax()
+    print("Testing gpu_softmax...")
+
+    let arr = [1.0, 2.0, 3.0]
+    let result = gpu_softmax(arr)
+
+    if len(result) == 3.0
+        // Should sum to 1.0
+        let sum = result[0.0] + result[1.0] + result[2.0]
+        if abs(sum - 1.0) < 0.01
+            print("  PASS: softmax sums to 1")
+            let pass_count = pass_count + 1.0
+            return
+
+    print("  FAIL: softmax")
+    let fail_count = fail_count + 1.0
+
+fn test_sigmoid()
+    print("Testing gpu_sigmoid...")
+
+    let arr = [0.0, 1.0, -1.0]
+    let result = gpu_sigmoid(arr)
+
+    if len(result) == 3.0
+        // sigmoid(0) = 0.5
+        if abs(result[0.0] - 0.5) < 0.01
+            print("  PASS: sigmoid(0) = 0.5")
+            let pass_count = pass_count + 1.0
+            return
+
+    print("  FAIL: sigmoid")
+    let fail_count = fail_count + 1.0
+
+fn test_relu()
+    print("Testing gpu_relu...")
+
+    let arr = [-2.0, -1.0, 0.0, 1.0, 2.0]
+    let result = gpu_relu(arr)
+
+    if len(result) == 5.0
+        // Negative should be 0
+        if abs(result[0.0]) < 0.01
+            if abs(result[1.0]) < 0.01
+                // Positive should be unchanged
+                if abs(result[3.0] - 1.0) < 0.01
+                    if abs(result[4.0] - 2.0) < 0.01
+                        print("  PASS: relu basic")
+                        let pass_count = pass_count + 1.0
+                        return
+
+    print("  FAIL: relu")
+    let fail_count = fail_count + 1.0
+
+fn test_tanh()
+    print("Testing gpu_tanh...")
+
+    let arr = [0.0, 1.0, -1.0]
+    let result = gpu_tanh(arr)
+
+    if len(result) == 3.0
+        // tanh(0) = 0
+        if abs(result[0.0]) < 0.01
+            print("  PASS: tanh(0) = 0")
+            let pass_count = pass_count + 1.0
+            return
+
+    print("  FAIL: tanh")
+    let fail_count = fail_count + 1.0
+
+fn test_log_sum_exp()
+    print("Testing gpu_log_sum_exp...")
+
+    let arr = [1.0, 2.0, 3.0]
+    let result = gpu_log_sum_exp(arr)
+
+    // log(e^1 + e^2 + e^3) ≈ 3.407
+    if abs(result - 3.407) < 0.1
+        print("  PASS: log_sum_exp basic")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: log_sum_exp: {result}")
+        let fail_count = fail_count + 1.0
+
+fn test_euclidean_distance()
+    print("Testing gpu_euclidean_distance...")
+
+    let vec1 = [0.0, 0.0, 0.0]
+    let vec2 = [3.0, 4.0, 0.0]
+
+    let dist = gpu_euclidean_distance(vec1, vec2)
+
+    // Should be 5.0 (3-4-5 triangle)
+    if abs(dist - 5.0) < 0.01
+        print("  PASS: euclidean_distance 3-4-5")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: euclidean_distance: {dist}")
+        let fail_count = fail_count + 1.0
+
+fn test_cosine_similarity()
+    print("Testing gpu_cosine_similarity...")
+
+    let vec1 = [1.0, 0.0, 0.0]
+    let vec2 = [1.0, 0.0, 0.0]
+
+    let sim = gpu_cosine_similarity(vec1, vec2)
+
+    // Identical vectors should be 1.0
+    if abs(sim - 1.0) < 0.01
+        print("  PASS: cosine_similarity identical")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: cosine_similarity: {sim}")
+        let fail_count = fail_count + 1.0
+
+fn test_l1_norm()
+    print("Testing gpu_l1_norm...")
+
+    let vec = [1.0, -2.0, 3.0]
+    let norm = gpu_l1_norm(vec)
+
+    // |1| + |-2| + |3| = 6
+    if abs(norm - 6.0) < 0.01
+        print("  PASS: l1_norm")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: l1_norm: {norm}")
+        let fail_count = fail_count + 1.0
+
+fn test_l2_norm()
+    print("Testing gpu_l2_norm...")
+
+    let vec = [3.0, 4.0]
+    let norm = gpu_l2_norm(vec)
+
+    // sqrt(9 + 16) = 5
+    if abs(norm - 5.0) < 0.01
+        print("  PASS: l2_norm")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: l2_norm: {norm}")
+        let fail_count = fail_count + 1.0
+
+fn test_pairwise_distances()
+    print("Testing gpu_pairwise_distances...")
+
+    // 2 points in 2D: (0,0) and (3,4)
+    let points = [0.0, 0.0, 3.0, 4.0]
+    let n_points = 2.0
+    let n_dims = 2.0
+
+    let dists = gpu_pairwise_distances(points, n_points, n_dims)
+
+    if len(dists) == 4.0
+        print("  PASS: pairwise_distances runs")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: pairwise_distances")
+        let fail_count = fail_count + 1.0
+
+// Run tests
+print("=== Advanced Math Tests ===")
+test_softmax()
+test_sigmoid()
+test_relu()
+test_tanh()
+test_log_sum_exp()
+test_euclidean_distance()
+test_cosine_similarity()
+test_l1_norm()
+test_l2_norm()
+test_pairwise_distances()
+
+print("")
+print("Advanced math tests: {pass_count} passed, {fail_count} failed")

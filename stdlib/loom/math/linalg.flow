@@ -1,0 +1,330 @@
+// stdlib/loom/linalg.flow — GPU-Accelerated Linear Algebra Operations
+//
+// Phase 92 Batch 3: Matrix and vector operations on GPU.
+// All matrices stored as flat arrays in row-major order: mat[i,j] = arr[i*cols + j]
+//
+// Available Functions:
+//   gpu_matmul(A, B, m, n, k)           — Matrix multiplication (m×k) * (k×n) = (m×n)
+//   gpu_transpose(mat, rows, cols)      — Matrix transpose
+//   gpu_dot_product(vec1, vec2)         — Vector dot product (scalar result)
+//   gpu_vector_add(vec1, vec2)          — Element-wise vector addition
+//   gpu_vector_scale(vec, scalar)       — Scalar multiplication
+//   gpu_matrix_vector_mul(mat, vec, rows, cols) — Matrix-vector product
+//   gpu_outer_product(vec1, vec2)       — Outer product of two vectors
+//
+// Requirements: --allow-ffi --allow-read
+// Usage:
+//   use "stdlib/loom/linalg"
+//   rt_init()
+//   let C = gpu_matmul(A, B, m, n, k)
+//   rt_cleanup()
+
+use "runtime"
+
+// ── gpu_matmul: Matrix multiplication C = A * B ──────────────────────────
+// A: m×k matrix, B: k×n matrix, result: m×n matrix
+// Uses tiled 2D dispatch for optimal memory access
+fn gpu_matmul(a, b, m, n, k)
+  let size_a = m * k
+  let size_b = k * n
+  let size_c = m * n
+
+  // Create buffers
+  let buf_a = rt_create_buffer(size_a * 4.0)
+  let buf_b = rt_create_buffer(size_b * 4.0)
+  let buf_c = rt_create_buffer(size_c * 4.0)
+
+  // Upload input matrices
+  rt_upload(buf_a, a)
+  rt_upload(buf_b, b)
+
+  // Load matmul pipeline (3 bindings, 12 bytes push constants)
+  let pipe = rt_load_pipeline("tests/gpu_shaders/50_matmul.spv", 3.0, 12.0)
+
+  // Calculate workgroups (16×16 local size)
+  let mut wgs_x = int((m + 15.0) / 16.0)
+  let mut wgs_y = int((n + 15.0) / 16.0)
+  if wgs_x < 1.0
+    wgs_x = 1.0
+  end
+  if wgs_y < 1.0
+    wgs_y = 1.0
+  end
+
+  // Dispatch
+  rt_chain_begin(1.0, 3.0)
+  let mut pc = [m, k, n]
+  rt_chain_push_constants(pipe, pc)
+  let mut bufs = [buf_a, buf_b, buf_c]
+  rt_chain_dispatch_2d(pipe, bufs, wgs_x, wgs_y)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // Download result
+  rt_download(buf_c, size_c)
+  let mut result = []
+  let mut i = 0.0
+  while i < size_c
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── gpu_transpose: Matrix transpose ──────────────────────────────────────
+// Input: rows×cols matrix, Output: cols×rows matrix
+fn gpu_transpose(mat, rows, cols)
+  let size = rows * cols
+
+  let buf_in = rt_create_buffer(size * 4.0)
+  let buf_out = rt_create_buffer(size * 4.0)
+
+  rt_upload(buf_in, mat)
+
+  // Load transpose pipeline (2 bindings, 8 bytes push constants)
+  let pipe = rt_load_pipeline("tests/gpu_shaders/49_transpose.spv", 2.0, 8.0)
+
+  // Calculate workgroups (16×16 local size)
+  let mut wgs_x = int((rows + 15.0) / 16.0)
+  let mut wgs_y = int((cols + 15.0) / 16.0)
+  if wgs_x < 1.0
+    wgs_x = 1.0
+  end
+  if wgs_y < 1.0
+    wgs_y = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut pc = [rows, cols]
+  rt_chain_push_constants(pipe, pc)
+  let mut bufs = [buf_in, buf_out]
+  rt_chain_dispatch_2d(pipe, bufs, wgs_x, wgs_y)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  rt_download(buf_out, size)
+  let mut result = []
+  let mut i = 0.0
+  while i < size
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── gpu_dot_product: Vector dot product ──────────────────────────────────
+// Returns scalar: sum(vec1[i] * vec2[i])
+// Uses element-wise multiply followed by reduction
+fn gpu_dot_product(vec1, vec2)
+  let n = len(vec1)
+
+  // Element-wise multiply
+  let buf_a = rt_create_buffer(n * 4.0)
+  let buf_b = rt_create_buffer(n * 4.0)
+  let buf_prod = rt_create_buffer(n * 4.0)
+
+  rt_upload(buf_a, vec1)
+  rt_upload(buf_b, vec2)
+
+  // Multiply kernel
+  let pipe_mul = rt_load_pipeline("stdlib/loom/kernels/math/mul.spv", 3.0, 0.0)
+  let mut wgs = int((n + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 3.0)
+  let mut bufs = [buf_a, buf_b, buf_prod]
+  rt_chain_dispatch(pipe_mul, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // Sum reduction
+  let buf_sum = rt_create_buffer(4.0)
+  let pipe_sum = rt_load_pipeline("stdlib/loom/kernels/reduce/reduce_sum.spv", 2.0, 4.0)
+
+  let wgs_red = int((n + 511.0) / 512.0)
+  if wgs_red < 1.0
+    wgs_red = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut pc = [n]
+  rt_chain_push_constants(pipe_sum, pc)
+  let mut bufs = [buf_prod, buf_sum]
+  rt_chain_dispatch(pipe_sum, bufs, wgs_red)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  rt_download(buf_sum, 1.0)
+  return rt_result[0]
+end
+
+// ── gpu_vector_add: Element-wise addition ────────────────────────────────
+fn gpu_vector_add(vec1, vec2)
+  let n = len(vec1)
+
+  let buf_a = rt_create_buffer(n * 4.0)
+  let buf_b = rt_create_buffer(n * 4.0)
+  let buf_out = rt_create_buffer(n * 4.0)
+
+  rt_upload(buf_a, vec1)
+  rt_upload(buf_b, vec2)
+
+  let pipe = rt_load_pipeline("stdlib/loom/kernels/math/add.spv", 3.0, 0.0)
+
+  let mut wgs = int((n + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 3.0)
+  let mut bufs = [buf_a, buf_b, buf_out]
+  rt_chain_dispatch(pipe, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  rt_download(buf_out, n)
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── gpu_vector_scale: Scalar multiplication ──────────────────────────────
+fn gpu_vector_scale(vec, scalar)
+  let n = len(vec)
+
+  let buf_in = rt_create_buffer(n * 4.0)
+  let buf_out = rt_create_buffer(n * 4.0)
+
+  rt_upload(buf_in, vec)
+
+  // Broadcast scalar to full array (mul.spv does element-wise multiplication)
+  let mut scalar_arr = []
+  let mut i = 0.0
+  while i < n
+    push(scalar_arr, scalar)
+    i = i + 1.0
+  end
+  let buf_scalar = rt_create_buffer(n * 4.0)
+  rt_upload(buf_scalar, scalar_arr)
+
+  let pipe = rt_load_pipeline("stdlib/loom/kernels/math/mul.spv", 3.0, 0.0)
+
+  let mut wgs = int((n + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 3.0)
+  let mut bufs = [buf_in, buf_scalar, buf_out]
+  rt_chain_dispatch(pipe, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  rt_download(buf_out, n)
+  let mut result = []
+  i = 0.0
+  while i < n
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── gpu_matrix_vector_mul: Matrix-vector multiplication ──────────────────
+// mat: m×n matrix, vec: n-element vector, result: m-element vector
+// Uses optimized reduction-per-row kernel
+fn gpu_matrix_vector_mul(mat, vec, rows, cols)
+  let size_mat = rows * cols
+  let size_vec = cols
+
+  let buf_mat = rt_create_buffer(size_mat * 4.0)
+  let buf_vec = rt_create_buffer(size_vec * 4.0)
+  let buf_out = rt_create_buffer(rows * 4.0)
+
+  rt_upload(buf_mat, mat)
+  rt_upload(buf_vec, vec)
+
+  // Load matvec pipeline (3 bindings, 8 bytes push constants)
+  let pipe = rt_load_pipeline("tests/gpu_shaders/51_matvec.spv", 3.0, 8.0)
+
+  // One workgroup per row
+  let mut wgs = int(rows)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 3.0)
+  let mut pc = [rows, cols]
+  rt_chain_push_constants(pipe, pc)
+  let mut bufs = [buf_mat, buf_vec, buf_out]
+  rt_chain_dispatch(pipe, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  rt_download(buf_out, rows)
+  let mut result = []
+  let mut i = 0.0
+  while i < rows
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── gpu_outer_product: Outer product of two vectors ──────────────────────
+// vec1: m-element vector, vec2: n-element vector
+// Result: m×n matrix where C[i,j] = vec1[i] * vec2[j]
+fn gpu_outer_product(vec1, vec2)
+  let m = len(vec1)
+  let n = len(vec2)
+  let size_out = m * n
+
+  let buf_a = rt_create_buffer(m * 4.0)
+  let buf_b = rt_create_buffer(n * 4.0)
+  let buf_c = rt_create_buffer(size_out * 4.0)
+
+  rt_upload(buf_a, vec1)
+  rt_upload(buf_b, vec2)
+
+  // Load outer product pipeline (3 bindings, 8 bytes push constants)
+  let pipe = rt_load_pipeline("tests/gpu_shaders/52_outer_product.spv", 3.0, 8.0)
+
+  // Calculate workgroups (16×16 local size)
+  let mut wgs_x = int((m + 15.0) / 16.0)
+  let mut wgs_y = int((n + 15.0) / 16.0)
+  if wgs_x < 1.0
+    wgs_x = 1.0
+  end
+  if wgs_y < 1.0
+    wgs_y = 1.0
+  end
+
+  rt_chain_begin(1.0, 3.0)
+  let mut pc = [m, n]
+  rt_chain_push_constants(pipe, pc)
+  let mut bufs = [buf_a, buf_b, buf_c]
+  rt_chain_dispatch_2d(pipe, bufs, wgs_x, wgs_y)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  rt_download(buf_c, size_out)
+  let mut result = []
+  let mut i = 0.0
+  while i < size_out
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end

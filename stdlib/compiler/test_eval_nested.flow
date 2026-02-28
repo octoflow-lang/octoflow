@@ -1,0 +1,151 @@
+// test_eval_nested.flow — Tests for nested function calls as arguments
+// These patterns are critical for self-hosting (lexer.flow uses them extensively)
+let mut pass = 0.0
+let mut fail = 0.0
+
+// T1: ord(char_at(str, idx)) — 2-level nesting
+let src = "Hello"
+let mut pos = 1.0
+let code = ord(char_at(src, pos))
+if code == 101.0
+  pass = pass + 1.0
+  print("T1 ord(char_at): PASS")
+else
+  fail = fail + 1.0
+  print("T1 ord(char_at): FAIL got {code}")
+end
+
+// T2: contains(str, char_at(str, idx)) — nested in second arg
+let digits = "0123456789"
+let data = "a5b"
+let c = char_at(data, 1.0)
+let has_digit = contains(digits, char_at(data, 1.0))
+if has_digit == 1.0
+  pass = pass + 1.0
+  print("T2 contains(char_at): PASS")
+else
+  fail = fail + 1.0
+  print("T2 contains(char_at): FAIL got {has_digit}")
+end
+
+// T3: is_match(char_at(str, idx), pattern) — nested in first arg
+let text = "x42z"
+let imr = is_match(char_at(text, 1.0), "[0-9]")
+if imr == 1.0
+  pass = pass + 1.0
+  print("T3 is_match(char_at): PASS")
+else
+  fail = fail + 1.0
+  print("T3 is_match(char_at): FAIL got {imr}")
+end
+
+// T4: char_at with arithmetic in inner arg: char_at(src, pos + 1.0)
+let word = "abcdef"
+let mut wi = 2.0
+let ch = char_at(word, wi + 1.0)
+if ch == "d"
+  pass = pass + 1.0
+  print("T4 char_at(pos+1): PASS")
+else
+  fail = fail + 1.0
+  print("T4 char_at(pos+1): FAIL got {ch}")
+end
+
+// T5: floor as nested arg: min(floor(x), y)
+let x = 3.7
+let y = 2.0
+let r5 = min(floor(x), y)
+if r5 == 2.0
+  pass = pass + 1.0
+  print("T5 min(floor(x),y): PASS")
+else
+  fail = fail + 1.0
+  print("T5 min(floor(x),y): FAIL got {r5}")
+end
+
+// T6: str() as nested arg: contains(str(n), "5")
+let n6 = 125.0
+let r6 = contains(str(n6), "5")
+if r6 == 1.0
+  pass = pass + 1.0
+  print("T6 contains(str(n)): PASS")
+else
+  fail = fail + 1.0
+  print("T6 contains(str(n)): FAIL got {r6}")
+end
+
+// T7: len of char_at result (always 1)
+let r7 = len(char_at(src, 0.0))
+if r7 == 1.0
+  pass = pass + 1.0
+  print("T7 len(char_at): PASS")
+else
+  fail = fail + 1.0
+  print("T7 len(char_at): FAIL got {r7}")
+end
+
+// T8: nested call with post-call arithmetic: ord(char_at(s,i)) + 1.0
+let r8 = ord(char_at("A", 0.0)) + 1.0
+if r8 == 66.0
+  pass = pass + 1.0
+  print("T8 ord(char_at)+1: PASS")
+else
+  fail = fail + 1.0
+  print("T8 ord(char_at)+1: FAIL got {r8}")
+end
+
+// T9: float(arr[idx]) — array element as nested arg
+let mut nums = []
+push(nums, "3.14")
+push(nums, "2.71")
+let r9 = float(nums[0])
+if r9 == 3.14
+  pass = pass + 1.0
+  print("T9 float(arr[idx]): PASS")
+else
+  fail = fail + 1.0
+  print("T9 float(arr[idx]): FAIL got {r9}")
+end
+
+// T10: while loop with nested call in condition (lexer pattern)
+let haystack = "hello world"
+let mut wi10 = 0.0
+while wi10 < len(haystack) && is_match(char_at(haystack, wi10), "[a-z]")
+  wi10 = wi10 + 1.0
+end
+if wi10 == 5.0
+  pass = pass + 1.0
+  print("T10 while+nested: PASS")
+else
+  fail = fail + 1.0
+  print("T10 while+nested: FAIL got {wi10}")
+end
+
+// T11: trim as nested: contains(trim(s), "abc")
+let padded = "  abc  "
+let r11 = contains(trim(padded), "abc")
+if r11 == 1.0
+  pass = pass + 1.0
+  print("T11 contains(trim): PASS")
+else
+  fail = fail + 1.0
+  print("T11 contains(trim): FAIL got {r11}")
+end
+
+// T12: replace as nested: len(replace(s, "a", ""))
+let r12 = len(replace("banana", "a", ""))
+if r12 == 3.0
+  pass = pass + 1.0
+  print("T12 len(replace): PASS")
+else
+  fail = fail + 1.0
+  print("T12 len(replace): FAIL got {r12}")
+end
+
+let total = pass + fail
+print("NESTED: {pass}/{total} passed")
+if fail == 0.0
+  print("NESTED: ALL PASS ({total}/{total} tests)")
+else
+  print("NESTED: {fail} FAILED")
+end

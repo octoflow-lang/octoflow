@@ -1,0 +1,150 @@
+// emit_gol_step.flow — Game of Life Step Kernel Emitter
+//
+// One generation of Conway's Game of Life on a toroidal NxN grid.
+// Each GPU thread handles one cell: counts 8 neighbors, applies rules.
+//
+// Push constants:
+//   pc[0] = src_off  (register offset for current grid, float → uint)
+//   pc[1] = dst_off  (register offset for next grid, float → uint)
+//   pc[2] = N        (grid width = height, float → uint)
+//   pc[3] = count    (total cells = N*N, float → uint)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read current grid, write next grid)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (unused)
+//   Binding 3: control   (unused)
+//
+// Dispatch: workgroups = ceil(count / 256)
+//
+// Run: octoflow run stdlib/loom/emit_gol_step.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_gol_step(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────────
+  let gid    = ir_load_gid(entry)
+  let pc_src = ir_push_const(entry, 0.0)
+  let pc_dst = ir_push_const(entry, 1.0)
+  let pc_n   = ir_push_const(entry, 2.0)
+  let pc_cnt = ir_push_const(entry, 3.0)
+  let cnt_u  = ir_ftou(entry, pc_cnt)
+  let oob    = ir_ugte(entry, gid, cnt_u)
+  let _sm    = ir_selection_merge(entry, exit_block)
+  let _br    = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: neighbor counting + Conway's rules ──────────────────
+  let src_u  = ir_ftou(body, pc_src)
+  let dst_u  = ir_ftou(body, pc_dst)
+  let n_u    = ir_ftou(body, pc_n)
+
+  // Row and col from flat index
+  let row    = ir_udiv(body, gid, n_u)
+  let col    = ir_umod(body, gid, n_u)
+
+  // Constants for wrapping
+  let one_u  = ir_const_u(body, 1.0)
+  let nm1_u  = ir_isub(body, n_u, one_u)
+
+  // Wrapped row: row-1, row+1
+  let rtm    = ir_iadd(body, row, nm1_u)
+  let row_m  = ir_umod(body, rtm, n_u)
+  let rtp    = ir_iadd(body, row, one_u)
+  let row_p  = ir_umod(body, rtp, n_u)
+
+  // Wrapped col: col-1, col+1
+  let ctm    = ir_iadd(body, col, nm1_u)
+  let col_m  = ir_umod(body, ctm, n_u)
+  let ctp    = ir_iadd(body, col, one_u)
+  let col_p  = ir_umod(body, ctp, n_u)
+
+  // Row offsets: row*N for index computation
+  let rm_n   = ir_imul(body, row_m, n_u)
+  let r0_n   = ir_imul(body, row, n_u)
+  let rp_n   = ir_imul(body, row_p, n_u)
+
+  // ── Load 8 neighbors from registers[src_off + row*N + col] ────
+  // (row-1, col-1)
+  let i0 = ir_iadd(body, rm_n, col_m)
+  let a0 = ir_iadd(body, src_u, i0)
+  let n0 = ir_load_input_at(body, 0.0, a0)
+  // (row-1, col)
+  let i1 = ir_iadd(body, rm_n, col)
+  let a1 = ir_iadd(body, src_u, i1)
+  let n1 = ir_load_input_at(body, 0.0, a1)
+  // (row-1, col+1)
+  let i2 = ir_iadd(body, rm_n, col_p)
+  let a2 = ir_iadd(body, src_u, i2)
+  let n2 = ir_load_input_at(body, 0.0, a2)
+  // (row, col-1)
+  let i3 = ir_iadd(body, r0_n, col_m)
+  let a3 = ir_iadd(body, src_u, i3)
+  let n3 = ir_load_input_at(body, 0.0, a3)
+  // (row, col+1)
+  let i4 = ir_iadd(body, r0_n, col_p)
+  let a4 = ir_iadd(body, src_u, i4)
+  let n4 = ir_load_input_at(body, 0.0, a4)
+  // (row+1, col-1)
+  let i5 = ir_iadd(body, rp_n, col_m)
+  let a5 = ir_iadd(body, src_u, i5)
+  let n5 = ir_load_input_at(body, 0.0, a5)
+  // (row+1, col)
+  let i6 = ir_iadd(body, rp_n, col)
+  let a6 = ir_iadd(body, src_u, i6)
+  let n6 = ir_load_input_at(body, 0.0, a6)
+  // (row+1, col+1)
+  let i7 = ir_iadd(body, rp_n, col_p)
+  let a7 = ir_iadd(body, src_u, i7)
+  let n7 = ir_load_input_at(body, 0.0, a7)
+
+  // ── Sum all 8 neighbors ───────────────────────────────────────
+  let s01     = ir_fadd(body, n0, n1)
+  let s012    = ir_fadd(body, s01, n2)
+  let s0123   = ir_fadd(body, s012, n3)
+  let s01234  = ir_fadd(body, s0123, n4)
+  let s012345 = ir_fadd(body, s01234, n5)
+  let s0to6   = ir_fadd(body, s012345, n6)
+  let sum     = ir_fadd(body, s0to6, n7)
+
+  // ── Load current cell ─────────────────────────────────────────
+  let cur_i = ir_iadd(body, src_u, gid)
+  let cur   = ir_load_input_at(body, 0.0, cur_i)
+
+  // ── Conway's rules ────────────────────────────────────────────
+  // alive = (sum == 3) || (current > 0.5 && sum == 2)
+  let three_f  = ir_const_f(body, 3.0)
+  let two_f    = ir_const_f(body, 2.0)
+  let half_f   = ir_const_f(body, 0.5)
+  let is_3     = ir_foeq(body, sum, three_f)
+  let is_2     = ir_foeq(body, sum, two_f)
+  let alive    = ir_fogt(body, cur, half_f)
+  let surv     = ir_land(body, alive, is_2)
+  let result_b = ir_lor(body, is_3, surv)
+
+  // Select 1.0 or 0.0
+  let one_f  = ir_const_f(body, 1.0)
+  let zero_f = ir_const_f(body, 0.0)
+  let result = ir_select(body, IR_TYPE_FLOAT, result_b, one_f, zero_f)
+
+  // ── Store to destination ──────────────────────────────────────
+  let dst_i  = ir_iadd(body, dst_u, gid)
+  let _store = ir_buf_store_f(body, 0.0, dst_i, result)
+  let _br2   = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/ops/gol_step.spv"
+let _r = emit_gol_step(out)
+print("Emitted: {out}")

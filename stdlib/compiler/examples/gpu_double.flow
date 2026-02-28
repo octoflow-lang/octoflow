@@ -1,0 +1,10 @@
+// gpu_double.flow — simple GPU kernel demo
+// Doubles each element in the input stream
+//
+// Run with codegen:
+//   FLOW_INPUT=gpu_double.flow octoflow run stdlib/compiler/codegen.flow --allow-read --allow-write
+
+let scale = 2.0
+let src = stream("input.raw")
+let result = src |> map(fn x: x * scale)
+emit result to "output.raw"

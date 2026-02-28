@@ -1,0 +1,153 @@
+// test_gpu_ops.flow — GPU compute builtins Tier 1 test suite
+
+// ── Setup test data ──
+let mut a = []
+push(a, 1.0)
+push(a, 4.0)
+push(a, 9.0)
+push(a, 16.0)
+
+let mut b = []
+push(b, 10.0)
+push(b, 20.0)
+push(b, 30.0)
+push(b, 40.0)
+
+// ── Element-wise unary ops ──
+let sq = gpu_sqrt(a)
+let sq0 = sq[0]
+let sq1 = sq[1]
+let sq2 = sq[2]
+let sq3 = sq[3]
+print("sqrt: {sq0} {sq1} {sq2} {sq3}")
+
+let ab = gpu_abs(a)
+let ab0 = ab[0]
+print("abs: {ab0}")
+
+let sc = gpu_scale(a, 2.0)
+let sc0 = sc[0]
+let sc3 = sc[3]
+print("scale: {sc0} {sc3}")
+
+let cl = gpu_clamp(b, 15.0, 35.0)
+let cl0 = cl[0]
+let cl1 = cl[1]
+let cl3 = cl[3]
+print("clamp: {cl0} {cl1} {cl3}")
+
+// ── Element-wise binary ops ──
+let added = gpu_add(a, b)
+let ad0 = added[0]
+let ad3 = added[3]
+print("add: {ad0} {ad3}")
+
+let subbed = gpu_sub(b, a)
+let sb0 = subbed[0]
+let sb3 = subbed[3]
+print("sub: {sb0} {sb3}")
+
+let mulled = gpu_mul(a, b)
+let ml0 = mulled[0]
+let ml3 = mulled[3]
+print("mul: {ml0} {ml3}")
+
+let divved = gpu_div(b, a)
+let dv0 = divved[0]
+let dv3 = divved[3]
+print("div: {dv0} {dv3}")
+
+// ── Conditional select ──
+let mut cond = []
+push(cond, 1.0)
+push(cond, 0.0)
+push(cond, 1.0)
+push(cond, 0.0)
+let sel = gpu_where(cond, a, b)
+let s0 = sel[0]
+let s1 = sel[1]
+let s2 = sel[2]
+let s3 = sel[3]
+print("where: {s0} {s1} {s2} {s3}")
+
+// ── Reductions ──
+let total = gpu_sum(a)
+print("sum: {total}")
+
+let mn = gpu_min(a)
+print("min: {mn}")
+
+let mx = gpu_max(a)
+print("max: {mx}")
+
+let avg = gpu_mean(a)
+print("mean: {avg}")
+
+// ── Linear algebra ──
+let d = dot(a, b)
+print("dot: {d}")
+
+let n = norm(a)
+print("norm: {n}")
+
+let nrm = normalize(a)
+let n0 = nrm[0]
+let n3 = nrm[3]
+print("normalize: {n0} {n3}")
+
+// ── Matrix transpose ──
+let mut m23 = []
+push(m23, 1.0)
+push(m23, 2.0)
+push(m23, 3.0)
+push(m23, 4.0)
+push(m23, 5.0)
+push(m23, 6.0)
+// 2x3 matrix: [[1,2,3],[4,5,6]] → transposed 3x2: [[1,4],[2,5],[3,6]]
+let t = mat_transpose(m23, 2.0, 3.0)
+let t0 = t[0]
+let t1 = t[1]
+let t2 = t[2]
+let t3 = t[3]
+let t4 = t[4]
+let t5 = t[5]
+print("transpose: {t0} {t1} {t2} {t3} {t4} {t5}")
+
+// ── Prefix scan ──
+let mut scan_in = []
+push(scan_in, 1.0)
+push(scan_in, 2.0)
+push(scan_in, 3.0)
+push(scan_in, 4.0)
+let cs = gpu_cumsum(scan_in)
+let cs0 = cs[0]
+let cs1 = cs[1]
+let cs2 = cs[2]
+let cs3 = cs[3]
+print("cumsum: {cs0} {cs1} {cs2} {cs3}")
+
+// ── Utility ──
+let filled = gpu_fill(7.0, 3.0)
+let f0 = filled[0]
+let f2 = filled[2]
+let fl = len(filled)
+print("fill: {f0} {f2} len={fl}")
+
+let rng = gpu_range(0.0, 5.0, 1.0)
+let r0 = rng[0]
+let r4 = rng[4]
+let rl = len(rng)
+print("range: {r0} {r4} len={rl}")
+
+let rev = gpu_reverse(a)
+let rv0 = rev[0]
+let rv3 = rev[3]
+print("reverse: {rv0} {rv3}")
+
+// ── GPU info ──
+let mut info = gpu_info()
+let gpu_name = info["name"]
+let gpu_avail = info["available"]
+print("gpu: {gpu_name} available={gpu_avail}")
+
+print("GPU_OPS DONE")

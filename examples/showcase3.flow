@@ -1,0 +1,145 @@
+// OctoFlow GPU Showcase 3 — Octopus Video Player (Native GIF)
+// Downloads an animated GIF, decodes natively, GPU-enhances, plays in terminal
+// Run:  octoflow run showcase3.flow --allow-exec --allow-read --allow-write
+// Exit: Plays once and exits
+// Requires: curl (for HTTPS download). No ffmpeg needed — native GIF decoder!
+
+// ═══ Configuration ═══════════════════════════════════════════
+let esc = chr(27)
+let reset = esc + "[0m"
+
+// ═══ Terminal setup ══════════════════════════════════════════
+let hide = esc + "[?25l" + esc + "[2J" + esc + "[H"
+print("{hide}")
+
+let c_title = esc + "[38;2;0;200;180m"
+let c_dim = esc + "[38;2;80;80;80m"
+let c_info = esc + "[38;2;140;160;180m"
+let c_hot = esc + "[38;2;255;180;60m"
+let c_err = esc + "[38;2;255;80;80m"
+
+print("")
+let title = c_title + "  OctoFlow Video Player — Octopus in Terminal" + reset
+print("{title}")
+let rule = c_dim + "  ──────────────────────────────────────────────────" + reset
+print("{rule}")
+print("")
+
+// ═══ Download octopus GIF ════════════════════════════════════
+// Giphy — free animated GIF, direct URL
+let gif_url = "https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif"
+let gif_file = "octopus.gif"
+
+let dl_msg = c_info + "  Downloading octopus GIF..." + reset
+print("{dl_msg}")
+
+let dl = exec("curl", "-s", "-o", gif_file, "-L", gif_url)
+if dl.ok == 0
+    let err_msg = c_err + "  Download failed. Is curl installed?" + reset
+    print("{err_msg}")
+    let restore = esc + "[?25h"
+    print("{restore}")
+end
+
+// ═══ Open video (native GIF decoder) ═════════════════════════
+let gif_bytes = read_bytes(gif_file)
+let gif_len = len(gif_bytes)
+let len_msg = c_info + "  Downloaded " + str(int(gif_len)) + " bytes" + reset
+print("{len_msg}")
+
+let vid = video_open(gif_bytes)
+let fw = vid.width
+let fh = vid.height
+let total_frames = vid.frames
+let vid_fps = vid.fps
+
+let info_msg = c_info + "  Decoded: " + str(int(fw)) + " x " + str(int(fh)) + " | " + str(int(total_frames)) + " frames | " + str(int(vid_fps)) + " fps" + reset
+print("{info_msg}")
+
+let ready_msg = c_info + "  Starting GPU-enhanced playback..." + reset
+print("{ready_msg}")
+sleep(500)
+
+// ═══ Playback loop ═══════════════════════════════════════════
+let frame_ms = 1000.0 / vid_fps
+
+let mut frame_num = 0
+while frame_num < total_frames
+    let t_start = now_ms()
+
+    // Decode frame
+    let f = video_frame(vid, frame_num)
+
+    let total = fw * fh
+    let itotal = int(total)
+
+    // GPU enhancement: ocean blue tint + contrast boost
+    let mid = gpu_fill(128.0, itotal)
+
+    let r_sub = gpu_sub(f.r, mid)
+    let r_sc = gpu_scale(r_sub, 1.15)
+    let r_add = gpu_add(r_sc, mid)
+    let r_enh = gpu_clamp(r_add, 0.0, 255.0)
+
+    let g_sub = gpu_sub(f.g, mid)
+    let g_sc = gpu_scale(g_sub, 1.2)
+    let g_add = gpu_add(g_sc, mid)
+    let g_enh = gpu_clamp(g_add, 0.0, 255.0)
+
+    let b_sub = gpu_sub(f.b, mid)
+    let b_sc = gpu_scale(b_sub, 1.3)
+    let b_add = gpu_add(b_sc, mid)
+    let b_enh = gpu_clamp(b_add, 0.0, 255.0)
+
+    // Ocean tint: boost blue, slightly boost green, reduce red
+    let r_tint = gpu_scale(r_enh, 0.85)
+    let g_tint = gpu_scale(g_enh, 1.05)
+    let b_tint = gpu_scale(b_enh, 1.15)
+
+    let r_final = gpu_clamp(r_tint, 0.0, 255.0)
+    let g_final = gpu_clamp(g_tint, 0.0, 255.0)
+    let b_final = gpu_clamp(b_tint, 0.0, 255.0)
+
+    // Display
+    let goto1 = esc + "[1;1H"
+    print("{goto1}")
+    print("")
+    print("{title}")
+    print("{rule}")
+
+    let sf = str(int(frame_num + 1))
+    let stf = str(int(total_frames))
+    let elapsed = now_ms() - t_start
+    let se = str(int(elapsed))
+    let spix = str(int(total))
+    let status = c_info + "  Frame " + c_hot + sf + "/" + stf + c_info + " | " + spix + " pixels | GPU ocean tint + contrast | " + se + "ms" + reset
+    print("{status}")
+    let hint = c_dim + "  Native GIF decoder — no ffmpeg needed" + reset
+    print("{hint}")
+    print("")
+
+    term_image(fw, fh, r_final, g_final, b_final)
+
+    // Frame timing
+    let frame_elapsed = now_ms() - t_start
+    let wait = frame_ms - frame_elapsed
+    if wait > 0
+        sleep(wait)
+    end
+
+    frame_num = frame_num + 1
+end
+
+// ═══ Cleanup ═════════════════════════════════════════════════
+print("")
+let done = c_title + "  Playback complete! " + str(int(total_frames)) + " frames, GPU-enhanced in real-time" + reset
+print("{done}")
+let credit = c_dim + "  Native GIF decode | GPU contrast + ocean tint | No external tools" + reset
+print("{credit}")
+print("")
+
+// Remove temp file
+let rm = exec("cmd", "/c", "del", "/q", gif_file)
+
+let restore = esc + "[?25h"
+print("{restore}")

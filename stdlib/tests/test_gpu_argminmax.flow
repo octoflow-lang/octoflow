@@ -1,0 +1,140 @@
+// test_gpu_argminmax.flow — GPU Argmin/Argmax unit test
+//
+// Test 1: Argmin of [5, 3, 7, 1, 9, 2, 8, 4] → min=1 at index 3
+// Test 2: Argmax of same array → max=9 at index 4
+// Test 3: Argmin of 256 elements, min at index 200
+//
+// Run: octoflow run stdlib/tests/test_gpu_argminmax.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+rt_init()
+
+let pipe_argmin = rt_load_pipeline("tests/gpu_shaders/37_argmin.spv", 3.0, 4.0)
+let pipe_argmax = rt_load_pipeline("tests/gpu_shaders/38_argmax.spv", 3.0, 4.0)
+
+// ── Test 1: Argmin of 8 elements ───────────────────────────────────
+let N1 = 8.0
+let mut input1 = [5.0, 3.0, 7.0, 1.0, 9.0, 2.0, 8.0, 4.0]
+
+let buf_in1 = rt_create_buffer(N1 * 4.0)
+let buf_val1 = rt_create_buffer(4.0)
+let buf_idx1 = rt_create_buffer(4.0)
+rt_upload(buf_in1, input1)
+
+rt_chain_begin(1.0, 3.0)
+let mut pc1 = [N1]
+rt_chain_push_constants(pipe_argmin, pc1)
+let mut bufs1 = [buf_in1, buf_val1, buf_idx1]
+rt_chain_dispatch(pipe_argmin, bufs1, 1.0)
+rt_chain_end()
+rt_chain_submit_wait()
+
+rt_download(buf_val1, 1.0)
+let min_val = rt_result[0]
+rt_download(buf_idx1, 1.0)
+let min_idx = rt_result[0]
+
+let mut pass1 = 1.0
+print("Test 1: Argmin of [5,3,7,1,9,2,8,4]:")
+print("  min_value={min_val}, min_index={min_idx}")
+if min_val != 1.0
+  print("  FAIL: expected value 1")
+  pass1 = 0.0
+end
+if min_idx != 3.0
+  print("  FAIL: expected index 3")
+  pass1 = 0.0
+end
+if pass1 == 1.0
+  print("  PASS: Test 1 BIT EXACT")
+end
+
+// ── Test 2: Argmax of same array ───────────────────────────────────
+let buf_val2 = rt_create_buffer(4.0)
+let buf_idx2 = rt_create_buffer(4.0)
+
+rt_chain_begin(1.0, 3.0)
+let mut pc2 = [N1]
+rt_chain_push_constants(pipe_argmax, pc2)
+let mut bufs2 = [buf_in1, buf_val2, buf_idx2]
+rt_chain_dispatch(pipe_argmax, bufs2, 1.0)
+rt_chain_end()
+rt_chain_submit_wait()
+
+rt_download(buf_val2, 1.0)
+let max_val = rt_result[0]
+rt_download(buf_idx2, 1.0)
+let max_idx = rt_result[0]
+
+let mut pass2 = 1.0
+print("Test 2: Argmax of [5,3,7,1,9,2,8,4]:")
+print("  max_value={max_val}, max_index={max_idx}")
+if max_val != 9.0
+  print("  FAIL: expected value 9")
+  pass2 = 0.0
+end
+if max_idx != 4.0
+  print("  FAIL: expected index 4")
+  pass2 = 0.0
+end
+if pass2 == 1.0
+  print("  PASS: Test 2 BIT EXACT")
+end
+
+// ── Test 3: Argmin of 256 elements, min at index 200 ───────────────
+let N3 = 256.0
+let mut input3 = []
+let mut i = 0.0
+while i < N3
+  if i == 200.0
+    push(input3, 0.0)
+  else
+    push(input3, i + 1.0)
+  end
+  i = i + 1.0
+end
+
+let buf_in3 = rt_create_buffer(N3 * 4.0)
+let buf_val3 = rt_create_buffer(4.0)
+let buf_idx3 = rt_create_buffer(4.0)
+rt_upload(buf_in3, input3)
+
+rt_chain_begin(1.0, 3.0)
+let mut pc3 = [N3]
+rt_chain_push_constants(pipe_argmin, pc3)
+let mut bufs3 = [buf_in3, buf_val3, buf_idx3]
+rt_chain_dispatch(pipe_argmin, bufs3, 1.0)
+rt_chain_end()
+rt_chain_submit_wait()
+
+rt_download(buf_val3, 1.0)
+let min_val3 = rt_result[0]
+rt_download(buf_idx3, 1.0)
+let min_idx3 = rt_result[0]
+
+let mut pass3 = 1.0
+print("Test 3: Argmin of 256 elements (min=0 at index 200):")
+print("  min_value={min_val3}, min_index={min_idx3}")
+if min_val3 != 0.0
+  print("  FAIL: expected value 0")
+  pass3 = 0.0
+end
+if min_idx3 != 200.0
+  print("  FAIL: expected index 200")
+  pass3 = 0.0
+end
+if pass3 == 1.0
+  print("  PASS: Test 3 BIT EXACT")
+end
+
+// ── Overall ────────────────────────────────────────────────────────
+if pass1 == 1.0
+  if pass2 == 1.0
+    if pass3 == 1.0
+      print("PASS: gpu_argminmax all tests BIT EXACT")
+    end
+  end
+end
+
+rt_cleanup()

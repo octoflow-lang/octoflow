@@ -1,4 +1,8 @@
 // stdlib/web/http.flow — HTTP client utilities
+//
+// Functions: http_get_json, http_post_json, api_call
+//
+// Builtins used: http_get(url), http_post(url, body), json_parse, json_stringify
 
 fn http_get_json(url)
   let r = http_get(url)
@@ -24,7 +28,8 @@ end
 
 fn api_call(method, url, headers_map, body)
   // Generic API call
-  // headers_map: map of header_name -> header_value
+  // NOTE: headers_map is accepted but not yet passed to builtins (http_get/http_post
+  // don't support custom headers). Reserved for future use.
   if method == "GET"
     return http_get(url)
   elif method == "POST"

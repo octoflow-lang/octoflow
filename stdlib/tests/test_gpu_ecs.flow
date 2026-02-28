@@ -1,0 +1,219 @@
+// test_gpu_ecs.flow — GPU ECS (Entity Component System) unit test
+//
+// Structure-of-Arrays memory layout, systems as GPU dispatches.
+//
+// 4 entities:
+//   Entity 0: pos=(0,10), vel=(1,0), active=1 → moves right, falls, bounces
+//   Entity 1: pos=(5,0),  vel=(0,0), active=1, grounded=1 → stays put
+//   Entity 2: pos=(0,5),  vel=(2,0), active=1 → moves right, falls
+//   Entity 3: pos=(0,0),  vel=(0,0), active=0 → inactive, untouched
+//
+// 3 systems per step: gravity → move → bounce
+// 10 timesteps, dt=0.1, gravity=-10, floor=0, restitution=0.8
+//
+// Run: octoflow run stdlib/tests/test_gpu_ecs.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+rt_init()
+
+let pipe_move = rt_load_pipeline("tests/gpu_shaders/29_ecs_move.spv", 5.0, 4.0)
+let pipe_grav = rt_load_pipeline("tests/gpu_shaders/30_ecs_gravity.spv", 3.0, 8.0)
+let pipe_bounce = rt_load_pipeline("tests/gpu_shaders/31_ecs_bounce.spv", 4.0, 8.0)
+
+let N = 4.0
+let PAD = 256.0
+let DT = 0.1
+let GRAVITY = -10.0
+let FLOOR = 0.0
+let RESTIT = 0.8
+let STEPS = 10.0
+
+// SoA component arrays (padded to 256)
+let mut pos_x = []
+let mut pos_y = []
+let mut vel_x = []
+let mut vel_y = []
+let mut alive_arr = []
+let mut grounded = []
+
+let mut i = 0.0
+while i < PAD
+  if i == 0.0
+    push(pos_x, 0.0)
+    push(pos_y, 10.0)
+    push(vel_x, 1.0)
+    push(vel_y, 0.0)
+    push(alive_arr, 1.0)
+    push(grounded, 0.0)
+  end
+  if i == 1.0
+    push(pos_x, 5.0)
+    push(pos_y, 0.0)
+    push(vel_x, 0.0)
+    push(vel_y, 0.0)
+    push(alive_arr, 1.0)
+    push(grounded, 1.0)
+  end
+  if i == 2.0
+    push(pos_x, 0.0)
+    push(pos_y, 5.0)
+    push(vel_x, 2.0)
+    push(vel_y, 0.0)
+    push(alive_arr, 1.0)
+    push(grounded, 0.0)
+  end
+  if i == 3.0
+    push(pos_x, 0.0)
+    push(pos_y, 0.0)
+    push(vel_x, 0.0)
+    push(vel_y, 0.0)
+    push(alive_arr, 0.0)
+    push(grounded, 0.0)
+  end
+  if i > 3.0
+    push(pos_x, 0.0)
+    push(pos_y, 0.0)
+    push(vel_x, 0.0)
+    push(vel_y, 0.0)
+    push(alive_arr, 0.0)
+    push(grounded, 0.0)
+  end
+  i = i + 1.0
+end
+
+// Upload
+let buf_px = rt_create_buffer(PAD * 4.0)
+let buf_py = rt_create_buffer(PAD * 4.0)
+let buf_vx = rt_create_buffer(PAD * 4.0)
+let buf_vy = rt_create_buffer(PAD * 4.0)
+let buf_alive = rt_create_buffer(PAD * 4.0)
+let buf_ground = rt_create_buffer(PAD * 4.0)
+
+rt_upload(buf_px, pos_x)
+rt_upload(buf_py, pos_y)
+rt_upload(buf_vx, vel_x)
+rt_upload(buf_vy, vel_y)
+rt_upload(buf_alive, alive_arr)
+rt_upload(buf_ground, grounded)
+
+// ── Simulate: 3 systems × 10 steps ──────────────────────────────────
+let mut step = 0.0
+while step < STEPS
+  // System 1: Gravity (vel_y += gravity * dt for non-grounded)
+  rt_chain_begin(1.0, 3.0)
+  let mut pc_g = [GRAVITY, DT]
+  rt_chain_push_constants(pipe_grav, pc_g)
+  let mut bufs_g = [buf_vy, buf_alive, buf_ground]
+  rt_chain_dispatch(pipe_grav, bufs_g, 1.0)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // System 2: Move (pos += vel * dt)
+  rt_chain_begin(1.0, 5.0)
+  let mut pc_m = [DT]
+  rt_chain_push_constants(pipe_move, pc_m)
+  let mut bufs_m = [buf_px, buf_py, buf_vx, buf_vy, buf_alive]
+  rt_chain_dispatch(pipe_move, bufs_m, 1.0)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // System 3: Bounce (floor collision)
+  rt_chain_begin(1.0, 4.0)
+  let mut pc_b = [FLOOR, RESTIT]
+  rt_chain_push_constants(pipe_bounce, pc_b)
+  let mut bufs_b = [buf_py, buf_vy, buf_alive, buf_ground]
+  rt_chain_dispatch(pipe_bounce, bufs_b, 1.0)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  step = step + 1.0
+end
+
+// ── Download results ─────────────────────────────────────────────────
+rt_download(buf_px, N)
+let e0_px = rt_result[0]
+let e1_px = rt_result[1]
+let e2_px = rt_result[2]
+let e3_px = rt_result[3]
+
+rt_download(buf_py, N)
+let e0_py = rt_result[0]
+let e1_py = rt_result[1]
+let e2_py = rt_result[2]
+let e3_py = rt_result[3]
+
+rt_download(buf_vy, N)
+let e0_vy = rt_result[0]
+let e1_vy = rt_result[1]
+let e2_vy = rt_result[2]
+let e3_vy = rt_result[3]
+
+rt_download(buf_ground, N)
+let e0_gnd = rt_result[0]
+let e1_gnd = rt_result[1]
+let e2_gnd = rt_result[2]
+let e3_gnd = rt_result[3]
+
+// ── Verify ───────────────────────────────────────────────────────────
+let mut pass = 1.0
+
+// Entity 0: started at y=10, should have fallen and bounced
+// After 10 steps at dt=0.1, gravity=-10: should be near ground
+print("GPU ECS (4 entities, 3 systems, 10 steps):")
+print("  Entity 0: pos=({e0_px}, {e0_py}) vy={e0_vy} grounded={e0_gnd}")
+print("  Entity 1: pos=({e1_px}, {e1_py}) vy={e1_vy} grounded={e1_gnd}")
+print("  Entity 2: pos=({e2_px}, {e2_py}) vy={e2_vy} grounded={e2_gnd}")
+print("  Entity 3: pos=({e3_px}, {e3_py}) vy={e3_vy} grounded={e3_gnd}")
+
+// Entity 0: moved right by vel_x * dt * steps = 1.0 * 0.1 * 10 = 1.0
+if abs(e0_px - 1.0) > 0.001
+  print("FAIL: entity 0 x should be ~1.0")
+  pass = 0.0
+end
+
+// Entity 1: grounded, should not have moved
+if e1_px != 5.0
+  print("FAIL: entity 1 x should be 5.0")
+  pass = 0.0
+end
+if e1_py != 0.0
+  print("FAIL: entity 1 y should be 0.0")
+  pass = 0.0
+end
+
+// Entity 2: moved right by 2.0 * 0.1 * 10 = 2.0
+if abs(e2_px - 2.0) > 0.001
+  print("FAIL: entity 2 x should be ~2.0")
+  pass = 0.0
+end
+
+// Entity 3: inactive, should be untouched
+if e3_px != 0.0
+  print("FAIL: entity 3 should be unchanged")
+  pass = 0.0
+end
+if e3_py != 0.0
+  print("FAIL: entity 3 y should be 0.0")
+  pass = 0.0
+end
+
+// Entity 0 and 2 should have hit the ground at some point
+// (started above floor, fell with gravity)
+if e0_py < -0.01
+  print("FAIL: entity 0 fell through floor")
+  pass = 0.0
+end
+if e2_py < -0.01
+  print("FAIL: entity 2 fell through floor")
+  pass = 0.0
+end
+
+let total_dispatches = STEPS * 3.0
+print("  Total dispatches: {total_dispatches} (3 systems x {STEPS} steps)")
+
+if pass == 1.0
+  print("PASS: gpu_ecs 3 systems, SoA layout, physics verified")
+end
+
+rt_cleanup()

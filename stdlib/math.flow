@@ -1,5 +1,7 @@
-// FlowGPU Standard Library: Math Utilities
-// Pure scalar functions — no array parameters needed.
+// stdlib/math.flow — Scalar math utilities
+//
+// Functions: min_of, max_of, clamp_val, lerp, map_range, sign,
+//            deg_to_rad, rad_to_deg, gcd, lcm
 
 fn min_of(a, b)
   if a < b
@@ -50,4 +52,22 @@ end
 
 fn rad_to_deg(rad)
   return rad * 180.0 / 3.14159265
+end
+
+fn gcd(a, b)
+  let mut x = abs(a)
+  let mut y = abs(b)
+  while y > 0.0
+    let tmp = y
+    y = x - floor(x / y) * y
+    x = tmp
+  end
+  return x
+end
+
+fn lcm(a, b)
+  if a == 0.0 || b == 0.0
+    return 0.0
+  end
+  return abs(a * b) / gcd(a, b)
 end

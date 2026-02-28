@@ -1,0 +1,106 @@
+// stdlib/loom/b64_emit.flow — GPU Base64 Encoding Kernel Emitter
+// Encodes RGB pixel data to base64 ASCII bytes entirely on GPU.
+//
+// Architecture:
+//   Input binding 0: dummy array (4N floats, determines output size)
+//   Input binding 1: R channel (N floats, 0-255)
+//   Input binding 2: G channel (N floats, 0-255)
+//   Input binding 3: B channel (N floats, 0-255)
+//   Output: 4N floats, each a base64 ASCII byte value (43-122)
+//
+// Each thread (gid 0..4N-1) computes one base64 character:
+//   pixel_idx = gid / 4, char_pos = gid % 4
+//   Reads R[pixel], G[pixel], B[pixel] from bindings 1-3
+//   3 bytes → 4 six-bit groups → select by char_pos → base64 ASCII
+//
+// Usage:
+//   emit_b64_kernel()                           // compile once (cached)
+//   let b64 = gpu_run("b64_encode.spv", dummy, r, g, b)
+//   print_bytes(b64)                            // OS boundary: stdout
+
+use "../compiler/ir"
+
+fn emit_b64_kernel()
+  ir_new()
+  // Direct assignment — not via function (scalar snapshot semantics)
+  ir_input_count = 4.0
+
+  let bb = ir_block("entry")
+
+  // Thread index
+  let gid = ir_load_gid(bb)
+
+  // pixel_idx = gid / 4, char_pos = gid % 4
+  let c4u = ir_const_u(bb, 4.0)
+  let pixel = ir_udiv(bb, gid, c4u)
+  let charpos = ir_umod(bb, gid, c4u)
+
+  // Read R, G, B from separate input bindings
+  let rv = ir_load_input_at(bb, 1.0, pixel)
+  let gv = ir_load_input_at(bb, 2.0, pixel)
+  let bv = ir_load_input_at(bb, 3.0, pixel)
+
+  // Convert to uint
+  let R = ir_ftou(bb, rv)
+  let G = ir_ftou(bb, gv)
+  let B = ir_ftou(bb, bv)
+
+  // Base64: 3 bytes → 4 six-bit groups (arithmetic, no bitwise ops)
+  // b0 = R / 4
+  // b1 = (R % 4) * 16 + G / 16
+  // b2 = (G % 16) * 4 + B / 64
+  // b3 = B % 64
+  let c16u = ir_const_u(bb, 16.0)
+  let c64u = ir_const_u(bb, 64.0)
+  let b0 = ir_udiv(bb, R, c4u)
+  let b1 = ir_iadd(bb, ir_imul(bb, ir_umod(bb, R, c4u), c16u), ir_udiv(bb, G, c16u))
+  let b2 = ir_iadd(bb, ir_imul(bb, ir_umod(bb, G, c16u), c4u), ir_udiv(bb, B, c64u))
+  let b3 = ir_umod(bb, B, c64u)
+
+  // Select group by char_pos: 0→b0, 1→b1, 2→b2, 3→b3
+  let c0u = ir_const_u(bb, 0.0)
+  let c1u = ir_const_u(bb, 1.0)
+  let c2u = ir_const_u(bb, 2.0)
+  let is0 = ir_ulte(bb, charpos, c0u)
+  let is1 = ir_ulte(bb, charpos, c1u)
+  let is2 = ir_ulte(bb, charpos, c2u)
+  let sel23 = ir_select(bb, IR_TYPE_UINT, is2, b2, b3)
+  let sel12 = ir_select(bb, IR_TYPE_UINT, is1, b1, sel23)
+  let b64idx = ir_select(bb, IR_TYPE_UINT, is0, b0, sel12)
+
+  // Base64 index (0-63) → ASCII char (branchless float select chain)
+  // 0-25: A-Z (65+idx), 26-51: a-z (71+idx), 52-61: 0-9 (idx-4)
+  // 62: + (43), 63: / (47)
+  let fidx = ir_utof(bb, b64idx)
+  let c26f = ir_const_f(bb, 26.0)
+  let c52f = ir_const_f(bb, 52.0)
+  let c62f = ir_const_f(bb, 62.0)
+  let c63f = ir_const_f(bb, 63.0)
+  let c65f = ir_const_f(bb, 65.0)
+  let c71f = ir_const_f(bb, 71.0)
+  let c4f = ir_const_f(bb, 4.0)
+  let c43f = ir_const_f(bb, 43.0)
+  let c47f = ir_const_f(bb, 47.0)
+
+  let upper_ch = ir_fadd(bb, fidx, c65f)
+  let lower_ch = ir_fadd(bb, fidx, c71f)
+  let digit_ch = ir_fsub(bb, fidx, c4f)
+
+  let is_upper = ir_folt(bb, fidx, c26f)
+  let is_lower = ir_folt(bb, fidx, c52f)
+  let is_digit = ir_folt(bb, fidx, c62f)
+  let is_lt63 = ir_folt(bb, fidx, c63f)
+
+  // Select chain (innermost first)
+  let ch_ps = ir_select(bb, IR_TYPE_FLOAT, is_lt63, c43f, c47f)
+  let ch_dps = ir_select(bb, IR_TYPE_FLOAT, is_digit, digit_ch, ch_ps)
+  let ch_ldps = ir_select(bb, IR_TYPE_FLOAT, is_lower, lower_ch, ch_dps)
+  let ascii = ir_select(bb, IR_TYPE_FLOAT, is_upper, upper_ch, ch_ldps)
+
+  ir_store_output(bb, ascii)
+  ir_term_return(bb)
+
+  ir_emit_spirv("b64_encode.spv")
+  print("Base64 encode kernel ready (4-input, GPU-native)")
+  return 0.0
+end

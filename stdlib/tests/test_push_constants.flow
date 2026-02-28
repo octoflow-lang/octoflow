@@ -1,0 +1,89 @@
+// test_push_constants.flow — Push Constants unit test
+// Scales 256 elements by 3.0 using a push constant parameter.
+// Zero allocation overhead for the scale factor.
+// Verify: [1, 2, 3, 4] * 3.0 = [3, 6, 9, 12]
+//
+// Run: octoflow run stdlib/tests/test_push_constants.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+let N = 256.0
+let BUF_BYTES = N * 4.0
+
+// Boot GPU
+rt_init()
+
+// Load shader with 1 push constant float (4 bytes)
+let pipe = rt_load_pipeline("tests/gpu_shaders/13_scale.spv", 2.0, 4.0)
+
+// Create buffers
+let buf_in = rt_create_buffer(BUF_BYTES)
+let buf_out = rt_create_buffer(BUF_BYTES)
+
+// Upload data: [1, 2, 3, ..., 256]
+let mut data = []
+let mut i = 0.0
+while i < N
+  push(data, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(buf_in, data)
+
+// Zero output buffer
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_out, zeros)
+
+// Chain: set push constant scale=3.0, then dispatch
+rt_chain_begin(1.0, 2.0)
+let mut pc_vals = [3.0]
+rt_chain_push_constants(pipe, pc_vals)
+let mut bufs = [buf_in, buf_out]
+rt_chain_dispatch(pipe, bufs, 1.0)
+rt_chain_end()
+
+// Submit and wait
+rt_chain_submit_wait()
+
+// Download and verify
+rt_download(buf_out, 4.0)
+
+let mut pass = 1.0
+let expected_0 = 3.0
+let expected_1 = 6.0
+let expected_2 = 9.0
+let expected_3 = 12.0
+
+let v0 = rt_result[0]
+let v1 = rt_result[1]
+let v2 = rt_result[2]
+let v3 = rt_result[3]
+print("Result: [{v0}, {v1}, {v2}, {v3}]")
+print("Expected: [{expected_0}, {expected_1}, {expected_2}, {expected_3}]")
+
+if v0 != expected_0
+  print("FAIL: v0={v0} expected {expected_0}")
+  pass = 0.0
+end
+if v1 != expected_1
+  print("FAIL: v1={v1} expected {expected_1}")
+  pass = 0.0
+end
+if v2 != expected_2
+  print("FAIL: v2={v2} expected {expected_2}")
+  pass = 0.0
+end
+if v3 != expected_3
+  print("FAIL: v3={v3} expected {expected_3}")
+  pass = 0.0
+end
+
+if pass == 1.0
+  print("PASS: push_constants scale=3.0, zero-alloc parameter passing")
+end
+
+rt_cleanup()

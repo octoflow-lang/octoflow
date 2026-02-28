@@ -1,0 +1,9 @@
+// Decompose GGUF model into per-layer .bin files for streaming inference
+// Usage: octoflow run stdlib/llm/run_decompose.flow --allow-read --allow-write
+
+use "decompose_gguf"
+
+let gguf_path = "C:/FlowGPU/models/qwen2.5-1.5b.gguf"
+let output_dir = "C:/FlowGPU/models/qwen-decomp"
+
+let _r = decompose_model(gguf_path, output_dir)

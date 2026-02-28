@@ -1,0 +1,9 @@
+// Run streaming text generation
+// Usage: octoflow run stdlib/llm/run_generate_streaming.flow --allow-read --allow-ffi
+
+use "generate_streaming"
+
+let model_path = "C:/FlowGPU/models/qwen2.5-1.5b.gguf"
+let prompt = "Write a Python function to check if a number is prime."
+
+let _r = run_generate_streaming(model_path, prompt)

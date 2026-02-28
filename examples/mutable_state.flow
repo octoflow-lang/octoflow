@@ -1,0 +1,26 @@
+// Phase 17: Mutable state demo
+// let mut declares a mutable variable, reassignment with name = expr
+
+let mut score = 0.0
+print("Initial score: {score}")
+
+score = score + 10.0
+print("After +10: {score}")
+
+score = score + 5.0
+print("After +5: {score}")
+
+score = score * 2.0
+print("After *2: {score}")
+
+// Mutable with conditional
+let mut label = if score > 20.0 then 1.0 else 0.0
+print("Label (score > 20): {label}")
+
+// Accumulator pattern
+let mut total = 0.0
+total = total + 1.0
+total = total + 2.0
+total = total + 3.0
+total = total + 4.0
+print("Sum 1..4: {total}")

@@ -1,0 +1,188 @@
+// test_collections.flow — Tests for stdlib/collections/collections.flow
+// Functions tested: stack_new/push/pop/peek, queue (map-based), counter (map-based)
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Stack functions (array-based, works with function params) --
+fn stack_new()
+  let mut s = []
+  return s
+end
+
+fn stack_push(s, val)
+  push(s, val)
+  return 0.0
+end
+
+fn stack_pop(s)
+  return pop(s)
+end
+
+fn stack_peek(s)
+  return s[len(s) - 1.0]
+end
+
+// -- Tests --
+
+print("=== test_collections ===")
+
+// Stack tests
+let mut stk = stack_new()
+let _p1 = stack_push(stk, 10.0)
+let _p2 = stack_push(stk, 20.0)
+let _p3 = stack_push(stk, 30.0)
+
+let pk = stack_peek(stk)
+if pk == 30.0
+  pass = pass + 1.0
+else
+  print("  FAIL: stack_peek expected 30 got {pk}")
+  fail = fail + 1.0
+end
+
+let popped = stack_pop(stk)
+if popped == 30.0
+  pass = pass + 1.0
+else
+  print("  FAIL: stack_pop expected 30 got {popped}")
+  fail = fail + 1.0
+end
+
+let popped2 = stack_pop(stk)
+if popped2 == 20.0
+  pass = pass + 1.0
+else
+  print("  FAIL: stack_pop expected 20 got {popped2}")
+  fail = fail + 1.0
+end
+
+// Queue tests (inline map operations — maps can't be passed to user fns yet)
+let mut q = map()
+map_set(q, "head", "0")
+map_set(q, "tail", "0")
+
+// enqueue 100
+let mut tail = float(map_get(q, "tail"))
+let mut qkey = "v_" + str(tail)
+map_set(q, qkey, str(100))
+map_set(q, "tail", str(tail + 1.0))
+
+// enqueue 200
+tail = float(map_get(q, "tail"))
+qkey = "v_" + str(tail)
+map_set(q, qkey, str(200))
+map_set(q, "tail", str(tail + 1.0))
+
+// enqueue 300
+tail = float(map_get(q, "tail"))
+qkey = "v_" + str(tail)
+map_set(q, qkey, str(300))
+map_set(q, "tail", str(tail + 1.0))
+
+// queue_size = tail - head
+let qhead = float(map_get(q, "head"))
+let qtail = float(map_get(q, "tail"))
+let qs = qtail - qhead
+if qs == 3.0
+  pass = pass + 1.0
+else
+  print("  FAIL: queue_size expected 3 got {qs}")
+  fail = fail + 1.0
+end
+
+// dequeue first
+let dq_head = float(map_get(q, "head"))
+let dq_key1 = "v_" + str(dq_head)
+let dq1 = map_get(q, dq_key1)
+map_remove(q, dq_key1)
+map_set(q, "head", str(dq_head + 1.0))
+if dq1 == "100"
+  pass = pass + 1.0
+else
+  print("  FAIL: queue_dequeue expected 100 got {dq1}")
+  fail = fail + 1.0
+end
+
+// dequeue second
+let dq_head2 = float(map_get(q, "head"))
+let dq_key2 = "v_" + str(dq_head2)
+let dq2 = map_get(q, dq_key2)
+map_remove(q, dq_key2)
+map_set(q, "head", str(dq_head2 + 1.0))
+if dq2 == "200"
+  pass = pass + 1.0
+else
+  print("  FAIL: queue_dequeue expected 200 got {dq2}")
+  fail = fail + 1.0
+end
+
+// Counter tests (inline map operations)
+let mut cnt = map()
+
+// counter_add "apple"
+if map_has(cnt, "apple")
+  let cur = float(map_get(cnt, "apple"))
+  map_set(cnt, "apple", str(cur + 1.0))
+else
+  map_set(cnt, "apple", "1")
+end
+
+// counter_add "banana"
+if map_has(cnt, "banana")
+  let cur2 = float(map_get(cnt, "banana"))
+  map_set(cnt, "banana", str(cur2 + 1.0))
+else
+  map_set(cnt, "banana", "1")
+end
+
+// counter_add "apple" again
+if map_has(cnt, "apple")
+  let cur3 = float(map_get(cnt, "apple"))
+  map_set(cnt, "apple", str(cur3 + 1.0))
+else
+  map_set(cnt, "apple", "1")
+end
+
+// counter_add "apple" third time
+if map_has(cnt, "apple")
+  let cur4 = float(map_get(cnt, "apple"))
+  map_set(cnt, "apple", str(cur4 + 1.0))
+else
+  map_set(cnt, "apple", "1")
+end
+
+let apple_count = float(map_get(cnt, "apple"))
+if apple_count == 3.0
+  pass = pass + 1.0
+else
+  print("  FAIL: counter apple expected 3 got {apple_count}")
+  fail = fail + 1.0
+end
+
+let banana_count = float(map_get(cnt, "banana"))
+if banana_count == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: counter banana expected 1 got {banana_count}")
+  fail = fail + 1.0
+end
+
+let has_cherry = map_has(cnt, "cherry")
+if has_cherry == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: counter cherry expected not present")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_collections ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

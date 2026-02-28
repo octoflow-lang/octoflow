@@ -1,0 +1,124 @@
+// emit_sieve_init_v2.flow — Sieve Init v2 Kernel Emitter (Bit-Packed)
+//
+// Initializes segment bitmap: each uint32 word = 32 odd candidates, bits set = prime candidate.
+// Thread i: R0[i] = 0xFFFFFFFF (all candidates prime)
+// Thread 0: clears bit for candidate 1 (not prime) if seg_idx == 0
+// Last word: mask off bits beyond N
+//
+// Bit j of word i represents odd candidate: seg_start + (i * 32 + j) * 2
+// where seg_start = seg_idx * SEG_RANGE + 1
+//
+// Push constants (passed as f32, converted to uint on GPU):
+//   pc[0] = seg_idx    (segment index, small — exact in f32)
+//   pc[1] = num_words  (bitmap words, 31250 — exact in f32)
+//   pc[2] = N          (sieve limit, 10^7/10^8/10^9 — exact in f32)
+//
+// seg_start is computed ON GPU using uint32 arithmetic to avoid f32 precision loss.
+// SEG_RANGE = num_words * 64 (computed dynamically from push constant).
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (write R0 bitmap as uint32)
+//
+// Dispatch: wg = ceil(num_words / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_init_v2.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_init_v2(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────
+  let gid      = ir_load_gid(entry)
+  let pc_seg   = ir_push_const(entry, 0.0)   // seg_idx
+  let pc_words = ir_push_const(entry, 1.0)   // num_words
+  let pc_n     = ir_push_const(entry, 2.0)   // N
+  let words_u  = ir_ftou(entry, pc_words)
+  let oob      = ir_ugte(entry, gid, words_u)
+  let _sm      = ir_selection_merge(entry, exit_block)
+  let _br      = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body ──────────────────────────────────────────────────
+  let seg_u    = ir_ftou(body, pc_seg)
+  let n_u      = ir_ftou(body, pc_n)
+
+  // Constants
+  let c0       = ir_const_u(body, 0.0)
+  let c1       = ir_const_u(body, 1.0)
+  let c2       = ir_const_u(body, 2.0)
+  let c31      = ir_const_u(body, 31.0)
+  let c32      = ir_const_u(body, 32.0)
+
+  // SEG_RANGE = num_words * 64 (dynamic, each word = 32 odd = 64 actual numbers)
+  let c64       = ir_const_u(body, 64.0)
+  let seg_range = ir_imul(body, words_u, c64)
+
+  // Compute seg_start = seg_idx * SEG_RANGE + 1 (uint32, no precision loss)
+  let seg_base  = ir_imul(body, seg_u, seg_range)
+  let seg_start = ir_iadd(body, seg_base, c1)
+
+  // all_ones = ~0 = 0xFFFFFFFF (compute on GPU to avoid f32 precision loss)
+  let all_ones = ir_not(body, c0)
+
+  // Compute first odd candidate in this word:
+  // word_base = seg_start + gid * 64
+  let gid64    = ir_imul(body, gid, c64)
+  let word_base = ir_iadd(body, seg_start, gid64)
+
+  // Total odd candidates in the sieve = floor(N / 2)
+  // But we only need to know how many valid bits in total from seg_start
+  // valid_from_seg = (N - seg_start + 1) / 2  (but be careful with underflow)
+  // Simpler: total bits used = floor((N - seg_base) / 2)  where N > seg_base
+  // If seg_base >= N, all bits invalid.
+
+  let seg_past_n = ir_ugte(body, seg_base, n_u)    // seg_base >= N → no valid candidates
+  let n_sub_base = ir_isub(body, n_u, seg_base)     // N - seg_base (may underflow if past)
+  let half_range = ir_udiv(body, n_sub_base, c2)     // total valid odd candidates from this segment
+
+  // How many valid bits in this word?
+  let gid32     = ir_imul(body, gid, c32)
+  let valid_raw = ir_isub(body, half_range, gid32)   // may underflow if this word is past end
+  let bits_past = ir_ugte(body, gid32, half_range)   // gid32 >= half_range → no valid bits
+
+  // enough = valid_raw >= 32 → all bits valid
+  let enough    = ir_ugte(body, valid_raw, c32)
+
+  // Partial mask: (1 << valid_raw) - 1
+  let one_shl   = ir_shl(body, c1, valid_raw)
+  let mask      = ir_isub(body, one_shl, c1)
+
+  // Select word value (priority: seg_past_n > bits_past > enough > partial mask)
+  // NOTE: bits_past must override enough because valid_raw underflows to huge
+  // uint32 when gid32 > half_range, falsely triggering enough=true.
+  let word0     = ir_select(body, IR_TYPE_UINT, enough, all_ones, mask)
+  let word1     = ir_select(body, IR_TYPE_UINT, bits_past, c0, word0)
+  let word2     = ir_select(body, IR_TYPE_UINT, seg_past_n, c0, word1)
+
+  // Special case: segment 0, word 0 → clear bit 0 (candidate 1 is not prime)
+  let is_seg0   = ir_uequ(body, seg_u, c0)
+  let is_word0  = ir_uequ(body, gid, c0)
+  let is_s0w0   = ir_land(body, is_seg0, is_word0)
+  let mask_bit0 = ir_not(body, c1)                    // ~1 = 0xFFFFFFFE
+  let word_clean = ir_bit_and(body, word2, mask_bit0)
+  let word_final = ir_select(body, IR_TYPE_UINT, is_s0w0, word_clean, word2)
+
+  // Store
+  let _store = ir_buf_store_u(body, 0.0, gid, word_final)
+  let _br2   = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_init_v2.spv"
+let _r = emit_sieve_init_v2(out)
+print("Emitted: {out}")

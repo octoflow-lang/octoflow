@@ -1,0 +1,135 @@
+// test_bpe.flow — Test gguf_tokenize BPE tokenizer builtin
+// Run: octoflow run stdlib/ai/test_bpe.flow --allow-read
+
+let model_path = "G:/ollama_models/blobs/sha256-29d8c98fa6b098e200069bfb88b9508dc3e85586d20cba59f8dda9a808165104"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, cond)
+  if cond == 1.0
+    counters[0] = counters[0] + 1.0
+  else
+    counters[1] = counters[1] + 1.0
+    print("  FAIL: {label}")
+  end
+  return 0.0
+end
+
+print("=== GGUF BPE Tokenizer Test ===")
+print(" ")
+
+// Load vocab for reverse lookup
+let vocab = gguf_load_vocab(model_path)
+
+// Test 1: Simple English text
+print("--- Test 1: Simple English ---")
+let t0 = time()
+let ids1 = gguf_tokenize(model_path, "Hello")
+let t1 = time()
+let ms1 = (t1 - t0) * 1000.0
+let n1 = len(ids1)
+print("  Tokenized: n_tokens={n1} time={ms1}ms")
+let mut i = 0.0
+while i < n1
+  let tid = ids1[int(i)]
+  let ttext = vocab[int(tid)]
+  print("    [{i}] id={tid} text={ttext}")
+  i = i + 1.0
+end
+let _c1 = check(counters, "Hello produces tokens", n1 > 0.0)
+
+// Test 2: Text with space
+print(" ")
+print("--- Test 2: Text with space ---")
+let ids2 = gguf_tokenize(model_path, "Hello world")
+let n2 = len(ids2)
+print("  Tokenized: n_tokens={n2}")
+let mut j = 0.0
+while j < n2
+  let tid2 = ids2[int(j)]
+  let ttext2 = vocab[int(tid2)]
+  print("    [{j}] id={tid2} text={ttext2}")
+  j = j + 1.0
+end
+let _c2 = check(counters, "Hello world produces tokens", n2 > 0.0)
+let _c3 = check(counters, "Hello world >= 2 tokens", n2 >= 2.0)
+
+// Test 3: Longer sentence
+print(" ")
+print("--- Test 3: Longer sentence ---")
+let ids3 = gguf_tokenize(model_path, "The quick brown fox jumps over the lazy dog.")
+let n3 = len(ids3)
+print("  Tokenized: n_tokens={n3}")
+let mut k = 0.0
+while k < n3
+  let tid3 = ids3[int(k)]
+  let ttext3 = vocab[int(tid3)]
+  print("    [{k}] id={tid3} text={ttext3}")
+  k = k + 1.0
+end
+let _c4 = check(counters, "Sentence produces tokens", n3 > 0.0)
+let _c5 = check(counters, "Sentence has multiple tokens", n3 > 5.0)
+
+// Test 4: Numbers and punctuation
+print(" ")
+print("--- Test 4: Numbers and punctuation ---")
+let ids4 = gguf_tokenize(model_path, "x = 42 + 3.14")
+let n4 = len(ids4)
+print("  Tokenized: n_tokens={n4}")
+let mut m = 0.0
+while m < n4
+  let tid4 = ids4[int(m)]
+  let ttext4 = vocab[int(tid4)]
+  print("    [{m}] id={tid4} text={ttext4}")
+  m = m + 1.0
+end
+let _c6 = check(counters, "Code-like text produces tokens", n4 > 0.0)
+
+// Test 5: Programming prompt
+print(" ")
+print("--- Test 5: Programming prompt ---")
+let ids5 = gguf_tokenize(model_path, "Write a Python function to sort a list")
+let n5 = len(ids5)
+print("  Tokenized: n_tokens={n5}")
+let mut p = 0.0
+while p < n5
+  let tid5 = ids5[int(p)]
+  let ttext5 = vocab[int(tid5)]
+  print("    [{p}] id={tid5} text={ttext5}")
+  p = p + 1.0
+end
+let _c7 = check(counters, "Prompt produces tokens", n5 > 0.0)
+
+// Test 6: Round-trip — tokenize then decode
+print(" ")
+print("--- Test 6: Round-trip decode ---")
+let original = "Write a Python function to sort a list"
+let mut decoded = " "
+let mut q = 0.0
+while q < n5
+  let rtid = ids5[int(q)]
+  let rttext = vocab[int(rtid)]
+  decoded = decoded + rttext
+  q = q + 1.0
+end
+print("  Original: {original}")
+print("  Decoded:  {decoded}")
+
+// Test 7: Single character
+print(" ")
+print("--- Test 7: Single character ---")
+let ids7 = gguf_tokenize(model_path, "A")
+let n7 = len(ids7)
+let _c8 = check(counters, "Single char produces 1 token", n7 == 1.0)
+if n7 > 0.0
+  let sid = ids7[0]
+  let stext = vocab[int(sid)]
+  print("  A -> id={sid} text={stext}")
+end
+
+// Summary
+print(" ")
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print("=== RESULTS: {pass}/{total} passed ===")

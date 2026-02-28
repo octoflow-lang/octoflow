@@ -1,0 +1,80 @@
+// create_animation.flow — Create animated GIF with gradient sweep
+// Demonstrates GIF encoding with multi-frame animation
+// Run: octoflow run examples/create_animation.flow --allow-write
+
+use "../stdlib/media/gif_encode"
+
+// ─── Configuration ───────────────────────────────────────────────
+
+let width = 32.0
+let height = 32.0
+let frame_count = 8.0
+let delay_ms = 100.0  // 100ms per frame = 10 fps
+
+print("Creating {frame_count}-frame animation ({width}x{height})...")
+
+// ─── Generate frames ─────────────────────────────────────────────
+
+let mut all_pixels = []
+let mut delays = []
+
+for frame_idx in range(0, int(frame_count))
+  // Color shift for this frame
+  let hue_shift = frame_idx * 32.0
+
+  for y in range(0, int(height))
+    for x in range(0, int(width))
+      // Simple gradient animation
+      let mut color_val = x + y + hue_shift
+
+      // Wrap around
+      while color_val >= 256.0
+        color_val = color_val - 256.0
+      end
+
+      // Create RGB from single value
+      let mut r = 0.0
+      let mut g = 0.0
+      let mut b = 0.0
+
+      if color_val < 85.0
+        // Red to Green
+        let t = color_val / 85.0
+        r = (1.0 - t) * 255.0
+        g = t * 255.0
+        b = 0.0
+      elif color_val < 170.0
+        // Green to Blue
+        let t = (color_val - 85.0) / 85.0
+        r = 0.0
+        g = (1.0 - t) * 255.0
+        b = t * 255.0
+      else
+        // Blue to Red
+        let t = (color_val - 170.0) / 85.0
+        r = t * 255.0
+        g = 0.0
+        b = (1.0 - t) * 255.0
+      end
+
+      push(all_pixels, r)
+      push(all_pixels, g)
+      push(all_pixels, b)
+    end
+  end
+
+  push(delays, delay_ms)
+end
+
+print("Encoding GIF...")
+
+// ─── Encode to GIF ───────────────────────────────────────────────
+
+gif_encode_frames(all_pixels, delays, frame_count, width, height, "gradient_sweep.gif")
+
+print("")
+print("Animation created: gradient_sweep.gif")
+print("  Dimensions: {width}x{height}")
+print("  Frames: {frame_count}")
+print("  Frame rate: 10 fps")
+print("  Loop: infinite")

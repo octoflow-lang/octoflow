@@ -1,0 +1,80 @@
+// stdlib/compiler/lower_test_branch.flow
+// Phase 70 Test: AST lowering with if/else → selection merge
+//
+// Kernel: if input[gid] > 0.5 then output[gid] = input[gid] * 2.0
+//         else output[gid] = 0.0
+// Expected: output[gid] = (input[gid] > 0.5) ? input[gid] * 2.0 : 0.0
+
+use ir
+use lower
+
+let mut out_path = env("SPIRV_OUTPUT")
+if out_path == ""
+  out_path = "spirv_lower_branch.spv"
+end
+
+ir_new()
+
+// AST: 6 nodes
+// [0] Let x = input [ gid ]
+push(nd_kind, "Let")
+push(nd_lhs, "x")
+push(nd_op, "=")
+push(nd_rhs, "input [ gid ]")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "1")
+push(nd_line, "1")
+push(nd_mut, "")
+
+// [1] If x > 0.5 → child=2, elif/else=3
+push(nd_kind, "If")
+push(nd_lhs, "x > 0.5")
+push(nd_op, "")
+push(nd_rhs, "")
+push(nd_rhs2, "3")
+push(nd_child, "2")
+push(nd_next, "-1")
+push(nd_line, "2")
+push(nd_mut, "")
+
+// [2] ArrSet output[gid] = x * 2.0  (then body)
+push(nd_kind, "ArrSet")
+push(nd_lhs, "output")
+push(nd_op, "gid")
+push(nd_rhs, "x * 2.0")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "-1")
+push(nd_line, "3")
+push(nd_mut, "")
+
+// [3] Else → child=4
+push(nd_kind, "Else")
+push(nd_lhs, "")
+push(nd_op, "")
+push(nd_rhs, "")
+push(nd_rhs2, "")
+push(nd_child, "4")
+push(nd_next, "-1")
+push(nd_line, "4")
+push(nd_mut, "")
+
+// [4] ArrSet output[gid] = 0.0  (else body)
+push(nd_kind, "ArrSet")
+push(nd_lhs, "output")
+push(nd_op, "gid")
+push(nd_rhs, "0.0")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "-1")
+push(nd_line, "5")
+push(nd_mut, "")
+
+// Block tracking
+push(cur_block_first, 0.0)
+push(cur_block_last, 1.0)
+
+// Lower and emit
+lower_to_ir()
+let _e = ir_emit_spirv(out_path)

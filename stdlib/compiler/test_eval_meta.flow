@@ -1,0 +1,221 @@
+// test_eval_meta.flow — Tests patterns common in eval.flow itself
+// These patterns must work for meta-circular interpretation.
+//
+// Run: EVAL_PROG_PATH=stdlib/compiler/test_eval_meta.flow octoflow run stdlib/compiler/eval.flow --allow-read --allow-ffi --max-iters 5000000
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// ── Test 1: Map with string values (env_s pattern) ───────────────
+let mut env = map()
+map_set(env, "x", "hello")
+map_set(env, "y", "world")
+let ex = map_get(env, "x")
+if ex == "hello"
+  pass = pass + 1.0
+else
+  print("FAIL T1: ex={ex}")
+  fail = fail + 1.0
+end
+
+// ── Test 2: Map with numeric values (env_num pattern) ────────────
+let mut env_n = map()
+map_set(env_n, "x", 42.0)
+map_set(env_n, "y", 3.14)
+let en = map_get(env_n, "x")
+if en == 42.0
+  pass = pass + 1.0
+else
+  print("FAIL T2: en={en}")
+  fail = fail + 1.0
+end
+
+// ── Test 3: Map with compound keys (eval.flow pattern) ───────────
+let mut m = map()
+let vname = "counter"
+let mkey = "__map_data." + vname
+map_set(m, mkey, 99.0)
+let mv = map_get(m, mkey)
+if mv == 99.0
+  pass = pass + 1.0
+else
+  print("FAIL T3: mv={mv}")
+  fail = fail + 1.0
+end
+
+// ── Test 4: Array of strings (token stream pattern) ──────────────
+let mut tok_types = []
+let mut tok_values = []
+push(tok_types, "kw")
+push(tok_values, "let")
+push(tok_types, "ident")
+push(tok_values, "x")
+push(tok_types, "op")
+push(tok_values, "=")
+push(tok_types, "float")
+push(tok_values, "5.0")
+let tc = len(tok_types)
+if tc == 4.0
+  pass = pass + 1.0
+else
+  print("FAIL T4: tc={tc}")
+  fail = fail + 1.0
+end
+
+// ── Test 5: Array index with variable ────────────────────────────
+let mut ci = 0.0
+let t0 = tok_types[ci]
+let v0 = tok_values[ci]
+if t0 == "kw" && v0 == "let"
+  pass = pass + 1.0
+else
+  print("FAIL T5: t0={t0} v0={v0}")
+  fail = fail + 1.0
+end
+
+// ── Test 6: While loop scanning tokens (eval.flow main loop) ─────
+let mut cur = 0.0
+let tok_count = len(tok_types)
+let mut found_ident = ""
+while cur < tok_count
+  let tt = tok_types[cur]
+  let tv = tok_values[cur]
+  if tt == "ident"
+    found_ident = tv
+  end
+  cur = cur + 1.0
+end
+if found_ident == "x"
+  pass = pass + 1.0
+else
+  print("FAIL T6: found_ident={found_ident}")
+  fail = fail + 1.0
+end
+
+// ── Test 7: Stack operations (cstack pattern) ────────────────────
+let mut stack = []
+push(stack, "fn")
+push(stack, "if")
+push(stack, "while")
+let top = pop(stack)
+if top == "while" && len(stack) == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL T7: top={top}")
+  fail = fail + 1.0
+end
+
+// ── Test 8: Function with map parameter and string concat ────────
+fn lookup(env, key)
+  let v = map_get(env, key)
+  return v
+end
+
+let lv = lookup(env, "x")
+if lv == "hello"
+  pass = pass + 1.0
+else
+  print("FAIL T8: lv={lv}")
+  fail = fail + 1.0
+end
+
+// ── Test 9: Map_has in condition ─────────────────────────────────
+if map_has(env, "x") == 1.0 && map_has(env, "z") == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL T9")
+  fail = fail + 1.0
+end
+
+// ── Test 10: Nested while with break (skip to end pattern) ───────
+let mut tokens2 = []
+push(tokens2, "a")
+push(tokens2, "b")
+push(tokens2, "end")
+push(tokens2, "c")
+let mut si = 0.0
+let sn = len(tokens2)
+while si < sn
+  if tokens2[si] == "end"
+    break
+  end
+  si = si + 1.0
+end
+if si == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL T10: si={si}")
+  fail = fail + 1.0
+end
+
+// ── Test 11: Split and rejoin (SEP pattern) ──────────────────────
+let sep = chr(1.0)
+let mut enc = "hello" + sep + "world" + sep + "test"
+let parts = split(enc, sep)
+let plen = len(parts)
+let p0 = parts[0]
+let p1 = parts[1]
+let p2 = parts[2]
+if plen == 3.0 && p0 == "hello" && p1 == "world" && p2 == "test"
+  pass = pass + 1.0
+else
+  print("FAIL T11: plen={plen} p0={p0} p1={p1} p2={p2}")
+  fail = fail + 1.0
+end
+
+// ── Test 12: Reassignment with map_get ───────────────────────────
+let mut val = 0.0
+val = map_get(env_n, "x")
+if val == 42.0
+  pass = pass + 1.0
+else
+  print("FAIL T12: val={val}")
+  fail = fail + 1.0
+end
+
+// ── Test 13: Chained string concat in assignment ─────────────────
+let a = "one"
+let b = "two"
+let c = "three"
+let mut result = ""
+result = a + " " + b + " " + c
+if result == "one two three"
+  pass = pass + 1.0
+else
+  print("FAIL T13: result={result}")
+  fail = fail + 1.0
+end
+
+// ── Test 14: Array as fn param (push inside fn) ──────────────────
+fn add_item(arr, item)
+  push(arr, item)
+end
+
+let mut items = []
+add_item(items, "first")
+add_item(items, "second")
+let ilen = len(items)
+if ilen == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL T14: ilen={ilen}")
+  fail = fail + 1.0
+end
+
+// ── Test 15: Env variable read ───────────────────────────────────
+// Note: EVAL_PROG_PATH is shadowed by eval.flow to prevent recursion
+// So we test with PATH which is always set
+let p = env("PATH")
+if len(p) > 0.0
+  pass = pass + 1.0
+else
+  print("FAIL T15: empty PATH")
+  fail = fail + 1.0
+end
+
+// ── Summary ──────────────────────────────────────────────────────
+if fail == 0.0
+  print("META: ALL PASS ({pass}/15 tests)")
+else
+  print("META: {fail} FAIL / {pass} PASS of 15 tests")
+end

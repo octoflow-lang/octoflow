@@ -1,0 +1,56 @@
+// stdlib/compiler/compile_and_run.flow
+// Phase 71 MILESTONE: Self-contained .flow program that compiles AND runs a GPU kernel
+//
+// This single .flow file:
+//   1. Builds kernel source text (chr(10) for newlines)
+//   2. Parses it (kparse.flow)
+//   3. Lowers to IR (lower.flow)
+//   4. Emits SPIR-V binary (ir.flow)
+//   5. Dispatches on GPU (gpu_compute builtin)
+//   6. Verifies output
+//
+// Kernel: output[gid] = input[gid] * 2.0 + 1.0
+// Expected: for input [1,2,3,4] → output [3,5,7,9]
+
+use ir
+use lower
+use kparse
+
+// Build kernel source
+let nl = chr(10.0)
+let src = "let x = input [ gid ] * 2.0 + 1.0" + nl + "output [ gid ] = x" + nl
+
+// Compile: parse → lower → emit SPIR-V
+let node_count = kparse_source(src)
+lower_to_ir()
+let spv_path = "compile_and_run_kernel.spv"
+ir_emit_spirv(spv_path)
+
+// Prepare input data
+let mut input = []
+push(input, 1.0)
+push(input, 2.0)
+push(input, 3.0)
+push(input, 4.0)
+
+// Dispatch on GPU
+let output = gpu_compute(spv_path, "input")
+let n = len(output)
+print("Output length: {n}")
+
+// Verify results
+let mut pass = 1.0
+for i in range(0.0, n)
+  let got = output[i]
+  let expected = input[i] * 2.0 + 1.0
+  if got != expected
+    print("FAIL at [{i}]: got {got} expected {expected}")
+    pass = 0.0
+  end
+end
+
+if pass == 1.0
+  print("COMPILE AND RUN: ALL PASS ({n} elements verified)")
+else
+  print("COMPILE AND RUN: FAILED")
+end

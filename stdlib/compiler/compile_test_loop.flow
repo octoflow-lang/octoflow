@@ -1,0 +1,39 @@
+// stdlib/compiler/compile_test_loop.flow
+// Phase 71 Test: End-to-end compile — while loop
+//
+// Kernel: sum = 0; i = 0; while i < 10: sum = sum + i; i = i + 1; output[gid] = sum
+// Expected: output[gid] = 45.0 (sum of 0..9)
+
+use ir
+use lower
+use kparse
+
+let mut out_path = env("SPIRV_OUTPUT")
+if out_path == ""
+  out_path = "spirv_compile_loop.spv"
+end
+
+let nl = chr(10.0)
+let mut src = "let mut sum = 0.0" + nl
+src = src + "let mut i = 0.0" + nl
+src = src + "while i < 10.0" + nl
+src = src + "  sum = sum + i" + nl
+src = src + "  i = i + 1.0" + nl
+src = src + "end" + nl
+src = src + "output [ gid ] = sum" + nl
+
+let node_count = kparse_source(src)
+print("Parsed {node_count} AST nodes")
+
+for di in range(0.0, node_count)
+  let dk = nd_kind[di]
+  let dl = nd_lhs[di]
+  let dop = nd_op[di]
+  let dr = nd_rhs[di]
+  let dc = nd_child[di]
+  let dn = nd_next[di]
+  print("  [{di}] {dk} lhs={dl} op={dop} rhs={dr} child={dc} next={dn}")
+end
+
+lower_to_ir()
+let _e = ir_emit_spirv(out_path)

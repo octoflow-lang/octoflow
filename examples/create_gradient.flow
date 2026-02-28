@@ -1,0 +1,31 @@
+// create_gradient.flow — Create a simple gradient image as GIF
+// Demonstrates single-frame GIF encoding
+// Run: octoflow run examples/create_gradient.flow --allow-write
+
+use "../stdlib/media/gif_encode"
+
+let width = 64.0
+let height = 64.0
+
+print("Creating {width}x{height} gradient image...")
+
+let mut pixels = []
+
+for y in range(0, int(height))
+  for x in range(0, int(width))
+    // Horizontal gradient from blue to red
+    let r = x
+    let g = 0.0
+    let b = 255.0 - x
+
+    push(pixels, r)
+    push(pixels, g)
+    push(pixels, b)
+  end
+end
+
+print("Encoding GIF...")
+
+gif_encode(pixels, width, height, "gradient.gif")
+
+print("Image saved to gradient.gif")

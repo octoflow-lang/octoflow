@@ -1,4 +1,7 @@
 // stdlib/db/query.flow — Database query operations
+//
+// Functions: db_join, db_group_by, db_order_by
+//
 // Tables use the db/core.flow map-based columnar format:
 //   __columns = "col1,col2,..."
 //   __count = "N"

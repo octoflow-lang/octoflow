@@ -1,4 +1,8 @@
 // stdlib/collections/graph.flow — Graph data structure (adjacency list via map)
+//
+// Functions: graph_create, graph_add_node, graph_add_edge, graph_neighbors,
+//            graph_weight, graph_nodes, graph_bfs, graph_has_edge
+//
 // Nodes are string keys. Edges stored as "node:neighbor_list" in map.
 // Weights stored as "w_from_to" keys.
 

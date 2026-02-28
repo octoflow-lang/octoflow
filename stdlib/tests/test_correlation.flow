@@ -1,0 +1,139 @@
+// test_correlation.flow — Tests for stdlib/stats/correlation.flow
+// Functions tested: pearson, spearman, covariance
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from stats/correlation.flow --
+fn pearson(x, y)
+  let n = len(x)
+  let mx = mean(x)
+  let my = mean(y)
+  let mut sum_xy = 0.0
+  let mut sum_x2 = 0.0
+  let mut sum_y2 = 0.0
+  let mut i = 0.0
+  while i < n
+    let dx = x[i] - mx
+    let dy = y[i] - my
+    sum_xy = sum_xy + dx * dy
+    sum_x2 = sum_x2 + dx * dx
+    sum_y2 = sum_y2 + dy * dy
+    i = i + 1.0
+  end
+  let denom = sqrt(sum_x2 * sum_y2)
+  if denom == 0.0
+    return 0.0
+  end
+  return sum_xy / denom
+end
+
+fn rank_array(arr)
+  let n = len(arr)
+  let sorted = sort_array(arr)
+  let mut ranks = []
+  let mut i = 0.0
+  while i < n
+    let val = arr[i]
+    let mut r = 0.0
+    let mut j = 0.0
+    while j < n
+      if sorted[j] == val
+        r = j + 1.0
+        break
+      end
+      j = j + 1.0
+    end
+    push(ranks, r)
+    i = i + 1.0
+  end
+  return ranks
+end
+
+fn spearman(x, y)
+  let n = len(x)
+  let rx = rank_array(x)
+  let ry = rank_array(y)
+  return pearson(rx, ry)
+end
+
+fn covariance(x, y)
+  let n = len(x)
+  let mx = mean(x)
+  let my = mean(y)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n
+    sum = sum + (x[i] - mx) * (y[i] - my)
+    i = i + 1.0
+  end
+  return sum / (n - 1.0)
+end
+
+// -- Tests --
+
+print("=== test_correlation ===")
+
+// Perfect positive correlation
+let x1 = [1.0, 2.0, 3.0, 4.0, 5.0]
+let y1 = [2.0, 4.0, 6.0, 8.0, 10.0]
+let p1 = pearson(x1, y1)
+let diff_p1 = abs(p1 - 1.0)
+if diff_p1 < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: pearson perfect pos expected 1.0 got {p1}")
+  fail = fail + 1.0
+end
+
+// Perfect negative correlation
+let y2 = [10.0, 8.0, 6.0, 4.0, 2.0]
+let p2 = pearson(x1, y2)
+let diff_p2 = abs(p2 + 1.0)
+if diff_p2 < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: pearson perfect neg expected -1.0 got {p2}")
+  fail = fail + 1.0
+end
+
+// Spearman on monotone data = 1.0
+let s1 = spearman(x1, y1)
+let diff_s1 = abs(s1 - 1.0)
+if diff_s1 < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: spearman monotone expected 1.0 got {s1}")
+  fail = fail + 1.0
+end
+
+// Covariance of identical arrays
+let cov1 = covariance(x1, x1)
+let var1 = variance(x1)
+let diff_cov = abs(cov1 - var1)
+if diff_cov < 0.01
+  pass = pass + 1.0
+else
+  print("  FAIL: covariance(x,x) expected {var1} got {cov1}")
+  fail = fail + 1.0
+end
+
+// Covariance of negatively correlated
+let cov2 = covariance(x1, y2)
+if cov2 < 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: covariance neg expected < 0 got {cov2}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_correlation ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

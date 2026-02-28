@@ -1,0 +1,339 @@
+// ====================================================================
+//  GPU PARALLEL SIEVE v3 — SCALING TEST
+//
+//  Tests v3 at increasing N values to find the uint32 boundary.
+//  Based on sieve_gpu_v3.flow with adjustable N and expanded audits.
+//
+//  Known values:
+//    pi(2×10^9) = 98,222,287
+//    pi(3×10^9) = 144,449,537
+//    pi(4×10^9) = 189,961,812
+//    pi(4.29×10^9) ≈ 203,280,221  (uint32 boundary)
+// ====================================================================
+
+print("")
+print("====================================================================")
+print("  GPU PARALLEL SIEVE v3 — SCALING TEST")
+print("====================================================================")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  CONFIGURATION — CHANGE N HERE
+// ════════════════════════════════════════════════════════════════════
+
+let N = 4000000000.0            // 4×10^9 (max verified scale)
+let CANDS_PER_SEG = 262144.0
+let NUM_VMS = 16.0
+let PRIME_THRESHOLD = 256.0
+
+let SEG_RANGE = CANDS_PER_SEG * 2.0
+let NUM_WORDS = floor(CANDS_PER_SEG / 32.0)
+let WG_BITMAP = floor((NUM_WORDS + 255.0) / 256.0)
+let TOTAL_ODDS = floor((N - 1.0) / 2.0)
+let NUM_SEGS = floor((TOTAL_ODDS + CANDS_PER_SEG - 1.0) / CANDS_PER_SEG)
+
+// Max seg_start = (NUM_SEGS - 1) * SEG_RANGE + 1
+let max_seg_start = (NUM_SEGS - 1.0) * SEG_RANGE + 1.0
+let uint32_max = 4294967295.0
+
+print("  N = {N:.0}")
+print("  Segments = {NUM_SEGS:.0}")
+print("  Max seg_start = {max_seg_start:.0}")
+print("  uint32 max    = {uint32_max:.0}")
+if max_seg_start > uint32_max
+  print("  WARNING: seg_start EXCEEDS uint32 — GPU will overflow!")
+else
+  let headroom = uint32_max - max_seg_start
+  print("  uint32 headroom = {headroom:.0}")
+end
+print("")
+
+// Kernel paths
+let K_INIT       = "stdlib/loom/kernels/sieve/sieve_init_v2.spv"
+let K_MARK_SMALL = "stdlib/loom/kernels/sieve/sieve_mark_v3_small.spv"
+let K_MARK_LARGE = "stdlib/loom/kernels/sieve/sieve_mark_v3_large.spv"
+let K_COUNT      = "stdlib/loom/kernels/sieve/sieve_count_v3.spv"
+let K_ACCUM      = "stdlib/loom/kernels/sieve/sieve_accum_v2.spv"
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 1: CPU SIEVE
+// ════════════════════════════════════════════════════════════════════
+
+let t0_cpu = now_ms()
+let sqrt_n = floor(sqrt(N)) + 1.0
+
+let mut cpu_sieve = []
+let mut csi = 0.0
+while csi < sqrt_n + 1.0
+  push(cpu_sieve, 1.0)
+  csi = csi + 1.0
+end
+cpu_sieve[0] = 0.0
+cpu_sieve[1] = 0.0
+
+let mut p = 2.0
+while p * p <= sqrt_n
+  if cpu_sieve[p] > 0.5
+    let mut m = p * p
+    while m <= sqrt_n
+      cpu_sieve[m] = 0.0
+      m = m + p
+    end
+  end
+  p = p + 1.0
+end
+
+let mut small_primes = []
+let mut spi = 3.0
+while spi <= sqrt_n
+  if cpu_sieve[spi] > 0.5
+    push(small_primes, spi)
+  end
+  spi = spi + 2.0
+end
+
+let num_primes = len(small_primes)
+
+let mut num_small = 0.0
+let mut si_count = 0.0
+while si_count < num_primes
+  if small_primes[si_count] < PRIME_THRESHOLD
+    num_small = num_small + 1.0
+  end
+  si_count = si_count + 1.0
+end
+let num_large = num_primes - num_small
+
+let t_cpu = now_ms() - t0_cpu
+
+print("  CPU sieve: {num_primes:.0} primes ({num_small:.0} small + {num_large:.0} large) in {t_cpu:.0}ms")
+
+// Dynamic GLOBALS_SIZE: must fit all primes
+let mut GLOBALS_SIZE = 4096.0
+if num_primes > GLOBALS_SIZE
+  GLOBALS_SIZE = num_primes + 100.0
+  print("  GLOBALS_SIZE expanded to {GLOBALS_SIZE:.0} (needed {num_primes:.0})")
+end
+while len(small_primes) < GLOBALS_SIZE
+  push(small_primes, 0.0)
+end
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 2: BOOT VMs
+// ════════════════════════════════════════════════════════════════════
+
+let t0_boot = now_ms()
+
+let REG_SIZE = NUM_WORDS + 2.0
+let COUNT_OFF = NUM_WORDS
+let ACCUM_OFF = NUM_WORDS + 1.0
+
+let mut vms = []
+let mut bi = 0.0
+while bi < NUM_VMS
+  let r = try(vm_boot(1.0, REG_SIZE, GLOBALS_SIZE))
+  if r.ok > 0.5
+    push(vms, r.value)
+    let _w = vm_write_globals(r.value, 0.0, small_primes)
+  else
+    print("    BOOT FAILED: {r.error}")
+    bi = NUM_VMS
+  end
+  bi = bi + 1.0
+end
+
+let t_boot = now_ms() - t0_boot
+let booted = len(vms)
+
+let mut active_vms = booted
+if active_vms > NUM_SEGS
+  active_vms = NUM_SEGS
+end
+
+print("  Booted {booted:.0} VMs in {t_boot:.0}ms, active: {active_vms:.0}")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 3: RECORD + BUILD + EXECUTE
+// ════════════════════════════════════════════════════════════════════
+
+let t0_chain = now_ms()
+let segs_per_vm = floor((NUM_SEGS + active_vms - 1.0) / active_vms)
+
+let needed_vms = floor((NUM_SEGS + segs_per_vm - 1.0) / segs_per_vm)
+if active_vms > needed_vms
+  active_vms = needed_vms
+end
+
+let mut total_dispatches = 0.0
+let mut vi = 0.0
+
+while vi < active_vms
+  let seg_start_idx = vi * segs_per_vm
+  let mut seg_end_idx = (vi + 1.0) * segs_per_vm
+  if seg_end_idx > NUM_SEGS
+    seg_end_idx = NUM_SEGS
+  end
+
+  let mut pc_init  = [0.0, 0.0, 0.0, 0.0]
+  let mut pc_mark  = [0.0, 0.0, 0.0, 0.0]
+  let pc_count = [NUM_WORDS, COUNT_OFF]
+  let pc_accum = [COUNT_OFF, ACCUM_OFF]
+
+  let mut prime_ptr = num_small
+
+  let mut si = seg_start_idx
+  while si < seg_end_idx
+    pc_init[0] = si
+    pc_init[1] = NUM_WORDS
+    pc_init[2] = N
+    pc_init[3] = 0.0
+    let _d0 = vm_dispatch(vms[vi], K_INIT, pc_init, WG_BITMAP)
+    total_dispatches = total_dispatches + 1.0
+
+    if num_small > 0.5
+      pc_mark[0] = si
+      pc_mark[1] = NUM_WORDS
+      pc_mark[2] = 0.0
+      pc_mark[3] = num_small
+      let _dm = vm_dispatch(vms[vi], K_MARK_SMALL, pc_mark, WG_BITMAP)
+      total_dispatches = total_dispatches + 1.0
+    end
+
+    let seg_end_val = (si + 1.0) * SEG_RANGE
+    let seg_sqrt = floor(sqrt(seg_end_val)) + 1.0
+    while prime_ptr < num_primes
+      if small_primes[prime_ptr] > seg_sqrt
+        break
+      end
+      prime_ptr = prime_ptr + 1.0
+    end
+
+    if prime_ptr > num_small
+      pc_mark[0] = si
+      pc_mark[1] = NUM_WORDS
+      pc_mark[2] = num_small
+      pc_mark[3] = prime_ptr
+      let wg_large_si = floor((prime_ptr - num_small + 255.0) / 256.0)
+      let _dml = vm_dispatch(vms[vi], K_MARK_LARGE, pc_mark, wg_large_si)
+      total_dispatches = total_dispatches + 1.0
+    end
+
+    let _dc = vm_dispatch(vms[vi], K_COUNT, pc_count, WG_BITMAP)
+    total_dispatches = total_dispatches + 1.0
+
+    let _da = vm_dispatch(vms[vi], K_ACCUM, pc_accum, 1.0)
+    total_dispatches = total_dispatches + 1.0
+
+    si = si + 1.0
+  end
+
+  vi = vi + 1.0
+end
+
+let t_chain = now_ms() - t0_chain
+
+// Build
+let t0_build = now_ms()
+let mut progs = []
+let mut bdi = 0.0
+while bdi < active_vms
+  let prog = vm_build(vms[bdi])
+  push(progs, prog)
+  bdi = bdi + 1.0
+end
+let t_build = now_ms() - t0_build
+
+// Execute async
+let t0_exec = now_ms()
+
+let mut ei = 0.0
+while ei < active_vms
+  let _ea = vm_execute_async(progs[ei])
+  ei = ei + 1.0
+end
+
+let mut done_flags = []
+let mut di = 0.0
+while di < active_vms
+  push(done_flags, 0.0)
+  di = di + 1.0
+end
+
+let mut done_count = 0.0
+while done_count < active_vms
+  let mut pi = 0.0
+  while pi < active_vms
+    if done_flags[pi] < 0.5
+      let status = vm_poll(progs[pi])
+      if status > 0.5
+        done_flags[pi] = 1.0
+        done_count = done_count + 1.0
+      end
+    end
+    pi = pi + 1.0
+  end
+end
+
+let t_exec = now_ms() - t0_exec
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 4: READ RESULTS
+// ════════════════════════════════════════════════════════════════════
+
+let mut total_count = 1.0
+
+let mut ri = 0.0
+while ri < active_vms
+  let result = vm_read_register(vms[ri], 0.0, 0.0, REG_SIZE)
+  let accum_raw = result[ACCUM_OFF]
+  let vm_count = float_to_bits(accum_raw)
+  total_count = total_count + vm_count
+  ri = ri + 1.0
+end
+
+let t_total = now_ms() - t0_cpu
+
+print("  ════════════════════════════════════════════")
+print("  RESULT: pi({N:.0}) = {total_count:.0}")
+print("  ════════════════════════════════════════════")
+
+// Audit
+let mut expected = 0.0
+if N > 3999000000.0
+  expected = 189961812.0       // pi(4×10^9)
+elif N > 2999000000.0
+  expected = 144449537.0       // pi(3×10^9)
+elif N > 1999000000.0
+  expected = 98222287.0        // pi(2×10^9)
+elif N > 999000000.0
+  expected = 50847534.0        // pi(10^9)
+elif N > 99000000.0
+  expected = 5761455.0
+elif N > 9900000.0
+  expected = 664579.0
+end
+
+if expected > 0.5
+  let diff = total_count - expected
+  if diff > -0.5 && diff < 0.5
+    print("  AUDIT: PASS (expected {expected:.0})")
+  else
+    print("  AUDIT: FAIL (expected {expected:.0}, got {total_count:.0}, diff={diff:.0})")
+  end
+end
+
+print("")
+print("  TIMING: chain={t_chain:.0}ms build={t_build:.0}ms GPU={t_exec:.0}ms TOTAL={t_total:.0}ms")
+print("  Dispatches: {total_dispatches:.0}")
+print("")
+
+// Cleanup
+let mut si2 = 0.0
+while si2 < booted
+  let _s = vm_shutdown(vms[si2])
+  si2 = si2 + 1.0
+end
+
+print("====================================================================")
+print("")

@@ -1,0 +1,51 @@
+// stdlib/compiler/compile_and_run_loop.flow
+// Phase 71: Compile+run with while loop kernel
+//
+// Kernel: sum = 0; i = 0; while i < N: sum += i; i += 1; output[gid] = sum + input[gid]
+// Expected: output[i] = 45.0 + input[i]   (sum of 0..9 = 45)
+
+use ir
+use lower
+use kparse
+
+let nl = chr(10.0)
+let mut src = "let mut sum = 0.0" + nl
+src = src + "let mut i = 0.0" + nl
+src = src + "while i < 10.0" + nl
+src = src + "  sum = sum + i" + nl
+src = src + "  i = i + 1.0" + nl
+src = src + "end" + nl
+src = src + "let val = input [ gid ] + sum" + nl
+src = src + "output [ gid ] = val" + nl
+
+let _nc = kparse_source(src)
+lower_to_ir()
+let spv_path = "compile_run_loop.spv"
+ir_emit_spirv(spv_path)
+
+// Build 256-element input
+let mut input = []
+for j in range(0.0, 256.0)
+  push(input, j * 0.5)
+end
+
+let output = gpu_compute(spv_path, "input")
+let n = len(output)
+
+let mut pass = 1.0
+let mut checked = 0.0
+for i in range(0.0, n)
+  let got = output[i]
+  let expected = input[i] + 45.0
+  if got != expected
+    print("FAIL at [{i}]: got {got} expected {expected}")
+    pass = 0.0
+  end
+  checked = checked + 1.0
+end
+
+if pass == 1.0
+  print("COMPILE+RUN LOOP: ALL PASS ({checked} elements, sum=45+input)")
+else
+  print("COMPILE+RUN LOOP: FAILED")
+end

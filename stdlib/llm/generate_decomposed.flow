@@ -1,0 +1,261 @@
+// stdlib/llm/generate_decomposed.flow — Decomposed Layer Streaming Generation
+//
+// Autoregressive inference reading from per-layer .bin files (decomposed GGUF).
+// Double-buffered: async disk I/O for layer N+1 hidden behind GPU compute of layer N.
+//
+// Prerequisites:
+//   1. Run decompose_gguf.flow to create per-layer .bin files
+//   2. Original GGUF still needed for: embed lookup, vocab, tokenizer, logits
+//
+// Architecture:
+//   decomposed_load_layer   → sync: read .bin, dequant, populate caches
+//   decomposed_prefetch_layer → async: background thread reads next .bin
+//   gguf_prefetch_complete   → join background thread, upload to GPU
+//   gguf_infer_layer         → finds 100% cache hits, zero GGUF reads for weights
+//   gguf_evict_layer         → full eviction (reload from .bin each token)
+//
+// Usage:
+//   use "generate_decomposed"
+//   let _r = run_generate_decomposed("path/to/model.gguf", "models/qwen-decomp", "Hello")
+//
+// Or standalone:
+//   octoflow run stdlib/llm/run_generate_decomposed.flow --allow-read --allow-ffi
+
+use "gguf"
+use "ops"
+use "sampling"
+use "chat"
+
+fn decomp_layer_path(dir, idx)
+  let li = int(idx)
+  let lis = str(li)
+  let mut path = dir + "/layer_"
+  if idx < 10.0
+    path = path + "00" + lis + ".bin"
+  elif idx < 100.0
+    path = path + "0" + lis + ".bin"
+  else
+    path = path + lis + ".bin"
+  end
+  return path
+end
+
+fn run_generate_decomposed(model_path, decomp_dir, prompt)
+  // ── Configuration ──────────────────────────────────────────────
+  let max_tokens = 5.0
+  let max_seq = 64.0
+  let strategy = "greedy"
+  let temperature = 0.8
+  let top_k = 40.0
+  let top_p = 0.9
+  // Eviction: "full"   = reload from .bin each token (low VRAM)
+  //           "ram"    = keep VRAM resident, only evict TENSOR_CACHE (high VRAM)
+  //           "budget" = auto budget-aware 2-slot eviction (recommended)
+  //           "auto"   = select based on model size vs 4GB VRAM budget
+  let mut evict_mode = "auto"
+  // VRAM budget in bytes (3.5 GB safe for 4 GB GPU, leaves room for embed/KV/logits)
+  let vram_budget = 3500000000.0
+
+  print("=== OctoFlow Decomposed Streaming Generation ===")
+  print("  GGUF:    {model_path}")
+  print("  Decomp:  {decomp_dir}")
+  print("Loading model metadata...")
+
+  let model = gguf_load_from_file(model_path)
+
+  let n_embd = map_get(model, "n_embd")
+  let n_head = map_get(model, "n_head")
+  let mut n_kv_head = map_get(model, "n_kv_head")
+  let n_ff = map_get(model, "n_ff")
+  let n_layer = map_get(model, "n_layer")
+  let vocab_size = map_get(model, "vocab_size")
+  let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+
+  if n_kv_head == 0.0
+    n_kv_head = n_head
+  end
+
+  let head_dim = n_embd / n_head
+
+  let arch = map_get(model, "arch")
+  print("  {arch} -- {n_layer} layers, {n_embd} dim, {vocab_size} vocab")
+  print("  Inference: decomposed .bin + double-buffered prefetch")
+
+  // Auto-detect eviction mode based on n_embd threshold
+  if evict_mode == "auto"
+    if n_embd > 2048.0
+      evict_mode = "full"
+      print("  Eviction:  full (auto: n_embd={n_embd} > 2048, too large for VRAM-resident)")
+    else
+      evict_mode = "ram"
+      print("  Eviction:  ram (auto: n_embd={n_embd} <= 2048, fits in VRAM)")
+    end
+  else
+    print("  Eviction:  {evict_mode}")
+  end
+
+  // ── Load vocabulary ────────────────────────────────────────────
+  print("Loading vocabulary...")
+  let vocab = gguf_load_vocab(model_path)
+
+  // ── Build adaptive chat template ──────────────────────────────
+  print("Building chat template...")
+  let chat_tokens = resolve_chat_tokens(model_path, model, vocab)
+  let prompt_ids = build_chat_tokens(model_path, model, vocab, prompt)
+  let stop_tokens = get_stop_tokens(model, chat_tokens)
+
+  let n_prompt = len(prompt_ids)
+  print("  Prompt: {prompt}")
+  print("  Template tokens: {n_prompt}")
+
+  // ── Load persistent weights ────────────────────────────────────
+  print("Loading output norm...")
+  let out_norm_w = gguf_load_tensor(model_path, model, "output_norm.weight")
+
+  // KV cache: managed by gguf_infer_layer in Rust thread-local
+  print("  KV cache: Rust-managed (max_seq={max_seq})")
+
+  // ── Main inference loop ────────────────────────────────────────
+  let total_steps = n_prompt + max_tokens
+  print(" ")
+  print("--- Prefilling {n_prompt} tokens + generating {max_tokens} tokens ---")
+
+  let mut current_token = prompt_ids[0]
+  let mut generated_text = " "
+  let mut seq_pos = 0.0
+  let mut gen_count = 0.0
+  let mut done = 0.0
+
+  while seq_pos < total_steps
+    if done == 1.0
+      seq_pos = total_steps
+    end
+    if seq_pos >= max_seq
+      print("  (max sequence length reached)")
+      seq_pos = total_steps
+    end
+    if seq_pos < total_steps
+
+    // 1. Load embedding for current token (from GGUF — cached in GPU after first use)
+    let tok_emb = gguf_load_tensor(model_path, model, "token_embd.weight", current_token)
+    let mut hidden = []
+    let mut ei = 0.0
+    while ei < n_embd
+      push(hidden, tok_emb[int(ei)])
+      ei = ei + 1.0
+    end
+
+    // 2. Run transformer layers with decomposed double-buffered prefetch
+    //    Pattern: sync load layer 0, then loop prefetches N+1 while computing N.
+    //    Only one PREFETCH_THREAD at a time (complete before starting next).
+    let mut layer_idx = 0.0
+
+    // Cold start: synchronously load layer 0 from .bin (atomic: all GPU or all CPU)
+    let l0_path = decomp_layer_path(decomp_dir, 0.0)
+    let l0_res = decomposed_load_layer(l0_path, model, 0.0, model_path)
+    if l0_res == 0.0
+      print("  [layer 0] CPU-resident (VRAM insufficient)")
+    end
+
+    while layer_idx < n_layer
+      // Complete prefetch from previous iteration (layer weights now in caches)
+      if layer_idx > 0.0
+        let _pw = gguf_prefetch_complete()
+      end
+
+      // Budget mode: evict old layers before prefetching next to stay within VRAM budget
+      if evict_mode == "budget"
+        if layer_idx >= 2.0
+          let evict_idx = layer_idx - 2.0
+          let evict_res = vm_layer_resident(evict_idx)
+          if evict_res == 1.0
+            let _ev = gguf_evict_layer(model_path, model, evict_idx)
+          end
+        end
+      end
+
+      // Prefetch next layer while current layer computes on GPU
+      let next_layer = layer_idx + 1.0
+      if next_layer < n_layer
+        let nl_path = decomp_layer_path(decomp_dir, next_layer)
+        let _pf = decomposed_prefetch_layer(nl_path, model, next_layer, model_path)
+      end
+
+      // Inference: gguf_infer_layer finds cache hits from decomposed pre-load
+      let layer_out = gguf_infer_layer(model_path, model, hidden, layer_idx, seq_pos, max_seq)
+
+      // Copy layer output back to hidden
+      let mut hi = 0.0
+      while hi < n_embd
+        hidden[int(hi)] = layer_out[int(hi)]
+        hi = hi + 1.0
+      end
+
+      // Evict layer caches based on mode
+      if evict_mode == "ram"
+        // RAM-only: keep GPU_BUFFER_CACHE resident, skip .bin reload on next token
+        let _ev = gguf_evict_layer_ram(model_path, model, layer_idx)
+      elif evict_mode == "full"
+        // Full: clear both caches, reload from .bin each token (for low VRAM)
+        let _ev = gguf_evict_layer(model_path, model, layer_idx)
+      end
+      // "budget" mode: eviction handled above (2-slot window, only when needed)
+
+      layer_idx = layer_idx + 1.0
+    end
+
+    // 3. Post-transformer: prefill vs generation
+    let prefill_end = n_prompt - 1.0
+    if seq_pos < prefill_end
+      let npos = seq_pos + 1.0
+      current_token = prompt_ids[int(npos)]
+      let ptext = vocab[int(current_token)]
+      print("  [prefill {npos}/{n_prompt}] token={current_token} text={ptext}")
+    else
+      // Compute logits: output norm + lm_head projection
+      let normed_out = rmsnorm_cpu(hidden, out_norm_w, n_embd, eps)
+      let logits = gguf_matvec(model_path, model, "token_embd.weight", normed_out)
+
+      let mut sampled_idx = 0.0
+      if strategy == "greedy"
+        sampled_idx = sample_greedy(logits)
+      elif strategy == "top_k"
+        sampled_idx = sample_top_k(logits, top_k, temperature)
+      elif strategy == "top_p"
+        sampled_idx = sample_top_p(logits, top_p, temperature)
+      elif strategy == "min_p"
+        sampled_idx = sample_min_p(logits, 0.05, temperature)
+      else
+        sampled_idx = sample_temperature(logits, temperature)
+      end
+      let sampled_logit = logits[int(sampled_idx)]
+
+      let token_text = vocab[int(sampled_idx)]
+      generated_text = generated_text + token_text
+      gen_count = gen_count + 1.0
+      print("  [gen {gen_count}] pos={seq_pos} token={sampled_idx} logit={sampled_logit} text={token_text}")
+
+      if is_stop_token(stop_tokens, sampled_idx) == 1.0
+        print("  (stop token -- stopping)")
+        done = 1.0
+      end
+      if gen_count >= max_tokens
+        done = 1.0
+      end
+
+      current_token = sampled_idx
+    end
+
+    end
+    seq_pos = seq_pos + 1.0
+  end
+
+  print("---")
+  print("Prompt: {prompt}")
+  print("Raw: {generated_text}")
+  let decoded = bpe_decode(generated_text)
+  print(" ")
+  print("=== Output ===")
+  print("{decoded}")
+  return 0.0
+end

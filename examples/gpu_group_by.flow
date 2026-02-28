@@ -1,0 +1,233 @@
+// gpu_group_by.flow — GPU GROUP BY: Dispatch Fan-Out
+//
+// "Relational algebra becomes dispatch graph."
+//
+// 65,536 employees across 8 departments processed ENTIRELY on GPU.
+// 64 dispatches, 1 submission, 0 CPU row iterations.
+// Multi-pass parallel reduction per group.
+//
+// SQL equivalent:
+//   SELECT dept, SUM(salary), COUNT(*), AVG(salary)
+//   FROM employees
+//   GROUP BY dept
+//
+// GPU dispatch fan-out (per group):
+//   [eq_scalar: dept==g] → [mul_ab: salary×mask] →
+//   [reduce pass 1] → [reduce pass 2] → [store_at: sums[g]] →
+//   [reduce pass 1] → [reduce pass 2] → [store_at: counts[g]]
+//
+// 8 groups × 8 dispatches = 64 dispatches, 1 submit
+//
+// Run: octoflow run examples/gpu_group_by.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N = 65536.0
+let K = 8.0
+let GROUP_SIZE = N / K
+let BUF_BYTES = N * 4.0
+let WG_SIZE = 256.0
+let NUM_WG = N / WG_SIZE
+let PARTIAL_BYTES = NUM_WG * 4.0
+
+// Boot GPU
+rt_init()
+
+// Load kernels
+let pipe_eq = rt_load_pipeline("tests/gpu_shaders/17_eq_scalar.spv", 2.0, 4.0)
+let pipe_mul = rt_load_pipeline("tests/gpu_shaders/18_mul_ab.spv", 3.0, 0.0)
+let pipe_reduce = rt_load_pipeline("stdlib/loom/kernels/reduce/reduce_sum.spv", 2.0, 0.0)
+let pipe_store = rt_load_pipeline("tests/gpu_shaders/19_store_at.spv", 2.0, 4.0)
+
+// Create data buffers
+let buf_dept = rt_create_buffer(BUF_BYTES)
+let buf_salary = rt_create_buffer(BUF_BYTES)
+
+// Working buffers (reused across groups — safe after barriers)
+let buf_mask = rt_create_buffer(BUF_BYTES)
+let buf_masked = rt_create_buffer(BUF_BYTES)
+let buf_partial = rt_create_buffer(PARTIAL_BYTES)
+let buf_partial_c = rt_create_buffer(PARTIAL_BYTES)
+let buf_temp = rt_create_buffer(1024.0)
+
+// Result buffers (accumulate per-group results)
+let buf_sums = rt_create_buffer(1024.0)
+let buf_counts = rt_create_buffer(1024.0)
+
+// Upload department and salary data
+// dept[i] = floor(i / GROUP_SIZE), salary[i] = i + 1
+let mut depts = []
+let mut salaries = []
+let mut i = 0.0
+while i < N
+  push(depts, floor(i / GROUP_SIZE))
+  push(salaries, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(buf_dept, depts)
+rt_upload(buf_salary, salaries)
+
+// Zero all working buffers
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_mask, zeros)
+rt_upload(buf_masked, zeros)
+
+let mut pz = []
+let mut i = 0.0
+while i < NUM_WG
+  push(pz, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_partial, pz)
+rt_upload(buf_partial_c, pz)
+rt_upload(buf_temp, pz)
+rt_upload(buf_sums, pz)
+rt_upload(buf_counts, pz)
+
+// ── GROUP BY dispatch fan-out ──────────────────────────────────────
+// 8 groups × 8 dispatches = 64 dispatches, 1 submit, 0 CPU row iterations
+let t0 = time()
+
+rt_chain_begin(64.0, 3.0)
+
+let mut g = 0.0
+while g < K
+  // Stage 1: filter — dept == g → boolean mask [256 workgroups]
+  let mut pc_g = [g]
+  rt_chain_push_constants(pipe_eq, pc_g)
+  let mut b1 = [buf_dept, buf_mask]
+  rt_chain_dispatch(pipe_eq, b1, NUM_WG)
+
+  // Stage 2: mask multiply — salary × mask → masked [256 workgroups]
+  let mut b2 = [buf_salary, buf_mask, buf_masked]
+  rt_chain_dispatch(pipe_mul, b2, NUM_WG)
+
+  // Stage 3: reduce SUM pass 1 — masked → 256 partials [256 workgroups]
+  let mut b3 = [buf_masked, buf_partial]
+  rt_chain_dispatch(pipe_reduce, b3, NUM_WG)
+
+  // Stage 4: reduce SUM pass 2 — 256 partials → 1 value [1 workgroup]
+  let mut b4 = [buf_partial, buf_temp]
+  rt_chain_dispatch(pipe_reduce, b4, 1.0)
+
+  // Stage 5: scatter — temp[0] → sums[g]
+  let mut pc_off = [g]
+  rt_chain_push_constants(pipe_store, pc_off)
+  let mut b5 = [buf_temp, buf_sums]
+  rt_chain_dispatch(pipe_store, b5, 1.0)
+
+  // Stage 6: reduce COUNT pass 1 — mask → 256 partials [256 workgroups]
+  let mut b6 = [buf_mask, buf_partial_c]
+  rt_chain_dispatch(pipe_reduce, b6, NUM_WG)
+
+  // Stage 7: reduce COUNT pass 2 — 256 partials → 1 value [1 workgroup]
+  let mut b7 = [buf_partial_c, buf_temp]
+  rt_chain_dispatch(pipe_reduce, b7, 1.0)
+
+  // Stage 8: scatter — temp[0] → counts[g]
+  rt_chain_push_constants(pipe_store, pc_off)
+  let mut b8 = [buf_temp, buf_counts]
+  rt_chain_dispatch(pipe_store, b8, 1.0)
+
+  g = g + 1.0
+end
+
+rt_chain_end()
+let t1 = time()
+let record_ms = (t1 - t0) * 1000.0
+
+// ── Single submit — GPU processes entire GROUP BY ──────────────────
+let t2 = time()
+rt_chain_submit_wait()
+let t3 = time()
+let gpu_ms = (t3 - t2) * 1000.0
+
+// ── Download results (K sums + K counts) ───────────────────────────
+rt_download(buf_sums, K)
+let mut gpu_sums = []
+let mut i = 0.0
+while i < K
+  push(gpu_sums, rt_result[int(i)])
+  i = i + 1.0
+end
+
+rt_download(buf_counts, K)
+let mut gpu_counts = []
+let mut i = 0.0
+while i < K
+  push(gpu_counts, rt_result[int(i)])
+  i = i + 1.0
+end
+
+// ── CPU verification ───────────────────────────────────────────────
+// dept d: employees d*8192..(d+1)*8192-1, salaries d*8192+1..(d+1)*8192
+// SUM_d = (first + last) * count / 2
+// COUNT_d = 8192
+print("")
+print("OctoFlow GPU GROUP BY Engine")
+print("  Records: {N}")
+print("  Departments: {K}")
+print("  Query: SELECT dept, SUM(salary), COUNT(*), AVG(salary) GROUP BY dept")
+print("  Dispatches: 64 (8 groups x 8 dispatches)")
+print("  Submissions: 1")
+print("  CPU row iterations: 0")
+print("  Record time: {record_ms} ms")
+print("  GPU time:    {gpu_ms} ms")
+print("")
+
+let mut all_ok = 1.0
+let mut g = 0.0
+while g < K
+  let first_sal = g * GROUP_SIZE + 1.0
+  let last_sal = (g + 1.0) * GROUP_SIZE
+  let exp_sum = (first_sal + last_sal) * GROUP_SIZE / 2.0
+  let exp_count = GROUP_SIZE
+  let gpu_sum = gpu_sums[int(g)]
+  let gpu_count = gpu_counts[int(g)]
+  let gpu_avg = gpu_sum / gpu_count
+
+  let count_err = abs(gpu_count - exp_count)
+  let sum_rel = abs(gpu_sum - exp_sum) / exp_sum
+
+  let mut status = "OK"
+  if count_err >= 1.0
+    status = "FAIL"
+    all_ok = 0.0
+  end
+  if sum_rel >= 0.001
+    status = "FAIL"
+    all_ok = 0.0
+  end
+
+  print("  dept {g}: SUM={gpu_sum}  COUNT={gpu_count}  AVG={gpu_avg}  [{status}]")
+  g = g + 1.0
+end
+
+print("")
+if all_ok == 1.0
+  print("  ALL GROUPS MATCH (counts exact, sums within 0.1%)")
+else
+  print("  SOME GROUPS FAILED")
+end
+
+// Compute grand total as cross-check
+let mut total_sum = 0.0
+let mut total_count = 0.0
+let mut i = 0.0
+while i < K
+  total_sum = total_sum + gpu_sums[int(i)]
+  total_count = total_count + gpu_counts[int(i)]
+  i = i + 1.0
+end
+let expected_total = N * (N + 1.0) / 2.0
+let total_rel = abs(total_sum - expected_total) / expected_total
+print("  Grand total: SUM={total_sum}  COUNT={total_count}  (expected SUM={expected_total})")
+print("  Grand total relative error: {total_rel}")
+
+print("")
+rt_cleanup()

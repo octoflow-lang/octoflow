@@ -1,0 +1,111 @@
+// emit_vm_matvec.flow — VM Matrix-Vector Multiply Kernel Emitter
+//
+// Computes: output[gid] = dot(globals[weight_off + gid*K .. +K], registers[in_off .. +K])
+//
+// Reads weight matrix from globals (binding 2), input vector from registers (binding 0),
+// writes result back to registers (binding 0) at a different offset.
+//
+// Push constants:
+//   pc[0] = M (rows, float → uint)
+//   pc[1] = K (cols / inner dim, float → uint)
+//   pc[2] = weight_offset (flat index into globals)
+//   pc[3] = input_offset  (flat index into registers)
+//   pc[4] = output_offset (flat index into registers)
+//
+// Binding layout (VM 4-SSBO, ir_input_count=3):
+//   Binding 0: registers (read input vector, write output vector)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (read weight matrix)
+//   Binding 3: control   (output binding, unused)
+//
+// Dispatch: ceil(M / 256) workgroups
+//
+// Run: octoflow run stdlib/loom/emit_vm_matvec.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_matvec(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry = ir_block("entry")
+  let bounds_ok = ir_block("bounds_ok")
+  let loop_header = ir_block("loop_header")
+  let loop_body = ir_block("loop_body")
+  let loop_cont = ir_block("loop_continue")
+  let loop_merge_blk = ir_block("loop_merge")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: load gid, push constants, bounds check ──
+  let gid = ir_load_gid(entry)
+  let pc_m = ir_push_const(entry, 0.0)
+  let pc_k = ir_push_const(entry, 1.0)
+  let pc_woff = ir_push_const(entry, 2.0)
+  let pc_ioff = ir_push_const(entry, 3.0)
+  let pc_ooff = ir_push_const(entry, 4.0)
+  let M = ir_ftou(entry, pc_m)
+  let K = ir_ftou(entry, pc_k)
+  let w_off = ir_ftou(entry, pc_woff)
+  let i_off = ir_ftou(entry, pc_ioff)
+  let o_off = ir_ftou(entry, pc_ooff)
+
+  // Bounds check: if gid >= M, skip to exit
+  let oob = ir_ugte(entry, gid, M)
+  let _sm = ir_selection_merge(entry, exit_block)
+  let _br = ir_term_cond_branch(entry, oob, exit_block, bounds_ok)
+
+  // ── bounds_ok: compute row base, init loop ──
+  let zero_u = ir_const_u(bounds_ok, 0.0)
+  let zero_f = ir_const_f(bounds_ok, 0.0)
+  // row_base = w_off + gid * K (index into globals for this row)
+  let gid_k = ir_imul(bounds_ok, gid, K)
+  let row_base = ir_iadd(bounds_ok, w_off, gid_k)
+  let _br2 = ir_term_branch(bounds_ok, loop_header)
+
+  // ── Loop header: phi nodes for j (uint col index) and sum (float accumulator) ──
+  let phi_j = ir_phi(loop_header, 2.0)
+  let phi_sum = ir_phi(loop_header, 1.0)
+  let _pj0 = ir_phi_add(phi_j, zero_u, bounds_ok)
+  let _ps0 = ir_phi_add(phi_sum, zero_f, bounds_ok)
+
+  // Loop condition: j >= K → done
+  let j_done = ir_ugte(loop_header, phi_j, K)
+  let _lm = ir_loop_merge(loop_header, loop_merge_blk, loop_cont)
+  let _bc = ir_term_cond_branch(loop_header, j_done, loop_merge_blk, loop_body)
+
+  // ── Loop body: load weight from globals, input from registers, multiply-add ──
+  // weight index: globals[row_base + j]
+  let w_idx = ir_iadd(loop_body, row_base, phi_j)
+  let w_val = ir_load_input_at(loop_body, 2.0, w_idx)
+  // input index: registers[i_off + j]
+  let in_idx = ir_iadd(loop_body, i_off, phi_j)
+  let in_val = ir_load_input_at(loop_body, 0.0, in_idx)
+  // accumulate
+  let prod = ir_fmul(loop_body, w_val, in_val)
+  let new_sum = ir_fadd(loop_body, phi_sum, prod)
+  let _br3 = ir_term_branch(loop_body, loop_cont)
+
+  // ── Loop continue: increment j ──
+  let one_u = ir_const_u(loop_cont, 1.0)
+  let new_j = ir_iadd(loop_cont, phi_j, one_u)
+  let _br4 = ir_term_branch(loop_cont, loop_header)
+
+  // Back-edge phi values
+  let _pj1 = ir_phi_add(phi_j, new_j, loop_cont)
+  let _ps1 = ir_phi_add(phi_sum, new_sum, loop_cont)
+
+  // ── Loop merge: store result to registers[o_off + gid] ──
+  let out_idx = ir_iadd(loop_merge_blk, o_off, gid)
+  let _store = ir_buf_store_f(loop_merge_blk, 0.0, out_idx, phi_sum)
+  let _br5 = ir_term_branch(loop_merge_blk, exit_block)
+
+  // ── Exit ──
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/nn/vm_matvec.spv"
+let _r = emit_vm_matvec(out)
+print("Emitted: {out}")

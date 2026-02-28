@@ -1,0 +1,237 @@
+// test_vm_poll.flow — CPU Polling & Dormant VM Activation
+//
+// Tests the GPU→CPU broadcast mechanism:
+//   1. HOST_VISIBLE Metrics: CPU polls GPU status via vm_poll_status (zero-copy)
+//   2. HOST_VISIBLE Control: CPU writes dispatch counts via vm_write_control_live
+//   3. Dormant VM activation: indirect dispatch with 0 workgroups (no-op),
+//      CPU writes nonzero count, next execution activates the dormant dispatch
+//   4. Existing vm_read_metrics/vm_read_control still work (transparent fast path)
+//
+// Run: octoflow run stdlib/loom/test_vm_poll.flow --allow-read --allow-write
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEST 1: vm_poll_status reads Metrics directly (zero-copy)
+// ═══════════════════════════════════════════════════════════════════════════
+print("TEST 1: vm_poll_status (zero-copy Metrics read)")
+
+let vm = vm_boot(1.0, 8.0, 8.0)
+
+// Initially status should be 0.0 (VM_STATUS_OK)
+let status0 = vm_poll_status(vm, 0.0)
+if status0 == 0.0
+  print("  initial status = 0 (OK)")
+else
+  print("  FAIL: expected 0, got {status0}")
+end
+
+// Write a status value to Metrics via vm_write_metrics
+let status_data = [3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let _wm = vm_write_metrics(vm, 0.0, status_data)
+
+// Poll should now read 3.0 (NEED_VM)
+let status1 = vm_poll_status(vm, 0.0)
+let mut t1_pass = 0.0
+if status1 == 3.0
+  t1_pass = 1.0
+  print("TEST 1: PASS -- vm_poll_status reads HOST_VISIBLE Metrics, zero-copy")
+else
+  print("TEST 1: FAIL -- expected 3, got {status1}")
+end
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEST 2: vm_write_control_live writes Control directly (zero-copy)
+// ═══════════════════════════════════════════════════════════════════════════
+print("TEST 2: vm_write_control_live (zero-copy Control write)")
+
+let _s1 = vm_shutdown(vm)
+let vm2 = vm_boot(1.0, 8.0, 8.0)
+
+// Write workgroup counts directly to Control (no staging DMA)
+let wg_counts = [1.0, 1.0, 1.0]
+let _wc = vm_write_control_live(vm2, 0.0, wg_counts)
+
+// Read back via vm_read_control to verify
+let ctrl = vm_read_control(vm2, 0.0, 3.0)
+let mut t2_pass = 0.0
+if ctrl[0] == 1.0
+  if ctrl[1] == 1.0
+    if ctrl[2] == 1.0
+      t2_pass = 1.0
+      print("TEST 2: PASS -- vm_write_control_live writes HOST_VISIBLE Control, zero-copy")
+    end
+  end
+end
+if t2_pass == 0.0
+  let c0 = ctrl[0]
+  let c1 = ctrl[1]
+  let c2 = ctrl[2]
+  print("TEST 2: FAIL -- control readback mismatch: [{c0}, {c1}, {c2}]")
+end
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEST 3: GPU kernel writes Metrics, CPU reads via fast path
+// ═══════════════════════════════════════════════════════════════════════════
+print("TEST 3: GPU writes Metrics, CPU reads via fast path")
+
+let _s2 = vm_shutdown(vm2)
+let vm3 = vm_boot(1.0, 8.0, 8.0)
+
+// Load data into register 0
+let data3 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let _w3 = vm_write_register(vm3, 0.0, 0.0, data3)
+
+// Run vm_reduce_sum: sums register values, writes result to Metrics
+let pc3 = [0.0, 0.0, 8.0, 0.0]
+let _d3 = vm_dispatch(vm3, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc3, 1.0)
+let prog3 = vm_build(vm3)
+let _e3 = vm_execute(prog3)
+
+// GPU wrote SUM=36 to Metrics[0]. Read via vm_read_metrics (HOST_VISIBLE fast path)
+let m3 = vm_read_metrics(vm3, 0.0, 1.0)
+let ps3 = vm_poll_status(vm3, 0.0)
+let mut t3_pass = 0.0
+if m3[0] == 36.0
+  if ps3 == 36.0
+    t3_pass = 1.0
+    print("TEST 3: PASS -- GPU writes Metrics, CPU reads via HOST_VISIBLE fast path (SUM=36)")
+  end
+end
+if t3_pass == 0.0
+  let m3_0 = m3[0]
+  print("TEST 3: FAIL -- expected SUM=36, got m3={m3_0}, poll={ps3}")
+end
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEST 4: Async execution + fence polling
+// ═══════════════════════════════════════════════════════════════════════════
+print("TEST 4: Async GPU execution + CPU poll loop")
+
+let _s3 = vm_shutdown(vm3)
+let vm4 = vm_boot(1.0, 8.0, 8.0)
+let data4 = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+let _w4 = vm_write_register(vm4, 0.0, 0.0, data4)
+
+// Scale R0 * 2.0
+let pc4 = [0.0, 2.0, 8.0]
+let _d4 = vm_dispatch(vm4, "stdlib/loom/kernels/ops/vm_scale.spv", pc4, 1.0)
+let prog4 = vm_build(vm4)
+
+// Execute asynchronously
+let _ea4 = vm_execute_async(prog4)
+
+// CPU poll loop: wait for GPU completion
+let mut poll_count = 0.0
+let mut done = vm_poll(prog4)
+while done == 0.0
+  poll_count = poll_count + 1.0
+  done = vm_poll(prog4)
+end
+
+// GPU is done. Read results
+let r4 = vm_read_register(vm4, 0.0, 0.0, 8.0)
+let mut t4_pass = 0.0
+if r4[0] == 20.0
+  if r4[7] == 160.0
+    t4_pass = 1.0
+    print("TEST 4: PASS -- Async exec + poll loop, completed in {poll_count} polls")
+  end
+end
+if t4_pass == 0.0
+  let r4_0 = r4[0]
+  let r4_7 = r4[7]
+  print("TEST 4: FAIL -- expected [20..160], got [{r4_0}, ..., {r4_7}]")
+end
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEST 5: Dormant VM activation via Control write
+// ═══════════════════════════════════════════════════════════════════════════
+print("TEST 5: Dormant VM activation (over-provisioned command buffer)")
+
+let _s4 = vm_shutdown(vm4)
+let vm5 = vm_boot(1.0, 8.0, 8.0)
+let data5 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let _w5 = vm_write_register(vm5, 0.0, 0.0, data5)
+
+// Dispatch 1: Scale R0 *= 10 (direct dispatch, always runs)
+let pc5a = [0.0, 10.0, 8.0]
+let _d5a = vm_dispatch(vm5, "stdlib/loom/kernels/ops/vm_scale.spv", pc5a, 1.0)
+
+// Dispatch 2: Scale R0 *= 2 (DORMANT — indirect dispatch with 0 workgroups)
+// Use vm_write_control_u32: writes uint32 values (vkCmdDispatchIndirect reads uint32)
+let dormant_wg = [0.0, 0.0, 0.0]
+let _wc5 = vm_write_control_u32(vm5, 0.0, dormant_wg)
+let pc5b = [0.0, 2.0, 8.0]
+let _d5b = vm_dispatch_indirect(vm5, "stdlib/loom/kernels/ops/vm_scale.spv", pc5b, 0.0)
+
+// Build and execute — dispatch 2 should be a no-op (0 workgroups)
+let prog5 = vm_build(vm5)
+let _e5a = vm_execute(prog5)
+
+// Verify: only first scale ran (R0 *= 10)
+let r5a = vm_read_register(vm5, 0.0, 0.0, 8.0)
+let mut t5a_pass = 0.0
+if r5a[0] == 10.0
+  if r5a[7] == 80.0
+    t5a_pass = 1.0
+    print("  Phase 1: Dormant dispatch skipped (R0 *= 10 only)")
+  end
+end
+if t5a_pass == 0.0
+  let r5a_0 = r5a[0]
+  let r5a_7 = r5a[7]
+  print("  FAIL Phase 1: expected [10..80], got [{r5a_0}, ..., {r5a_7}]")
+end
+
+// NOW: CPU activates the dormant dispatch by writing nonzero uint32 workgroups
+let active_wg = [1.0, 1.0, 1.0]
+let _wc5b = vm_write_control_u32(vm5, 0.0, active_wg)
+
+// Re-execute SAME command buffer — now dispatch 2 runs too
+let _e5b = vm_execute(prog5)
+
+// R0 was [10..80] from first exec. Second exec: dispatch1 *10 → [100..800], dispatch2 *2 → [200..1600]
+let r5b = vm_read_register(vm5, 0.0, 0.0, 8.0)
+let r5b_0 = r5b[0]
+let r5b_7 = r5b[7]
+let mut t5_pass = 0.0
+if r5b_0 == 200.0
+  if r5b_7 == 1600.0
+    t5_pass = 1.0
+    print("  Phase 2: Dormant dispatch activated (R0 *= 10 *= 2)")
+    print("TEST 5: PASS -- Dormant dispatch activated via vm_write_control_live")
+  end
+end
+if t5_pass == 0.0
+  print("TEST 5: FAIL -- expected [200..1600], got [{r5b_0}, ..., {r5b_7}]")
+end
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEST 6: Deactivate a previously active dispatch
+// ═══════════════════════════════════════════════════════════════════════════
+print("TEST 6: Deactivate dispatch (set workgroups to 0)")
+
+// Set Control back to zero — dormant again
+let _wc5c = vm_write_control_u32(vm5, 0.0, dormant_wg)
+
+// Write fresh data to R0
+let data5c = [5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0]
+let _w5c = vm_write_register(vm5, 0.0, 0.0, data5c)
+
+// Re-execute same command buffer — dispatch 2 is dormant again
+let _e5c = vm_execute(prog5)
+
+// Only dispatch 1 ran: 5 * 10 = 50
+let r5c = vm_read_register(vm5, 0.0, 0.0, 8.0)
+let r5c_0 = r5c[0]
+let mut t6_pass = 0.0
+if r5c_0 == 50.0
+  t6_pass = 1.0
+  print("TEST 6: PASS -- Dispatch deactivated by zeroing Control workgroups")
+else
+  print("TEST 6: FAIL -- expected 50, got {r5c_0}")
+end
+
+let _s5 = vm_shutdown(vm5)
+
+let total = t1_pass + t2_pass + t3_pass + t4_pass + t5_pass + t6_pass
+print("=== {total}/6 TESTS PASS ===")

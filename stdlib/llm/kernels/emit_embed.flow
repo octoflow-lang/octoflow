@@ -1,0 +1,43 @@
+// emit_embed.flow — GPU Embedding Lookup Kernel Emitter
+//
+// Kernel: output[gid] = table[token_id * n_embd + gid]
+//
+//   Binding 0 (float): embedding table (vocab_size * n_embd floats)
+//   Binding 1 (float): output (n_embd floats)
+//   Push constants: [token_id, n_embd] (2 floats)
+//
+//   Dispatch: ceil(n_embd / 256) workgroups
+//
+// The embedding table is pre-loaded once at model init.
+// Each token lookup is a single GPU dispatch — no CPU copy.
+
+use "../../compiler/ir"
+
+fn emit_embed_kernel(out_path)
+  ir_new()
+  ir_input_count = 1.0
+
+  let entry = ir_block("entry")
+
+  // Load push constants: token_id and n_embd
+  let token_id_f = ir_push_const(entry, 0.0)
+  let n_embd_f = ir_push_const(entry, 1.0)
+
+  // gid = global invocation ID
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+
+  // index = token_id * n_embd + gid
+  let offset_f = ir_fadd(entry, ir_fmul(entry, token_id_f, n_embd_f), gid_f)
+  let offset_u = ir_ftou(entry, offset_f)
+
+  // Load from embedding table (binding 0) at computed index
+  let val = ir_load_input_at(entry, 0.0, offset_u)
+
+  // Store to output (binding 1)
+  let _s = ir_store_output_at(entry, gid, val)
+  let _t = ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

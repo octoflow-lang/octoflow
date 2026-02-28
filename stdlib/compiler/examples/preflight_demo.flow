@@ -1,0 +1,18 @@
+// stdlib/compiler/examples/preflight_demo.flow
+// Demonstrates all preflight checks via FLOW_INPUT pointing to preflight_errors.flow
+//
+// Run:
+//   FLOW_INPUT=stdlib/compiler/examples/preflight_errors.flow \
+//     octoflow run stdlib/compiler/preflight.flow --allow-read
+//
+// Expected output:
+//   PREFLIGHT ANALYSIS: preflight_errors.flow
+//     tokens: N   symbols: M
+//     [E002] line 11: counter is not mutable (declare with let mut)
+//     [E003] line 14: unknown_fn() is not defined
+//     [D002] line 8: let unused is defined but never referenced
+//     STATUS: FAILED (2 errors, 1 warnings)
+
+let x = 42.0
+let y = x + 1.0
+print("result: {y}")

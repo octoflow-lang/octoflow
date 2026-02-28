@@ -1,4 +1,6 @@
 // stdlib/web/json_util.flow — JSON manipulation utilities
+//
+// Functions: json_pretty, json_merge, json_get, json_flatten
 
 fn json_pretty(data)
   // Simple indented JSON output

@@ -1,0 +1,879 @@
+// stdlib/compiler/spirv_emit_param.flow
+// Parametric SPIR-V Binary Emitter — Pure OctoFlow
+//
+// Environment variables:
+//   SPIRV_OP       = "mul" | "add" | "sub" | "div" | "neg" | "identity"
+//   SPIRV_CONST    = float constant (e.g. "2.0") — ignored for neg/identity
+//   SPIRV_OUTPUT   = output .spv file path
+//
+// Emits: output[gid] = <op>(input[gid], constant)
+//
+// SPIR-V opcodes:  OpFMul=133  OpFAdd=129  OpFSub=131  OpFDiv=136  OpFNegate=127
+//
+// SPIR-V layout: Header → Capability → MemoryModel → EntryPoint →
+//   ExecutionMode → Annotations → Types/Vars/Constants → Functions
+
+let mut op_name = env("SPIRV_OP")
+if op_name == ""
+  op_name = "mul"
+end
+let mut const_str = env("SPIRV_CONST")
+if const_str == ""
+  const_str = "2.0"
+end
+let mut out_path = env("SPIRV_OUTPUT")
+if out_path == ""
+  out_path = "spirv_output.spv"
+end
+let const_val = float(const_str)
+
+// Determine SPIR-V opcode
+let mut opcode = 133.0
+let mut op_wc = 5.0
+if op_name == "mul"
+  opcode = 133.0
+  op_wc = 5.0
+end
+if op_name == "add"
+  opcode = 129.0
+  op_wc = 5.0
+end
+if op_name == "sub"
+  opcode = 131.0
+  op_wc = 5.0
+end
+if op_name == "div"
+  opcode = 136.0
+  op_wc = 5.0
+end
+if op_name == "neg"
+  opcode = 127.0
+  op_wc = 4.0
+end
+if op_name == "identity"
+  opcode = 0.0
+  op_wc = 0.0
+end
+
+// Determine if we need a constant
+let mut need_const = 1.0
+if op_name == "neg"
+  need_const = 0.0
+end
+if op_name == "identity"
+  need_const = 0.0
+end
+
+// Determine bound (max ID + 1)
+// With constant: IDs 1-24, bound=25 (but use 30 for safety)
+// Without constant: IDs 1-23, bound=30
+let bound = 30.0
+
+fn make_op(wc, op)
+  return (wc << 16.0) | op
+end
+fn wb0(w)
+  return w & 255.0
+end
+fn wb1(w)
+  return (w >> 8.0) & 255.0
+end
+fn wb2(w)
+  return (w >> 16.0) & 255.0
+end
+fn wb3(w)
+  return (w >> 24.0) & 255.0
+end
+
+let mut buf = []
+
+// ===================== SECTION 1: Header =====================
+push(buf, 3.0)
+push(buf, 2.0)
+push(buf, 35.0)
+push(buf, 7.0)
+// Version 1.4
+let _w = 66560.0
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+// Generator=0, Bound, Schema=0
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+let _w = bound
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// ===================== SECTION 2: Capability =====================
+let _w = make_op(2.0, 17.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// ===================== SECTION 3: MemoryModel =====================
+let _w = make_op(3.0, 14.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// ===================== SECTION 4: EntryPoint =====================
+// OpEntryPoint GLCompute %3 "main" %8 %12 %13
+let _w = make_op(8.0, 15.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 5.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 3.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 109.0)
+push(buf, 97.0)
+push(buf, 105.0)
+push(buf, 110.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 8.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 12.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 13.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// ===================== SECTION 5: ExecutionMode =====================
+let _w = make_op(6.0, 16.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 3.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 17.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// ===================== SECTION 6: Annotations =====================
+// OpDecorate %8 BuiltIn GlobalInvocationId
+let _w = make_op(4.0, 71.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 8.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 11.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 28.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// OpDecorate %10 Block
+let _w = make_op(3.0, 71.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 10.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 2.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// OpMemberDecorate %10 0 Offset 0
+let _w = make_op(5.0, 72.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 10.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 35.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// OpDecorate %9 ArrayStride 4
+let _w = make_op(4.0, 71.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 9.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 6.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 4.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// OpDecorate %12 DescriptorSet 0
+let _w = make_op(4.0, 71.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 12.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 34.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// OpDecorate %12 Binding 0
+let _w = make_op(4.0, 71.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 12.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 33.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// OpDecorate %13 DescriptorSet 0
+let _w = make_op(4.0, 71.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 13.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 34.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// OpDecorate %13 Binding 1
+let _w = make_op(4.0, 71.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 13.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 33.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// ===================== SECTION 7: Types/Variables/Constants =====================
+// %1 = OpTypeVoid
+let _w = make_op(2.0, 19.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %2 = OpTypeFunction %1
+let _w = make_op(3.0, 33.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 2.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %4 = OpTypeFloat 32
+let _w = make_op(3.0, 22.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 4.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 32.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %5 = OpTypeInt 32 0
+let _w = make_op(4.0, 21.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 5.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 32.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %6 = OpTypeVector %5 3
+let _w = make_op(4.0, 23.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 6.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 5.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 3.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %7 = OpTypePointer Input %6
+let _w = make_op(4.0, 32.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 7.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 6.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %9 = OpTypeRuntimeArray %4
+let _w = make_op(3.0, 29.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 9.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 4.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %10 = OpTypeStruct %9
+let _w = make_op(3.0, 30.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 10.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 9.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %11 = OpTypePointer StorageBuffer %10
+let _w = make_op(4.0, 32.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 11.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 12.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 10.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %15 = OpTypePointer Input %5
+let _w = make_op(4.0, 32.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 15.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 5.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %17 = OpTypePointer StorageBuffer %4
+let _w = make_op(4.0, 32.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 17.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 12.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 4.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %16 = OpConstant %5 0
+let _w = make_op(4.0, 43.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 5.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 16.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %18 = OpConstant %4 <const_val> (only if needed)
+if need_const == 1.0
+  let _w = make_op(4.0, 43.0)
+  push(buf, wb0(_w))
+  push(buf, wb1(_w))
+  push(buf, wb2(_w))
+  push(buf, wb3(_w))
+  push(buf, 4.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 18.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, float_byte(const_val, 0.0))
+  push(buf, float_byte(const_val, 1.0))
+  push(buf, float_byte(const_val, 2.0))
+  push(buf, float_byte(const_val, 3.0))
+end
+
+// %8 = OpVariable %7 Input
+let _w = make_op(4.0, 59.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 7.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 8.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %12 = OpVariable %11 StorageBuffer
+let _w = make_op(4.0, 59.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 11.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 12.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 12.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %13 = OpVariable %11 StorageBuffer
+let _w = make_op(4.0, 59.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 11.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 13.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 12.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// ===================== SECTION 8: Function =====================
+// OpFunction %1 %3 None %2
+let _w = make_op(5.0, 54.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 1.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 3.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 2.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// OpLabel %14
+let _w = make_op(2.0, 248.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 14.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %19 = OpAccessChain %15 %8 %16
+let _w = make_op(5.0, 65.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 15.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 19.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 8.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 16.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %20 = OpLoad %5 %19
+let _w = make_op(4.0, 61.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 5.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 20.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 19.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %21 = OpAccessChain %17 %12 %16 %20
+let _w = make_op(6.0, 65.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 17.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 21.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 12.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 16.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 20.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// %22 = OpLoad %4 %21
+let _w = make_op(4.0, 61.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 4.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 22.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 21.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// ========== OPERATION (parameterized) ==========
+if op_name == "identity"
+  // No operation — %22 IS the result, store directly
+  let _w = 22.0
+elif op_name == "neg"
+  // %23 = OpFNegate(127) %4 %22
+  let _w = make_op(4.0, 127.0)
+  push(buf, wb0(_w))
+  push(buf, wb1(_w))
+  push(buf, wb2(_w))
+  push(buf, wb3(_w))
+  push(buf, 4.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 23.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 22.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+else
+  // %23 = Op<opcode>(opcode) %4 %22 %18
+  let _w = make_op(op_wc, opcode)
+  push(buf, wb0(_w))
+  push(buf, wb1(_w))
+  push(buf, wb2(_w))
+  push(buf, wb3(_w))
+  push(buf, 4.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 23.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 22.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 18.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+  push(buf, 0.0)
+end
+
+// Determine result ID for the store
+let mut result_id = 23.0
+if op_name == "identity"
+  result_id = 22.0
+end
+
+// %24 = OpAccessChain %17 %13 %16 %20
+let _w = make_op(6.0, 65.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 17.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 24.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 13.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 16.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 20.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// OpStore %24 %result_id
+let _w = make_op(3.0, 62.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+push(buf, 24.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, result_id)
+push(buf, 0.0)
+push(buf, 0.0)
+push(buf, 0.0)
+
+// OpReturn
+let _w = make_op(1.0, 253.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+
+// OpFunctionEnd
+let _w = make_op(1.0, 56.0)
+push(buf, wb0(_w))
+push(buf, wb1(_w))
+push(buf, wb2(_w))
+push(buf, wb3(_w))
+
+// ===================== WRITE =====================
+let byte_count = len(buf)
+let word_count = byte_count / 4.0
+print("SPIR-V [{op_name}] emitted: {word_count} words ({byte_count} bytes)")
+write_bytes(out_path, buf)
+print("Written to {out_path}")

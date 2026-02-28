@@ -1,0 +1,135 @@
+// test_vm_chain.flow — Step 4: Single-submit GPU-autonomous pipeline
+//
+// Proves the chain execution model: multiple vm_dispatch calls followed by
+// ONE vm_build produce a single VkCommandBuffer. ONE vm_execute = ONE
+// vkQueueSubmit. GPU executes all stages autonomously with VkMemoryBarrier
+// ordering — no CPU round-trips between stages.
+//
+// Contrast with Step 3.5 (test_vm_pipeline.flow) which used 3 submits:
+//   3.5: vm_dispatch -> vm_build -> vm_execute   (x3 = 3 submits)
+//   4.0: vm_dispatch x3 -> vm_build x1 -> vm_execute x1  (1 submit)
+//
+// Same two-VM pipeline, same expected output:
+//
+//   Op 1  VM0: affine  R0  -> R30  (x*2+0)  doubles input
+//   Op 2  MSG: copy    VM0.R30 -> VM1.R31   message pass
+//   Op 3  VM1: affine  R31 -> R30  (x*-1+0) negates
+//
+//   VkCommandBuffer: [dispatch1 | BARRIER | dispatch2 | BARRIER | dispatch3]
+//   vkQueueSubmit:   once
+//
+// Input:    VM0.R0  = [1, 2, 3, 4, 5, 6, 7, 8]
+// Expected: VM1.R30 = [-2, -4, -6, -8, -10, -12, -14, -16]
+//
+// Run: octoflow run stdlib/loom/test_vm_chain.flow --allow-ffi
+
+// ── 1. Boot VM with 2 instances ──────────────────────────────────────────────
+let reg_size = 8.0
+let n_inst   = 2.0
+let vm = vm_boot(n_inst, reg_size, 1.0)
+
+// ── 2. Write input to VM0.R0 ─────────────────────────────────────────────────
+let input = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+let _wr = vm_write_register(vm, 0.0, 0.0, input)
+
+// ── 3. Flat register offsets ──────────────────────────────────────────────────
+let n_regs  = 32.0
+let vm0_r0  = (0.0 * n_regs +  0.0) * reg_size  //   0
+let vm0_r30 = (0.0 * n_regs + 30.0) * reg_size  // 240
+let vm1_r31 = (1.0 * n_regs + 31.0) * reg_size  // 504
+let vm1_r30 = (1.0 * n_regs + 30.0) * reg_size  // 496
+let wg = 1.0
+
+// ── 4. Stage all 3 ops before building ───────────────────────────────────────
+// Each vm_dispatch appends one VmOp to VM_STAGED_OPS[vm].
+// vm_build drains ALL staged ops into a SINGLE VkCommandBuffer
+// with VkMemoryBarrier (SHADER_WRITE -> SHADER_READ) between each op.
+// The GPU executes the full pipeline without returning to CPU.
+
+// Op 1: VM0 doubles R0 -> R30
+let pc1 = [vm0_r0, vm0_r30, 2.0, 0.0, reg_size]
+let _d1 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_affine.spv", pc1, wg)
+
+// Op 2: message pass VM0.R30 -> VM1.R31  (barrier before this)
+let pc2 = [vm0_r30, vm1_r31, reg_size]
+let _d2 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_copy.spv", pc2, wg)
+
+// Op 3: VM1 negates R31 -> R30  (barrier before this)
+let pc3 = [vm1_r31, vm1_r30, -1.0, 0.0, reg_size]
+let _d3 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_affine.spv", pc3, wg)
+
+// ── 5. Build ONE program from all 3 staged ops ────────────────────────────────
+// vm_build drains VM_STAGED_OPS[vm] -> calls vm_build_program(&[op1, op2, op3])
+// Returns a reusable VkCommandBuffer handle.
+let prog = vm_build(vm)
+
+// ── 6. Execute ONCE — one vkQueueSubmit, GPU autonomous ───────────────────────
+let _e = vm_execute(prog)
+
+// ── 7. Read results ───────────────────────────────────────────────────────────
+let result = vm_read_register(vm, 1.0, 30.0, reg_size)
+let mid    = vm_read_register(vm, 0.0, 30.0, reg_size)
+let inbox  = vm_read_register(vm, 1.0, 31.0, reg_size)
+
+// ── 8. Report ─────────────────────────────────────────────────────────────────
+let r0 = result[0]
+let r1 = result[1]
+let r2 = result[2]
+let r3 = result[3]
+let m0 = mid[0]
+let m1 = mid[1]
+let i0 = inbox[0]
+let i1 = inbox[1]
+
+print("Program:  {prog}  (single VkCommandBuffer, 3 ops, 2 barriers)")
+print("VM0.R30 (outbox):  [{m0}, {m1}, ...] -- doubled input, sent as message")
+print("VM1.R31 (inbox):   [{i0}, {i1}, ...] -- message received")
+print("VM1.R30 (output):  [{r0}, {r1}, {r2}, {r3}, ...] -- negated")
+print("Expected:          [-2, -4, -6, -8, ...]")
+
+// ── 9. Verify ─────────────────────────────────────────────────────────────────
+let mut pass = 1.0
+let mut vi = 0.0
+while vi < reg_size
+  let exp_val = 0.0 - (vi + 1.0) * 2.0
+  let diff = abs(result[int(vi)] - exp_val)
+  if diff > 0.001
+    pass = 0.0
+    print("  MISMATCH [{vi}]: got {result[int(vi)]}, expected {exp_val}")
+  end
+  vi = vi + 1.0
+end
+
+if pass == 1.0
+  print("TEST 1: PASS -- single-submit 3-op pipeline, correct output")
+else
+  print("TEST 1: FAIL")
+end
+
+// ── 10. Re-execute the SAME program ──────────────────────────────────────────
+// VkCommandBuffer is REUSABLE. vm_write_register re-seeds R0.
+// This validates that re-submission produces identical results.
+let input2 = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+let _wr2 = vm_write_register(vm, 0.0, 0.0, input2)
+let _e2  = vm_execute(prog)   // same program, new input data
+let result2 = vm_read_register(vm, 1.0, 30.0, reg_size)
+
+let mut pass2 = 1.0
+let mut vi2 = 0.0
+while vi2 < reg_size
+  let exp2 = 0.0 - (vi2 + 1.0) * 10.0 * 2.0
+  let diff2 = abs(result2[int(vi2)] - exp2)
+  if diff2 > 0.001
+    pass2 = 0.0
+    print("  MISMATCH2 [{vi2}]: got {result2[int(vi2)]}, expected {exp2}")
+  end
+  vi2 = vi2 + 1.0
+end
+
+if pass2 == 1.0
+  print("TEST 2: PASS -- reusable program, new input, same pipeline")
+else
+  print("TEST 2: FAIL")
+end
+
+let _sv = vm_shutdown(vm)

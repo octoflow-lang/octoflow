@@ -1,0 +1,57 @@
+// tcp_demo.flow — Phase 45: TCP/UDP sockets
+//
+// Demonstrates raw TCP client/server patterns.
+// Run with: flowgpu --allow-net tcp_demo.flow
+//
+// OctoFlow uses raw OS socket APIs (WinSock2/POSIX) — zero dependencies.
+
+// ── TCP echo client (connect to a test server) ───────────────────────
+//
+// To test manually, start a netcat listener first:
+//   Windows: ncat -l 8080
+//   Linux:   nc -l 8080
+//
+// Then run: flowgpu --allow-net tcp_demo.flow
+
+let host = "127.0.0.1"
+let port = 8080.0
+
+let fd = tcp_connect(host, port)
+if fd > 0.0
+    print("connected: fd={fd}")
+    let sent = tcp_send(fd, "hello from OctoFlow")
+    print("bytes sent: {sent}")
+    let reply = tcp_recv(fd, 1024)
+    print("received: {reply}")
+    let r = tcp_close(fd)
+end
+
+if fd < 0.0
+    print("connection refused (no server running — that is expected)")
+end
+
+// ── TCP server snippet (requires --allow-net) ────────────────────────
+//
+// let listener = tcp_listen(8080.0)
+// if listener > 0.0
+//     print("listening on :8080")
+//     let client = tcp_accept(listener)
+//     if client > 0.0
+//         let data = tcp_recv(client, 4096)
+//         print("received: {data}")
+//         let sent = tcp_send(client, "pong")
+//         let r = tcp_close(client)
+//     end
+//     let r2 = tcp_close(listener)
+// end
+
+// ── UDP example ───────────────────────────────────────────────────────
+//
+// let sock = udp_socket()
+// if sock > 0.0
+//     let sent = udp_send_to(sock, "127.0.0.1", 9999.0, "ping")
+//     print("UDP sent: {sent} bytes")
+//     let msg = udp_recv_from(sock, 1024)
+//     print("UDP reply: {msg}")
+//     let r = tcp_close(sock)
+// end

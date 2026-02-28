@@ -1,0 +1,80 @@
+// emit_vm_scheduler.flow — VM Indirect Dispatch Scheduler Kernel
+//
+// Thread 0 computes the workgroup count for the next dispatch and writes
+// it to the control buffer as 3 consecutive uint32: {ceil(count/256), 1, 1}.
+//
+// This enables GPU self-scheduling: a kernel determines its own dispatch
+// size, and the next kernel is launched via vkCmdDispatchIndirect.
+//
+// Push constants:
+//   pc[0] = count          (float -> uint, number of elements for next dispatch)
+//   pc[1] = control_off    (float -> uint, float offset in control where to write)
+//
+// The scheduler writes 3 uint32 values at control[control_off]:
+//   control[off+0] = ceil(count / 256)  (workgroup X)
+//   control[off+1] = 1                  (workgroup Y)
+//   control[off+2] = 1                  (workgroup Z)
+//
+// Binding layout (ir_input_count=3):
+//   Binding 0: registers (unused)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (unused)
+//   Binding 3: control   (write dispatch parameters)
+//
+// Dispatch: wg=1 (only thread 0 runs)
+//
+// Run: octoflow run stdlib/loom/emit_vm_scheduler.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_scheduler(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  // Binding 3 (control) stores uint32 dispatch parameters — declare as uint binding
+  push(ir_uint_bindings, 3.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid guard (thread 0 only) ──────────────────────────────────
+  let gid    = ir_load_gid(entry)
+  let one_u  = ir_const_u(entry, 1.0)
+  let not_t0 = ir_ugte(entry, gid, one_u)
+  let _sm    = ir_selection_merge(entry, exit_block)
+  let _br    = ir_term_cond_branch(entry, not_t0, exit_block, body)
+
+  // ── Body: compute workgroups = ceil(count / 256) ──────────────────────
+  let pc_count = ir_push_const(body, 0.0)
+  let pc_off   = ir_push_const(body, 1.0)
+  let count_u  = ir_ftou(body, pc_count)
+  let off_u    = ir_ftou(body, pc_off)
+
+  // ceil(count / 256) = (count + 255) / 256
+  let c255     = ir_const_u(body, 255.0)
+  let c256     = ir_const_u(body, 256.0)
+  let sum      = ir_iadd(body, count_u, c255)
+  let wg_x     = ir_udiv(body, sum, c256)
+
+  // Write {wg_x, 1, 1} to control buffer as uint32
+  let one_u2   = ir_const_u(body, 1.0)
+  let off_1    = ir_iadd(body, off_u, one_u2)
+  let two_u    = ir_const_u(body, 2.0)
+  let off_2    = ir_iadd(body, off_u, two_u)
+
+  let _sw0     = ir_buf_store_u(body, 3.0, off_u,  wg_x)    // control[off+0] = wg_x
+  let _sw1     = ir_buf_store_u(body, 3.0, off_1,  one_u2)  // control[off+1] = 1
+  let _sw2     = ir_buf_store_u(body, 3.0, off_2,  one_u2)  // control[off+2] = 1
+
+  let _br2     = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/ops/vm_scheduler.spv"
+let _r = emit_vm_scheduler(out)
+print("Emitted: {out}")

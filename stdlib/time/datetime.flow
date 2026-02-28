@@ -1,4 +1,8 @@
 // stdlib/time/datetime.flow — Date/time utilities (Python datetime equivalent)
+//
+// Functions: unix_now, ms_now, unix_to_date, is_leap_year, format_date,
+//            format_datetime_full, str_zfill, day_of_week, day_name,
+//            days_between, hours_between
 
 fn unix_now()
   return now()

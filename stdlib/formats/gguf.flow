@@ -1,0 +1,868 @@
+// stdlib/formats/gguf.flow — GGUF Model Format Parser
+//
+// GGUF (GPT-Generated Unified Format) is the standard format for quantized LLM weights.
+// Used by llama.cpp ecosystem (Qwen, Llama, Mistral, etc.)
+//
+// Spec: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md
+// Version: GGUF v3 (latest as of 2024)
+//
+// Functions:
+//   gguf_load(file_path) → model_map
+//   gguf_load_from_bytes(file_bytes) → model_map
+//     ALL metadata stored as kv.{original_key} in model map.
+//     Tensor info stored as t.{name}.type/offset/count/etc.
+//     Shorthand aliases: n_layer, n_head, n_embd, etc. for convenience.
+//
+//   gguf_meta(model, suffix) → value
+//     Tries kv.{arch}.{suffix}, then kv.llama.{suffix}, then 0.0
+//
+//   gguf_meta_default(model, suffix, default_val) → value
+//     Like gguf_meta but returns default_val instead of 0.0
+//
+// Requirements: --allow-read
+// Usage:
+//   use "stdlib/formats/gguf"
+//   let model = gguf_load("qwen2.5-0.5b-instruct-q4_k_m.gguf")
+//   let n_head = gguf_meta(model, "attention.head_count")
+//   let rope_theta = map_get(model, "kv.qwen2.rope.freq_base")
+
+// ── GGUF Constants ──────────────────────────────────────────────────
+
+let GGUF_MAGIC = 1179993927.0        // 0x46554747 "GGUF" in little-endian
+let GGUF_VERSION = 3.0                // Version 3 (current)
+
+// GGUF value types
+let GGUF_TYPE_UINT8   = 0.0
+let GGUF_TYPE_INT8    = 1.0
+let GGUF_TYPE_UINT16  = 2.0
+let GGUF_TYPE_INT16   = 3.0
+let GGUF_TYPE_UINT32  = 4.0
+let GGUF_TYPE_INT32   = 5.0
+let GGUF_TYPE_FLOAT32 = 6.0
+let GGUF_TYPE_BOOL    = 7.0
+let GGUF_TYPE_STRING  = 8.0
+let GGUF_TYPE_ARRAY   = 9.0
+let GGUF_TYPE_UINT64  = 10.0
+let GGUF_TYPE_INT64   = 11.0
+let GGUF_TYPE_FLOAT64 = 12.0
+
+// GGUF tensor types (quantization formats)
+let GGUF_TENSOR_F32  = 0.0
+let GGUF_TENSOR_F16  = 1.0
+let GGUF_TENSOR_Q4_0 = 2.0
+let GGUF_TENSOR_Q4_1 = 3.0
+let GGUF_TENSOR_Q5_0 = 6.0
+let GGUF_TENSOR_Q5_1 = 7.0
+let GGUF_TENSOR_Q8_0 = 8.0
+let GGUF_TENSOR_Q8_1 = 9.0
+let GGUF_TENSOR_Q4_K = 12.0          // Q4_K_M (most common for small models)
+let GGUF_TENSOR_Q5_K = 13.0
+let GGUF_TENSOR_Q6_K = 14.0
+
+// ── Helper: Read bytes as little-endian values ──────────────────────
+
+fn read_u32_le(bytes, offset)
+  let b0 = bytes[int(offset)]
+  let b1 = bytes[int(offset + 1.0)]
+  let b2 = bytes[int(offset + 2.0)]
+  let b3 = bytes[int(offset + 3.0)]
+  return b0 + (b1 * 256.0) + (b2 * 65536.0) + (b3 * 16777216.0)
+end
+
+fn read_u64_le(bytes, offset)
+  // Read low 32 bits (JavaScript/OctoFlow float precision limits us to 53 bits)
+  let low = read_u32_le(bytes, offset)
+  let high = read_u32_le(bytes, offset + 4.0)
+  // For sizes < 2^32, high will be 0
+  if high > 0.0
+    // Approximate: high * 2^32 + low (loses precision for large files)
+    return (high * 4294967296.0) + low
+  end
+  return low
+end
+
+fn read_f32_le(bytes, offset)
+  // IEEE 754 float32 from 4 bytes via bits_to_float builtin
+  let u = read_u32_le(bytes, offset)
+  return bits_to_float(u)
+end
+
+fn read_f16_le(bytes, offset)
+  // IEEE 754 half-precision float from 2 bytes
+  let b0 = bytes[int(offset)]
+  let b1 = bytes[int(offset + 1.0)]
+  let bits = b0 + b1 * 256.0
+
+  let sign_bit = floor(bits / 32768.0)
+  let remainder = bits - sign_bit * 32768.0
+  let exp_bits = floor(remainder / 1024.0)
+  let mantissa_bits = remainder - exp_bits * 1024.0
+
+  if exp_bits == 0.0
+    if mantissa_bits == 0.0
+      return 0.0
+    end
+    // Subnormal
+    let val = mantissa_bits / 1024.0 * pow(2.0, -14.0)
+    if sign_bit == 1.0
+      return val * -1.0
+    end
+    return val
+  elif exp_bits == 31.0
+    // Inf/NaN → 0.0 (simplified)
+    return 0.0
+  end
+
+  let val = (1.0 + mantissa_bits / 1024.0) * pow(2.0, exp_bits - 15.0)
+  if sign_bit == 1.0
+    return val * -1.0
+  end
+  return val
+end
+
+fn read_string(bytes, offset)
+  // GGUF string: u64 length + UTF-8 bytes
+  let len = read_u64_le(bytes, offset)
+  let start = offset + 8.0
+
+  // Read UTF-8 bytes and convert to string
+  let mut s = ""
+  let mut i = 0.0
+  while i < len
+    let byte = bytes[int(start + i)]
+    // Simple ASCII conversion (proper UTF-8 decode needed for full support)
+    s = s + chr(byte)
+    i = i + 1.0
+  end
+
+  return s
+end
+
+fn read_string_len(bytes, offset)
+  // Return string length in bytes (u64 + string data)
+  let len = read_u64_le(bytes, offset)
+  return 8.0 + len
+end
+
+// ── GGUF Header Parser ──────────────────────────────────────────────
+
+fn gguf_parse_header(bytes)
+  let mut pos = 0.0
+
+  // Magic number (4 bytes)
+  let magic = read_u32_le(bytes, pos)
+  pos = pos + 4.0
+
+  if magic != GGUF_MAGIC
+    print("ERROR: Invalid GGUF magic number")
+    let mut _err = map()
+    return _err
+  end
+
+  // Version (4 bytes)
+  let version = read_u32_le(bytes, pos)
+  pos = pos + 4.0
+
+  if version != GGUF_VERSION
+    print("WARNING: GGUF version {version}, expected {GGUF_VERSION}")
+  end
+
+  // Tensor count (u64)
+  let tensor_count = read_u64_le(bytes, pos)
+  pos = pos + 8.0
+
+  // Metadata KV count (u64)
+  let kv_count = read_u64_le(bytes, pos)
+  pos = pos + 8.0
+
+  let mut result = map()
+  map_set(result, "magic", magic)
+  map_set(result, "version", version)
+  map_set(result, "tensor_count", tensor_count)
+  map_set(result, "kv_count", kv_count)
+  map_set(result, "header_size", pos)
+
+  return result
+end
+
+// ── GGUF Metadata Parser ────────────────────────────────────────────
+// Writes ALL KV pairs into model map with "kv." prefix.
+// Returns kv_end_pos (byte offset after last KV pair).
+
+fn gguf_parse_kv(bytes, start_pos, kv_count, model)
+  let mut pos = start_pos
+
+  let mut i = 0.0
+  while i < kv_count
+    // Read key (string)
+    let key = read_string(bytes, pos)
+    pos = pos + read_string_len(bytes, pos)
+
+    // Read value type (u32)
+    let val_type = read_u32_le(bytes, pos)
+    pos = pos + 4.0
+
+    // Read value based on type
+    let mut value = 0.0
+    let kv_key = "kv." + key
+
+    if val_type == GGUF_TYPE_UINT8
+      value = bytes[int(pos)]
+      pos = pos + 1.0
+    elif val_type == GGUF_TYPE_INT8
+      value = bytes[int(pos)]
+      pos = pos + 1.0
+    elif val_type == GGUF_TYPE_UINT16
+      value = bytes[int(pos)] + bytes[int(pos + 1.0)] * 256.0
+      pos = pos + 2.0
+    elif val_type == GGUF_TYPE_INT16
+      value = bytes[int(pos)] + bytes[int(pos + 1.0)] * 256.0
+      pos = pos + 2.0
+    elif val_type == GGUF_TYPE_UINT32
+      value = read_u32_le(bytes, pos)
+      pos = pos + 4.0
+    elif val_type == GGUF_TYPE_INT32
+      value = read_u32_le(bytes, pos)
+      pos = pos + 4.0
+    elif val_type == GGUF_TYPE_UINT64
+      value = read_u64_le(bytes, pos)
+      pos = pos + 8.0
+    elif val_type == GGUF_TYPE_INT64
+      value = read_u64_le(bytes, pos)
+      pos = pos + 8.0
+    elif val_type == GGUF_TYPE_FLOAT32
+      value = read_f32_le(bytes, pos)
+      pos = pos + 4.0
+    elif val_type == GGUF_TYPE_FLOAT64
+      // Read as 8 bytes, skip (f64 not supported in OctoFlow f32 runtime)
+      pos = pos + 8.0
+      i = i + 1.0
+      continue
+    elif val_type == GGUF_TYPE_STRING
+      let str_val = read_string(bytes, pos)
+      pos = pos + read_string_len(bytes, pos)
+      map_set(model, kv_key, str_val)
+      i = i + 1.0
+      continue
+    elif val_type == GGUF_TYPE_BOOL
+      value = bytes[int(pos)]
+      pos = pos + 1.0
+    elif val_type == GGUF_TYPE_ARRAY
+      // Skip array: element_type (u32) + count (u64) + elements
+      let elem_type = read_u32_le(bytes, pos)
+      pos = pos + 4.0
+      let arr_count = read_u64_le(bytes, pos)
+      pos = pos + 8.0
+      // Skip elements based on element type
+      if elem_type == GGUF_TYPE_UINT8 || elem_type == GGUF_TYPE_INT8 || elem_type == GGUF_TYPE_BOOL
+        pos = pos + arr_count
+      elif elem_type == GGUF_TYPE_UINT16 || elem_type == GGUF_TYPE_INT16
+        pos = pos + arr_count * 2.0
+      elif elem_type == GGUF_TYPE_UINT32 || elem_type == GGUF_TYPE_INT32 || elem_type == GGUF_TYPE_FLOAT32
+        pos = pos + arr_count * 4.0
+      elif elem_type == GGUF_TYPE_UINT64 || elem_type == GGUF_TYPE_INT64 || elem_type == GGUF_TYPE_FLOAT64
+        pos = pos + arr_count * 8.0
+      elif elem_type == GGUF_TYPE_STRING
+        // Walk strings one by one to find correct total length
+        let mut si = 0.0
+        while si < arr_count
+          pos = pos + read_string_len(bytes, pos)
+          si = si + 1.0
+        end
+      end
+      i = i + 1.0
+      continue
+    else
+      // Unknown type - cannot skip safely
+      print("WARNING: Unknown KV type {val_type} for key {key}, stopping metadata parse")
+      i = kv_count
+      continue
+    end
+
+    map_set(model, kv_key, value)
+    i = i + 1.0
+  end
+
+  return pos
+end
+
+// ── GGUF Tensor Info Parser ─────────────────────────────────────────
+// Stores tensor info as FLAT prefixed keys in model map to avoid nested maps.
+// Keys: t.NAME.type, t.NAME.offset, t.NAME.ndims, t.NAME.dim0, ..., t.NAME.count
+
+fn gguf_parse_tensors(bytes, start_pos, tensor_count, model)
+  // Parse tensor headers and store flat keys directly into model map.
+  // Returns tensor_info_end_pos (byte offset after all tensor headers).
+  let mut pos = start_pos
+
+  let mut i = 0.0
+  while i < tensor_count
+    // Tensor name (string)
+    let name = read_string(bytes, pos)
+    pos = pos + read_string_len(bytes, pos)
+
+    // Number of dimensions (u32)
+    let n_dims = read_u32_le(bytes, pos)
+    pos = pos + 4.0
+
+    // Dimensions (u64 x n_dims)
+    let mut dims = []
+    let mut d = 0.0
+    while d < n_dims
+      let dim_val = read_u64_le(bytes, pos)
+      push(dims, dim_val)
+      pos = pos + 8.0
+      d = d + 1.0
+    end
+
+    // Tensor type (u32)
+    let tensor_type = read_u32_le(bytes, pos)
+    pos = pos + 4.0
+
+    // Tensor offset (u64) — relative to data section start
+    let tensor_offset = read_u64_le(bytes, pos)
+    pos = pos + 8.0
+
+    // Calculate total element count
+    let mut elem_count = 1.0
+    let mut j = 0.0
+    while j < len(dims)
+      elem_count = elem_count * dims[int(j)]
+      j = j + 1.0
+    end
+
+    // Store as flat prefixed keys in model map
+    let prefix = "t." + name
+    map_set(model, prefix + ".type", tensor_type)
+    map_set(model, prefix + ".offset", tensor_offset)
+    map_set(model, prefix + ".ndims", n_dims)
+    map_set(model, prefix + ".count", elem_count)
+    if len(dims) > 0.0
+      map_set(model, prefix + ".dim0", dims[0])
+    end
+    if len(dims) > 1.0
+      map_set(model, prefix + ".dim1", dims[1])
+    end
+    if len(dims) > 2.0
+      map_set(model, prefix + ".dim2", dims[2])
+    end
+    if len(dims) > 3.0
+      map_set(model, prefix + ".dim3", dims[3])
+    end
+
+    i = i + 1.0
+  end
+
+  return pos
+end
+
+// ── Data Section Helpers ─────────────────────────────────────────
+
+fn gguf_data_start(tensor_info_end, alignment)
+  // Align position to alignment boundary (default 32)
+  let rem = tensor_info_end - floor(tensor_info_end / alignment) * alignment
+  if rem > 0.0
+    return tensor_info_end + (alignment - rem)
+  end
+  return tensor_info_end
+end
+
+// ── Tensor Access Helpers (flat key API) ─────────────────────────
+
+fn gguf_has_tensor(model, tname)
+  // Check if a tensor exists in the model
+  let key = "t." + tname + ".type"
+  return map_has(model, key)
+end
+
+fn gguf_tensor_type(model, tname)
+  return map_get(model, "t." + tname + ".type")
+end
+
+fn gguf_tensor_offset(model, tname)
+  return map_get(model, "t." + tname + ".offset")
+end
+
+fn gguf_tensor_count(model, tname)
+  return map_get(model, "t." + tname + ".count")
+end
+
+fn gguf_tensor_ndims(model, tname)
+  return map_get(model, "t." + tname + ".ndims")
+end
+
+fn gguf_tensor_dim(model, tname, dim_idx)
+  if dim_idx == 0.0
+    return map_get(model, "t." + tname + ".dim0")
+  elif dim_idx == 1.0
+    return map_get(model, "t." + tname + ".dim1")
+  elif dim_idx == 2.0
+    return map_get(model, "t." + tname + ".dim2")
+  elif dim_idx == 3.0
+    return map_get(model, "t." + tname + ".dim3")
+  end
+  return 0.0
+end
+
+// ── Architecture-aware metadata helpers ──────────────────────────
+
+fn gguf_meta(model, suffix)
+  // Try kv.{arch}.{suffix}, then kv.llama.{suffix}, then 0.0
+  let arch = map_get(model, "arch")
+  let key1 = "kv." + arch + "." + suffix
+  if map_has(model, key1)
+    return map_get(model, key1)
+  end
+  let key2 = "kv.llama." + suffix
+  if map_has(model, key2)
+    return map_get(model, key2)
+  end
+  return 0.0
+end
+
+fn gguf_meta_default(model, suffix, default_val)
+  let v = gguf_meta(model, suffix)
+  if v == 0.0
+    return default_val
+  end
+  return v
+end
+
+// ── Main GGUF Loader ────────────────────────────────────────────────
+
+fn gguf_load_from_bytes(file_bytes)
+  // Parse GGUF from byte array. All metadata stored as kv.* keys.
+  let header = gguf_parse_header(file_bytes)
+
+  if map_get(header, "magic") != GGUF_MAGIC
+    print("ERROR: Failed to parse GGUF header")
+    let mut _err2 = map()
+    return _err2
+  end
+
+  let mut model = map()
+
+  // Parse metadata KV pairs → writes kv.* keys into model
+  let kv_count = map_get(header, "kv_count")
+  let header_end = map_get(header, "header_size")
+  let kv_end = gguf_parse_kv(file_bytes, header_end, kv_count, model)
+
+  // Detect architecture
+  let mut arch = "llama"
+  if map_has(model, "kv.general.architecture")
+    arch = map_get(model, "kv.general.architecture")
+  end
+  map_set(model, "arch", arch)
+
+  // Parse tensor info — writes t.* keys into model
+  let tensor_count = map_get(header, "tensor_count")
+  let tensor_end = gguf_parse_tensors(file_bytes, kv_end, tensor_count, model)
+
+  // Calculate data section start
+  let mut alignment = 32.0
+  if map_has(model, "kv.general.alignment")
+    alignment = map_get(model, "kv.general.alignment")
+  end
+  let data_start = gguf_data_start(tensor_end, alignment)
+  map_set(model, "data_start", data_start)
+  map_set(model, "alignment", alignment)
+  map_set(model, "tensor_count", tensor_count)
+  map_set(model, "file_size", len(file_bytes))
+
+  // Backward-compat shorthand aliases (canonical source is kv.*)
+  let n_layer = gguf_meta(model, "block_count")
+  let n_head = gguf_meta(model, "attention.head_count")
+  let n_embd = gguf_meta(model, "embedding_length")
+  let n_kv_head = gguf_meta(model, "attention.head_count_kv")
+  let n_ff = gguf_meta(model, "feed_forward_length")
+  let mut vocab_size = gguf_meta(model, "vocab_size")
+  // Fallback: derive from token_embd.weight dim0
+  if vocab_size == 0.0
+    if gguf_has_tensor(model, "token_embd.weight") == 1.0
+      vocab_size = gguf_tensor_dim(model, "token_embd.weight", 1.0)
+    end
+  end
+
+  if n_layer > 0.0
+    map_set(model, "n_layer", n_layer)
+  end
+  if n_head > 0.0
+    map_set(model, "n_head", n_head)
+  end
+  if n_embd > 0.0
+    map_set(model, "n_embd", n_embd)
+  end
+  if n_kv_head > 0.0
+    map_set(model, "n_kv_head", n_kv_head)
+  end
+  if n_ff > 0.0
+    map_set(model, "n_ff", n_ff)
+  end
+  if vocab_size > 0.0
+    map_set(model, "vocab_size", vocab_size)
+  end
+
+  return model
+end
+
+fn gguf_load(file_path)
+  // Read entire file and load GGUF model
+  let file_bytes = read_bytes(file_path)
+  return gguf_load_from_bytes(file_bytes)
+end
+
+// ══════════════════════════════════════════════════════════════════════
+// MEM-based GGUF parser — reads from MEM_TABLE buffer, no Value overhead.
+// For loading real models (100MB+) without OOM.
+// ══════════════════════════════════════════════════════════════════════
+
+// ── MEM-based helpers ──────────────────────────────────────────────
+
+fn read_u32_le_m(buf, pos)
+  // Direct u32 read from MEM_TABLE — fast, no byte assembly needed
+  return mem_get_u32(buf, pos)
+end
+
+fn read_u64_le_m(buf, pos)
+  // Returns f32 (lossy for values > 16M — use off_pos for precise tensor offsets)
+  return mem_get_u64(buf, pos)
+end
+
+fn read_f32_le_m(buf, pos)
+  let u = mem_get_u32(buf, pos)
+  return bits_to_float(u)
+end
+
+fn read_string_m(buf, pos)
+  // GGUF string: u64 length + UTF-8 bytes
+  let slen = mem_get_u32(buf, pos)
+  return mem_to_str_at(buf, pos + 8.0, slen)
+end
+
+fn read_string_len_m(buf, pos)
+  let slen = mem_get_u32(buf, pos)
+  return 8.0 + slen
+end
+
+// ── MEM-based header parser ──────────────────────────────────────
+
+fn gguf_parse_header_m(buf)
+  let magic = read_u32_le_m(buf, 0.0)
+  let version = read_u32_le_m(buf, 4.0)
+  let tensor_count = read_u64_le_m(buf, 8.0)
+  let kv_count = read_u64_le_m(buf, 16.0)
+
+  if magic != GGUF_MAGIC
+    print("ERROR: Invalid GGUF magic number")
+  end
+
+  let mut result = map()
+  map_set(result, "magic", magic)
+  map_set(result, "version", version)
+  map_set(result, "tensor_count", tensor_count)
+  map_set(result, "kv_count", kv_count)
+  map_set(result, "header_size", 24.0)
+  return result
+end
+
+// ── MEM-based KV parser ──────────────────────────────────────────
+
+fn gguf_parse_kv_m(buf, start_pos, kv_count, model)
+  let mut pos = start_pos
+  let mut i = 0.0
+
+  while i < kv_count
+    let key = read_string_m(buf, pos)
+    pos = pos + read_string_len_m(buf, pos)
+
+    let val_type = read_u32_le_m(buf, pos)
+    pos = pos + 4.0
+
+    let mut value = 0.0
+    let kv_key = "kv." + key
+
+    if val_type == GGUF_TYPE_UINT8
+      value = mem_get_u8(buf, pos)
+      pos = pos + 1.0
+    elif val_type == GGUF_TYPE_INT8
+      value = mem_get_u8(buf, pos)
+      pos = pos + 1.0
+    elif val_type == GGUF_TYPE_UINT16
+      let b0 = mem_get_u8(buf, pos)
+      let b1 = mem_get_u8(buf, pos + 1.0)
+      value = b0 + b1 * 256.0
+      pos = pos + 2.0
+    elif val_type == GGUF_TYPE_INT16
+      let b0 = mem_get_u8(buf, pos)
+      let b1 = mem_get_u8(buf, pos + 1.0)
+      value = b0 + b1 * 256.0
+      pos = pos + 2.0
+    elif val_type == GGUF_TYPE_UINT32
+      value = read_u32_le_m(buf, pos)
+      pos = pos + 4.0
+    elif val_type == GGUF_TYPE_INT32
+      value = read_u32_le_m(buf, pos)
+      pos = pos + 4.0
+    elif val_type == GGUF_TYPE_UINT64
+      value = read_u64_le_m(buf, pos)
+      pos = pos + 8.0
+    elif val_type == GGUF_TYPE_INT64
+      value = read_u64_le_m(buf, pos)
+      pos = pos + 8.0
+    elif val_type == GGUF_TYPE_FLOAT32
+      value = read_f32_le_m(buf, pos)
+      pos = pos + 4.0
+    elif val_type == GGUF_TYPE_FLOAT64
+      pos = pos + 8.0
+      i = i + 1.0
+      continue
+    elif val_type == GGUF_TYPE_STRING
+      let str_val = read_string_m(buf, pos)
+      pos = pos + read_string_len_m(buf, pos)
+      map_set(model, kv_key, str_val)
+      i = i + 1.0
+      continue
+    elif val_type == GGUF_TYPE_BOOL
+      value = mem_get_u8(buf, pos)
+      pos = pos + 1.0
+    elif val_type == GGUF_TYPE_ARRAY
+      let elem_type = read_u32_le_m(buf, pos)
+      pos = pos + 4.0
+      let arr_count = read_u64_le_m(buf, pos)
+      pos = pos + 8.0
+      if elem_type == GGUF_TYPE_UINT8 || elem_type == GGUF_TYPE_INT8 || elem_type == GGUF_TYPE_BOOL
+        pos = pos + arr_count
+      elif elem_type == GGUF_TYPE_UINT16 || elem_type == GGUF_TYPE_INT16
+        pos = pos + arr_count * 2.0
+      elif elem_type == GGUF_TYPE_UINT32 || elem_type == GGUF_TYPE_INT32 || elem_type == GGUF_TYPE_FLOAT32
+        pos = pos + arr_count * 4.0
+      elif elem_type == GGUF_TYPE_UINT64 || elem_type == GGUF_TYPE_INT64 || elem_type == GGUF_TYPE_FLOAT64
+        pos = pos + arr_count * 8.0
+      elif elem_type == GGUF_TYPE_STRING
+        let mut si = 0.0
+        while si < arr_count
+          pos = pos + read_string_len_m(buf, pos)
+          si = si + 1.0
+        end
+      end
+      i = i + 1.0
+      continue
+    else
+      print("WARNING: Unknown KV type {val_type} for key {key}")
+      i = kv_count
+      continue
+    end
+
+    map_set(model, kv_key, value)
+    i = i + 1.0
+  end
+
+  return pos
+end
+
+// ── MEM-based tensor info parser ─────────────────────────────────
+// Also stores off_pos: byte position of tensor offset u64 in header buffer,
+// for precise file seeking via file_read_into_mem_u64.
+
+fn gguf_parse_tensors_m(buf, start_pos, tensor_count, model)
+  let mut pos = start_pos
+  let mut i = 0.0
+
+  while i < tensor_count
+    let name = read_string_m(buf, pos)
+    pos = pos + read_string_len_m(buf, pos)
+
+    let n_dims = read_u32_le_m(buf, pos)
+    pos = pos + 4.0
+
+    let mut dims = []
+    let mut d = 0.0
+    while d < n_dims
+      let dim_val = read_u64_le_m(buf, pos)
+      push(dims, dim_val)
+      pos = pos + 8.0
+      d = d + 1.0
+    end
+
+    let tensor_type = read_u32_le_m(buf, pos)
+    pos = pos + 4.0
+
+    // Store the byte position of the offset u64 (for precise file seeking)
+    let off_byte_pos = pos
+    let tensor_offset = read_u64_le_m(buf, pos)
+    pos = pos + 8.0
+
+    let mut elem_count = 1.0
+    let mut j = 0.0
+    while j < len(dims)
+      elem_count = elem_count * dims[int(j)]
+      j = j + 1.0
+    end
+
+    let prefix = "t." + name
+    map_set(model, prefix + ".type", tensor_type)
+    map_set(model, prefix + ".offset", tensor_offset)
+    map_set(model, prefix + ".off_pos", off_byte_pos)
+    map_set(model, prefix + ".ndims", n_dims)
+    map_set(model, prefix + ".count", elem_count)
+    if len(dims) > 0.0
+      map_set(model, prefix + ".dim0", dims[0])
+    end
+    if len(dims) > 1.0
+      map_set(model, prefix + ".dim1", dims[1])
+    end
+    if len(dims) > 2.0
+      map_set(model, prefix + ".dim2", dims[2])
+    end
+    if len(dims) > 3.0
+      map_set(model, prefix + ".dim3", dims[3])
+    end
+
+    i = i + 1.0
+  end
+
+  return pos
+end
+
+// ── Tensor byte size helper ──────────────────────────────────────
+
+fn gguf_tensor_byte_size(model, tname)
+  let ttype = gguf_tensor_type(model, tname)
+  let count = gguf_tensor_count(model, tname)
+  if ttype == GGUF_TENSOR_F32
+    return count * 4.0
+  elif ttype == GGUF_TENSOR_F16
+    return count * 2.0
+  elif ttype == GGUF_TENSOR_Q4_K
+    // Q4_K: 256 elements per block, 144 bytes per block
+    let n_blocks = count / 256.0
+    return n_blocks * 144.0
+  elif ttype == GGUF_TENSOR_Q5_K
+    let n_blocks = count / 256.0
+    return n_blocks * 176.0
+  elif ttype == GGUF_TENSOR_Q6_K
+    let n_blocks = count / 256.0
+    return n_blocks * 210.0
+  elif ttype == GGUF_TENSOR_Q8_0
+    let n_blocks = count / 32.0
+    return n_blocks * 34.0
+  elif ttype == GGUF_TENSOR_Q4_0
+    let n_blocks = count / 32.0
+    return n_blocks * 18.0
+  end
+  // Default: assume F32
+  return count * 4.0
+end
+
+// ── Get precise u64 file offset for a tensor ─────────────────────
+// Returns MEM_TABLE handle containing u64 absolute file offset.
+// Caller must mem_free the returned handle when done.
+
+fn gguf_tensor_file_offset(model, tname)
+  let ds_buf = map_get(model, "_ds_buf")
+  let hdr_buf = map_get(model, "_hdr_buf")
+  let off_pos = map_get(model, "t." + tname + ".off_pos")
+
+  // result = data_start (copy u64)
+  let result = mem_alloc(8)
+  let _cp = mem_copy(ds_buf, 0, result, 0, 8)
+
+  // result += tensor_offset (u64 add from header buffer at off_pos)
+  let _add = mem_u64_add(result, 0.0, hdr_buf, off_pos)
+
+  return result
+end
+
+// ── Load GGUF model from file (no OOM for large models) ──────────
+// Reads only the header into memory (MEM_TABLE), not the full file.
+// Tensor data loaded on-demand via gguf_tensor_file_offset + file_read_into_mem_u64.
+
+fn gguf_load_from_file(file_path)
+  // 1. Determine header read size (cap at 32MB)
+  let fsz = file_size(file_path)
+  let mut hdr_size = 33554432.0
+  if fsz < hdr_size
+    hdr_size = fsz
+  end
+
+  // 2. Read header bytes into MEM_TABLE
+  let hdr = mem_alloc(hdr_size)
+  let _r = file_read_into_mem(file_path, hdr, 0.0, hdr_size)
+
+  // 3. Parse header
+  let header = gguf_parse_header_m(hdr)
+  if map_get(header, "magic") != GGUF_MAGIC
+    print("ERROR: Invalid GGUF magic")
+    mem_free(hdr)
+    let mut _err = map()
+    return _err
+  end
+
+  let mut model = map()
+
+  // 4. Parse KV → writes kv.* keys into model
+  let kv_count = map_get(header, "kv_count")
+  let header_end = map_get(header, "header_size")
+  let kv_end = gguf_parse_kv_m(hdr, header_end, kv_count, model)
+
+  // 5. Detect architecture
+  let mut arch = "llama"
+  if map_has(model, "kv.general.architecture")
+    arch = map_get(model, "kv.general.architecture")
+  end
+  map_set(model, "arch", arch)
+
+  // 6. Parse tensors → writes t.* keys + off_pos into model
+  let tensor_count = map_get(header, "tensor_count")
+  let tensor_end = gguf_parse_tensors_m(hdr, kv_end, tensor_count, model)
+
+  // 7. Compute data_start as u64 (stored in MEM_TABLE for precision)
+  let mut alignment = 32.0
+  if map_has(model, "kv.general.alignment")
+    alignment = map_get(model, "kv.general.alignment")
+  end
+  let data_start = gguf_data_start(tensor_end, alignment)
+  let ds_buf = mem_alloc(8)
+  mem_set_u64(ds_buf, 0.0, data_start)
+  map_set(model, "_ds_buf", ds_buf)
+  map_set(model, "_hdr_buf", hdr)
+  map_set(model, "data_start", data_start)
+  map_set(model, "alignment", alignment)
+  map_set(model, "tensor_count", tensor_count)
+  map_set(model, "file_path", file_path)
+
+  // 8. Shorthand aliases
+  let n_layer = gguf_meta(model, "block_count")
+  let n_head = gguf_meta(model, "attention.head_count")
+  let n_embd = gguf_meta(model, "embedding_length")
+  let n_kv_head = gguf_meta(model, "attention.head_count_kv")
+  let n_ff = gguf_meta(model, "feed_forward_length")
+  let mut vocab_size = gguf_meta(model, "vocab_size")
+  // Fallback: derive from token_embd.weight dim0
+  if vocab_size == 0.0
+    if gguf_has_tensor(model, "token_embd.weight") == 1.0
+      vocab_size = gguf_tensor_dim(model, "token_embd.weight", 1.0)
+    end
+  end
+
+  if n_layer > 0.0
+    map_set(model, "n_layer", n_layer)
+  end
+  if n_head > 0.0
+    map_set(model, "n_head", n_head)
+  end
+  if n_embd > 0.0
+    map_set(model, "n_embd", n_embd)
+  end
+  if n_kv_head > 0.0
+    map_set(model, "n_kv_head", n_kv_head)
+  end
+  if n_ff > 0.0
+    map_set(model, "n_ff", n_ff)
+  end
+  if vocab_size > 0.0
+    map_set(model, "vocab_size", vocab_size)
+  end
+
+  return model
+end

@@ -1,0 +1,511 @@
+// stdlib/loom/array_ops.flow — GPU-Native Array Transformation Operations
+//
+// Phase 92 Batch 2: Array filtering, compaction, sorting, and transformations.
+// Architecture: Compose kernels (scan, sort, comparison, gather) for array ops.
+//
+// Available Functions:
+//   gpu_filter(arr, threshold, op)    — Filter elements (op = "gt", "lt", "eq")
+//   gpu_compact(arr, mask)             — Stream compaction (keep mask=1 elements)
+//   gpu_unique(arr)                    — Remove duplicates (sort + adjacent check)
+//   gpu_top_k(arr, k)                  — Top K largest elements
+//   gpu_reverse(arr)                   — Reverse array order
+//   gpu_normalize(arr, min_val, max_val) — Scale to [min, max] range
+//   gpu_clamp(arr, low, high)          — Element-wise clamping
+//   gpu_map(arr, op)                   — Element-wise operation (sqrt, square, abs, negate)
+//
+// Requirements: --allow-ffi --allow-read
+// Usage:
+//   use "stdlib/loom/array_ops"
+//   rt_init()
+//   let filtered = gpu_filter(data, 0.5, "gt")
+//   rt_cleanup()
+
+use "runtime"
+use "stats"
+
+// ── Internal: Gather elements based on prefix sum indices ───────────────
+fn _gpu_gather(buf_data, buf_indices, n_out, n_total)
+  let pipe_gather = rt_load_pipeline("tests/gpu_shaders/41_gather.spv", 3.0, 8.0)
+
+  let buf_out = rt_create_buffer(n_out * 4.0)
+
+  let mut wgs = int((n_total + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 3.0)
+  let mut pc = [n_total, n_out]
+  rt_chain_push_constants(pipe_gather, pc)
+  let mut bufs = [buf_data, buf_indices, buf_out]
+  rt_chain_dispatch(pipe_gather, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  return buf_out
+end
+
+// ── gpu_compact: Stream compaction using prefix scan ────────────────────
+fn gpu_compact(arr, mask)
+  let n = len(arr)
+
+  // Upload data and mask
+  let buf_data = rt_create_buffer(n * 4.0)
+  let buf_mask = rt_create_buffer(n * 4.0)
+  rt_upload(buf_data, arr)
+  rt_upload(buf_mask, mask)
+
+  // Prefix sum on mask to get output indices
+  let buf_indices = rt_create_buffer(n * 4.0)
+  let pipe_scan = rt_load_pipeline("tests/gpu_shaders/32_scan_sum.spv", 2.0, 4.0)
+
+  let mut wgs = int((n + 511.0) / 512.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut pc = [n]
+  rt_chain_push_constants(pipe_scan, pc)
+  let mut bufs = [buf_mask, buf_indices]
+  rt_chain_dispatch(pipe_scan, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // Download last index to get output count
+  rt_download(buf_indices, n)
+  let n_out = int(rt_result[int(n - 1.0)])
+
+  if n_out == 0.0
+    let mut empty = []
+    return empty
+  end
+
+  // Gather elements where mask=1
+  let buf_out = _gpu_gather(buf_data, buf_indices, n_out, n)
+
+  // Download result
+  rt_download(buf_out, n_out)
+  let mut result = []
+  let mut i = 0.0
+  while i < n_out
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── gpu_filter: Filter elements based on comparison ──────────────────────
+fn gpu_filter(arr, threshold, op)
+  let n = len(arr)
+
+  // Select comparison kernel
+  let mut kernel_path = ""
+  if op == "gt"
+    kernel_path = "tests/gpu_shaders/15_gt_scalar.spv"
+  elif op == "lt"
+    kernel_path = "tests/gpu_shaders/16_lt_scalar.spv"
+  elif op == "eq"
+    kernel_path = "tests/gpu_shaders/17_eq_scalar.spv"
+  else
+    print("gpu_filter: unknown op {op}, using gt")
+    kernel_path = "tests/gpu_shaders/15_gt_scalar.spv"
+  end
+
+  // Create comparison mask
+  let buf_data = rt_create_buffer(n * 4.0)
+  let buf_mask = rt_create_buffer(n * 4.0)
+  rt_upload(buf_data, arr)
+
+  let pipe_cmp = rt_load_pipeline(kernel_path, 2.0, 4.0)
+  let mut wgs = int((n + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut pc = [threshold]
+  rt_chain_push_constants(pipe_cmp, pc)
+  let mut bufs = [buf_data, buf_mask]
+  rt_chain_dispatch(pipe_cmp, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // Download mask for compact
+  rt_download(buf_mask, n)
+  let mut mask = []
+  let mut i = 0.0
+  while i < n
+    push(mask, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  // Compact using mask
+  return gpu_compact(arr, mask)
+end
+
+// ── gpu_unique: Remove duplicates via sort + adjacent comparison ────────
+fn gpu_unique(arr)
+  let n = len(arr)
+
+  if n == 0.0
+    let mut empty = []
+    return empty
+  end
+
+  // For small arrays, use CPU sort (bitonic sort kernel requires >= 512 elements)
+  if n < 512.0
+    // CPU bubble sort
+    let mut sorted = []
+    let mut i = 0.0
+    while i < n
+      push(sorted, arr[int(i)])
+      i = i + 1.0
+    end
+
+    let mut i = 0.0
+    while i < n - 1.0
+      let mut j = 0.0
+      while j < n - i - 1.0
+        let idx_j = int(j)
+        let idx_j1 = int(j + 1.0)
+        if sorted[idx_j] > sorted[idx_j1]
+          let temp = sorted[idx_j]
+          sorted[idx_j] = sorted[idx_j1]
+          sorted[idx_j1] = temp
+        end
+        j = j + 1.0
+      end
+      i = i + 1.0
+    end
+
+    // Dedup
+    let mut unique = []
+    push(unique, sorted[0])
+    let mut i = 1.0
+    while i < n
+      if sorted[int(i)] != sorted[int(i - 1.0)]
+        push(unique, sorted[int(i)])
+      end
+      i = i + 1.0
+    end
+    return unique
+  end
+
+  // Pad to power of 2 for bitonic sort
+  let mut padded_size = 1.0
+  while padded_size < n
+    padded_size = padded_size * 2.0
+  end
+
+  let mut padded = []
+  let mut i = 0.0
+  while i < n
+    push(padded, arr[int(i)])
+    i = i + 1.0
+  end
+  while i < padded_size
+    push(padded, 999999999.0)
+    i = i + 1.0
+  end
+
+  let buf = rt_create_buffer(padded_size * 4.0)
+  rt_upload(buf, padded)
+
+  // Sort
+  let pipe_sort = rt_load_pipeline("tests/gpu_shaders/36_bitonic_sort.spv", 1.0, 12.0)
+  let num_stages = int(log(padded_size) / log(2.0))
+
+  rt_chain_begin(num_stages * (num_stages + 1.0) / 2.0, 1.0)
+
+  let mut stage = 0.0
+  while stage < num_stages
+    let mut substage = 0.0
+    while substage <= stage
+      let mut pc = [padded_size, stage, substage]
+      rt_chain_push_constants(pipe_sort, pc)
+      let mut bufs = [buf]
+      rt_chain_dispatch(pipe_sort, bufs, padded_size / 512.0)
+      substage = substage + 1.0
+    end
+    stage = stage + 1.0
+  end
+
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // Download sorted array
+  rt_download(buf, n)
+
+  // CPU-side dedup (could be GPU kernel in production)
+  let mut unique = []
+  push(unique, rt_result[0])
+  let mut i = 1.0
+  while i < n
+    if rt_result[int(i)] != rt_result[int(i - 1.0)]
+      push(unique, rt_result[int(i)])
+    end
+    i = i + 1.0
+  end
+
+  return unique
+end
+
+// ── gpu_top_k: Top K largest elements ────────────────────────────────────
+fn gpu_top_k(arr, k)
+  let n = len(arr)
+
+  if k >= n
+    return arr
+  end
+
+  // For small arrays, use CPU sort (bitonic sort kernel requires >= 512 elements)
+  if n < 512.0
+    // CPU bubble sort (descending)
+    let mut sorted = []
+    let mut i = 0.0
+    while i < n
+      push(sorted, arr[int(i)])
+      i = i + 1.0
+    end
+
+    let mut i = 0.0
+    while i < n - 1.0
+      let mut j = 0.0
+      while j < n - i - 1.0
+        let idx_j = int(j)
+        let idx_j1 = int(j + 1.0)
+        // Sort descending (larger values first)
+        if sorted[idx_j] < sorted[idx_j1]
+          let temp = sorted[idx_j]
+          sorted[idx_j] = sorted[idx_j1]
+          sorted[idx_j1] = temp
+        end
+        j = j + 1.0
+      end
+      i = i + 1.0
+    end
+
+    // Take top k
+    let mut result = []
+    let mut i = 0.0
+    while i < k
+      push(result, sorted[int(i)])
+      i = i + 1.0
+    end
+    return result
+  end
+
+  // Pad to power of 2 for bitonic sort
+  let mut padded_size = 1.0
+  while padded_size < n
+    padded_size = padded_size * 2.0
+  end
+
+  let mut padded = []
+  let mut i = 0.0
+  while i < n
+    push(padded, arr[int(i)])
+    i = i + 1.0
+  end
+  while i < padded_size
+    push(padded, -999999999.0)
+    i = i + 1.0
+  end
+
+  let buf = rt_create_buffer(padded_size * 4.0)
+  rt_upload(buf, padded)
+
+  // Sort descending (bitonic sort)
+  let pipe_sort = rt_load_pipeline("tests/gpu_shaders/36_bitonic_sort.spv", 1.0, 12.0)
+  let num_stages = int(log(padded_size) / log(2.0))
+
+  rt_chain_begin(num_stages * (num_stages + 1.0) / 2.0, 1.0)
+
+  let mut stage = 0.0
+  while stage < num_stages
+    let mut substage = 0.0
+    while substage <= stage
+      let mut pc = [padded_size, stage, substage]
+      rt_chain_push_constants(pipe_sort, pc)
+      let mut bufs = [buf]
+      rt_chain_dispatch(pipe_sort, bufs, padded_size / 512.0)
+      substage = substage + 1.0
+    end
+    stage = stage + 1.0
+  end
+
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // Download and reverse (sort is ascending, we want descending)
+  rt_download(buf, n)
+
+  let mut result = []
+  let mut i = 0.0
+  while i < k
+    push(result, rt_result[int(n - 1.0 - i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── gpu_reverse: Reverse array order ─────────────────────────────────────
+fn gpu_reverse(arr)
+  let n = len(arr)
+
+  let buf_in = rt_create_buffer(n * 4.0)
+  let buf_out = rt_create_buffer(n * 4.0)
+  rt_upload(buf_in, arr)
+
+  let pipe_reverse = rt_load_pipeline("tests/gpu_shaders/41_reverse.spv", 2.0, 4.0)
+  let mut wgs = int((n + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut pc = [n]
+  rt_chain_push_constants(pipe_reverse, pc)
+  let mut bufs = [buf_in, buf_out]
+  rt_chain_dispatch(pipe_reverse, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  rt_download(buf_out, n)
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── gpu_normalize: Scale to [min_val, max_val] range ────────────────────
+fn gpu_normalize(arr, min_val, max_val)
+  let n = len(arr)
+
+  // Find current min/max
+  let cur_min = gpu_min(arr)
+  let cur_max = gpu_max(arr)
+  let cur_range = cur_max - cur_min
+
+  if cur_range < 0.0000001
+    // All values same, return array of min_val
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+      push(result, min_val)
+      i = i + 1.0
+    end
+    return result
+  end
+
+  let target_range = max_val - min_val
+
+  // Download and normalize on CPU (could be GPU kernel)
+  let buf = rt_create_buffer(n * 4.0)
+  rt_upload(buf, arr)
+  rt_download(buf, n)
+
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    let normalized = (rt_result[int(i)] - cur_min) / cur_range * target_range + min_val
+    push(result, normalized)
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── gpu_clamp: Element-wise clamping ─────────────────────────────────────
+fn gpu_clamp(arr, low, high)
+  let n = len(arr)
+
+  let buf_in = rt_create_buffer(n * 4.0)
+  let buf_out = rt_create_buffer(n * 4.0)
+  rt_upload(buf_in, arr)
+
+  let pipe_clamp = rt_load_pipeline("tests/gpu_shaders/42_clamp.spv", 2.0, 8.0)
+  let mut wgs = int((n + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut pc = [n, low, high]
+  rt_chain_push_constants(pipe_clamp, pc)
+  let mut bufs = [buf_in, buf_out]
+  rt_chain_dispatch(pipe_clamp, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  rt_download(buf_out, n)
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── gpu_map: Element-wise operation ──────────────────────────────────────
+fn gpu_map(arr, op)
+  let n = len(arr)
+
+  // Select operation kernel
+  let mut kernel_path = ""
+  let mut pc_size = 4.0
+
+  if op == "sqrt"
+    kernel_path = "tests/gpu_shaders/43_sqrt.spv"
+  elif op == "square"
+    kernel_path = "tests/gpu_shaders/44_square.spv"
+  elif op == "abs"
+    kernel_path = "tests/gpu_shaders/45_abs.spv"
+  elif op == "negate"
+    kernel_path = "tests/gpu_shaders/46_negate.spv"
+  elif op == "exp"
+    kernel_path = "tests/gpu_shaders/47_exp.spv"
+  elif op == "log"
+    kernel_path = "tests/gpu_shaders/48_log.spv"
+  else
+    print("gpu_map: unknown op {op}, using sqrt")
+    kernel_path = "tests/gpu_shaders/43_sqrt.spv"
+  end
+
+  let buf_in = rt_create_buffer(n * 4.0)
+  let buf_out = rt_create_buffer(n * 4.0)
+  rt_upload(buf_in, arr)
+
+  let pipe_map = rt_load_pipeline(kernel_path, 2.0, pc_size)
+  let mut wgs = int((n + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut pc = [n]
+  rt_chain_push_constants(pipe_map, pc)
+  let mut bufs = [buf_in, buf_out]
+  rt_chain_dispatch(pipe_map, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  rt_download(buf_out, n)
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end

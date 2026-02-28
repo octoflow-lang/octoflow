@@ -1,0 +1,14 @@
+// test_while_len.flow — tests while len(arr) > 0 pattern
+let mut items = []
+push(items, "x")
+push(items, "y")
+push(items, "z")
+let mut out = ""
+while len(items) > 0.0
+  let it = pop(items)
+  if len(out) > 0.0
+    out = out + ","
+  end
+  out = out + it
+end
+print("drain={out}")

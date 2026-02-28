@@ -1,0 +1,72 @@
+// stdlib/llm/stream.flow — Double-Buffered Streaming Helpers
+//
+// Wraps the staging buffer builtins into a clean API for streaming
+// layer data from disk to GPU with double-buffered prefetching.
+//
+// Staging builtins (Rust side):
+//   rt_staging_alloc(size_bytes) -> handle
+//   rt_staging_load(handle, path, offset, float_count) -> 0.0 (async, returns immediately)
+//   rt_staging_upload(handle, cache_key) -> 1.0
+//   rt_staging_ready(handle) -> 1.0/0.0
+//   rt_staging_wait(handle) -> float_count (blocks until I/O complete)
+//   rt_staging_free(handle) -> 1.0
+//
+// Usage:
+//   use "stream"
+//   let bufs = stream_init(layer_size_bytes)
+//   let ha = bufs[0]
+//   let hb = bufs[1]
+//   let _r = stream_load_sync(ha, "layer_000.bin", 0.0, count, "key")
+//   let _r = stream_prefetch(hb, "layer_001.bin", 0.0, count)
+//   // ... compute layer 0 ...
+//   let _r = stream_finish_upload(hb, "key2")
+
+// Module state stored in arrays for snapshot safety
+let mut _stream_handles = []
+
+fn stream_init(layer_size)
+  // Allocate two persistent staging buffers (reused across all layers)
+  let ha = rt_staging_alloc(layer_size)
+  let hb = rt_staging_alloc(layer_size)
+  let mut result = []
+  push(result, ha)
+  push(result, hb)
+  push(_stream_handles, ha)
+  push(_stream_handles, hb)
+  return result
+end
+
+fn stream_load_sync(handle, path, offset, count, dest_key)
+  // Synchronous load: read file region, wait, upload to GPU cache
+  let _l = rt_staging_load(handle, path, offset, count)
+  let _w = rt_staging_wait(handle)
+  let _u = rt_staging_upload(handle, dest_key)
+  let _w2 = rt_staging_wait(handle)
+  return 1.0
+end
+
+fn stream_prefetch(handle, path, offset, count)
+  // Start loading file region into staging buffer (non-blocking)
+  // Returns immediately — I/O runs on background thread
+  let _l = rt_staging_load(handle, path, offset, count)
+  return 1.0
+end
+
+fn stream_finish_upload(handle, dest_key)
+  // Wait for prefetch to complete, then upload to GPU cache
+  let _w = rt_staging_wait(handle)
+  let _u = rt_staging_upload(handle, dest_key)
+  let _w2 = rt_staging_wait(handle)
+  return 1.0
+end
+
+fn stream_free_all()
+  // Free all staging handles allocated by stream_init
+  let mut i = 0.0
+  while i < len(_stream_handles)
+    let h = _stream_handles[int(i)]
+    let _f = rt_staging_free(h)
+    i = i + 1.0
+  end
+  return 1.0
+end

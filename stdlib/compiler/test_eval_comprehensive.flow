@@ -1,0 +1,290 @@
+// test_eval_comprehensive.flow — Comprehensive eval.flow capability test
+// Tests: for-range, nested loops, for-each, arrays, maps, string ops,
+//        function returns, nested fn calls, break/continue, complex conditions
+//
+// Run: EVAL_PROG_PATH=stdlib/compiler/test_eval_comprehensive.flow octoflow run stdlib/compiler/eval.flow --allow-read --allow-ffi --max-iters 5000000
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// ── Test 1: For-each loop over array ─────────────────────────────
+let mut arr = []
+push(arr, "alpha")
+push(arr, "beta")
+push(arr, "gamma")
+let mut joined = ""
+for item in arr
+  if len(joined) > 0.0
+    joined = joined + ","
+  end
+  joined = joined + item
+end
+if joined == "alpha,beta,gamma"
+  pass = pass + 1.0
+else
+  print("FAIL T1: joined={joined}")
+  fail = fail + 1.0
+end
+
+// ── Test 2: While loop with break ────────────────────────────────
+let mut i = 0.0
+while i < 100.0
+  if i == 5.0
+    break
+  end
+  i = i + 1.0
+end
+if i == 5.0
+  pass = pass + 1.0
+else
+  print("FAIL T2: i={i}")
+  fail = fail + 1.0
+end
+
+// ── Test 3: While loop with continue ─────────────────────────────
+let mut sum = 0.0
+let mut j = 0.0
+while j < 10.0
+  j = j + 1.0
+  if j == 3.0 || j == 7.0
+    continue
+  end
+  sum = sum + j
+end
+// sum = 1+2+4+5+6+8+9+10 = 45
+if sum == 45.0
+  pass = pass + 1.0
+else
+  print("FAIL T3: sum={sum}")
+  fail = fail + 1.0
+end
+
+// ── Test 4: Nested if/elif/else ──────────────────────────────────
+let val = 42.0
+let mut label = ""
+if val < 10.0
+  label = "small"
+elif val < 50.0
+  label = "medium"
+elif val < 100.0
+  label = "large"
+else
+  label = "huge"
+end
+if label == "medium"
+  pass = pass + 1.0
+else
+  print("FAIL T4: label={label}")
+  fail = fail + 1.0
+end
+
+// ── Test 5: Function with return ─────────────────────────────────
+fn double(x)
+  let r = x * 2.0
+  return r
+end
+
+let d = double(7.0)
+if d == 14.0
+  pass = pass + 1.0
+else
+  print("FAIL T5: d={d}")
+  fail = fail + 1.0
+end
+
+// ── Test 6: Function calling another function ────────────────────
+fn add(a, b)
+  let s = a + b
+  return s
+end
+
+fn add_double(a, b)
+  let s = add(a, b)
+  let r = double(s)
+  return r
+end
+
+let ad = add_double(3.0, 4.0)
+if ad == 14.0
+  pass = pass + 1.0
+else
+  print("FAIL T6: ad={ad}")
+  fail = fail + 1.0
+end
+
+// ── Test 7: Map operations ───────────────────────────────────────
+let mut m = map()
+map_set(m, "x", 10.0)
+map_set(m, "y", 20.0)
+let mx = map_get(m, "x")
+let my = map_get(m, "y")
+if mx == 10.0 && my == 20.0
+  pass = pass + 1.0
+else
+  print("FAIL T7: mx={mx} my={my}")
+  fail = fail + 1.0
+end
+
+// ── Test 8: Map has / not has ────────────────────────────────────
+let h1 = map_has(m, "x")
+let h2 = map_has(m, "z")
+if h1 == 1.0 && h2 == 0.0
+  pass = pass + 1.0
+else
+  print("FAIL T8: h1={h1} h2={h2}")
+  fail = fail + 1.0
+end
+
+// ── Test 9: String operations ────────────────────────────────────
+let s1 = "Hello World"
+let s2 = replace(s1, "World", "OctoFlow")
+if s2 == "Hello OctoFlow"
+  pass = pass + 1.0
+else
+  print("FAIL T9: s2={s2}")
+  fail = fail + 1.0
+end
+
+// ── Test 10: contains and starts_with ────────────────────────────
+let c1 = contains(s1, "World")
+let c2 = starts_with(s1, "Hello")
+let c3 = ends_with(s1, "World")
+if c1 == 1.0 && c2 == 1.0 && c3 == 1.0
+  pass = pass + 1.0
+else
+  print("FAIL T10: c1={c1} c2={c2} c3={c3}")
+  fail = fail + 1.0
+end
+
+// ── Test 11: Array push/pop/len ──────────────────────────────────
+let mut stack = []
+push(stack, 10.0)
+push(stack, 20.0)
+push(stack, 30.0)
+let p1 = pop(stack)
+let slen = len(stack)
+if p1 == 30.0 && slen == 2.0
+  pass = pass + 1.0
+else
+  print("FAIL T11: p1={p1} slen={slen}")
+  fail = fail + 1.0
+end
+
+// ── Test 12: Array indexing ──────────────────────────────────────
+let v0 = stack[0]
+let v1 = stack[1]
+if v0 == 10.0 && v1 == 20.0
+  pass = pass + 1.0
+else
+  print("FAIL T12: v0={v0} v1={v1}")
+  fail = fail + 1.0
+end
+
+// ── Test 13: Nested while loops ──────────────────────────────────
+let mut total = 0.0
+let mut oi = 0.0
+while oi < 3.0
+  let mut oj = 0.0
+  while oj < 3.0
+    total = total + 1.0
+    oj = oj + 1.0
+  end
+  oi = oi + 1.0
+end
+if total == 9.0
+  pass = pass + 1.0
+else
+  print("FAIL T13: total={total}")
+  fail = fail + 1.0
+end
+
+// ── Test 14: String interpolation ────────────────────────────────
+let name = "OctoFlow"
+let ver = 1.0
+// Just verify it doesn't crash
+print("name={name} ver={ver}")
+pass = pass + 1.0
+
+// ── Test 15: Expression args in function calls ───────────────────
+let ea = add(3.0 * 2.0, 4.0 + 1.0)
+if ea == 11.0
+  pass = pass + 1.0
+else
+  print("FAIL T15: ea={ea}")
+  fail = fail + 1.0
+end
+
+// ── Test 16: String function args ────────────────────────────────
+fn greet(prefix, name)
+  let r = prefix + " " + name
+  return r
+end
+
+let g = greet("Hello", "World")
+if g == "Hello World"
+  pass = pass + 1.0
+else
+  print("FAIL T16: g={g}")
+  fail = fail + 1.0
+end
+
+// ── Test 17: Float conversion ────────────────────────────────────
+let fs = "42.5"
+let fv = float(fs)
+if fv == 42.5
+  pass = pass + 1.0
+else
+  print("FAIL T17: fv={fv}")
+  fail = fail + 1.0
+end
+
+// ── Test 18: String conversion ───────────────────────────────────
+let nv = 123.0
+let ns = str(nv)
+if ns == "123"
+  pass = pass + 1.0
+else
+  print("FAIL T18: ns={ns}")
+  fail = fail + 1.0
+end
+
+// ── Test 19: Nested if inside while inside fn ────────────────────
+fn count_even(limit)
+  let mut cnt = 0.0
+  let mut k = 0.0
+  while k < limit
+    let half = k / 2.0
+    let rounded = floor(half) * 2.0
+    if rounded == k
+      cnt = cnt + 1.0
+    end
+    k = k + 1.0
+  end
+  return cnt
+end
+
+let ev = count_even(10.0)
+if ev == 5.0
+  pass = pass + 1.0
+else
+  print("FAIL T19: ev={ev}")
+  fail = fail + 1.0
+end
+
+// ── Test 20: split and array iteration ───────────────────────────
+let csv = "one,two,three"
+let mut parts = split(csv, ",")
+let plen = len(parts)
+if plen == 3.0
+  pass = pass + 1.0
+else
+  print("FAIL T20: plen={plen}")
+  fail = fail + 1.0
+end
+
+// ── Summary ──────────────────────────────────────────────────────
+if fail == 0.0
+  print("COMPREHENSIVE: ALL PASS ({pass}/20 tests)")
+else
+  print("COMPREHENSIVE: {fail} FAIL / {pass} PASS of 20 tests")
+end

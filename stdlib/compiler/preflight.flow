@@ -1,0 +1,763 @@
+// stdlib/compiler/preflight.flow
+// OctoFlow Self-Hosting Preflight (Phase 48)
+//
+// Validates a .flow source file:
+//   E001  Undefined variable (used before declared)
+//   E002  Immutability violation (assign to non-mut)
+//   E003  Undefined function call
+//   D002  Unused scalar variable
+//   D003  Unused function
+//
+// Usage:
+//   FLOW_INPUT=prog.flow octoflow run stdlib/compiler/preflight.flow --allow-read
+
+// ---- INLINE LEXER ---------------------------------------------------
+let input_path = env("FLOW_INPUT")
+let src = read_file(input_path)
+let src_len = len(src)
+let mut lpos = 0.0
+let mut tok_types  = []
+let mut tok_values = []
+let mut tok_lines  = []
+let mut cur_line   = 1.0
+
+let mut kw_set = map()
+map_set(kw_set, "let", 1.0)
+map_set(kw_set, "mut", 1.0)
+map_set(kw_set, "fn", 1.0)
+map_set(kw_set, "end", 1.0)
+map_set(kw_set, "if", 1.0)
+map_set(kw_set, "elif", 1.0)
+map_set(kw_set, "else", 1.0)
+map_set(kw_set, "while", 1.0)
+map_set(kw_set, "for", 1.0)
+map_set(kw_set, "in", 1.0)
+map_set(kw_set, "return", 1.0)
+map_set(kw_set, "break", 1.0)
+map_set(kw_set, "continue", 1.0)
+map_set(kw_set, "print", 1.0)
+map_set(kw_set, "use", 1.0)
+map_set(kw_set, "push", 1.0)
+map_set(kw_set, "map_set", 1.0)
+map_set(kw_set, "stream", 1.0)
+map_set(kw_set, "emit", 1.0)
+map_set(kw_set, "struct", 1.0)
+map_set(kw_set, "extern", 1.0)
+map_set(kw_set, "then", 1.0)
+
+let LNL  = 10.0
+let LTAB = 9.0
+let LCR  = 13.0
+let LQT  = 34.0
+let LSP  = 32.0
+
+while lpos < src_len
+  let lc  = char_at(src, lpos)
+  let lco = ord(lc)
+  if lco == LSP || lco == LTAB || lco == LCR
+    lpos = lpos + 1.0
+  elif lco == LNL
+    push(tok_types, "nl")
+    push(tok_values, "NL")
+    push(tok_lines, cur_line)
+    cur_line = cur_line + 1.0
+    lpos = lpos + 1.0
+  elif lco == 47.0
+    let lnpos = lpos + 1.0
+    if lnpos < src_len
+      let lnc = char_at(src, lnpos)
+      if lnc == "/"
+        while lpos < src_len && ord(char_at(src, lpos)) != LNL
+          lpos = lpos + 1.0
+        end
+      else
+        push(tok_types, "op")
+        push(tok_values, "/")
+        push(tok_lines, cur_line)
+        lpos = lpos + 1.0
+      end
+    else
+      push(tok_types, "op")
+      push(tok_values, "/")
+      push(tok_lines, cur_line)
+      lpos = lpos + 1.0
+    end
+  elif lco >= 48.0 && lco <= 57.0
+    let mut lnum = ""
+    while lpos < src_len && contains("0123456789.", char_at(src, lpos))
+      lnum = lnum + char_at(src, lpos)
+      lpos = lpos + 1.0
+    end
+    push(tok_types, "float")
+    push(tok_values, lnum)
+    push(tok_lines, cur_line)
+  elif lco == LQT
+    lpos = lpos + 1.0
+    let mut lstr = ""
+    while lpos < src_len && ord(char_at(src, lpos)) != LQT && ord(char_at(src, lpos)) != LNL
+      lstr = lstr + char_at(src, lpos)
+      lpos = lpos + 1.0
+    end
+    if lpos < src_len
+      let lclose_ch = char_at(src, lpos)
+      let lclose_ord = ord(lclose_ch)
+      if lclose_ord == LQT
+        lpos = lpos + 1.0
+      end
+    end
+    push(tok_types, "str")
+    push(tok_values, lstr)
+    push(tok_lines, cur_line)
+  elif is_match(lc, "[a-zA-Z_]")
+    let mut lword = ""
+    while lpos < src_len && is_match(char_at(src, lpos), "[a-zA-Z_0-9]")
+      lword = lword + char_at(src, lpos)
+      lpos = lpos + 1.0
+    end
+    if map_has(kw_set, lword)
+      push(tok_types, "kw")
+    else
+      push(tok_types, "ident")
+    end
+    push(tok_values, lword)
+    push(tok_lines, cur_line)
+  elif lpos + 1.0 < src_len
+    let lc2 = char_at(src, lpos + 1.0)
+    if lc == "=" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, "==")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "!" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, "!=")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "<" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, "<=")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == ">" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, ">=")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "&" && lc2 == "&"
+      push(tok_types, "op")
+      push(tok_values, "&&")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "|" && lc2 == "|"
+      push(tok_types, "op")
+      push(tok_values, "||")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "|" && lc2 == ">"
+      push(tok_types, "op")
+      push(tok_values, "|>")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "*" && lc2 == "*"
+      push(tok_types, "op")
+      push(tok_values, "**")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "-" && lc2 == ">"
+      push(tok_types, "op")
+      push(tok_values, "->")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "<" && lc2 == "<"
+      push(tok_types, "op")
+      push(tok_values, "<<")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == ">" && lc2 == ">"
+      push(tok_types, "op")
+      push(tok_values, ">>")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    else
+      push(tok_types, "op")
+      push(tok_values, lc)
+      push(tok_lines, cur_line)
+      lpos = lpos + 1.0
+    end
+  else
+    push(tok_types, "op")
+    push(tok_values, lc)
+    push(tok_lines, cur_line)
+    lpos = lpos + 1.0
+  end
+end
+push(tok_types, "eof")
+push(tok_values, "EOF")
+push(tok_lines, cur_line)
+
+let tok_count = len(tok_types)
+
+// ---- BUILTIN FUNCTION TABLE -----------------------------------------
+// All known builtin functions — used for E003 (undefined fn call) check
+let mut bfn_map = map()
+map_set(bfn_map, "len", 1.0)
+map_set(bfn_map, "str", 1.0)
+map_set(bfn_map, "float", 1.0)
+map_set(bfn_map, "int", 1.0)
+map_set(bfn_map, "abs", 1.0)
+map_set(bfn_map, "floor", 1.0)
+map_set(bfn_map, "ceil", 1.0)
+map_set(bfn_map, "sqrt", 1.0)
+map_set(bfn_map, "pow", 1.0)
+map_set(bfn_map, "min", 1.0)
+map_set(bfn_map, "max", 1.0)
+map_set(bfn_map, "clamp", 1.0)
+map_set(bfn_map, "random", 1.0)
+map_set(bfn_map, "exp", 1.0)
+map_set(bfn_map, "log", 1.0)
+map_set(bfn_map, "sin", 1.0)
+map_set(bfn_map, "cos", 1.0)
+map_set(bfn_map, "round", 1.0)
+map_set(bfn_map, "trim", 1.0)
+map_set(bfn_map, "replace", 1.0)
+map_set(bfn_map, "starts_with", 1.0)
+map_set(bfn_map, "ends_with", 1.0)
+map_set(bfn_map, "contains", 1.0)
+map_set(bfn_map, "split", 1.0)
+map_set(bfn_map, "join", 1.0)
+map_set(bfn_map, "substr", 1.0)
+map_set(bfn_map, "index_of", 1.0)
+map_set(bfn_map, "upper", 1.0)
+map_set(bfn_map, "lower", 1.0)
+map_set(bfn_map, "to_upper", 1.0)
+map_set(bfn_map, "to_lower", 1.0)
+map_set(bfn_map, "char_at", 1.0)
+map_set(bfn_map, "ord", 1.0)
+map_set(bfn_map, "is_match", 1.0)
+map_set(bfn_map, "regex_replace", 1.0)
+map_set(bfn_map, "type_of", 1.0)
+map_set(bfn_map, "push", 1.0)
+map_set(bfn_map, "pop", 1.0)
+map_set(bfn_map, "map_set", 1.0)
+map_set(bfn_map, "map_get", 1.0)
+map_set(bfn_map, "map_has", 1.0)
+map_set(bfn_map, "map_remove", 1.0)
+map_set(bfn_map, "map_keys", 1.0)
+map_set(bfn_map, "map", 1.0)
+map_set(bfn_map, "read_file", 1.0)
+map_set(bfn_map, "write_file", 1.0)
+map_set(bfn_map, "read_lines", 1.0)
+map_set(bfn_map, "list_dir", 1.0)
+map_set(bfn_map, "env", 1.0)
+map_set(bfn_map, "json_parse", 1.0)
+map_set(bfn_map, "json_parse_array", 1.0)
+map_set(bfn_map, "json_stringify", 1.0)
+map_set(bfn_map, "load_data", 1.0)
+map_set(bfn_map, "save_data", 1.0)
+map_set(bfn_map, "read_csv", 1.0)
+map_set(bfn_map, "read_csv_header", 1.0)
+map_set(bfn_map, "http_get", 1.0)
+map_set(bfn_map, "http_post", 1.0)
+map_set(bfn_map, "exec", 1.0)
+map_set(bfn_map, "time", 1.0)
+map_set(bfn_map, "now", 1.0)
+map_set(bfn_map, "now_ms", 1.0)
+map_set(bfn_map, "os_name", 1.0)
+map_set(bfn_map, "try", 1.0)
+map_set(bfn_map, "vec2", 1.0)
+map_set(bfn_map, "vec3", 1.0)
+map_set(bfn_map, "vec4", 1.0)
+map_set(bfn_map, "vec2f", 1.0)
+map_set(bfn_map, "mean", 1.0)
+map_set(bfn_map, "median", 1.0)
+map_set(bfn_map, "quantile", 1.0)
+map_set(bfn_map, "correlation", 1.0)
+map_set(bfn_map, "base64_encode", 1.0)
+map_set(bfn_map, "base64_decode", 1.0)
+map_set(bfn_map, "hex_encode", 1.0)
+map_set(bfn_map, "hex_decode", 1.0)
+map_set(bfn_map, "filter", 1.0)
+map_set(bfn_map, "map_each", 1.0)
+map_set(bfn_map, "sort_by", 1.0)
+map_set(bfn_map, "reduce", 1.0)
+map_set(bfn_map, "negate", 1.0)
+map_set(bfn_map, "sign", 1.0)
+map_set(bfn_map, "chr", 1.0)
+map_set(bfn_map, "bit_and", 1.0)
+map_set(bfn_map, "bit_or", 1.0)
+map_set(bfn_map, "bit_xor", 1.0)
+map_set(bfn_map, "bit_not", 1.0)
+map_set(bfn_map, "bit_shift_left", 1.0)
+map_set(bfn_map, "bit_shift_right", 1.0)
+map_set(bfn_map, "range", 1.0)
+map_set(bfn_map, "print", 1.0)
+map_set(bfn_map, "format", 1.0)
+map_set(bfn_map, "assert", 1.0)
+map_set(bfn_map, "panic", 1.0)
+map_set(bfn_map, "exit", 1.0)
+
+// ---- SYMBOL TABLE (map-based) ----------------------------------------
+// sym_kind_map : name → "scalar" | "mut" | "fn" | "array" | "map" | "param"
+// sym_line_map : name → definition line (float)
+// sym_used_map : name → 1.0 if referenced at least once
+// sym_names    : all defined names (for D002/D003 iteration)
+
+let mut sym_kind_map = map()
+let mut sym_line_map = map()
+let mut sym_used_map = map()
+let mut sym_names    = []
+let mut sym_count    = 0.0
+
+// ---- ERROR / WARNING LISTS -------------------------------------------
+let mut err_codes = []
+let mut err_lines = []
+let mut err_msgs  = []
+let mut err_count = 0.0
+
+let mut wrn_codes = []
+let mut wrn_lines = []
+let mut wrn_msgs  = []
+let mut wrn_count = 0.0
+
+// ---- HELPER: register a symbol (skip if already defined) -------------
+// (inline — OctoFlow arrays not accessible from fn bodies via snapshot)
+
+// ---- PASS 0: Pre-register all fn names (forward reference support) ---
+let mut p0 = 0.0
+while p0 < tok_count
+  if tok_types[p0] == "kw" && tok_values[p0] == "fn"
+    let p0n = p0 + 1.0
+    if p0n < tok_count && tok_types[p0n] == "ident"
+      let fn0_name = tok_values[p0n]
+      let fn0_line = float(tok_lines[p0n])
+      if map_has(sym_kind_map, fn0_name) == 0.0
+        push(sym_names, fn0_name)
+        sym_count = sym_count + 1.0
+        map_set(sym_kind_map, fn0_name, "fn")
+        map_set(sym_line_map, fn0_name, fn0_line)
+        map_set(sym_used_map, fn0_name, 0.0)
+      end
+    end
+  end
+  p0 = p0 + 1.0
+end
+
+// ---- PASS 1: Main analysis pass -------------------------------------
+// State machine tracks context to distinguish defs vs uses
+let mut pi = 0.0
+let mut skip_to_nl = 0.0       // skip rest of line (after use/emit/stream)
+let mut after_dot = 0.0        // 1 after ".", don't treat as ident ref
+
+while pi < tok_count
+  let pt = tok_types[pi]
+  let pv = tok_values[pi]
+  let pl = float(tok_lines[pi])
+
+  // Reset nl-skip flag on newline
+  if pt == "nl"
+    skip_to_nl = 0.0
+    after_dot  = 0.0
+    pi = pi + 1.0
+
+  elif skip_to_nl == 1.0
+    // Skip remainder of use/emit/stream line
+    pi = pi + 1.0
+
+  // Track dot-access (v.x, r.ok, etc.) — next ident is a field, not a var ref
+  elif pt == "op" && pv == "."
+    after_dot = 1.0
+    pi = pi + 1.0
+
+  // ---- let [mut] name = rhs -------------------------------------------
+  elif pt == "kw" && pv == "let"
+    pi = pi + 1.0
+    let mut is_mut = 0.0
+    if pi < tok_count && tok_values[pi] == "mut"
+      is_mut = 1.0
+      pi = pi + 1.0
+    end
+
+    if pi < tok_count && tok_types[pi] == "ident"
+      let vname = tok_values[pi]
+      let vline = float(tok_lines[pi])
+      pi = pi + 1.0
+
+      // Determine kind by peeking at "= <first_rhs_token>"
+      let mut vkind = "scalar"
+      if is_mut == 1.0
+        vkind = "mut"
+      end
+
+      // peek: skip =, look at first rhs token
+      if pi < tok_count && tok_values[pi] == "="
+        let peek_i = pi + 1.0
+        if peek_i < tok_count
+          let rv = tok_values[peek_i]
+          if rv == "["
+            vkind = "array"
+          elif rv == "map"
+            // map() constructor → map kind
+            vkind = "map"
+          end
+        end
+      end
+
+      // Register symbol (skip re-registration of fn pre-scanned names)
+      if map_has(sym_kind_map, vname) == 0.0
+        push(sym_names, vname)
+        sym_count = sym_count + 1.0
+        map_set(sym_kind_map, vname, vkind)
+        map_set(sym_line_map, vname, vline)
+        map_set(sym_used_map, vname, 0.0)
+      elif vkind == "array" || vkind == "map"
+        // Upgrade kind if rhs is array/map (already registered as scalar from fn pre-scan)
+        map_set(sym_kind_map, vname, vkind)
+      end
+
+      // Register decomposed names for known constructors:
+      // try(...)  → vname.value, vname.ok, vname.error
+      // http_get/http_post/exec → vname.status, vname.body/.output, vname.ok, vname.error
+      // vec2/vec3/vec4 → vname.x, vname.y[, vname.z[, vname.w]]
+      // (These are marked as "used" immediately — decomposed fields are implicit)
+      if pi < tok_count && tok_values[pi] == "="
+        let rhs_i = pi + 1.0
+        if rhs_i < tok_count
+          let rhs_fn = tok_values[rhs_i]
+          let mut decomp_prefix = ""
+          if rhs_fn == "try"
+            decomp_prefix = vname
+            let d_val = vname + ".value"
+            let d_ok  = vname + ".ok"
+            let d_err = vname + ".error"
+            map_set(sym_kind_map, d_val, "scalar")
+            map_set(sym_line_map, d_val, vline)
+            map_set(sym_used_map, d_val, 0.0)
+            push(sym_names, d_val)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_ok, "scalar")
+            map_set(sym_line_map, d_ok, vline)
+            map_set(sym_used_map, d_ok, 0.0)
+            push(sym_names, d_ok)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_err, "scalar")
+            map_set(sym_line_map, d_err, vline)
+            map_set(sym_used_map, d_err, 0.0)
+            push(sym_names, d_err)
+            sym_count = sym_count + 1.0
+          elif rhs_fn == "http_get" || rhs_fn == "http_post"
+            let d_st  = vname + ".status"
+            let d_bd  = vname + ".body"
+            let d_ok  = vname + ".ok"
+            let d_err = vname + ".error"
+            map_set(sym_kind_map, d_st, "scalar")
+            map_set(sym_line_map, d_st, vline)
+            map_set(sym_used_map, d_st, 0.0)
+            push(sym_names, d_st)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_bd, "scalar")
+            map_set(sym_line_map, d_bd, vline)
+            map_set(sym_used_map, d_bd, 0.0)
+            push(sym_names, d_bd)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_ok, "scalar")
+            map_set(sym_line_map, d_ok, vline)
+            map_set(sym_used_map, d_ok, 0.0)
+            push(sym_names, d_ok)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_err, "scalar")
+            map_set(sym_line_map, d_err, vline)
+            map_set(sym_used_map, d_err, 0.0)
+            push(sym_names, d_err)
+            sym_count = sym_count + 1.0
+          elif rhs_fn == "exec"
+            let d_st  = vname + ".status"
+            let d_out = vname + ".output"
+            let d_ok  = vname + ".ok"
+            let d_err = vname + ".error"
+            map_set(sym_kind_map, d_st, "scalar")
+            map_set(sym_line_map, d_st, vline)
+            map_set(sym_used_map, d_st, 0.0)
+            push(sym_names, d_st)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_out, "scalar")
+            map_set(sym_line_map, d_out, vline)
+            map_set(sym_used_map, d_out, 0.0)
+            push(sym_names, d_out)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_ok, "scalar")
+            map_set(sym_line_map, d_ok, vline)
+            map_set(sym_used_map, d_ok, 0.0)
+            push(sym_names, d_ok)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_err, "scalar")
+            map_set(sym_line_map, d_err, vline)
+            map_set(sym_used_map, d_err, 0.0)
+            push(sym_names, d_err)
+            sym_count = sym_count + 1.0
+          elif rhs_fn == "vec2"
+            let d_x = vname + ".x"
+            let d_y = vname + ".y"
+            map_set(sym_kind_map, d_x, "scalar")
+            map_set(sym_line_map, d_x, vline)
+            map_set(sym_used_map, d_x, 0.0)
+            push(sym_names, d_x)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_y, "scalar")
+            map_set(sym_line_map, d_y, vline)
+            map_set(sym_used_map, d_y, 0.0)
+            push(sym_names, d_y)
+            sym_count = sym_count + 1.0
+          elif rhs_fn == "vec3"
+            let d_x = vname + ".x"
+            let d_y = vname + ".y"
+            let d_z = vname + ".z"
+            map_set(sym_kind_map, d_x, "scalar")
+            map_set(sym_line_map, d_x, vline)
+            map_set(sym_used_map, d_x, 0.0)
+            push(sym_names, d_x)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_y, "scalar")
+            map_set(sym_line_map, d_y, vline)
+            map_set(sym_used_map, d_y, 0.0)
+            push(sym_names, d_y)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, d_z, "scalar")
+            map_set(sym_line_map, d_z, vline)
+            map_set(sym_used_map, d_z, 0.0)
+            push(sym_names, d_z)
+            sym_count = sym_count + 1.0
+          end
+        end
+      end
+    end
+
+  // ---- fn name(params) ... end ----------------------------------------
+  elif pt == "kw" && pv == "fn"
+    pi = pi + 1.0
+    // fn name already pre-registered in Pass 0; skip name token
+    if pi < tok_count && tok_types[pi] == "ident"
+      pi = pi + 1.0
+    end
+    // skip : (pipeline fn header) — rest of header to nl
+    if pi < tok_count && tok_values[pi] == ":"
+      skip_to_nl = 1.0
+    end
+    // parse (params)
+    if pi < tok_count && tok_values[pi] == "("
+      pi = pi + 1.0
+      while pi < tok_count && tok_values[pi] != ")"
+        if tok_types[pi] == "ident"
+          let param_nm   = tok_values[pi]
+          let param_line = float(tok_lines[pi])
+          // params: register as "param" kind, mark used to suppress D002
+          if map_has(sym_kind_map, param_nm) == 0.0
+            push(sym_names, param_nm)
+            sym_count = sym_count + 1.0
+            map_set(sym_kind_map, param_nm, "param")
+            map_set(sym_line_map, param_nm, param_line)
+            map_set(sym_used_map, param_nm, 1.0)
+          end
+        end
+        pi = pi + 1.0
+      end
+      if pi < tok_count
+        pi = pi + 1.0  // skip )
+      end
+    end
+
+  // ---- name = expr  (assignment — check immutability) -----------------
+  // Detect: tok[pi]=ident, tok[pi+1]="=" (single =, not ==, !=, etc.)
+  // The lexer produces "==" as a single op token, so tok_values[pi+1]=="=" is assignment
+  elif pt == "ident" && pi + 1.0 < tok_count && tok_values[pi + 1.0] == "="
+    let aname = pv
+    let aline = pl
+    after_dot = 0.0
+    // Mark variable as used (lhs of assignment still references the variable)
+    if map_has(sym_kind_map, aname)
+      map_set(sym_used_map, aname, 1.0)
+      // Check mutability: only "mut", "array", "map", "param" may be assigned
+      let akind = map_get(sym_kind_map, aname)
+      if akind == "scalar" || akind == "fn"
+        push(err_codes, "E002")
+        push(err_lines, aline)
+        let em = aname + " is not mutable (declare with let mut)"
+        push(err_msgs, em)
+        err_count = err_count + 1.0
+      end
+    else
+      // Assignment to undefined variable → E001
+      push(err_codes, "E001")
+      push(err_lines, aline)
+      let em = aname + " is assigned but not declared"
+      push(err_msgs, em)
+      err_count = err_count + 1.0
+    end
+    pi = pi + 1.0
+
+  // ---- ident reference or function call --------------------------------
+  elif pt == "ident"
+    let ref_name = pv
+    let ref_line = pl
+
+    if after_dot == 1.0
+      // This is a field access (v.x, r.ok, etc.) — mark compound name as used
+      // We handle the compound usage by just clearing after_dot
+      after_dot = 0.0
+    else
+      // Check if this is a function call: ident followed by (
+      let mut is_call = 0.0
+      if pi + 1.0 < tok_count && tok_values[pi + 1.0] == "("
+        is_call = 1.0
+      end
+
+      if is_call == 1.0
+        // Function call — check E003 (undefined function)
+        if map_has(sym_kind_map, ref_name) == 0.0 && map_has(bfn_map, ref_name) == 0.0
+          push(err_codes, "E003")
+          push(err_lines, ref_line)
+          let em = ref_name + "() is not defined"
+          push(err_msgs, em)
+          err_count = err_count + 1.0
+        end
+        // Mark the function as used in sym table if it's a user fn
+        if map_has(sym_kind_map, ref_name)
+          map_set(sym_used_map, ref_name, 1.0)
+        end
+      else
+        // Variable reference
+        if map_has(sym_kind_map, ref_name)
+          map_set(sym_used_map, ref_name, 1.0)
+        end
+        // Note: we don't E001 for undefined vars here — too many false positives
+        // (env vars, struct fields, loop iteration vars, etc.)
+        // E001 only fires on assignment to undefined (above)
+      end
+    end
+    pi = pi + 1.0
+
+  // ---- string literal — scan for {ident} template references ----------
+  elif pt == "str"
+    let sv = pv
+    let sv_len = len(sv)
+    let mut si = 0.0
+    while si < sv_len
+      if char_at(sv, si) == "{"
+        si = si + 1.0
+        let mut sn = ""
+        while si < sv_len && char_at(sv, si) != "}" && char_at(sv, si) != "{"
+          let sc = char_at(sv, si)
+          if is_match(sc, "[a-zA-Z_0-9.]")
+            sn = sn + sc
+          end
+          si = si + 1.0
+        end
+        if len(sn) > 0.0
+          // Mark the full name as used (e.g. "v.x" or "name")
+          if map_has(sym_kind_map, sn)
+            map_set(sym_used_map, sn, 1.0)
+          end
+          // Also mark root name before first "." (e.g. "v" in "v.x")
+          let dot_pos = index_of(sn, ".")
+          if dot_pos > 0.0
+            let root_nm = substr(sn, 0.0, dot_pos)
+            if map_has(sym_kind_map, root_nm)
+              map_set(sym_used_map, root_nm, 1.0)
+            end
+          end
+        end
+      end
+      si = si + 1.0
+    end
+    pi = pi + 1.0
+
+  // ---- use module — skip line, suppress D004 --------------------------
+  elif pt == "kw" && pv == "use"
+    skip_to_nl = 1.0
+    pi = pi + 1.0
+
+  // ---- for item in array — register loop var --------------------------
+  elif pt == "kw" && pv == "for"
+    pi = pi + 1.0
+    if pi < tok_count && tok_types[pi] == "ident"
+      let for_var  = tok_values[pi]
+      let for_line = float(tok_lines[pi])
+      // Register loop var as param (suppress D002)
+      if map_has(sym_kind_map, for_var) == 0.0
+        push(sym_names, for_var)
+        sym_count = sym_count + 1.0
+        map_set(sym_kind_map, for_var, "param")
+        map_set(sym_line_map, for_var, for_line)
+        map_set(sym_used_map, for_var, 1.0)
+      end
+      pi = pi + 1.0  // skip item name
+    end
+
+  else
+    pi = pi + 1.0
+  end
+end
+
+// ---- POST-PASS: Emit D002/D003 for unused definitions ----------------
+let mut pp = 0.0
+while pp < sym_count
+  let sn = sym_names[pp]
+  let sk = map_get(sym_kind_map, sn)
+  let su = map_get(sym_used_map, sn)
+  let sl = map_get(sym_line_map, sn)
+
+  // Variables starting with "_" are intentionally unused (convention)
+  let d002_exempt = starts_with(sn, "_")
+  if su == 0.0 && d002_exempt == 0.0
+    if sk == "scalar" || sk == "mut" || sk == "array" || sk == "map"
+      push(wrn_codes, "D002")
+      push(wrn_lines, sl)
+      let wm = "let " + sn + " is defined but never referenced"
+      push(wrn_msgs, wm)
+      wrn_count = wrn_count + 1.0
+    elif sk == "fn"
+      push(wrn_codes, "D003")
+      push(wrn_lines, sl)
+      let wm = "fn " + sn + " is defined but never called"
+      push(wrn_msgs, wm)
+      wrn_count = wrn_count + 1.0
+    end
+  end
+  pp = pp + 1.0
+end
+
+// ---- REPORT ----------------------------------------------------------
+print("PREFLIGHT ANALYSIS: {input_path}")
+print("  tokens: {tok_count}   symbols: {sym_count}")
+print("")
+
+// Print errors
+let mut ri = 0.0
+while ri < err_count
+  let ecode = err_codes[ri]
+  let eline = err_lines[ri]
+  let emsg  = err_msgs[ri]
+  print("  [{ecode}] line {eline}: {emsg}")
+  ri = ri + 1.0
+end
+
+// Print warnings
+let mut wi = 0.0
+while wi < wrn_count
+  let wcode = wrn_codes[wi]
+  let wline = wrn_lines[wi]
+  let wmsg  = wrn_msgs[wi]
+  print("  [{wcode}] line {wline}: {wmsg}")
+  wi = wi + 1.0
+end
+
+if err_count == 0.0
+  print("")
+  if wrn_count == 0.0
+    print("  STATUS: OK (no issues)")
+  else
+    print("  STATUS: OK ({wrn_count} warnings)")
+  end
+else
+  print("")
+  print("  STATUS: FAILED ({err_count} errors, {wrn_count} warnings)")
+end

@@ -1,0 +1,189 @@
+// stdlib/loom/vk.flow — Vulkan FFI module
+// Phase 72b: Pure .flow GPU compute dispatch via Vulkan API
+//
+// Provides extern declarations, constants, and utility helpers for
+// calling Vulkan directly from .flow via the FFI system.
+// Requires: --allow-ffi --allow-read
+
+// ── Section 1: Extern declarations ──────────────────────────────────
+
+extern "vulkan-1" {
+    // Instance
+    fn vkCreateInstance(pInfo: ptr, pAlloc: ptr, pInst: ptr) -> u32
+    fn vkDestroyInstance(inst: handle, pAlloc: ptr)
+
+    // Physical device
+    fn vkEnumeratePhysicalDevices(inst: handle, pCount: ptr, pDevs: ptr) -> u32
+    fn vkGetPhysicalDeviceQueueFamilyProperties(dev: handle, pCount: ptr, pProps: ptr)
+    fn vkGetPhysicalDeviceMemoryProperties(dev: handle, pProps: ptr)
+
+    // Logical device
+    fn vkCreateDevice(phys: handle, pInfo: ptr, pAlloc: ptr, pDev: ptr) -> u32
+    fn vkDestroyDevice(dev: handle, pAlloc: ptr)
+    fn vkGetDeviceQueue(dev: handle, qfi: u32, qi: u32, pQueue: ptr)
+
+    // Buffer
+    fn vkCreateBuffer(dev: handle, pInfo: ptr, pAlloc: ptr, pBuf: ptr) -> u32
+    fn vkDestroyBuffer(dev: handle, buf: handle, pAlloc: ptr)
+    fn vkGetBufferMemoryRequirements(dev: handle, buf: handle, pReqs: ptr)
+
+    // Memory
+    fn vkAllocateMemory(dev: handle, pInfo: ptr, pAlloc: ptr, pMem: ptr) -> u32
+    fn vkFreeMemory(dev: handle, mem: handle, pAlloc: ptr)
+    fn vkBindBufferMemory(dev: handle, buf: handle, mem: handle, off: u64) -> u32
+    fn vkMapMemory(dev: handle, mem: handle, off: u64, sz: u64, flags: u32, ppData: ptr) -> u32
+    fn vkUnmapMemory(dev: handle, mem: handle)
+
+    // Shader module
+    fn vkCreateShaderModule(dev: handle, pInfo: ptr, pAlloc: ptr, pMod: ptr) -> u32
+    fn vkDestroyShaderModule(dev: handle, smod: handle, pAlloc: ptr)
+
+    // Descriptor set layout
+    fn vkCreateDescriptorSetLayout(dev: handle, pInfo: ptr, pAlloc: ptr, pLay: ptr) -> u32
+    fn vkDestroyDescriptorSetLayout(dev: handle, lay: handle, pAlloc: ptr)
+
+    // Pipeline layout + compute pipeline
+    fn vkCreatePipelineLayout(dev: handle, pInfo: ptr, pAlloc: ptr, pLay: ptr) -> u32
+    fn vkDestroyPipelineLayout(dev: handle, lay: handle, pAlloc: ptr)
+    fn vkCreateComputePipelines(dev: handle, pcache: handle, cnt: u32, pInfos: ptr, pAlloc: ptr, pPipes: ptr) -> u32
+    fn vkDestroyPipeline(dev: handle, pipe: handle, pAlloc: ptr)
+
+    // Descriptor pool + sets
+    fn vkCreateDescriptorPool(dev: handle, pInfo: ptr, pAlloc: ptr, pPool: ptr) -> u32
+    fn vkDestroyDescriptorPool(dev: handle, pool: handle, pAlloc: ptr)
+    fn vkAllocateDescriptorSets(dev: handle, pInfo: ptr, pSets: ptr) -> u32
+    fn vkUpdateDescriptorSets(dev: handle, wCnt: u32, pWrites: ptr, cCnt: u32, pCopies: ptr)
+
+    // Command pool + buffers
+    fn vkCreateCommandPool(dev: handle, pInfo: ptr, pAlloc: ptr, pPool: ptr) -> u32
+    fn vkDestroyCommandPool(dev: handle, pool: handle, pAlloc: ptr)
+    fn vkAllocateCommandBuffers(dev: handle, pInfo: ptr, pBufs: ptr) -> u32
+    fn vkBeginCommandBuffer(cmd: handle, pInfo: ptr) -> u32
+    fn vkEndCommandBuffer(cmd: handle) -> u32
+
+    // Commands
+    fn vkCmdBindPipeline(cmd: handle, bp: u32, pipe: handle)
+    fn vkCmdBindDescriptorSets(cmd: handle, bp: u32, lay: handle, fs: u32, cnt: u32, pSets: ptr, dc: u32, pOff: ptr)
+    fn vkCmdDispatch(cmd: handle, gx: u32, gy: u32, gz: u32)
+    fn vkCmdDispatchIndirect(cmd: handle, buf: handle, offset: u64)
+    fn vkCmdFillBuffer(cmd: handle, buf: handle, dstOffset: u64, size: u64, data: u32)
+    fn vkCmdPipelineBarrier(cmd: handle, srcStage: u32, dstStage: u32, depFlags: u32, memCnt: u32, pMemBarriers: ptr, bufCnt: u32, pBufBarriers: ptr, imgCnt: u32, pImgBarriers: ptr)
+    fn vkCmdPushConstants(cmd: handle, layout: handle, stageFlags: u32, offset: u32, size: u32, pValues: ptr)
+
+    // Synchronization
+    fn vkCreateFence(dev: handle, pInfo: ptr, pAlloc: ptr, pFence: ptr) -> u32
+    fn vkDestroyFence(dev: handle, fence: handle, pAlloc: ptr)
+    fn vkQueueSubmit(queue: handle, cnt: u32, pSubmits: ptr, fence: handle) -> u32
+    fn vkWaitForFences(dev: handle, cnt: u32, pFences: ptr, waitAll: u32, timeout: u64) -> u32
+    fn vkResetFences(dev: handle, cnt: u32, pFences: ptr) -> u32
+    fn vkResetCommandPool(dev: handle, pool: handle, flags: u32) -> u32
+    fn vkResetDescriptorPool(dev: handle, pool: handle, flags: u32) -> u32
+
+    // Semaphores (Vulkan 1.2 timeline semaphore)
+    fn vkCreateSemaphore(dev: handle, pInfo: ptr, pAlloc: ptr, pSem: ptr) -> u32
+    fn vkDestroySemaphore(dev: handle, sem: handle, pAlloc: ptr)
+    fn vkSignalSemaphore(dev: handle, pInfo: ptr) -> u32
+    fn vkWaitSemaphores(dev: handle, pInfo: ptr, timeout: u64) -> u32
+    fn vkGetSemaphoreCounterValue(dev: handle, sem: handle, pVal: ptr) -> u32
+}
+
+// ── Section 2: Constants ────────────────────────────────────────────
+
+// VkStructureType values
+let VK_STRUCTURE_TYPE_APPLICATION_INFO = 0.0
+let VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO = 1.0
+let VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO = 2.0
+let VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO = 3.0
+let VK_STRUCTURE_TYPE_SUBMIT_INFO = 4.0
+let VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO = 5.0
+let VK_STRUCTURE_TYPE_FENCE_CREATE_INFO = 8.0
+let VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO = 12.0
+let VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO = 15.0
+let VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO = 29.0
+let VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO = 30.0
+let VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO = 32.0
+let VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO = 33.0
+let VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO = 34.0
+let VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET = 35.0
+let VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO = 39.0
+let VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO = 40.0
+let VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO = 42.0
+let VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO = 18.0
+
+// Pipeline bind point
+let VK_PIPELINE_BIND_POINT_COMPUTE = 1.0
+
+// Queue flags
+let VK_QUEUE_COMPUTE_BIT = 2.0
+
+// Buffer usage
+let VK_BUFFER_USAGE_STORAGE_BUFFER_BIT = 32.0
+let VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT = 256.0
+
+// Memory property flags
+let VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT = 2.0
+let VK_MEMORY_PROPERTY_HOST_COHERENT_BIT = 4.0
+
+// Descriptor type
+let VK_DESCRIPTOR_TYPE_STORAGE_BUFFER = 7.0
+
+// Shader stage
+let VK_SHADER_STAGE_COMPUTE_BIT = 32.0
+
+// Command buffer level
+let VK_COMMAND_BUFFER_LEVEL_PRIMARY = 0.0
+
+// Vulkan API version 1.0 = VK_MAKE_API_VERSION(0,1,0,0) = 1<<22 = 4194304
+let VK_API_VERSION_1_0 = 4194304.0
+
+// Memory barrier
+let VK_STRUCTURE_TYPE_MEMORY_BARRIER = 46.0
+let VK_ACCESS_SHADER_READ_BIT = 32.0
+let VK_ACCESS_SHADER_WRITE_BIT = 64.0
+let VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT = 2048.0
+let VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT = 1.0
+let VK_ACCESS_INDIRECT_COMMAND_READ_BIT = 1.0
+let VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT = 2.0
+
+// Vulkan 1.2 API version = (1<<22) | (2<<12) = 4202496
+let VK_API_VERSION_1_2 = 4202496.0
+
+// Semaphore
+let VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO = 9.0
+let VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES = 51.0
+let VK_SEMAPHORE_TYPE_TIMELINE = 1.0
+let VK_PIPELINE_STAGE_ALL_COMMANDS_BIT = 65536.0
+
+// ── Section 3: Utility functions ────────────────────────────────────
+// bit_and(a, b), bit_or(a, b), bit_test(n, bit) are Rust builtins.
+
+fn vk_check(result, context)
+    if result != 0.0
+        print("VK ERROR in {context}: code {result}")
+    end
+    return result
+end
+
+// Find a memory type index that satisfies both type_bits and required_flags.
+// Returns the index (>= 0) or -1 if not found.
+// phys_dev: physical device handle
+// type_bits: memoryTypeBits from VkMemoryRequirements
+// required_flags: e.g. VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | HOST_COHERENT_BIT
+fn vk_find_memory_type(phys_dev, type_bits, required_flags)
+    let props = mem_alloc(520)
+    let _r = vkGetPhysicalDeviceMemoryProperties(phys_dev, props)
+    let count = mem_get_u32(props, 0.0)
+    let mut i = 0.0
+    let mut found = 0.0 - 1.0
+    while i < count && found < 0.0
+        let type_ok = bit_test(type_bits, i)
+        let flags = mem_get_u32(props, 4.0 + i * 8.0)
+        let masked = bit_and(flags, required_flags)
+        if type_ok == 1.0 && masked == required_flags
+            found = i
+        end
+        i = i + 1.0
+    end
+    mem_free(props)
+    return found
+end

@@ -1,0 +1,37 @@
+// emit_silu.flow — SiLU (Swish) Activation Kernel Emitter
+//
+// SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
+//
+// Used in transformer FFN layers (Llama, Qwen).
+// Exact implementation using GLSL.std.450 Exp.
+//
+// Binding 0: input x (float array)
+// Binding 1: output (float array)
+
+use "../../compiler/ir"
+
+fn emit_silu(out_path)
+  ir_new()
+  ir_input_count = 1.0
+
+  let entry = ir_block("entry")
+
+  let gid = ir_load_gid(entry)
+  let x = ir_load_input_at(entry, 0.0, gid)
+
+  // sigmoid(x) = 1 / (1 + exp(-x))
+  let neg_x = ir_fneg(entry, x)
+  let exp_neg_x = ir_exp(entry, neg_x)
+  let c1 = ir_const_f(entry, 1.0)
+  let one_plus_exp = ir_fadd(entry, c1, exp_neg_x)
+  let sigmoid = ir_fdiv(entry, c1, one_plus_exp)
+
+  // silu(x) = x * sigmoid(x)
+  let result = ir_fmul(entry, x, sigmoid)
+
+  ir_store_output_at(entry, gid, result)
+  ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

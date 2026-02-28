@@ -1,0 +1,182 @@
+// gpu_join.flow — GPU Broadcast Join: Dimension Table Lookup via Dispatch Chain
+//
+// "Two tables. One submit. Zero CPU row iteration."
+//
+// 65,536 employees joined with 8-row department table ENTIRELY on GPU.
+// 19 dispatches, 1 submission, 0 CPU row iterations.
+//
+// SQL equivalent:
+//   SELECT SUM(e.salary + d.bonus) AS total_comp,
+//          COUNT(*) AS headcount,
+//          SUM(e.salary + d.bonus) / COUNT(*) AS avg_comp
+//   FROM employees e
+//   JOIN departments d ON e.dept_id = d.dept_id
+//
+// GPU broadcast join:
+//   For each dept d with bonus_d:
+//     [eq_scalar: dept==d → mask] → [fma_scalar: bonus_col += mask × bonus_d]
+//   [add_ab: salary + bonus_col → total_comp]
+//   [reduce pass 1: 256→256] → [reduce pass 2: 256→1]
+//
+// 8 join dispatches + 8 accumulate dispatches + 1 add + 2 reduce = 19
+//
+// Run: octoflow run examples/gpu_join.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N = 65536.0
+let K = 8.0
+let GROUP_SIZE = N / K
+let BUF_BYTES = N * 4.0
+let WG_SIZE = 256.0
+let NUM_WG = N / WG_SIZE
+let PARTIAL_BYTES = NUM_WG * 4.0
+
+// Boot GPU
+rt_init()
+
+// Load kernels
+let pipe_eq = rt_load_pipeline("tests/gpu_shaders/17_eq_scalar.spv", 2.0, 4.0)
+let pipe_fma = rt_load_pipeline("tests/gpu_shaders/21_fma_scalar.spv", 2.0, 4.0)
+let pipe_add = rt_load_pipeline("tests/gpu_shaders/20_add_ab.spv", 3.0, 0.0)
+let pipe_reduce = rt_load_pipeline("stdlib/loom/kernels/reduce/reduce_sum.spv", 2.0, 0.0)
+
+// Create data buffers
+let buf_dept = rt_create_buffer(BUF_BYTES)
+let buf_salary = rt_create_buffer(BUF_BYTES)
+
+// Working buffers
+let buf_mask = rt_create_buffer(BUF_BYTES)
+let buf_bonus = rt_create_buffer(BUF_BYTES)
+let buf_total = rt_create_buffer(BUF_BYTES)
+let buf_partial = rt_create_buffer(PARTIAL_BYTES)
+let buf_result = rt_create_buffer(1024.0)
+
+// Upload employee data: dept[i] = floor(i/8192), salary[i] = i + 1
+let mut depts = []
+let mut salaries = []
+let mut i = 0.0
+while i < N
+  push(depts, floor(i / GROUP_SIZE))
+  push(salaries, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(buf_dept, depts)
+rt_upload(buf_salary, salaries)
+
+// Zero working buffers
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_mask, zeros)
+rt_upload(buf_bonus, zeros)
+rt_upload(buf_total, zeros)
+
+let mut pz = []
+let mut i = 0.0
+while i < NUM_WG
+  push(pz, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_partial, pz)
+rt_upload(buf_result, pz)
+
+// Department dimension table (8 departments, lives on CPU)
+// bonus = [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+let mut bonuses = [500.0, 1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 3500.0, 4000.0]
+
+// ── JOIN + AGGREGATE dispatch chain ────────────────────────────────
+// Phase 1: broadcast join — 8×2 = 16 dispatches
+// Phase 2: combine — 1 dispatch
+// Phase 3: 2-pass reduce — 2 dispatches
+// Total: 19 dispatches, 1 submit
+let t0 = time()
+
+rt_chain_begin(19.0, 3.0)
+
+// Phase 1: broadcast join
+// For each dept d, broadcast bonus_d to all matching employees
+let mut g = 0.0
+while g < K
+  // eq_scalar: dept == g → mask
+  let mut pc_g = [g]
+  rt_chain_push_constants(pipe_eq, pc_g)
+  let mut b1 = [buf_dept, buf_mask]
+  rt_chain_dispatch(pipe_eq, b1, NUM_WG)
+
+  // fma_scalar: bonus_col[i] += mask[i] * bonus_d
+  let bonus_d = bonuses[int(g)]
+  let mut pc_b = [bonus_d]
+  rt_chain_push_constants(pipe_fma, pc_b)
+  let mut b2 = [buf_mask, buf_bonus]
+  rt_chain_dispatch(pipe_fma, b2, NUM_WG)
+
+  g = g + 1.0
+end
+
+// Phase 2: combine columns — total_comp = salary + bonus
+let mut b3 = [buf_salary, buf_bonus, buf_total]
+rt_chain_dispatch(pipe_add, b3, NUM_WG)
+
+// Phase 3: reduce — SUM(total_comp)
+let mut b4 = [buf_total, buf_partial]
+rt_chain_dispatch(pipe_reduce, b4, NUM_WG)
+
+let mut b5 = [buf_partial, buf_result]
+rt_chain_dispatch(pipe_reduce, b5, 1.0)
+
+rt_chain_end()
+let t1 = time()
+let record_ms = (t1 - t0) * 1000.0
+
+// ── Single submit — GPU processes entire join + aggregate ──────────
+let t2 = time()
+rt_chain_submit_wait()
+let t3 = time()
+let gpu_ms = (t3 - t2) * 1000.0
+
+// ── Download result ────────────────────────────────────────────────
+rt_download(buf_result, 1.0)
+let gpu_total = rt_result[0]
+
+// CPU verification
+// SUM(salary) = N*(N+1)/2 = 65536*65537/2 = 2,147,516,416
+// SUM(bonus) = each dept has 8192 employees
+//   = 8192 * (500+1000+1500+2000+2500+3000+3500+4000)
+//   = 8192 * 18000 = 147,456,000
+// Grand total = 2,147,516,416 + 147,456,000 = 2,294,972,416
+let exp_salary_sum = N * (N + 1.0) / 2.0
+let bonus_sum_scalar = 500.0 + 1000.0 + 1500.0 + 2000.0 + 2500.0 + 3000.0 + 3500.0 + 4000.0
+let exp_bonus_sum = GROUP_SIZE * bonus_sum_scalar
+let exp_total = exp_salary_sum + exp_bonus_sum
+let avg_comp = gpu_total / N
+
+let rel_err = abs(gpu_total - exp_total) / exp_total
+
+print("")
+print("OctoFlow GPU Broadcast Join")
+print("  Fact table:      {N} employees (dept_id, salary)")
+print("  Dimension table: {K} departments (dept_id, bonus)")
+print("  Query: SELECT SUM(salary + bonus) FROM employees JOIN departments")
+print("  Dispatches: 19 (16 join + 1 combine + 2 reduce)")
+print("  Submissions: 1")
+print("  CPU row iterations: 0")
+print("  Record time: {record_ms} ms")
+print("  GPU time:    {gpu_ms} ms")
+print("")
+print("  SUM(total_comp): {gpu_total}")
+print("  Expected:        {exp_total}")
+print("  AVG(total_comp): {avg_comp}")
+print("  Relative error:  {rel_err}")
+
+if rel_err < 0.001
+  print("  MATCH (within 0.1%)")
+else
+  print("  MISMATCH")
+end
+
+print("")
+rt_cleanup()

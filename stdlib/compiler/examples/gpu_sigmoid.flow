@@ -1,0 +1,9 @@
+// gpu_sigmoid.flow — sigmoid activation function as a GPU kernel
+//   sigmoid(x) = 1 / (1 + exp(-x))
+//
+// Run codegen:
+//   FLOW_INPUT=gpu_sigmoid.flow octoflow run stdlib/compiler/codegen.flow --allow-read --allow-write
+
+let src = stream("activations.raw")
+let result = src |> map(fn x: 1.0 / (1.0 + exp(0.0 - x)))
+emit result to "output.raw"

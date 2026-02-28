@@ -1,0 +1,99 @@
+// emit_sieve_init_offsets.flow — Initialize Carry-Forward Prime Offsets
+//
+// Per-VM kernel. For each prime p (index = gid), compute the first odd
+// multiple of p that falls in or after this VM's first segment. Store at
+// B0[offset_base + gid] as carry-forward state for the mark kernel.
+//
+// Thread gid (gid < num_primes):
+//   prime = ftou(B2[gid])
+//   seg_start = first_seg_idx * num_words * 64 + 1
+//   start_pt = max(prime², seg_start)
+//   Find first multiple of prime >= start_pt, ensure odd
+//   B0[offset_base + gid] = result
+//
+// Push constants:
+//   pc[0] = num_primes     (total primes to process)
+//   pc[1] = offset_base    (starting index in B0 for carry-forward area)
+//   pc[2] = first_seg_idx  (first segment index for this VM)
+//   pc[3] = num_words      (bitmap words per segment, for computing seg_start)
+//
+// Binding layout (5-SSBO):
+//   B0 (uint): Write offsets at [offset_base + gid]
+//   B2 (float): Read prime values at [gid]
+//
+// Dispatch: wg = ceil(num_primes / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_init_offsets.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_init_offsets(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────
+  let gid      = ir_load_gid(entry)
+  let pc_nump  = ir_push_const(entry, 0.0)   // num_primes
+  let pc_obase = ir_push_const(entry, 1.0)   // offset_base
+  let pc_fseg  = ir_push_const(entry, 2.0)   // first_seg_idx for this VM
+  let pc_words = ir_push_const(entry, 3.0)   // num_words
+  let nump_u   = ir_ftou(entry, pc_nump)
+  let oob      = ir_ugte(entry, gid, nump_u)
+  let _sm      = ir_selection_merge(entry, exit_block)
+  let _br      = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: load prime, compute per-VM carry-forward offset ──
+  let c0       = ir_const_u(body, 0.0)
+  let c1       = ir_const_u(body, 1.0)
+  let c2       = ir_const_u(body, 2.0)
+  let c64      = ir_const_u(body, 64.0)
+
+  // Compute seg_start for this VM's first segment
+  let words_u   = ir_ftou(body, pc_words)
+  let seg_range = ir_imul(body, words_u, c64)
+  let fseg_u    = ir_ftou(body, pc_fseg)
+  let seg_base  = ir_imul(body, fseg_u, seg_range)
+  let seg_start = ir_iadd(body, seg_base, c1)
+
+  // Load prime from globals (B2, float → uint)
+  let prime_f  = ir_load_input_at(body, 2.0, gid)
+  let prime_u  = ir_ftou(body, prime_f)
+  let p_sq     = ir_imul(body, prime_u, prime_u)
+
+  // start_pt = max(p², seg_start)
+  let use_psq  = ir_ugte(body, p_sq, seg_start)
+  let start_pt = ir_select(body, IR_TYPE_UINT, use_psq, p_sq, seg_start)
+
+  // Find first multiple of prime >= start_pt
+  // rem = start_pt % prime; gap = (prime - rem) % prime; first_m = start_pt + gap
+  let rem       = ir_umod(body, start_pt, prime_u)
+  let gap_raw   = ir_isub(body, prime_u, rem)
+  let gap       = ir_umod(body, gap_raw, prime_u)
+  let first_m   = ir_iadd(body, start_pt, gap)
+
+  // Ensure first_m is odd (if even, add prime)
+  let is_even   = ir_uequ(body, ir_bit_and(body, first_m, c1), c0)
+  let first_adj = ir_iadd(body, first_m, prime_u)
+  let result    = ir_select(body, IR_TYPE_UINT, is_even, first_adj, first_m)
+
+  // Store at B0[offset_base + gid]
+  let obase_u  = ir_ftou(body, pc_obase)
+  let store_idx = ir_iadd(body, obase_u, gid)
+  let _store   = ir_buf_store_u(body, 0.0, store_idx, result)
+  let _br2     = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_v4_init_offsets.spv"
+let _r = emit_sieve_init_offsets(out)
+print("Emitted: {out}")

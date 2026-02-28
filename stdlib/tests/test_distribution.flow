@@ -1,0 +1,145 @@
+// test_distribution.flow — Tests for stdlib/stats/distribution.flow
+// Functions tested: normal_cdf, normal_pdf, poisson_pmf, combinations, binomial_pmf
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from stats/distribution.flow --
+fn normal_pdf(x, mu, sigma)
+  let PI = 3.14159265358979
+  let z = (x - mu) / sigma
+  return exp(-0.5 * z * z) / (sigma * sqrt(2.0 * PI))
+end
+
+fn normal_cdf(x, mu, sigma)
+  let z = (x - mu) / (sigma * sqrt(2.0))
+  let t = 1.0 / (1.0 + 0.3275911 * abs(z))
+  let a1 = 0.254829592
+  let a2 = -0.284496736
+  let a3 = 1.421413741
+  let a4 = -1.453152027
+  let a5 = 1.061405429
+  let mut erf = 1.0 - (a1 * t + a2 * t * t + a3 * t * t * t + a4 * t * t * t * t + a5 * t * t * t * t * t) * exp(-1.0 * z * z)
+  if z < 0.0
+    erf = -1.0 * erf
+  end
+  return 0.5 * (1.0 + erf)
+end
+
+fn poisson_pmf(k, lambda)
+  let mut result = exp(-1.0 * lambda)
+  let mut i = 1.0
+  while i <= k
+    result = result * lambda / i
+    i = i + 1.0
+  end
+  return result
+end
+
+fn combinations(n, k)
+  if k > n
+    return 0.0
+  end
+  if k == 0.0 || k == n
+    return 1.0
+  end
+  let mut result = 1.0
+  let mut i = 0.0
+  let mut kk = k
+  if kk > n - kk
+    kk = n - kk
+  end
+  while i < kk
+    result = result * (n - i) / (i + 1.0)
+    i = i + 1.0
+  end
+  return result
+end
+
+fn binomial_pmf(k, n, p)
+  let c = combinations(n, k)
+  return c * pow(p, k) * pow(1.0 - p, n - k)
+end
+
+// -- Tests --
+
+print("=== test_distribution ===")
+
+// normal_cdf(0, 0, 1) = 0.5 (standard normal at mean)
+let c1 = normal_cdf(0.0, 0.0, 1.0)
+let diff_c1 = abs(c1 - 0.5)
+if diff_c1 < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: normal_cdf(0,0,1) expected 0.5 got {c1}")
+  fail = fail + 1.0
+end
+
+// normal_cdf should be monotonically increasing
+let c2 = normal_cdf(1.0, 0.0, 1.0)
+if c2 > 0.5
+  pass = pass + 1.0
+else
+  print("  FAIL: normal_cdf(1,0,1) expected > 0.5 got {c2}")
+  fail = fail + 1.0
+end
+
+// normal_cdf(-1, 0, 1) ~ 0.1587
+let c3 = normal_cdf(-1.0, 0.0, 1.0)
+let diff_c3 = abs(c3 - 0.1587)
+if diff_c3 < 0.01
+  pass = pass + 1.0
+else
+  print("  FAIL: normal_cdf(-1,0,1) expected ~0.1587 got {c3}")
+  fail = fail + 1.0
+end
+
+// normal_pdf at mean should be peak: pdf(0,0,1) ~ 0.3989
+let pdf1 = normal_pdf(0.0, 0.0, 1.0)
+let diff_pdf = abs(pdf1 - 0.3989)
+if diff_pdf < 0.01
+  pass = pass + 1.0
+else
+  print("  FAIL: normal_pdf(0,0,1) expected ~0.3989 got {pdf1}")
+  fail = fail + 1.0
+end
+
+// poisson_pmf(3, 3.0) ~ 0.2240
+let pp = poisson_pmf(3.0, 3.0)
+let diff_pp = abs(pp - 0.2240)
+if diff_pp < 0.01
+  pass = pass + 1.0
+else
+  print("  FAIL: poisson_pmf(3,3) expected ~0.2240 got {pp}")
+  fail = fail + 1.0
+end
+
+// combinations(5, 2) = 10
+let comb = combinations(5.0, 2.0)
+if comb == 10.0
+  pass = pass + 1.0
+else
+  print("  FAIL: combinations(5,2) expected 10 got {comb}")
+  fail = fail + 1.0
+end
+
+// binomial_pmf(3, 5, 0.5) ~ 0.3125
+let bp = binomial_pmf(3.0, 5.0, 0.5)
+let diff_bp = abs(bp - 0.3125)
+if diff_bp < 0.01
+  pass = pass + 1.0
+else
+  print("  FAIL: binomial_pmf(3,5,0.5) expected ~0.3125 got {bp}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_distribution ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

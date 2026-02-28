@@ -1,0 +1,60 @@
+// Test new builtins in eval.flow
+
+// unary minus in let
+let neg = -7.5
+print("neg={neg}")
+
+// floor and ceil
+let f1 = 3.7
+let floor_v = floor(f1)
+let ceil_v = ceil(f1)
+print("floor(3.7)={floor_v}")
+print("ceil(3.7)={ceil_v}")
+
+// sqrt
+let sq = sqrt(9.0)
+print("sqrt(9)={sq}")
+
+// min/max via conditional
+let a = 5.0
+let b = 3.0
+let mut mn = a
+if b < mn
+  mn = b
+end
+let mut mx = a
+if b > mx
+  mx = b
+end
+print("min(5,3)={mn}")
+print("max(5,3)={mx}")
+
+// trim
+let s1 = "  hello  "
+let tr1 = trim(s1)
+print("trim=[{tr1}]")
+
+// starts_with, ends_with
+let s2 = "hello world"
+let sw1 = starts_with(s2, "hello")
+let ew1 = ends_with(s2, "world")
+print("sw={sw1} ew={ew1}")
+
+// replace
+let s3 = "foo bar foo"
+let rp1 = replace(s3, "foo", "baz")
+print("replace={rp1}")
+
+// chained concat in let
+let p1 = "a"
+let p2 = "b"
+let p3 = "c"
+let chain = p1 + p2 + p3 + "d"
+print("chain={chain}")
+
+// chained concat in assignment
+let mut out = ""
+let d = "foo"
+let e = "bar"
+out = out + d + "." + e
+print("out={out}")

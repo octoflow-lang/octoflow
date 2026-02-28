@@ -1,0 +1,67 @@
+// emit_sieve_planner.flow — Write Indirect Dispatch Params to Control Buffer
+//
+// Thread 0 only: computes workgroup count for the mark kernel and writes
+// {wg_x, 1, 1} to B3 (Control, HOST_VISIBLE). The next dispatch uses
+// vm_dispatch_indirect_mem to read workgroup count from B3.
+//
+// Push constants:
+//   pc[0] = num_primes_for_seg  (number of primes to dispatch)
+//   pc[1] = control_offset      (offset in B3 to write 3 uints)
+//
+// Binding layout (5-SSBO):
+//   B3 (uint): Write [wg_x, 1, 1] at control_offset
+//
+// Dispatch: wg = 1
+//
+// Run: octoflow run stdlib/loom/emit_sieve_planner.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_planner(out_path)
+  ir_new()
+  ir_input_count = 4.0
+  push(ir_uint_bindings, 0.0)
+  push(ir_uint_bindings, 3.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: thread 0 guard ────────────────────────────────
+  let gid     = ir_load_gid(entry)
+  let pc_np   = ir_push_const(entry, 0.0)   // num_primes_for_seg
+  let pc_off  = ir_push_const(entry, 1.0)   // control_offset
+  let one_u   = ir_const_u(entry, 1.0)
+  let not_t0  = ir_ugte(entry, gid, one_u)
+  let _sm     = ir_selection_merge(entry, exit_block)
+  let _br     = ir_term_cond_branch(entry, not_t0, exit_block, body)
+
+  // ── Body: compute wg_x = ceil(num_primes / 256), write to B3 ──
+  let c255    = ir_const_u(body, 255.0)
+  let c256    = ir_const_u(body, 256.0)
+  let np_u    = ir_ftou(body, pc_np)
+  let off_u   = ir_ftou(body, pc_off)
+
+  // wg_x = (num_primes + 255) / 256
+  let np_pad  = ir_iadd(body, np_u, c255)
+  let wg_x    = ir_udiv(body, np_pad, c256)
+
+  // B3[offset+0] = wg_x, B3[offset+1] = 1, B3[offset+2] = 1
+  let off1    = ir_iadd(body, off_u, one_u)
+  let c2      = ir_const_u(body, 2.0)
+  let off2    = ir_iadd(body, off_u, c2)
+  let _s0     = ir_buf_store_u(body, 3.0, off_u, wg_x)
+  let _s1     = ir_buf_store_u(body, 3.0, off1, one_u)
+  let _s2     = ir_buf_store_u(body, 3.0, off2, one_u)
+  let _br2    = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_planner.spv"
+let _r = emit_sieve_planner(out)
+print("Emitted: {out}")

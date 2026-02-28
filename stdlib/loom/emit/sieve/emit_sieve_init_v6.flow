@@ -1,0 +1,126 @@
+// emit_sieve_init_v6.flow — Sieve Init v6 Kernel Emitter (uint64 seg_start)
+//
+// Breaks the uint32 wall: seg_base = seg_idx × SEG_RANGE is computed in uint64.
+// N is passed as two f32-exact halves (N_lo, N_hi) and reconstructed as uint64 on GPU.
+//
+// Push constants (all exact in f32):
+//   pc[0] = seg_idx    (segment index, small)
+//   pc[1] = num_words  (bitmap words, e.g. 8192)
+//   pc[2] = N_lo       (N mod 2^24, always < 16777216)
+//   pc[3] = N_hi       (floor(N / 2^24), always < 16777216 for N < 2^48)
+//
+// GPU reconstruction: N = N_hi * 16777216 + N_lo (uint64, exact)
+// seg_base = seg_idx * SEG_RANGE (uint64, no overflow)
+// n_sub_base = min(N - seg_base, SEG_RANGE) (uint64 → clamped → uint32)
+//
+// Binding layout: same as init_v2 (binding 0 = uint registers)
+// Dispatch: wg = ceil(num_words / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_init_v6.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_init_v6(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  ir_uses_uint64[0] = 0.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────
+  let gid      = ir_load_gid(entry)
+  let pc_seg   = ir_push_const(entry, 0.0)   // seg_idx
+  let pc_words = ir_push_const(entry, 1.0)   // num_words
+  let pc_n_lo  = ir_push_const(entry, 2.0)   // N mod 2^24
+  let pc_n_hi  = ir_push_const(entry, 3.0)   // floor(N / 2^24)
+  let words_u  = ir_ftou(entry, pc_words)
+  let oob      = ir_ugte(entry, gid, words_u)
+  let _sm      = ir_selection_merge(entry, exit_block)
+  let _br      = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body ──────────────────────────────────────────────────
+  let seg_u    = ir_ftou(body, pc_seg)
+
+  // uint32 constants
+  let c0       = ir_const_u(body, 0.0)
+  let c1       = ir_const_u(body, 1.0)
+  let c2       = ir_const_u(body, 2.0)
+  let c32      = ir_const_u(body, 32.0)
+  let c64      = ir_const_u(body, 64.0)
+  let c_shift  = ir_const_u(body, 16777216.0)   // 2^24
+
+  // ── Reconstruct N as uint64 from two f32-exact halves ──
+  let n_lo_u   = ir_ftou(body, pc_n_lo)
+  let n_hi_u   = ir_ftou(body, pc_n_hi)
+  let n_lo_64  = ir_u32_to_u64(body, n_lo_u)
+  let n_hi_64  = ir_u32_to_u64(body, n_hi_u)
+  let shift_64 = ir_u32_to_u64(body, c_shift)
+  let n64      = ir_iadd64(body, ir_imul64(body, n_hi_64, shift_64), n_lo_64)
+
+  // ── SEG_RANGE = num_words * 64 (uint32, always small) ──
+  let seg_range = ir_imul(body, words_u, c64)
+
+  // ── seg_base in uint64 (THE OVERFLOW FIX) ──
+  let seg_u64     = ir_u32_to_u64(body, seg_u)
+  let seg_range64 = ir_u32_to_u64(body, seg_range)
+  let seg_base64  = ir_imul64(body, seg_u64, seg_range64)
+
+  // seg_past_n: compare in uint64
+  let seg_past_n  = ir_ugte64(body, seg_base64, n64)
+
+  // n_sub_base = min(N - seg_base, seg_range) — clamped to prevent uint32 overflow
+  // For middle segments, N - seg_base can be >> 2^32. But we only need to know
+  // whether the segment is fully valid (n_sub_base >= seg_range) or partially valid.
+  let n_sub_base64  = ir_isub64(body, n64, seg_base64)
+  let all_valid     = ir_ugte64(body, n_sub_base64, seg_range64)
+  let n_clamped64   = ir_select(body, IR_TYPE_UINT64, all_valid, seg_range64, n_sub_base64)
+  let n_sub_base    = ir_u64_to_u32(body, n_clamped64)
+
+  // half_range = n_sub_base / 2 (uint32 from here on — all within-segment)
+  let half_range = ir_udiv(body, n_sub_base, c2)
+
+  // all_ones = ~0 = 0xFFFFFFFF
+  let all_ones   = ir_not(body, c0)
+
+  // How many valid bits in this word?
+  let gid32     = ir_imul(body, gid, c32)
+  let valid_raw = ir_isub(body, half_range, gid32)
+  let bits_past = ir_ugte(body, gid32, half_range)
+
+  // enough = valid_raw >= 32 → all bits valid
+  let enough    = ir_ugte(body, valid_raw, c32)
+
+  // Partial mask: (1 << valid_raw) - 1
+  let one_shl   = ir_shl(body, c1, valid_raw)
+  let mask      = ir_isub(body, one_shl, c1)
+
+  // Select word value (priority: seg_past_n > bits_past > enough > partial mask)
+  let word0     = ir_select(body, IR_TYPE_UINT, enough, all_ones, mask)
+  let word1     = ir_select(body, IR_TYPE_UINT, bits_past, c0, word0)
+  let word2     = ir_select(body, IR_TYPE_UINT, seg_past_n, c0, word1)
+
+  // Special case: segment 0, word 0 → clear bit 0 (candidate 1 is not prime)
+  let is_seg0   = ir_uequ(body, seg_u, c0)
+  let is_word0  = ir_uequ(body, gid, c0)
+  let is_s0w0   = ir_land(body, is_seg0, is_word0)
+  let mask_bit0 = ir_not(body, c1)
+  let word_clean = ir_bit_and(body, word2, mask_bit0)
+  let word_final = ir_select(body, IR_TYPE_UINT, is_s0w0, word_clean, word2)
+
+  // Store
+  let _store = ir_buf_store_u(body, 0.0, gid, word_final)
+  let _br2   = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_init_v6.spv"
+let _r = emit_sieve_init_v6(out)
+print("Emitted: {out}")

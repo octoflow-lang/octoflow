@@ -1,0 +1,226 @@
+// gpu_bfs.flow — GPU Breadth-First Search on a Grid Graph
+//
+// "BFS as frontier expansion. 1 dispatch per level. 0 CPU vertex iterations."
+//
+// Graph: 64×64 grid (4096 vertices), each connected to 4 neighbors (up/down/left/right).
+// BFS from vertex 0 (top-left corner).
+// Expected max distance = 126 (Manhattan distance to bottom-right = 63+63).
+//
+// CSR format. Multi-submit: 1 dispatch per BFS level.
+//
+// Run: octoflow run examples/gpu_bfs.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let GRID = 64.0
+let N = GRID * GRID
+let PAD = 4096.0
+
+rt_init()
+
+let pipe_expand = rt_load_pipeline("tests/gpu_shaders/25_bfs_expand.spv", 5.0, 4.0)
+
+// ── Build CSR for 64×64 grid ─────────────────────────────────────────
+// Each vertex (r,c) connects to up to 4 neighbors
+let mut csr_offsets = []
+let mut csr_edges = []
+let mut edge_count = 0.0
+
+let mut v = 0.0
+while v < N
+  push(csr_offsets, edge_count)
+  let r = floor(v / GRID)
+  let c = v - r * GRID
+
+  // Up
+  if r > 0.0
+    push(csr_edges, (r - 1.0) * GRID + c)
+    edge_count = edge_count + 1.0
+  end
+  // Down
+  if r < GRID - 1.0
+    push(csr_edges, (r + 1.0) * GRID + c)
+    edge_count = edge_count + 1.0
+  end
+  // Left
+  if c > 0.0
+    push(csr_edges, r * GRID + c - 1.0)
+    edge_count = edge_count + 1.0
+  end
+  // Right
+  if c < GRID - 1.0
+    push(csr_edges, r * GRID + c + 1.0)
+    edge_count = edge_count + 1.0
+  end
+
+  v = v + 1.0
+end
+push(csr_offsets, edge_count)
+
+// ── Upload graph ─────────────────────────────────────────────────────
+let buf_offsets = rt_create_buffer((N + 1.0) * 4.0)
+let buf_edges = rt_create_buffer(edge_count * 4.0)
+rt_upload(buf_offsets, csr_offsets)
+rt_upload(buf_edges, csr_edges)
+
+// Frontier/visited buffers (PAD = 4096 = 16 workgroups)
+let WGS = PAD / 256.0
+let buf_frontier = rt_create_buffer(PAD * 4.0)
+let buf_next = rt_create_buffer(PAD * 4.0)
+let buf_visited = rt_create_buffer(PAD * 4.0)
+
+// Initialize frontier: vertex 0 = 1.0, rest = 0.0
+let mut frontier = []
+let mut i = 0.0
+while i < PAD
+  if i == 0.0
+    push(frontier, 1.0)
+  else
+    push(frontier, 0.0)
+  end
+  i = i + 1.0
+end
+
+let mut zeros = []
+let mut i = 0.0
+while i < PAD
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+
+rt_upload(buf_frontier, frontier)
+rt_upload(buf_next, zeros)
+rt_upload(buf_visited, zeros)
+
+// ── BFS loop ─────────────────────────────────────────────────────────
+let t0 = time()
+let mut level = 1.0
+let mut total_dispatches = 0.0
+
+while level < 200.0
+  // Expand frontier
+  rt_chain_begin(1.0, 5.0)
+  let mut pc = [level]
+  rt_chain_push_constants(pipe_expand, pc)
+  let mut bufs = [buf_offsets, buf_edges, buf_frontier, buf_next, buf_visited]
+  rt_chain_dispatch(pipe_expand, bufs, WGS)
+  rt_chain_end()
+  rt_chain_submit_wait()
+  total_dispatches = total_dispatches + 1.0
+
+  // Check if next frontier has any active vertices
+  rt_download(buf_next, N)
+  let mut has_next = 0.0
+  let mut i = 0.0
+  while i < N
+    if rt_result[int(i)] == 1.0
+      has_next = 1.0
+    end
+    i = i + 1.0
+  end
+
+  if has_next == 0.0
+    level = 999.0
+  else
+    // Swap frontier ← next, clear next
+    let mut new_frontier = []
+    let mut i = 0.0
+    while i < PAD
+      if i < N
+        push(new_frontier, rt_result[int(i)])
+      else
+        push(new_frontier, 0.0)
+      end
+      i = i + 1.0
+    end
+    rt_upload(buf_frontier, new_frontier)
+    rt_upload(buf_next, zeros)
+    level = level + 1.0
+  end
+end
+
+let t1 = time()
+let total_ms = (t1 - t0) * 1000.0
+
+// ── Download and verify ──────────────────────────────────────────────
+rt_download(buf_visited, N)
+
+// Find max level and count vertices per level
+let mut max_level = 0.0
+let mut visited_count = 0.0
+let mut i = 0.0
+while i < N
+  let v = rt_result[int(i)]
+  if v > max_level
+    max_level = v
+  end
+  if v > 0.0
+    visited_count = visited_count + 1.0
+  end
+  i = i + 1.0
+end
+
+// Verify: corner vertices should have known distances
+// Vertex 0 (0,0) → level 1
+let v_00 = rt_result[0]
+// Vertex 63 (0,63) → level 64
+let v_063 = rt_result[63]
+// Vertex 4032 (63,0) → level 64
+let v_630 = rt_result[4032]
+// Vertex 4095 (63,63) → level 127
+let v_6363 = rt_result[4095]
+
+// Expected: Manhattan distance + 1 (level starts at 1)
+let exp_00 = 1.0
+let exp_063 = 64.0
+let exp_630 = 64.0
+let exp_6363 = 127.0
+
+let mut pass = 1.0
+if v_00 != exp_00
+  print("FAIL: vertex(0,0)={v_00} expected={exp_00}")
+  pass = 0.0
+end
+if v_063 != exp_063
+  print("FAIL: vertex(0,63)={v_063} expected={exp_063}")
+  pass = 0.0
+end
+if v_630 != exp_630
+  print("FAIL: vertex(63,0)={v_630} expected={exp_630}")
+  pass = 0.0
+end
+if v_6363 != exp_6363
+  print("FAIL: vertex(63,63)={v_6363} expected={exp_6363}")
+  pass = 0.0
+end
+if visited_count != N
+  print("FAIL: visited {visited_count}/{N} vertices")
+  pass = 0.0
+end
+
+// ── Report ───────────────────────────────────────────────────────────
+print("")
+print("OctoFlow GPU Breadth-First Search")
+print("  Graph: {GRID}x{GRID} grid ({N} vertices, {edge_count} edges)")
+print("  BFS source: vertex 0 (top-left)")
+print("  Max BFS level: {max_level}")
+print("  Vertices visited: {visited_count}/{N}")
+print("  BFS levels (dispatches): {total_dispatches}")
+print("  Submissions: {total_dispatches}")
+print("  CPU vertex iterations: 0")
+print("  Total time: {total_ms} ms")
+print("")
+print("  Corner verification:")
+print("    (0,0)   → level {v_00} (expected {exp_00})")
+print("    (0,63)  → level {v_063} (expected {exp_063})")
+print("    (63,0)  → level {v_630} (expected {exp_630})")
+print("    (63,63) → level {v_6363} (expected {exp_6363})")
+
+if pass == 1.0
+  print("  PASS: all {N} vertices reached, corner distances BIT EXACT")
+else
+  print("  FAIL")
+end
+
+print("")
+rt_cleanup()

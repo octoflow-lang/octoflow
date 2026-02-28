@@ -1,0 +1,102 @@
+// test_embed.flow — Embedding Lookup Tests
+//
+// Tests embed_from_table and embed_batch_from_table (pure CPU, no model needed).
+// embed_token/embed_batch require a GGUF model file and are tested in
+// test_inference_e2e.flow.
+//
+// Usage:
+//   octoflow run stdlib/ai/test_embed.flow
+
+use "embed"
+
+let mut _tc = [0.0, 0.0]
+
+fn check(name, got, expected)
+  if got == expected
+    _tc[0] = _tc[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected {expected}")
+  _tc[1] = _tc[1] + 1.0
+  return 0.0
+end
+
+fn check_range(name, got, lo, hi)
+  if got >= lo
+    if got <= hi
+      _tc[0] = _tc[0] + 1.0
+      return 1.0
+    end
+  end
+  print("  FAIL: {name} — got {got}, expected [{lo}..{hi}]")
+  _tc[1] = _tc[1] + 1.0
+  return 0.0
+end
+
+print("=== Embed Tests ===")
+
+// Build a small 4-token embedding table with n_embd=3
+// Layout: [tok0_d0, tok0_d1, tok0_d2, tok1_d0, tok1_d1, tok1_d2, ...]
+let n_embd = 3.0
+let mut table = [1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 100.0, 200.0, 300.0, 0.5, 0.6, 0.7]
+
+// ── 1. Single token lookup ───────────────────────────────────────
+print("1. Single token lookup")
+let e0 = embed_from_table(table, 0.0, n_embd)
+let _c1 = check("tok0 dim0", e0[0], 1.0)
+let _c2 = check("tok0 dim1", e0[1], 2.0)
+let _c3 = check("tok0 dim2", e0[2], 3.0)
+let _c4 = check("tok0 len", len(e0), 3.0)
+
+let e1 = embed_from_table(table, 1.0, n_embd)
+let _c5 = check("tok1 dim0", e1[0], 10.0)
+let _c6 = check("tok1 dim1", e1[1], 20.0)
+let _c7 = check("tok1 dim2", e1[2], 30.0)
+
+let e2 = embed_from_table(table, 2.0, n_embd)
+let _c8 = check("tok2 dim0", e2[0], 100.0)
+
+let e3 = embed_from_table(table, 3.0, n_embd)
+let _c9 = check("tok3 dim0", e3[0], 0.5)
+let _c10 = check("tok3 dim2", e3[2], 0.7)
+
+// ── 2. Batch lookup ──────────────────────────────────────────────
+print("2. Batch lookup")
+let mut ids = [2.0, 0.0, 3.0]
+let batch = embed_batch_from_table(table, ids, n_embd)
+// batch should be [100,200,300, 1,2,3, 0.5,0.6,0.7]
+let _c11 = check("batch len", len(batch), 9.0)
+let _c12 = check("batch tok2 d0", batch[0], 100.0)
+let _c13 = check("batch tok2 d1", batch[1], 200.0)
+let _c14 = check("batch tok2 d2", batch[2], 300.0)
+let _c15 = check("batch tok0 d0", batch[3], 1.0)
+let _c16 = check("batch tok0 d1", batch[4], 2.0)
+let _c17 = check("batch tok3 d0", batch[6], 0.5)
+let _c18 = check("batch tok3 d2", batch[8], 0.7)
+
+// ── 3. Single token batch ────────────────────────────────────────
+print("3. Single token batch")
+let mut single = [1.0]
+let sb = embed_batch_from_table(table, single, n_embd)
+let _c19 = check("single batch len", len(sb), 3.0)
+let _c20 = check("single batch d0", sb[0], 10.0)
+let _c21 = check("single batch d1", sb[1], 20.0)
+
+// ── 4. Repeated tokens ───────────────────────────────────────────
+print("4. Repeated tokens")
+let mut reps = [0.0, 0.0, 0.0]
+let rb = embed_batch_from_table(table, reps, n_embd)
+let _c22 = check("repeat len", len(rb), 9.0)
+let _c23 = check("repeat [0]", rb[0], 1.0)
+let _c24 = check("repeat [3]", rb[3], 1.0)
+let _c25 = check("repeat [6]", rb[6], 1.0)
+
+// ── Summary ───────────────────────────────────────────────────────
+let total = _tc[0] + _tc[1]
+let passed = _tc[0]
+let failed = _tc[1]
+print(" ")
+print("=== Results: {passed}/{total} passed ===")
+if failed > 0.0
+  print("FAILURES: {failed}")
+end

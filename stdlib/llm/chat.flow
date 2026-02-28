@@ -1,0 +1,302 @@
+// stdlib/llm/chat.flow — Adaptive Chat Template Builder
+//
+// Resolves special token IDs dynamically from GGUF vocabulary
+// instead of hardcoding Qwen2-specific values.
+//
+// Supported architectures:
+//   qwen2  — ChatML (<|im_start|>role\n...<|im_end|>)
+//   llama  — LLaMA/Mistral ([INST] ... [/INST])
+//   gemma  — Gemma (<start_of_turn>role\n...<end_of_turn>)
+//   phi    — Phi (<|user|>\n...<|end|>\n<|assistant|>)
+//
+// Usage:
+//   use "chat"
+//   let toks = build_chat_tokens(model_path, model, vocab, prompt)
+
+use "gguf"
+
+// ── Special Token Resolution ────────────────────────────────────
+// Scans vocab array for known special token strings.
+// Returns a map: { "im_start": id, "im_end": id, ... }
+
+fn resolve_chat_tokens(model_path, model, vocab)
+  let mut result = map()
+  let arch = map_get(model, "arch")
+
+  // Read EOS/BOS from GGUF metadata (precise, no vocab scan needed)
+  let mut eos_id = 2.0
+  if map_has(model, "kv.tokenizer.ggml.eos_token_id")
+    eos_id = map_get(model, "kv.tokenizer.ggml.eos_token_id")
+  end
+  map_set(result, "eos", eos_id)
+
+  let mut bos_id = 1.0
+  if map_has(model, "kv.tokenizer.ggml.bos_token_id")
+    bos_id = map_get(model, "kv.tokenizer.ggml.bos_token_id")
+  end
+  map_set(result, "bos", bos_id)
+
+  // Tokenize common role words (works across all BPE tokenizers)
+  let user_toks = gguf_tokenize(model_path, "user")
+  if len(user_toks) > 0.0
+    map_set(result, "user", user_toks[0])
+  end
+
+  let asst_toks = gguf_tokenize(model_path, "assistant")
+  if len(asst_toks) > 0.0
+    map_set(result, "assistant", asst_toks[0])
+  end
+
+  let sys_toks = gguf_tokenize(model_path, "system")
+  if len(sys_toks) > 0.0
+    map_set(result, "system", sys_toks[0])
+  end
+
+  // Newline token: tokenize actual newline character
+  let nl_char = chr(10.0)
+  let nl_toks = gguf_tokenize(model_path, nl_char)
+  if len(nl_toks) > 0.0
+    map_set(result, "nl", nl_toks[0])
+  end
+
+  // Scan vocab for architecture-specific special tokens
+  let vlen = len(vocab)
+  let mut i = 0.0
+  while i < vlen
+    let tok = vocab[int(i)]
+
+    // ChatML tokens (Qwen2, Yi, etc.)
+    if tok == "<|im_start|>"
+      map_set(result, "im_start", i)
+    elif tok == "<|im_end|>"
+      map_set(result, "im_end", i)
+
+    // LLaMA/Mistral tokens
+    elif tok == "[INST]"
+      map_set(result, "inst_start", i)
+    elif tok == "[/INST]"
+      map_set(result, "inst_end", i)
+    elif tok == "<<SYS>>"
+      map_set(result, "sys_start", i)
+    elif tok == "<</SYS>>"
+      map_set(result, "sys_end", i)
+
+    // Gemma tokens
+    elif tok == "<start_of_turn>"
+      map_set(result, "turn_start", i)
+    elif tok == "<end_of_turn>"
+      map_set(result, "turn_end", i)
+
+    // Phi tokens
+    elif tok == "<|user|>"
+      map_set(result, "phi_user", i)
+    elif tok == "<|assistant|>"
+      map_set(result, "phi_asst", i)
+    elif tok == "<|end|>"
+      map_set(result, "phi_end", i)
+    end
+
+    i = i + 1.0
+  end
+
+  return result
+end
+
+// ── Chat Template Detection ─────────────────────────────────────
+// Detects which chat format to use based on architecture + available tokens.
+
+fn detect_chat_format(arch, tokens)
+  // Check for ChatML tokens first (Qwen2, Yi, some fine-tunes)
+  if map_has(tokens, "im_start")
+    return "chatml"
+  end
+
+  // Check for LLaMA/Mistral instruction tokens
+  if map_has(tokens, "inst_start")
+    return "llama"
+  end
+
+  // Check for Gemma turn tokens
+  if map_has(tokens, "turn_start")
+    return "gemma"
+  end
+
+  // Check for Phi tokens
+  if map_has(tokens, "phi_user")
+    return "phi"
+  end
+
+  // Fallback based on architecture name
+  if arch == "qwen2"
+    return "chatml"
+  elif arch == "llama"
+    return "llama"
+  elif arch == "gemma"
+    return "gemma"
+  elif arch == "phi3"
+    return "phi"
+  end
+
+  // Default: raw (no chat template, just tokenize the prompt)
+  return "raw"
+end
+
+// ── Chat Template Builders ──────────────────────────────────────
+
+fn build_chatml_tokens(model_path, tokens, msg_toks)
+  let im_start = map_get(tokens, "im_start")
+  let im_end = map_get(tokens, "im_end")
+  let nl_id = map_get(tokens, "nl")
+  let user_id = map_get(tokens, "user")
+  let asst_id = map_get(tokens, "assistant")
+
+  // <|im_start|>user\n{message}<|im_end|>\n<|im_start|>assistant\n
+  let mut ids = []
+  push(ids, im_start)
+  push(ids, user_id)
+  push(ids, nl_id)
+  let mut mi = 0.0
+  while mi < len(msg_toks)
+    push(ids, msg_toks[int(mi)])
+    mi = mi + 1.0
+  end
+  push(ids, im_end)
+  push(ids, nl_id)
+  push(ids, im_start)
+  push(ids, asst_id)
+  push(ids, nl_id)
+  return ids
+end
+
+fn build_llama_tokens(model_path, tokens, msg_toks)
+  let bos = map_get(tokens, "bos")
+  let inst_start = map_get(tokens, "inst_start")
+  let inst_end = map_get(tokens, "inst_end")
+
+  // <s>[INST] {message} [/INST]
+  let mut ids = []
+  push(ids, bos)
+  push(ids, inst_start)
+  let mut mi = 0.0
+  while mi < len(msg_toks)
+    push(ids, msg_toks[int(mi)])
+    mi = mi + 1.0
+  end
+  push(ids, inst_end)
+  return ids
+end
+
+fn build_gemma_tokens(model_path, tokens, msg_toks)
+  let turn_start = map_get(tokens, "turn_start")
+  let turn_end = map_get(tokens, "turn_end")
+  let nl_id = map_get(tokens, "nl")
+  let user_id = map_get(tokens, "user")
+  let asst_id = map_get(tokens, "assistant")
+
+  // <start_of_turn>user\n{message}<end_of_turn>\n<start_of_turn>model\n
+  let mut ids = []
+  push(ids, turn_start)
+  push(ids, user_id)
+  push(ids, nl_id)
+  let mut mi = 0.0
+  while mi < len(msg_toks)
+    push(ids, msg_toks[int(mi)])
+    mi = mi + 1.0
+  end
+  push(ids, turn_end)
+  push(ids, nl_id)
+  push(ids, turn_start)
+  // Gemma uses "model" not "assistant"
+  let model_toks = gguf_tokenize(model_path, "model")
+  if len(model_toks) > 0.0
+    push(ids, model_toks[0])
+  end
+  push(ids, nl_id)
+  return ids
+end
+
+fn build_phi_tokens(model_path, tokens, msg_toks)
+  let phi_user = map_get(tokens, "phi_user")
+  let phi_asst = map_get(tokens, "phi_asst")
+  let phi_end = map_get(tokens, "phi_end")
+  let nl_id = map_get(tokens, "nl")
+
+  // <|user|>\n{message}<|end|>\n<|assistant|>\n
+  let mut ids = []
+  push(ids, phi_user)
+  push(ids, nl_id)
+  let mut mi = 0.0
+  while mi < len(msg_toks)
+    push(ids, msg_toks[int(mi)])
+    mi = mi + 1.0
+  end
+  push(ids, phi_end)
+  push(ids, nl_id)
+  push(ids, phi_asst)
+  push(ids, nl_id)
+  return ids
+end
+
+fn build_raw_tokens(model_path, tokens, msg_toks)
+  // No chat template — just the tokenized prompt
+  return msg_toks
+end
+
+// ── Public API ──────────────────────────────────────────────────
+
+fn build_chat_tokens(model_path, model, vocab, prompt)
+  // 1. Resolve special tokens from vocabulary
+  let tokens = resolve_chat_tokens(model_path, model, vocab)
+
+  // 2. Detect chat format
+  let arch = map_get(model, "arch")
+  let fmt = detect_chat_format(arch, tokens)
+
+  // 3. Tokenize the user message
+  let msg_toks = gguf_tokenize(model_path, prompt)
+
+  // 4. Build template-wrapped token sequence
+  if fmt == "chatml"
+    return build_chatml_tokens(model_path, tokens, msg_toks)
+  elif fmt == "llama"
+    return build_llama_tokens(model_path, tokens, msg_toks)
+  elif fmt == "gemma"
+    return build_gemma_tokens(model_path, tokens, msg_toks)
+  elif fmt == "phi"
+    return build_phi_tokens(model_path, tokens, msg_toks)
+  end
+
+  // Default: raw tokens
+  return build_raw_tokens(model_path, tokens, msg_toks)
+end
+
+// Returns the EOS/stop token IDs for the detected chat format.
+// Generation should stop when ANY of these are sampled.
+fn get_stop_tokens(model, tokens)
+  let mut stops = []
+  let eos = map_get(tokens, "eos")
+  push(stops, eos)
+
+  if map_has(tokens, "im_end")
+    push(stops, map_get(tokens, "im_end"))
+  end
+  if map_has(tokens, "turn_end")
+    push(stops, map_get(tokens, "turn_end"))
+  end
+  if map_has(tokens, "phi_end")
+    push(stops, map_get(tokens, "phi_end"))
+  end
+  return stops
+end
+
+// Checks if a token ID is in the stop token list.
+fn is_stop_token(stops, token_id)
+  let mut i = 0.0
+  while i < len(stops)
+    if token_id == stops[int(i)]
+      return 1.0
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end

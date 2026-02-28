@@ -1,0 +1,457 @@
+// layout.flow — GUI Layout Helpers
+//
+// Provides vertical/horizontal stacking and grid layout for the OctoFlow
+// GUI toolkit. Eliminates manual x,y coordinate computation.
+//
+// Usage:
+//   use "gui"
+//   use "layout"
+//
+//   let app = gui_init(800.0, 600.0, "Layout Demo")
+//   let vl = vstack(20.0, 20.0, 8.0)
+//   let lbl = vstack_label(vl, "HELLO WORLD")
+//   let btn = vstack_button(vl, 120.0, 34.0, "CLICK ME")
+//   let chk = vstack_checkbox(vl, "OPTION A")
+//   let sld = vstack_slider(vl, 200.0, 0.0, 100.0, 50.0)
+
+use "gui"
+
+// ── Layout state (parallel arrays) ────────────────────────────────
+// Each layout has: type, x, y, spacing, cursor_x, cursor_y, width
+let mut _lay_type = []
+let mut _lay_x = []
+let mut _lay_y = []
+let mut _lay_spacing = []
+let mut _lay_cx = []
+let mut _lay_cy = []
+let mut _lay_w = []
+
+// Layout types
+let LAY_VSTACK = 1.0
+let LAY_HSTACK = 2.0
+
+// ── Vertical Stack ────────────────────────────────────────────────
+// Widgets are placed top-to-bottom with spacing between them.
+
+fn vstack(x, y, spacing)
+  let id = len(_lay_type)
+  push(_lay_type, LAY_VSTACK)
+  push(_lay_x, x)
+  push(_lay_y, y)
+  push(_lay_spacing, spacing)
+  push(_lay_cx, x)
+  push(_lay_cy, y)
+  push(_lay_w, 0.0)
+  // Keep grid arrays aligned
+  push(_lay_cols, 0.0)
+  push(_lay_cell_w, 0.0)
+  push(_lay_cell_h, 0.0)
+  push(_lay_gap, 0.0)
+  return id
+end
+
+fn _vstack_advance(lay_id, widget_h)
+  let ii = int(lay_id)
+  let cy = _lay_cy[ii]
+  let sp = _lay_spacing[ii]
+  _lay_cy[ii] = cy + widget_h + sp
+  return 0.0
+end
+
+fn vstack_label(lay_id, text)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_label(cx, cy, text)
+  let _a = _vstack_advance(lay_id, 20.0)
+  return w
+end
+
+fn vstack_button(lay_id, bw, bh, text)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_button(cx, cy, bw, bh, text)
+  let _a = _vstack_advance(lay_id, bh)
+  return w
+end
+
+fn vstack_checkbox(lay_id, text)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_checkbox(cx, cy, text)
+  let _a = _vstack_advance(lay_id, 22.0)
+  return w
+end
+
+fn vstack_slider(lay_id, sw, smin, smax, sinit)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_slider(cx, cy, sw, smin, smax, sinit)
+  let _a = _vstack_advance(lay_id, 24.0)
+  return w
+end
+
+fn vstack_progress(lay_id, pw)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_progress(cx, cy, pw)
+  let _a = _vstack_advance(lay_id, 22.0)
+  return w
+end
+
+fn vstack_textinput(lay_id, tw)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_textinput(cx, cy, tw)
+  let _a = _vstack_advance(lay_id, 30.0)
+  return w
+end
+
+fn vstack_separator(lay_id, sw)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_separator(cx, cy, sw)
+  let _a = _vstack_advance(lay_id, 2.0)
+  return w
+end
+
+fn vstack_radio(lay_id, text, group)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_radio(cx, cy, text, group)
+  let _a = _vstack_advance(lay_id, 22.0)
+  return w
+end
+
+fn vstack_listbox(lay_id, lw, lh)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_listbox(cx, cy, lw, lh)
+  let _a = _vstack_advance(lay_id, lh)
+  return w
+end
+
+fn vstack_spinbox(lay_id, sw, smin, smax, sinit, sstep)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_spinbox(cx, cy, sw, smin, smax, sinit, sstep)
+  let _a = _vstack_advance(lay_id, 30.0)
+  return w
+end
+
+fn vstack_dropdown(lay_id, dw)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_dropdown(cx, cy, dw)
+  let _a = _vstack_advance(lay_id, 30.0)
+  return w
+end
+
+fn vstack_tabs(lay_id, tw, th)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_tabs(cx, cy, tw, th)
+  let _a = _vstack_advance(lay_id, th)
+  return w
+end
+
+fn vstack_canvas(lay_id, cw, ch)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_canvas(cx, cy, cw, ch)
+  let _a = _vstack_advance(lay_id, ch)
+  return w
+end
+
+fn vstack_treeview(lay_id, tw, th)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_treeview(cx, cy, tw, th)
+  let _a = _vstack_advance(lay_id, th)
+  return w
+end
+
+// Skip vertical space without creating a widget
+fn vstack_space(lay_id, amount)
+  let ii = int(lay_id)
+  _lay_cy[ii] = _lay_cy[ii] + amount
+  return 0.0
+end
+
+// Get current cursor position
+fn vstack_cursor_y(lay_id)
+  return _lay_cy[int(lay_id)]
+end
+
+// ── Horizontal Stack ──────────────────────────────────────────────
+// Widgets are placed left-to-right with spacing between them.
+
+fn hstack(x, y, spacing)
+  let id = len(_lay_type)
+  push(_lay_type, LAY_HSTACK)
+  push(_lay_x, x)
+  push(_lay_y, y)
+  push(_lay_spacing, spacing)
+  push(_lay_cx, x)
+  push(_lay_cy, y)
+  push(_lay_w, 0.0)
+  // Keep grid arrays aligned
+  push(_lay_cols, 0.0)
+  push(_lay_cell_w, 0.0)
+  push(_lay_cell_h, 0.0)
+  push(_lay_gap, 0.0)
+  return id
+end
+
+fn _hstack_advance(lay_id, widget_w)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let sp = _lay_spacing[ii]
+  _lay_cx[ii] = cx + widget_w + sp
+  return 0.0
+end
+
+fn hstack_label(lay_id, text)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let tw = len(text) * 10.0 + 4.0
+  let w = gui_label(cx, cy, text)
+  let _a = _hstack_advance(lay_id, tw)
+  return w
+end
+
+fn hstack_button(lay_id, bw, bh, text)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_button(cx, cy, bw, bh, text)
+  let _a = _hstack_advance(lay_id, bw)
+  return w
+end
+
+fn hstack_checkbox(lay_id, text)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let tw = len(text) * 10.0 + 28.0
+  let w = gui_checkbox(cx, cy, text)
+  let _a = _hstack_advance(lay_id, tw)
+  return w
+end
+
+fn hstack_slider(lay_id, sw, smin, smax, sinit)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_slider(cx, cy, sw, smin, smax, sinit)
+  let _a = _hstack_advance(lay_id, sw)
+  return w
+end
+
+fn hstack_radio(lay_id, text, group)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let tw = len(text) * 10.0 + 28.0
+  let w = gui_radio(cx, cy, text, group)
+  let _a = _hstack_advance(lay_id, tw)
+  return w
+end
+
+fn hstack_textinput(lay_id, tw)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_textinput(cx, cy, tw)
+  let _a = _hstack_advance(lay_id, tw)
+  return w
+end
+
+fn hstack_spinbox(lay_id, sw, smin, smax, sinit, sstep)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_spinbox(cx, cy, sw, smin, smax, sinit, sstep)
+  let _a = _hstack_advance(lay_id, sw)
+  return w
+end
+
+fn hstack_dropdown(lay_id, dw)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_dropdown(cx, cy, dw)
+  let _a = _hstack_advance(lay_id, dw)
+  return w
+end
+
+fn hstack_canvas(lay_id, cw, ch)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_canvas(cx, cy, cw, ch)
+  let _a = _hstack_advance(lay_id, cw)
+  return w
+end
+
+fn hstack_treeview(lay_id, tw, th)
+  let ii = int(lay_id)
+  let cx = _lay_cx[ii]
+  let cy = _lay_cy[ii]
+  let w = gui_treeview(cx, cy, tw, th)
+  let _a = _hstack_advance(lay_id, tw)
+  return w
+end
+
+// Skip horizontal space without creating a widget
+fn hstack_space(lay_id, amount)
+  let ii = int(lay_id)
+  _lay_cx[ii] = _lay_cx[ii] + amount
+  return 0.0
+end
+
+// Get current cursor position
+fn hstack_cursor_x(lay_id)
+  return _lay_cx[int(lay_id)]
+end
+
+// ── Grid Layout ─────────────────────────────────────────────────────
+// Place widgets in a rows x cols grid with uniform cell sizing.
+//
+// Usage:
+//   let g = grid(20.0, 20.0, 3.0, 100.0, 36.0, 4.0)
+//   let b1 = grid_button(g, 0.0, 0.0, "A")
+//   let b2 = grid_button(g, 0.0, 1.0, "B")
+//   let b3 = grid_button(g, 1.0, 0.0, "C")
+
+let LAY_GRID = 3.0
+
+// Grid-specific metadata (parallel arrays indexed by layout id)
+let mut _lay_cols = []
+let mut _lay_cell_w = []
+let mut _lay_cell_h = []
+let mut _lay_gap = []
+
+fn grid(x, y, cols, cell_w, cell_h, gap)
+  let id = len(_lay_type)
+  push(_lay_type, LAY_GRID)
+  push(_lay_x, x)
+  push(_lay_y, y)
+  push(_lay_spacing, 0.0)
+  push(_lay_cx, x)
+  push(_lay_cy, y)
+  push(_lay_w, cols * cell_w + (cols - 1.0) * gap)
+  // Grid-specific
+  push(_lay_cols, cols)
+  push(_lay_cell_w, cell_w)
+  push(_lay_cell_h, cell_h)
+  push(_lay_gap, gap)
+  return id
+end
+
+fn grid_cell_x(grid_id, row, col)
+  let ii = int(grid_id)
+  let gx = _lay_x[ii]
+  let cw = _lay_cell_w[ii]
+  let gap = _lay_gap[ii]
+  return gx + col * (cw + gap)
+end
+
+fn grid_cell_y(grid_id, row, col)
+  let ii = int(grid_id)
+  let gy = _lay_y[ii]
+  let ch = _lay_cell_h[ii]
+  let gap = _lay_gap[ii]
+  return gy + row * (ch + gap)
+end
+
+fn grid_button(grid_id, row, col, text)
+  let cx = grid_cell_x(grid_id, row, col)
+  let cy = grid_cell_y(grid_id, row, col)
+  let ii = int(grid_id)
+  let cw = _lay_cell_w[ii]
+  let ch = _lay_cell_h[ii]
+  let w = gui_button(cx, cy, cw, ch, text)
+  return w
+end
+
+fn grid_label(grid_id, row, col, text)
+  let cx = grid_cell_x(grid_id, row, col)
+  let cy = grid_cell_y(grid_id, row, col)
+  let w = gui_label(cx, cy, text)
+  return w
+end
+
+fn grid_checkbox(grid_id, row, col, text)
+  let cx = grid_cell_x(grid_id, row, col)
+  let cy = grid_cell_y(grid_id, row, col)
+  let w = gui_checkbox(cx, cy, text)
+  return w
+end
+
+fn grid_slider(grid_id, row, col, sw, smin, smax, sinit)
+  let cx = grid_cell_x(grid_id, row, col)
+  let cy = grid_cell_y(grid_id, row, col)
+  let w = gui_slider(cx, cy, sw, smin, smax, sinit)
+  return w
+end
+
+fn grid_canvas(grid_id, row, col)
+  let cx = grid_cell_x(grid_id, row, col)
+  let cy = grid_cell_y(grid_id, row, col)
+  let ii = int(grid_id)
+  let cw = _lay_cell_w[ii]
+  let ch = _lay_cell_h[ii]
+  let w = gui_canvas(cx, cy, cw, ch)
+  return w
+end
+
+fn grid_textinput(grid_id, row, col)
+  let cx = grid_cell_x(grid_id, row, col)
+  let cy = grid_cell_y(grid_id, row, col)
+  let ii = int(grid_id)
+  let cw = _lay_cell_w[ii]
+  let w = gui_textinput(cx, cy, cw)
+  return w
+end
+
+fn grid_dropdown(grid_id, row, col)
+  let cx = grid_cell_x(grid_id, row, col)
+  let cy = grid_cell_y(grid_id, row, col)
+  let ii = int(grid_id)
+  let cw = _lay_cell_w[ii]
+  let w = gui_dropdown(cx, cy, cw)
+  return w
+end
+
+fn grid_progress(grid_id, row, col)
+  let cx = grid_cell_x(grid_id, row, col)
+  let cy = grid_cell_y(grid_id, row, col)
+  let ii = int(grid_id)
+  let cw = _lay_cell_w[ii]
+  let w = gui_progress(cx, cy, cw)
+  return w
+end
+
+fn grid_spinbox(grid_id, row, col, smin, smax, sinit, sstep)
+  let cx = grid_cell_x(grid_id, row, col)
+  let cy = grid_cell_y(grid_id, row, col)
+  let ii = int(grid_id)
+  let cw = _lay_cell_w[ii]
+  let w = gui_spinbox(cx, cy, cw, smin, smax, sinit, sstep)
+  return w
+end

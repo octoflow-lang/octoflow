@@ -1,0 +1,24 @@
+// stdlib/compiler/lower_test_arith.flow
+// Phase 70 Test: Expression parser → IR → SPIR-V → GPU dispatch
+//
+// Tests lower.flow expression parser: "input [ gid ] * 3.0 + 1.0"
+// Expected output[gid] = input[gid] * 3.0 + 1.0
+
+use ir
+use lower
+
+let mut out_path = env("SPIRV_OUTPUT")
+if out_path == ""
+  out_path = "spirv_lower_arith.spv"
+end
+
+ir_new()
+
+let b = ir_block("entry")
+
+// Parse expression and emit IR
+let val = lower_expr(b, "input [ gid ] * 3.0 + 1.0")
+ir_store_output(b, val)
+ir_term_return(b)
+
+let _e = ir_emit_spirv(out_path)

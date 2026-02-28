@@ -1,0 +1,19 @@
+// Minimal test for lambdas in eval.flow
+let mut nums = []
+push(nums, 1.0)
+push(nums, 2.0)
+push(nums, 3.0)
+push(nums, 4.0)
+push(nums, 5.0)
+
+let doubled = map_each(nums, fn(x) x * 2.0 end)
+let d0 = doubled[0]
+let d2 = doubled[2]
+print("d0={d0} d2={d2}")
+
+let total = reduce(nums, 0.0, fn(acc, x) acc + x end)
+print("total={total}")
+
+let big = filter(nums, fn(x) x >= 3.0 end)
+let blen = len(big)
+print("blen={blen}")

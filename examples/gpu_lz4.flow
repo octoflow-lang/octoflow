@@ -1,0 +1,183 @@
+// gpu_lz4.flow — GPU LZ4 Parallel Block Decompression
+//
+// "1024 compressed blocks. 1 dispatch. 1 submit. 0 CPU decompression loops."
+//
+// Each GPU thread independently decompresses one LZ4 block.
+// Embarrassingly parallel: blocks are independent.
+//
+// Data: 1024 blocks, each compresses 256 bytes of repeating pattern [1..8]
+// down to ~14 bytes. Total: ~14KB compressed → 256KB decompressed.
+//
+// Run: octoflow run examples/gpu_lz4.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N_BLOCKS = 1024.0
+let OUT_BLOCK = 256.0
+
+rt_init()
+
+let pipe_lz4 = rt_load_pipeline("tests/gpu_shaders/28_lz4_decompress.spv", 2.0, 8.0)
+
+// ── Build compressed blocks ──────────────────────────────────────────
+// Each block compresses [1,2,3,4,5,6,7,8] × 32 = 256 bytes
+//
+// LZ4 encoding:
+//   Token: 0x8F (lit_len=8, match_len nibble=15 → extended)
+//   Literals: 1, 2, 3, 4, 5, 6, 7, 8
+//   Offset: 8, 0 (match offset = 8, little-endian)
+//   Extra match: 248 - 4 - 15 = 229
+//   Total match = 4 + 15 + 229 = 248, + 8 literals = 256 bytes
+//
+// Compressed block: [0x8F, 1,2,3,4,5,6,7,8, 8,0, 229] = 12 bytes
+let COMP_SIZE = 12.0
+
+// Build input: [offsets (N+1)] + [compressed data (N × COMP_SIZE)]
+let mut input = []
+
+// Block offsets
+let mut i = 0.0
+while i < N_BLOCKS + 1.0
+  push(input, i * COMP_SIZE)
+  i = i + 1.0
+end
+
+// Compressed data: same block repeated 1024 times
+let mut i = 0.0
+while i < N_BLOCKS
+  // Token: 0x8F = 143
+  push(input, 143.0)
+  // Literals
+  push(input, 1.0)
+  push(input, 2.0)
+  push(input, 3.0)
+  push(input, 4.0)
+  push(input, 5.0)
+  push(input, 6.0)
+  push(input, 7.0)
+  push(input, 8.0)
+  // Match offset: 8 (little-endian)
+  push(input, 8.0)
+  push(input, 0.0)
+  // Extra match length: 229
+  push(input, 229.0)
+  i = i + 1.0
+end
+
+let total_compressed = N_BLOCKS * COMP_SIZE
+let total_decompressed = N_BLOCKS * OUT_BLOCK
+
+// ── Upload ───────────────────────────────────────────────────────────
+let input_size = N_BLOCKS + 1.0 + total_compressed
+let buf_in = rt_create_buffer(input_size * 4.0)
+let buf_out = rt_create_buffer(total_decompressed * 4.0)
+rt_upload(buf_in, input)
+
+// Zero output
+let mut zeros = []
+let mut i = 0.0
+while i < total_decompressed
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_out, zeros)
+
+// ── Dispatch ─────────────────────────────────────────────────────────
+let WGS = N_BLOCKS / 256.0
+
+let t0 = time()
+rt_chain_begin(1.0, 2.0)
+let mut pc = [N_BLOCKS, OUT_BLOCK]
+rt_chain_push_constants(pipe_lz4, pc)
+let mut bufs = [buf_in, buf_out]
+rt_chain_dispatch(pipe_lz4, bufs, WGS)
+rt_chain_end()
+let t1 = time()
+let record_ms = (t1 - t0) * 1000.0
+
+let t2 = time()
+rt_chain_submit_wait()
+let t3 = time()
+let gpu_ms = (t3 - t2) * 1000.0
+
+// ── Download and verify ──────────────────────────────────────────────
+// Check first block and last block
+rt_download(buf_out, total_decompressed)
+
+// Verify first block (bytes 0-255)
+let mut pass_first = 1.0
+let mut i = 0.0
+while i < OUT_BLOCK
+  let got = rt_result[int(i)]
+  let exp = 1.0 + (i - floor(i / 8.0) * 8.0)
+  if got != exp
+    pass_first = 0.0
+  end
+  i = i + 1.0
+end
+
+// Verify last block (bytes (N-1)*256 to N*256-1)
+let mut pass_last = 1.0
+let last_base = (N_BLOCKS - 1.0) * OUT_BLOCK
+let mut i = 0.0
+while i < OUT_BLOCK
+  let got = rt_result[int(last_base + i)]
+  let exp = 1.0 + (i - floor(i / 8.0) * 8.0)
+  if got != exp
+    pass_last = 0.0
+  end
+  i = i + 1.0
+end
+
+// Spot-check random blocks
+let mut pass_mid = 1.0
+let mid_base = 512.0 * OUT_BLOCK
+let mut i = 0.0
+while i < 8.0
+  let got = rt_result[int(mid_base + i)]
+  let exp = i + 1.0
+  if got != exp
+    pass_mid = 0.0
+  end
+  i = i + 1.0
+end
+
+let ratio = total_decompressed / total_compressed
+let comp_kb = total_compressed / 1024.0
+let decomp_kb = total_decompressed / 1024.0
+
+// ── Report ───────────────────────────────────────────────────────────
+print("")
+print("OctoFlow GPU LZ4 Parallel Decompression")
+print("  Blocks: {N_BLOCKS}")
+print("  Block size: {OUT_BLOCK} bytes")
+print("  Compressed: {comp_kb} KB ({total_compressed} bytes)")
+print("  Decompressed: {decomp_kb} KB ({total_decompressed} bytes)")
+print("  Compression ratio: {ratio}:1")
+print("  Workgroups: {WGS}")
+print("  Dispatches: 1")
+print("  Submissions: 1")
+print("  CPU decompress loops: 0")
+print("  Record time: {record_ms} ms")
+print("  GPU time:    {gpu_ms} ms")
+print("")
+print("  First block: {pass_first}")
+print("  Last block:  {pass_last}")
+print("  Mid block:   {pass_mid}")
+
+if pass_first == 1.0
+  if pass_last == 1.0
+    if pass_mid == 1.0
+      print("  PASS: {N_BLOCKS} blocks decompressed, all verified")
+    else
+      print("  FAIL: middle block mismatch")
+    end
+  else
+    print("  FAIL: last block mismatch")
+  end
+else
+  print("  FAIL: first block mismatch")
+end
+
+print("")
+rt_cleanup()

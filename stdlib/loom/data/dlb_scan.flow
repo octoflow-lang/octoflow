@@ -1,0 +1,79 @@
+// stdlib/loom/gpu_dlb_scan.flow
+// GPU Prefix Scan — Decoupled Lookback (single-pass)
+//
+// Implements inclusive prefix sum using Merrill & Garland (2016) decoupled lookback.
+// Single dispatch, no CPU round-trips, O(N) work.
+//
+// Usage:
+//   use "stdlib/loom/gpu_dlb_scan"
+//   let result = gpu_prefix_scan(input_array)
+//
+// Limitations:
+//   - Vulkan has no cross-workgroup forward progress guarantee
+//   - Safe for arrays up to ~229K elements (RTX 3060: 896 concurrent WGs × 256)
+//   - For larger arrays, falls back to multi-pass (not yet implemented)
+//   - Input size must be > 0 (padded to multiple of 256 internally)
+
+use "../compiler/ir"
+use "dlb_scan_emit"
+
+// Cache: only emit the kernel once
+let mut _dlb_emitted = 0.0
+let _dlb_spv_path = "stdlib/loom/kernels/nn/dlb_scan.spv"
+
+// Module-level output array (workaround for RETURNED_ARRAY limitation in module fns)
+let mut dlb_result = []
+
+fn gpu_prefix_scan(input)
+  // Emit kernel on first call
+  if _dlb_emitted < 1.0
+    emit_dlb_scan(_dlb_spv_path)
+    _dlb_emitted = 1.0
+  end
+
+  let n = len(input)
+  // Pad input to multiple of 256
+  let mut padded = []
+  let mut pi = 0.0
+  while pi < n
+    push(padded, input[pi])
+    pi = pi + 1.0
+  end
+  // Pad with zeros
+  let rem = n - floor(n / 256.0) * 256.0
+  if rem > 0.0
+    let pad_count = 256.0 - rem
+    let mut pj = 0.0
+    while pj < pad_count
+      push(padded, 0.0)
+      pj = pj + 1.0
+    end
+  end
+  let padded_n = len(padded)
+  let wg_count = padded_n / 256.0
+
+  // Allocate auxiliary buffers
+  let mut status_buf = []
+  let mut values_buf = []
+  let mut wi = 0.0
+  while wi < wg_count
+    push(status_buf, 0.0)
+    push(values_buf, 0.0)
+    wi = wi + 1.0
+  end
+  let mut part_idx_buf = [0.0]
+
+  // Dispatch
+  let result_padded = gpu_run(_dlb_spv_path, padded, status_buf, values_buf, part_idx_buf, padded_n)
+
+  // Copy to module-level output array (trimmed to original size)
+  while len(dlb_result) > 0.0
+    pop(dlb_result)
+  end
+  let mut ri = 0.0
+  while ri < n
+    push(dlb_result, result_padded[ri])
+    ri = ri + 1.0
+  end
+  return 0.0
+end

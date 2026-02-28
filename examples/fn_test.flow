@@ -1,0 +1,10 @@
+// Test local function definitions and calls
+fn double(): multiply(2.0)
+fn clamp_unit(): clamp(0.0, 1.0)
+fn normalize_255(): divide(255.0) |> clamp_unit()
+
+stream data = tap("test_data/input_10.csv")
+stream doubled = data |> double()
+stream normalized = data |> normalize_255()
+emit(doubled, "test_data/output_fn_doubled.csv")
+emit(normalized, "test_data/output_fn_normalized.csv")

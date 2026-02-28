@@ -1,4 +1,8 @@
 // stdlib/collections/heap.flow — Binary min-heap (array-backed)
+//
+// Functions: heap_create, heap_push, heap_pop, heap_peek, heap_size,
+//            heap_is_empty, heapify
+//
 // Index math: parent(i) = floor((i-1)/2), left(i) = 2i+1, right(i) = 2i+2
 
 fn heap_create()

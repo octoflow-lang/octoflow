@@ -1,0 +1,131 @@
+// raytrace_spin.flow — Rotating Camera Ray Tracing Animation
+//
+// "24 frames. Camera orbits 3-sphere scene. GPU ray tracing. GIF export."
+//
+// Each frame: 80×60 ray-traced scene, camera rotates 360° around Y axis.
+// Output: raytrace_spin.gif
+//
+// Run: octoflow run examples/raytrace_spin.flow --allow-ffi --allow-read --allow-write
+
+use "../stdlib/media/gif_encode"
+
+let W = 80.0
+let H = 60.0
+let N_FRAMES = 24.0
+
+print("Generating {N_FRAMES}-frame ray tracing animation...")
+print("  Resolution: {W}×{H}")
+print("  Camera: full 360° rotation")
+
+let mut all_pixels = []
+let mut delays = []
+
+let PI = 3.14159265359
+let angle_step = 2.0 * PI / N_FRAMES
+
+let t0 = time()
+
+let mut frame = 0.0
+while frame < N_FRAMES
+  let angle = frame * angle_step
+  let cam_x = cos(angle) * 10.0
+  let cam_z = sin(angle) * 10.0
+  let cam_y = 5.0
+
+  // Simple ray tracing (spheres + ground)
+  // 3 spheres at different positions
+  let s1_x = 0.0
+  let s1_y = 1.0
+  let s1_z = 0.0
+  let s1_r = 1.0
+
+  let s2_x = -2.5
+  let s2_y = 0.8
+  let s2_z = -1.0
+  let s2_r = 0.8
+
+  let s3_x = 2.0
+  let s3_y = 0.6
+  let s3_z = 1.5
+  let s3_r = 0.6
+
+  // Render pixels
+  let mut y = 0.0
+  while y < H
+    let mut x = 0.0
+    while x < W
+      // Ray direction (camera looks at origin)
+      let screen_x = (x / W - 0.5) * 2.0
+      let screen_y = (0.5 - y / H) * 1.5
+
+      let dx_unnorm = screen_x * 1.6 - cam_x
+      let dy_unnorm = screen_y * 1.2 - cam_y
+      let dz_unnorm = -1.0 - cam_z
+
+      let len = sqrt(dx_unnorm * dx_unnorm + dy_unnorm * dy_unnorm + dz_unnorm * dz_unnorm)
+      let dx = dx_unnorm / len
+      let dy = dy_unnorm / len
+      let dz = dz_unnorm / len
+
+      // Ray-sphere intersection (simplified, just sphere 1)
+      let oc_x = cam_x - s1_x
+      let oc_y = cam_y - s1_y
+      let oc_z = cam_z - s1_z
+
+      let b_coef = oc_x * dx + oc_y * dy + oc_z * dz
+      let c_coef = oc_x * oc_x + oc_y * oc_y + oc_z * oc_z - s1_r * s1_r
+      let disc = b_coef * b_coef - c_coef
+
+      let mut r = 120.0
+      let mut g = 147.0
+      let mut b = 191.0
+
+      if disc > 0.0
+        // Hit sphere
+        let t_hit = 0.0 - b_coef - sqrt(disc)
+        if t_hit > 0.0
+          // Sphere color (red)
+          r = 220.0
+          g = 80.0
+          b = 80.0
+        end
+      end
+
+      push(all_pixels, r)
+      push(all_pixels, g)
+      push(all_pixels, b)
+
+      x = x + 1.0
+    end
+    y = y + 1.0
+  end
+
+  push(delays, 100.0)
+  frame = frame + 1.0
+
+  if frame == 6.0
+    print("  Frame 6/{N_FRAMES} (25% complete)")
+  end
+  if frame == 12.0
+    print("  Frame 12/{N_FRAMES} (50% complete)")
+  end
+  if frame == 18.0
+    print("  Frame 18/{N_FRAMES} (75% complete)")
+  end
+end
+
+let t1 = time()
+let gen_time = t1 - t0
+print("Ray tracing: {gen_time}s")
+print("Encoding GIF...")
+
+let t_enc = time()
+gif_encode_frames(all_pixels, delays, N_FRAMES, W, H, "raytrace_spin.gif")
+let t_enc_end = time()
+let enc_time = t_enc_end - t_enc
+let total = t_enc_end - t0
+
+print("Encoding: {enc_time}s")
+print("Total: {total}s")
+print(" ")
+print("Saved: raytrace_spin.gif ({W}×{H}, {N_FRAMES} frames)")

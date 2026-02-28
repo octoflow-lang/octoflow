@@ -1,0 +1,116 @@
+// boot_once.flow — Boot Once GPU Runtime: Tier 1 Autonomy Proof
+//
+// 200 DEPENDENT dispatches in a single VkCommandBuffer, single vkQueueSubmit.
+// GPU runs all 200 doublings autonomously with pipeline barriers.
+// CPU boots Vulkan once, then is completely passive until fence signals.
+//
+// This proves SEQUENTIAL autonomy — each dispatch depends on the previous
+// dispatch's output. Pipeline barriers enforce write → read ordering.
+// This is the hard case. Parallel is easy mode.
+//
+// Verification is BIT-EXACT: 2^(-100) is an exact IEEE 754 value (power of 2,
+// no mantissa rounding). Each multiply-by-2 increments the exponent — zero
+// floating-point ambiguity. 2^100 fits within f32 range.
+//
+// Architecture:
+//   Language → IR → SPIR-V      (compute)
+//   Language → Vulkan commands   (scheduling)
+//   = GPU orchestration, not just GPU compute.
+//
+// Run: octoflow run examples/boot_once.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N = 256.0
+let BUF_BYTES = N * 4.0
+let NUM_DISPATCHES = 200.0
+
+// Boot GPU (single init, never again)
+rt_init()
+
+// Load shader: 01_double.spv (output[i] = input[i] * 2.0)
+let pipe = rt_load_pipeline("tests/gpu_shaders/01_double.spv", 2.0, 0.0)
+
+// Create ping-pong buffers (256 elements each)
+let buf_a = rt_create_buffer(BUF_BYTES)
+let buf_b = rt_create_buffer(BUF_BYTES)
+
+// Start value: 2^(-100) — exact in IEEE 754 (power of 2, no mantissa rounding)
+let start_val = pow(2.0, -100.0)
+let mut data = []
+let mut i = 0.0
+while i < N
+  push(data, start_val)
+  i = i + 1.0
+end
+rt_upload(buf_a, data)
+
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_b, zeros)
+
+// ── Record 200 DEPENDENT dispatches ──────────────────────────────
+// Each dispatch reads the PREVIOUS dispatch's output (sequential dependency).
+// Pipeline barrier after each: SHADER_WRITE → SHADER_READ|WRITE.
+// 200 dispatches, 200 barriers, 1 command buffer, 0 CPU intervention.
+let t0 = time()
+
+rt_chain_begin(NUM_DISPATCHES, 2.0)
+
+let mut d = 0.0
+let mut ping = 1.0
+while d < NUM_DISPATCHES
+  if ping == 1.0
+    let mut bufs = [buf_a, buf_b]
+    rt_chain_dispatch(pipe, bufs, 1.0)
+    ping = 0.0
+  else
+    let mut bufs = [buf_b, buf_a]
+    rt_chain_dispatch(pipe, bufs, 1.0)
+    ping = 1.0
+  end
+  d = d + 1.0
+end
+
+rt_chain_end()
+let t1 = time()
+let record_ms = (t1 - t0) * 1000.0
+
+// ── Single submit — GPU takes over ──────────────────────────────
+let t2 = time()
+rt_chain_submit_wait()
+let t3 = time()
+let gpu_ms = (t3 - t2) * 1000.0
+
+// ── Verify result (bit-exact) ───────────────────────────────────
+// 200 dispatches: last dispatch writes to buffer A
+// 2^(-100) * 2^200 = 2^100 — exact in IEEE 754, zero rounding
+rt_download(buf_a, 1.0)
+let expected = pow(2.0, 100.0)
+let actual = rt_result[0]
+
+print("")
+print("OctoFlow GPU Autonomy — Tier 1 Proof")
+print("  Dispatches:  {NUM_DISPATCHES} (sequential, each depends on previous)")
+print("  Submissions: 1")
+print("  CPU wakeups: 0")
+print("  Record time: {record_ms} ms")
+print("  GPU time:    {gpu_ms} ms")
+print("  Input:       2^(-100) = {start_val}")
+print("  Expected:    2^(100)  = {expected}")
+print("  Actual:      {actual}")
+
+if actual == expected
+  print("  EXACT MATCH")
+else
+  let diff = abs(actual - expected)
+  let rel = diff / expected
+  print("  MISMATCH: relative error = {rel}")
+end
+
+print("")
+rt_cleanup()

@@ -1,0 +1,90 @@
+// Phase 24: User-Defined Scalar Functions
+//
+// Demonstrates imperative scalar functions with
+// fn name(params) ... return expr ... end syntax.
+
+// Simple function — doubles a value
+fn double(x)
+  return x * 2.0
+end
+
+let a = double(21.0)
+print("double(21) = {a:.0}")
+
+// Function with local variables
+fn distance(x1, y1, x2, y2)
+  let dx = x2 - x1
+  let dy = y2 - y1
+  return sqrt(dx * dx + dy * dy)
+end
+
+let d = distance(0.0, 0.0, 3.0, 4.0)
+print("distance(0,0 -> 3,4) = {d:.1}")
+
+// Function with conditional return
+fn my_abs(x)
+  if x >= 0.0
+    return x
+  end
+  return x * -1.0
+end
+
+let b = my_abs(-7.0)
+let c = my_abs(5.0)
+print("my_abs(-7) = {b:.0}")
+print("my_abs(5) = {c:.0}")
+
+// Function with loop
+fn factorial(n)
+  let mut result = 1.0
+  let mut i = 1.0
+  while i <= n
+    result = result * i
+    i = i + 1.0
+  end
+  return result
+end
+
+let f5 = factorial(5.0)
+let f10 = factorial(10.0)
+print("5! = {f5:.0}")
+print("10! = {f10:.0}")
+
+// Function calling another function
+fn hypotenuse(a, b)
+  return sqrt(a * a + b * b)
+end
+
+fn perimeter(x1, y1, x2, y2, x3, y3)
+  let s1 = distance(x1, y1, x2, y2)
+  let s2 = distance(x2, y2, x3, y3)
+  let s3 = distance(x3, y3, x1, y1)
+  return s1 + s2 + s3
+end
+
+let p = perimeter(0.0, 0.0, 3.0, 0.0, 0.0, 4.0)
+print("triangle perimeter = {p:.1}")
+
+// Fibonacci using loop
+fn fib(n)
+  let mut a = 0.0
+  let mut b = 1.0
+  let mut i = 0.0
+  while i < n
+    let temp = b
+    b = a + b
+    a = temp
+    i = i + 1.0
+  end
+  return a
+end
+
+let fib10 = fib(10.0)
+print("fib(10) = {fib10:.0}")
+
+// Using scalar fn in a for loop
+let mut total = 0.0
+for i in range(1, 6)
+  total = total + factorial(i)
+end
+print("sum of 1!..5! = {total:.0}")

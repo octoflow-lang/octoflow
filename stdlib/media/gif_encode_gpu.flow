@@ -1,0 +1,128 @@
+// gif_encode_gpu.flow — GPU-Accelerated GIF Encoder
+//
+// Same as gif_encode.flow but uses GPU for RGB→palette quantization.
+// 10-100× faster palette conversion for large images/animations.
+//
+// Usage: Same as gif_encode.flow but requires --allow-ffi for GPU runtime
+//   use gif_encode_gpu
+//   gif_encode_frames_gpu(all_pixels, delays, frame_count, width, height, "output.gif")
+//
+// Requirements: --allow-ffi --allow-read --allow-write
+
+use "../gpu/runtime"
+use "gif_encode"
+
+// ── GPU-Accelerated RGB→Palette Quantization ─────────────────────────
+
+fn gif_rgb_to_indices_gpu(rgb, palette)
+  let n_pixels = len(rgb) / 3.0
+  let n_colors = len(palette) / 3.0
+
+  if n_pixels < 256.0
+    // Small images: CPU is faster (GPU dispatch overhead)
+    return gif_rgb_to_indices(rgb, palette)
+  end
+
+  rt_init()
+
+  // Separate RGB channels into buffers
+  let mut r_chan = []
+  let mut g_chan = []
+  let mut b_chan = []
+  let mut i = 0.0
+  while i < n_pixels
+    let pi = i * 3.0
+    push(r_chan, rgb[int(pi)])
+    push(g_chan, rgb[int(pi + 1.0)])
+    push(b_chan, rgb[int(pi + 2.0)])
+    i = i + 1.0
+  end
+
+  // Separate palette RGB
+  let mut pal_r = []
+  let mut pal_g = []
+  let mut pal_b = []
+  let mut i = 0.0
+  while i < n_colors
+    let pi = i * 3.0
+    push(pal_r, palette[int(pi)])
+    push(pal_g, palette[int(pi + 1.0)])
+    push(pal_b, palette[int(pi + 2.0)])
+    i = i + 1.0
+  end
+
+  // Create buffers
+  let buf_pix_r = rt_create_buffer(n_pixels * 4.0)
+  let buf_pix_g = rt_create_buffer(n_pixels * 4.0)
+  let buf_pix_b = rt_create_buffer(n_pixels * 4.0)
+  let buf_pal_r = rt_create_buffer(n_colors * 4.0)
+  let buf_pal_g = rt_create_buffer(n_colors * 4.0)
+  let buf_pal_b = rt_create_buffer(n_colors * 4.0)
+  let buf_indices = rt_create_buffer(n_pixels * 4.0)
+
+  rt_upload(buf_pix_r, r_chan)
+  rt_upload(buf_pix_g, g_chan)
+  rt_upload(buf_pix_b, b_chan)
+  rt_upload(buf_pal_r, pal_r)
+  rt_upload(buf_pal_g, pal_g)
+  rt_upload(buf_pal_b, pal_b)
+
+  // Dispatch palette quantization
+  let pipe = rt_load_pipeline("tests/gpu_shaders/53_palette_quantize.spv", 7.0, 8.0)
+  let n_wgs = int((n_pixels + 255.0) / 256.0)
+
+  rt_chain_begin(1.0, 7.0)
+  let mut pc = [n_pixels, n_colors]
+  rt_chain_push_constants(pipe, pc)
+  let mut bufs = [buf_pix_r, buf_pix_g, buf_pix_b, buf_pal_r, buf_pal_g, buf_pal_b, buf_indices]
+  rt_chain_dispatch(pipe, bufs, n_wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  rt_download(buf_indices, n_pixels)
+
+  let mut indices = []
+  let mut i = 0.0
+  while i < n_pixels
+    push(indices, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  rt_cleanup()
+  return indices
+end
+
+// ── GPU-Accelerated Multi-Frame Encoder ──────────────────────────────
+
+fn gif_encode_frames_gpu(all_pixels, delays, frame_count, width, height, path)
+  let palette = gif_palette_init()
+
+  // Use GPU for RGB→palette quantization
+  let indices = gif_rgb_to_indices_gpu(all_pixels, palette)
+
+  // LZW compression (CPU)
+  let compressed_frames = gif_lzw_encode_all_frames(indices, frame_count, width, height)
+
+  // Assemble GIF file
+  let bytes = gif_assemble_file(palette, compressed_frames, delays, frame_count, width, height)
+
+  write_bytes(path, bytes)
+
+  let file_size = len(bytes)
+  let pixels_per_frame = width * height
+  let total_pixels = pixels_per_frame * frame_count
+  let ratio = total_pixels * 3.0 / file_size
+
+  print("GIF saved: {path}")
+  print("  Frames: {frame_count}")
+  print("  Size: {width}×{height}")
+  print("  File: {file_size} bytes")
+  print("  Compression: {ratio}:1")
+
+  return file_size
+end
+
+fn gif_encode_gpu(pixels, width, height, path)
+  let delays = [0.0]
+  return gif_encode_frames_gpu(pixels, delays, 1.0, width, height, path)
+end

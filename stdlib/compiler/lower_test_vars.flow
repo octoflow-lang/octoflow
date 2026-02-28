@@ -1,0 +1,68 @@
+// stdlib/compiler/lower_test_vars.flow
+// Phase 70 Test: AST lowering with let statements + variable references
+//
+// Kernel: let x = input[gid]; let y = x * 2.0; let z = y + x; output[gid] = z
+// Expected: output[gid] = input[gid] * 3.0
+
+use ir
+use lower
+
+let mut out_path = env("SPIRV_OUTPUT")
+if out_path == ""
+  out_path = "spirv_lower_vars.spv"
+end
+
+ir_new()
+
+// Build AST manually: 4 statements
+// [0] Let x = input [ gid ]
+push(nd_kind, "Let")
+push(nd_lhs, "x")
+push(nd_op, "=")
+push(nd_rhs, "input [ gid ]")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "1")
+push(nd_line, "1")
+push(nd_mut, "")
+
+// [1] Let y = x * 2.0
+push(nd_kind, "Let")
+push(nd_lhs, "y")
+push(nd_op, "=")
+push(nd_rhs, "x * 2.0")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "2")
+push(nd_line, "2")
+push(nd_mut, "")
+
+// [2] Let z = y + x
+push(nd_kind, "Let")
+push(nd_lhs, "z")
+push(nd_op, "=")
+push(nd_rhs, "y + x")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "3")
+push(nd_line, "3")
+push(nd_mut, "")
+
+// [3] ArrSet output[gid] = z
+push(nd_kind, "ArrSet")
+push(nd_lhs, "output")
+push(nd_op, "gid")
+push(nd_rhs, "z")
+push(nd_rhs2, "")
+push(nd_child, "-1")
+push(nd_next, "-1")
+push(nd_line, "4")
+push(nd_mut, "")
+
+// Set up block tracking
+push(cur_block_first, 0.0)
+push(cur_block_last, 3.0)
+
+// Lower AST → IR → SPIR-V
+lower_to_ir()
+let _e = ir_emit_spirv(out_path)

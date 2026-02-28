@@ -1,4 +1,8 @@
 // stdlib/science/physics.flow — Physics simulation
+//
+// Functions: integrate_euler, integrate_rk4, spring_damper, projectile,
+//            kinetic_energy, potential_energy, gravitational_force,
+//            wave_equation_1d
 
 fn integrate_euler(state, dt, accel_fn_name)
   // Euler integration for 1D: x, v → x', v'

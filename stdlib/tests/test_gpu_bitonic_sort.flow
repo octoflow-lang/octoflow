@@ -1,0 +1,129 @@
+// test_gpu_bitonic_sort.flow — GPU Bitonic Sort unit test
+//
+// Test 1: N=8, reverse-sorted → ascending
+//   Input:  [8, 7, 6, 5, 4, 3, 2, 1]
+//   Output: [1, 2, 3, 4, 5, 6, 7, 8]
+//
+// Test 2: N=256, interleaved shuffle → ascending
+//   Input:  [255, 0, 254, 1, ...] → [0, 1, 2, ..., 255]
+//
+// Bitonic sort: O(log²N) dispatches. XOR-based compare-and-swap.
+// N must be power of 2.
+//
+// Run: octoflow run stdlib/tests/test_gpu_bitonic_sort.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+rt_init()
+
+let pipe_sort = rt_load_pipeline("tests/gpu_shaders/36_bitonic_sort.spv", 1.0, 12.0)
+
+// ── Test 1: N=8, reverse sorted ────────────────────────────────────
+let N1 = 8.0
+let mut input1 = [8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+
+let buf1 = rt_create_buffer(N1 * 4.0)
+rt_upload(buf1, input1)
+
+// Bitonic network: k=2,4,...,N; j=k/2,k/4,...,1
+let n_wgs1 = int((N1 + 255.0) / 256.0)
+
+let mut k = 2.0
+while k <= N1
+  let mut j = k / 2.0
+  while j >= 1.0
+    rt_chain_begin(1.0, 1.0)
+    let mut pc = [k, j, N1]
+    rt_chain_push_constants(pipe_sort, pc)
+    let mut bufs = [buf1]
+    rt_chain_dispatch(pipe_sort, bufs, n_wgs1)
+    rt_chain_end()
+    rt_chain_submit_wait()
+    j = j / 2.0
+  end
+  k = k * 2.0
+end
+
+rt_download(buf1, N1)
+
+let mut pass1 = 1.0
+print("Test 1: Sort [8,7,6,5,4,3,2,1]:")
+let mut i = 0.0
+while i < N1
+  let got = rt_result[int(i)]
+  let exp = i + 1.0
+  if got != exp
+    print("  FAIL: index {i} got={got} expected={exp}")
+    pass1 = 0.0
+  end
+  i = i + 1.0
+end
+
+let s0 = rt_result[0]
+let s7 = rt_result[7]
+print("  Result: [{s0}, ..., {s7}]")
+if pass1 == 1.0
+  print("  PASS: Test 1 BIT EXACT")
+end
+
+// ── Test 2: N=256, interleaved shuffle ─────────────────────────────
+let N2 = 256.0
+let mut input2 = []
+let mut i = 0.0
+while i < N2 / 2.0
+  push(input2, N2 - 1.0 - i)
+  push(input2, i)
+  i = i + 1.0
+end
+
+let buf2 = rt_create_buffer(N2 * 4.0)
+rt_upload(buf2, input2)
+
+let n_wgs2 = int((N2 + 255.0) / 256.0)
+
+let mut k = 2.0
+while k <= N2
+  let mut j = k / 2.0
+  while j >= 1.0
+    rt_chain_begin(1.0, 1.0)
+    let mut pc = [k, j, N2]
+    rt_chain_push_constants(pipe_sort, pc)
+    let mut bufs = [buf2]
+    rt_chain_dispatch(pipe_sort, bufs, n_wgs2)
+    rt_chain_end()
+    rt_chain_submit_wait()
+    j = j / 2.0
+  end
+  k = k * 2.0
+end
+
+rt_download(buf2, N2)
+
+let mut pass2 = 1.0
+let mut i = 0.0
+while i < N2
+  let got = rt_result[int(i)]
+  if got != i
+    print("  FAIL: index {i} got={got} expected={i}")
+    pass2 = 0.0
+  end
+  i = i + 1.0
+end
+
+let r0 = rt_result[0]
+let r127 = rt_result[127]
+let r255 = rt_result[255]
+print("Test 2: Sort 256-element interleaved shuffle:")
+print("  Result: [{r0}, ..., {r127}, ..., {r255}]")
+if pass2 == 1.0
+  print("  PASS: Test 2 BIT EXACT")
+end
+
+// ── Overall ────────────────────────────────────────────────────────
+if pass1 == 1.0
+  if pass2 == 1.0
+    print("PASS: gpu_bitonic_sort all tests BIT EXACT")
+  end
+end
+
+rt_cleanup()

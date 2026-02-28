@@ -1,0 +1,93 @@
+// test_b64_gpu.flow — Test GPU base64 encoding kernel
+use "../gpu/b64_emit"
+
+// Compile kernel
+emit_b64_kernel()
+
+// Test with 4 pixels: known RGB values
+let mut r = [255.0, 0.0, 0.0, 128.0]
+let mut g = [0.0, 255.0, 0.0, 128.0]
+let mut b = [0.0, 0.0, 255.0, 128.0]
+
+// Create dummy (4 pixels * 4 = 16 output elements)
+let mut dummy = []
+for i in range(0, 16)
+  push(dummy, 0.0)
+end
+
+// GPU dispatch
+let result = gpu_run("b64_encode.spv", dummy, r, g, b)
+
+// Verify: pixel 0 is (255, 0, 0) → /wAA in base64
+// R=255, G=0, B=0
+// b0 = 255/4 = 63 → '/' (47)
+// b1 = (255%4)*16 + 0/16 = 48 → 'w' (71+48=119)
+// b2 = (0%16)*4 + 0/64 = 0 → 'A' (65)
+// b3 = 0%64 = 0 → 'A' (65)
+let v0 = result[0]
+let v1 = result[1]
+let v2 = result[2]
+let v3 = result[3]
+
+print("Pixel 0 (255,0,0): [{v0}, {v1}, {v2}, {v3}]")
+print("Expected: [47, 119, 65, 65] (/wAA)")
+
+let mut pass = 1.0
+if v0 != 47.0
+  print("FAIL: v0={v0} expected 47")
+  pass = 0.0
+end
+if v1 != 119.0
+  print("FAIL: v1={v1} expected 119")
+  pass = 0.0
+end
+if v2 != 65.0
+  print("FAIL: v2={v2} expected 65")
+  pass = 0.0
+end
+if v3 != 65.0
+  print("FAIL: v3={v3} expected 65")
+  pass = 0.0
+end
+
+// Verify pixel 3 (128, 128, 128) → gICA
+// b0 = 128/4 = 32 → 'g' (71+32=103)
+// b1 = (128%4)*16 + 128/16 = 0+8 = 8 → 'I' (65+8=73)
+// b2 = (128%16)*4 + 128/64 = 0+2 = 2 → 'C' (65+2=67)
+// b3 = 128%64 = 0 → 'A' (65)
+let v12 = result[12]
+let v13 = result[13]
+let v14 = result[14]
+let v15 = result[15]
+
+print("Pixel 3 (128,128,128): [{v12}, {v13}, {v14}, {v15}]")
+print("Expected: [103, 73, 67, 65] (gICA)")
+
+if v12 != 103.0
+  print("FAIL: v12={v12} expected 103")
+  pass = 0.0
+end
+if v13 != 73.0
+  print("FAIL: v13={v13} expected 73")
+  pass = 0.0
+end
+if v14 != 67.0
+  print("FAIL: v14={v14} expected 67")
+  pass = 0.0
+end
+if v15 != 65.0
+  print("FAIL: v15={v15} expected 65")
+  pass = 0.0
+end
+
+if pass == 1.0
+  print("PASS: GPU base64 encoding all correct")
+end
+
+// Test print_bytes with first 4 chars (should print "/wAA")
+print("Base64 via print_bytes:")
+let mut chunk = [result[0], result[1], result[2], result[3]]
+print_bytes(chunk)
+print("")
+
+print("GPU base64 test complete")

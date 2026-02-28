@@ -1,0 +1,111 @@
+// test_tokenizer.flow — Tokenizer Tests
+// Run from stdlib/ai/: octoflow run test_tokenizer.flow --allow-read
+
+use "tokenizer"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+fn check_array_len(counters, label, arr, expected_len)
+  let n = len(arr)
+  if n == expected_len
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — len={n}, expected {expected_len}")
+  return 0.0
+end
+
+print("=== TOKENIZER TESTS ===")
+print(" ")
+
+// ── Test 1: Build simple vocab ──────────────────────────────────
+print("--- Simple vocab builder ---")
+
+let vocab = tokenizer_build_simple()
+let _c = check(counters, "vocab has <unk>", map_has(vocab, "<unk>"), 1.0)
+let _c = check(counters, "vocab has space", map_has(vocab, " "), 1.0)
+let _c = check(counters, "vocab has Hello", map_has(vocab, "Hello"), 1.0)
+
+let unk_id = map_get(vocab, "<unk>")
+let _c = check(counters, "<unk> id", unk_id, 0.0)
+
+let space_id = map_get(vocab, " ")
+let _c = check(counters, "space id", space_id, 32.0)
+
+// ── Test 2: Encode single char ──────────────────────────────────
+print("--- Encode single character ---")
+
+let tokens_a = tokenizer_encode("A", vocab)
+let _c = check_array_len(counters, "single char len", tokens_a, 1.0)
+let _c = check(counters, "char A id", tokens_a[0], 65.0)
+
+// ── Test 3: Encode known word ───────────────────────────────────
+print("--- Encode known word ---")
+
+let tokens_hello = tokenizer_encode("Hello", vocab)
+let _c = check_array_len(counters, "Hello len", tokens_hello, 1.0)
+let _c = check(counters, "Hello id", tokens_hello[0], 250.0)
+
+// ── Test 4: Encode multi-word ───────────────────────────────────
+print("--- Encode multi-word ---")
+
+let tokens_hw = tokenizer_encode("Hello world", vocab)
+// "Hello" + " " + "world" = 3 tokens
+let _c = check_array_len(counters, "Hello world len", tokens_hw, 3.0)
+let _c = check(counters, "hw[0]", tokens_hw[0], 250.0)
+let _c = check(counters, "hw[1]", tokens_hw[1], 32.0)
+let _c = check(counters, "hw[2]", tokens_hw[2], 251.0)
+
+// ── Test 5: Encode fallback to chars ────────────────────────────
+print("--- Fallback to char-by-char ---")
+
+let tokens_abc = tokenizer_encode("abc", vocab)
+// No "abc" token, falls back to 'a' + 'b' + 'c'
+let _c = check_array_len(counters, "abc len", tokens_abc, 3.0)
+let _c = check(counters, "a id", tokens_abc[0], 97.0)
+let _c = check(counters, "b id", tokens_abc[1], 98.0)
+let _c = check(counters, "c id", tokens_abc[2], 99.0)
+
+// ── Test 6: Decode tokens ───────────────────────────────────────
+print("--- Decode token IDs ---")
+
+let mut ids = []
+push(ids, 250.0)
+push(ids, 32.0)
+push(ids, 251.0)
+
+let decoded = tokenizer_decode(ids, vocab)
+let _c = check(counters, "decode", decoded, "Hello world")
+
+// ── Test 7: Encode-decode roundtrip ─────────────────────────────
+print("--- Roundtrip test ---")
+
+let original = "Hello world"
+let enc = tokenizer_encode(original, vocab)
+let dec = tokenizer_decode(enc, vocab)
+let _c = check(counters, "roundtrip", dec, original)
+
+// ── SUMMARY ─────────────────────────────────────────────────────
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print(" ")
+print("=== TOKENIZER TEST SUMMARY ===")
+print("  pass: {pass}/{total}")
+print("  fail: {fail}")
+if fail == 0.0
+  print("  ALL PASS")
+else
+  print("  FAILURES DETECTED")
+end

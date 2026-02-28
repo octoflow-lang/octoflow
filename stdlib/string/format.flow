@@ -1,4 +1,6 @@
 // stdlib/string/format.flow — String formatting utilities
+//
+// Functions: pad_left, pad_right, format_number, format_bytes, format_duration
 
 fn pad_left(s, width, ch)
   let n = len(s)

@@ -1,0 +1,14 @@
+// preflight_errors.flow — intentional errors for preflight demo
+// preflight.flow should report:
+//   E002 line 5: counter is not mutable
+//   E003 line 8: unknown_fn() is not defined
+//   D002 line 3: let unused is defined but never referenced
+
+let x = 10.0
+let unused = 99.0          // D002: never referenced
+let counter = 0.0          // scalar (not mut)
+
+counter = counter + 1.0    // E002: not mutable
+
+print("x = {x}")
+unknown_fn(x)              // E003: not defined

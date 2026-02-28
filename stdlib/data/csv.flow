@@ -1,60 +1,215 @@
-// stdlib/data/csv.flow — CSV file operations
+// stdlib/data/csv.flow — CSV parsing and formatting (pure .flow)
+// Handles RFC 4180 quoted fields: commas inside quotes, doubled quotes.
+//
+// Preferred API:
+//   csv_parse_line(line)              -> array of field strings
+//   csv_parse_text(text, result_rows) -> populates result_rows with maps
+//   csv_format(headers, rows)         -> CSV string
+//   csv_format_row(headers, row_map)  -> single CSV line
+//
+// Convenience functions (use these for quick scripts):
+//   csv_read(path)                    -> array of row maps (reads file)
+//   csv_write(rows, path, headers)    -> writes CSV file
+//   csv_column(rows, col)             -> array of floats from a column
+//   csv_column_str(rows, col)         -> array of strings from a column
+//   csv_filter(rows, col, op, val)    -> filtered rows (numeric comparison)
+//   csv_filter_str(rows, col, op, val)-> filtered rows (string comparison)
+//   csv_select(rows, cols)            -> rows with only selected columns
+//   csv_sort(rows, col, ascending)    -> sorted rows by column
 
-fn csv_read(path)
-  // Read CSV file into array of maps (each row = map of column:value)
-  let lines = read_lines(path)
-  let n = len(lines)
-  if n < 2.0
-    let mut empty = []
-    return empty
+// ── csv_parse_line ─────────────────────────────────────────────────
+// Split a single CSV line into an array of field strings.
+// Handles: quoted fields, commas inside quotes, doubled double-quotes.
+fn csv_parse_line(line)
+  let mut fields = []
+  let n = len(line)
+  if n == 0.0
+    return fields
   end
-  let NL = chr(10)
-  // Parse header
+  let mut i = 0.0
+  let mut done = 0.0
+  while done == 0.0
+    if i >= n
+      // trailing comma at end of line
+      push(fields, " ")
+      done = 1.0
+    elif ord(char_at(line, i)) == 34.0
+      // ── quoted field ──
+      i = i + 1.0
+      let mut val = " "
+      let mut first = 1.0
+      while i < n
+        let qc = char_at(line, i)
+        if ord(qc) == 34.0
+          let nxt = i + 1.0
+          if nxt < n && ord(char_at(line, nxt)) == 34.0
+            // doubled quote -> literal quote char
+            if first == 1.0
+              val = chr(34.0)
+              first = 0.0
+            else
+              val = val + chr(34.0)
+            end
+            i = i + 2.0
+          else
+            // closing quote
+            i = i + 1.0
+            break
+          end
+        else
+          if first == 1.0
+            val = qc
+            first = 0.0
+          else
+            val = val + qc
+          end
+          i = i + 1.0
+        end
+      end
+      if first == 1.0
+        push(fields, " ")
+      else
+        push(fields, val)
+      end
+      // skip comma separator after closing quote
+      if i < n && char_at(line, i) == ","
+        i = i + 1.0
+      else
+        done = 1.0
+      end
+    else
+      // ── unquoted field ──
+      let mut val = " "
+      let mut first = 1.0
+      let mut hit_comma = 0.0
+      while i < n
+        let uc = char_at(line, i)
+        if uc == ","
+          i = i + 1.0
+          hit_comma = 1.0
+          break
+        end
+        if first == 1.0
+          val = uc
+          first = 0.0
+        else
+          val = val + uc
+        end
+        i = i + 1.0
+      end
+      if first == 1.0
+        push(fields, " ")
+      else
+        push(fields, trim(val))
+      end
+      if hit_comma == 0.0
+        done = 1.0
+      end
+    end
+  end
+  return fields
+end
+
+// ── csv_parse_text ─────────────────────────────────────────────────
+// Parse multi-line CSV text (first row = headers) into array of maps.
+// Each subsequent row becomes a map keyed by header names.
+fn csv_parse_text(text, result_rows)
+  let NL = chr(10.0)
+  // Split text into lines; trim() on each line handles CRLF
+  let lines = split(text, NL)
+  let nlines = len(lines)
+  if nlines < 2.0
+    return 0.0
+  end
+  // Parse header row
   let header_line = trim(lines[0])
-  let headers = split(header_line, ",")
+  let headers = csv_parse_line(header_line)
   let ncols = len(headers)
   // Parse data rows
-  let mut rows = []
   let mut i = 1.0
-  while i < n
+  while i < nlines
     let line = trim(lines[i])
     if len(line) > 0.0
-      let vals = split(line, ",")
+      let vals = csv_parse_line(line)
       let mut row = map()
       let mut j = 0.0
       while j < ncols && j < len(vals)
-        map_set(row, trim(headers[j]), trim(vals[j]))
+        map_set(row, headers[j], vals[j])
         j = j + 1.0
       end
-      push(rows, row)
+      push(result_rows, row)
     end
     i = i + 1.0
   end
+  return len(result_rows)
+end
+
+// ── csv_format_row ─────────────────────────────────────────────────
+// Format a single map as a CSV line. Quotes fields containing commas
+// or double-quotes.
+fn csv_format_row(headers, row_map)
+  let ncols = len(headers)
+  let mut parts = []
+  let mut j = 0.0
+  while j < ncols
+    let key = headers[j]
+    let mut val = " "
+    if map_has(row_map, key)
+      val = map_get(row_map, key)
+    end
+    // Check if quoting is needed
+    let mut needs_quote = 0.0
+    if contains(val, ",")
+      needs_quote = 1.0
+    end
+    let dq = chr(34.0)
+    if contains(val, dq)
+      needs_quote = 1.0
+    end
+    if needs_quote == 1.0
+      // Escape internal double-quotes by doubling them
+      let escaped = replace(val, dq, dq + dq)
+      let quoted = dq + escaped + dq
+      push(parts, quoted)
+    else
+      push(parts, val)
+    end
+    j = j + 1.0
+  end
+  return join(parts, ",")
+end
+
+// ── csv_format ─────────────────────────────────────────────────────
+// Format array of maps as complete CSV string with header row.
+fn csv_format(headers, rows)
+  let NL = chr(10.0)
+  let mut content = join(headers, ",") + NL
+  for row in rows
+    let line = csv_format_row(headers, row)
+    content = content + line + NL
+  end
+  return content
+end
+
+// ── Convenience functions ────────────────────────────────────────────
+// Higher-level wrappers built on the core parse/format API above.
+
+// Read a CSV file into an array of row maps. Requires --allow-read.
+fn csv_read(path)
+  let text = read_file(path)
+  let mut rows = []
+  let count = csv_parse_text(text, rows)
   return rows
 end
 
+// Write an array of row maps to a CSV file. Requires --allow-write.
 fn csv_write(rows, path, headers)
-  // Write array of maps to CSV
-  let ncols = len(headers)
-  let mut content = join(headers, ",") + chr(10)
-  for row in rows
-    let mut vals = []
-    let mut j = 0.0
-    while j < ncols
-      let key = headers[j]
-      if map_has(row, key)
-        push(vals, map_get(row, key))
-      else
-        push(vals, "")
-      end
-      j = j + 1.0
-    end
-    content = content + join(vals, ",") + chr(10)
-  end
+  let content = csv_format(headers, rows)
   write_file(path, content)
   return len(rows)
 end
 
+// Get header names from the first row. Returns comma-separated string.
 fn csv_headers(rows)
   if len(rows) == 0.0
     let mut empty = []
@@ -63,6 +218,7 @@ fn csv_headers(rows)
   return map_keys(rows[0])
 end
 
+// Extract a column as an array of floats (non-numeric values become 0.0).
 fn csv_column(rows, col_name)
   let mut result = []
   for row in rows
@@ -76,18 +232,20 @@ fn csv_column(rows, col_name)
   return result
 end
 
+// Extract a column as an array of strings.
 fn csv_column_str(rows, col_name)
   let mut result = []
   for row in rows
     if map_has(row, col_name)
       push(result, map_get(row, col_name))
     else
-      push(result, "")
+      push(result, " ")
     end
   end
   return result
 end
 
+// Filter rows by numeric comparison. op: ">", "<", ">=", "<=", "==", "!="
 fn csv_filter(rows, col, op, val)
   let mut result = []
   for row in rows
@@ -115,6 +273,7 @@ fn csv_filter(rows, col, op, val)
   return result
 end
 
+// Filter rows by string comparison. op: "==", "!=", "contains", "starts_with"
 fn csv_filter_str(rows, col, op, val)
   let mut result = []
   for row in rows
@@ -138,6 +297,7 @@ fn csv_filter_str(rows, col, op, val)
   return result
 end
 
+// Project rows to a subset of columns.
 fn csv_select(rows, cols)
   let mut result = []
   for row in rows
@@ -152,8 +312,8 @@ fn csv_select(rows, cols)
   return result
 end
 
+// Sort rows by a numeric column. ascending: 1.0 for asc, 0.0 for desc.
 fn csv_sort(rows, col, ascending)
-  // Simple insertion sort by column value
   let n = len(rows)
   let mut vals = []
   let mut indices = []
@@ -167,7 +327,6 @@ fn csv_sort(rows, col, ascending)
     push(indices, i)
     i = i + 1.0
   end
-  // Sort indices by vals
   i = 1.0
   while i < n
     let key = vals[i]

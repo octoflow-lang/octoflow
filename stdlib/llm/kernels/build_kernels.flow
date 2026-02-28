@@ -1,0 +1,38 @@
+// build_kernels.flow — Emit all LLM SPIR-V kernels
+//
+// Usage: octoflow run stdlib/llm/kernels/build_kernels.flow --allow-read --allow-write
+
+use "emit_rmsnorm"
+use "emit_rope"
+use "emit_silu"
+use "emit_softmax"
+use "emit_gemm"
+use "emit_matvec"
+use "emit_dequant_q4k"
+use "emit_dequant_q6k"
+use "emit_embed"
+use "emit_kv_write"
+use "emit_attention_score"
+
+print("=== Building LLM SPIR-V Kernels ===")
+
+print("  rmsnorm.spv...")
+let _r1 = emit_rmsnorm("stdlib/llm/kernels/rmsnorm.spv")
+print("  rope.spv...")
+let _r2 = emit_rope("stdlib/llm/kernels/rope.spv")
+print("  silu.spv...")
+let _r3 = emit_silu("stdlib/llm/kernels/silu.spv")
+print("  softmax.spv...")
+let _r4 = emit_softmax("stdlib/llm/kernels/softmax.spv")
+print("  gemm.spv...")
+let _r5 = emit_matmul_tiled("stdlib/llm/kernels/gemm.spv")
+print("  matvec.spv...")
+let _r6 = emit_matvec("stdlib/llm/kernels/matvec.spv")
+
+print("  kv_write.spv...")
+let _r7 = emit_kv_write("stdlib/llm/kernels/kv_write.spv")
+print("  attention_score.spv...")
+let _r8 = emit_attention_score("stdlib/llm/kernels/attention_score.spv")
+
+print(" ")
+print("=== Done: 8 kernels emitted ===")

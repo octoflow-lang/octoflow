@@ -1,0 +1,97 @@
+// emit_vm_regulator.flow — VM Homeostasis Regulator Kernel Emitter
+//
+// Reads maxnorm from metrics[metrics_slot], applies a branchless threshold
+// decision, and writes a scale factor + stability status to control[control_slot].
+//
+// Decision logic (branchless, using ir_select):
+//   safe_norm  = fmax(maxnorm, 0.0001)       -- avoid divide-by-zero
+//   ideal      = target_norm / safe_norm     -- scale that would hit target
+//   too_hi     = maxnorm > hi_thresh
+//   too_lo     = maxnorm < lo_thresh
+//   scale      = (too_hi OR too_lo) ? ideal : 1.0
+//   status     = (too_hi OR too_lo) ? 0.0   : 1.0  (1=stable, 0=correcting)
+//
+// Outputs:
+//   control[control_slot]     = scale factor  (apply to registers to regulate)
+//   control[control_slot + 1] = stability     (1.0=OK, 0.0=correcting)
+//
+// Push constants:
+//   pc[0] = metrics_slot  (uint: index into metrics SSBO to read maxnorm)
+//   pc[1] = control_slot  (uint: index into control SSBO to write scale+status)
+//   pc[2] = target_norm   (float: desired maxnorm, e.g. 10.0)
+//   pc[3] = lo_thresh     (float: lower activation bound, e.g. 5.0)
+//   pc[4] = hi_thresh     (float: upper activation bound, e.g. 20.0)
+//
+// Binding layout (ir_input_count=4):
+//   Binding 0: registers (unused — declared to match VM 4-SSBO descriptor layout)
+//   Binding 1: metrics   (read maxnorm)
+//   Binding 2: globals   (unused — declared to match VM 4-SSBO descriptor layout)
+//   Binding 3: control   (write scale + status)
+//
+// Dispatch: wg=1 (single-thread kernel, gid==0 guard)
+//
+// Run: octoflow run stdlib/loom/emit_vm_regulator.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_regulator(out_path)
+  ir_new()
+  ir_input_count = 4.0
+
+  let entry      = ir_block("entry")
+  let compute    = ir_block("compute")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: load gid, push constants, guard gid==0 ──────────────────
+  let gid       = ir_load_gid(entry)
+  let pc_ms     = ir_push_const(entry, 0.0)
+  let pc_cs     = ir_push_const(entry, 1.0)
+  let pc_target = ir_push_const(entry, 2.0)
+  let pc_lo     = ir_push_const(entry, 3.0)
+  let pc_hi     = ir_push_const(entry, 4.0)
+  let mslot_u   = ir_ftou(entry, pc_ms)
+  let cslot_u   = ir_ftou(entry, pc_cs)
+  let one_u     = ir_const_u(entry, 1.0)
+  // if gid >= 1 → skip to exit
+  let not_t0    = ir_ugte(entry, gid, one_u)
+  let _sm       = ir_selection_merge(entry, exit_block)
+  let _br0      = ir_term_cond_branch(entry, not_t0, exit_block, compute)
+
+  // ── Compute: branchless scale decision ─────────────────────────────
+  // Read maxnorm from metrics[mslot_u]
+  let maxnorm   = ir_load_input_at(compute, 1.0, mslot_u)
+  // Clamp to avoid divide-by-zero
+  let tiny      = ir_const_f(compute, 0.0001)
+  let safe_norm = ir_fmax(compute, maxnorm, tiny)
+  // Ideal scale: target_norm / safe_norm
+  let ideal     = ir_fdiv(compute, pc_target, safe_norm)
+  // Threshold comparisons
+  let f_one     = ir_const_f(compute, 1.0)
+  let f_zero    = ir_const_f(compute, 0.0)
+  let too_hi    = ir_fogt(compute, maxnorm, pc_hi)
+  let too_lo    = ir_folt(compute, maxnorm, pc_lo)
+  // Scale: if too_high, use ideal; else 1.0
+  let scale_hi  = ir_select(compute, 1.0, too_hi, ideal, f_one)
+  // Scale: if too_low, use ideal; else keep scale_hi
+  let scale     = ir_select(compute, 1.0, too_lo, ideal, scale_hi)
+  // Status: 0=correcting if out of bounds
+  let stat_hi   = ir_select(compute, 1.0, too_hi, f_zero, f_one)
+  let status    = ir_select(compute, 1.0, too_lo, f_zero, stat_hi)
+  // Write scale to control[cslot_u]
+  let _sc       = ir_buf_store_f(compute, 3.0, cslot_u, scale)
+  // Write status to control[cslot_u + 1]
+  let one_u2    = ir_const_u(compute, 1.0)
+  let cslot1_u  = ir_iadd(compute, cslot_u, one_u2)
+  let _ss       = ir_buf_store_f(compute, 3.0, cslot1_u, status)
+  let _bco      = ir_term_branch(compute, exit_block)
+
+  // ── Exit ────────────────────────────────────────────────────────────
+  let _ret      = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/ops/vm_regulator.spv"
+let _r = emit_vm_regulator(out)
+print("Emitted: {out}")

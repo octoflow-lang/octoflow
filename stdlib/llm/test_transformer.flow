@@ -1,0 +1,149 @@
+// test_transformer.flow — Transformer Layer Tests
+// Run from C:\FlowGPU: octoflow run stdlib/llm/test_transformer.flow --allow-read
+
+use "ops"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+fn check_near(counters, label, got, expected, tol)
+  let d = abs(got - expected)
+  if d < tol
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}, diff={d}")
+  return 0.0
+end
+
+print("=== TRANSFORMER LAYER TESTS ===")
+print(" ")
+
+// -- Test 1: RMSNorm CPU --
+print("--- RMSNorm ---")
+
+let mut hidden = []
+push(hidden, 1.0)
+push(hidden, 2.0)
+push(hidden, 3.0)
+push(hidden, 4.0)
+
+let mut weight = []
+push(weight, 1.0)
+push(weight, 1.0)
+push(weight, 1.0)
+push(weight, 1.0)
+
+let normed = rmsnorm_cpu(hidden, weight, 4.0, 0.00001)
+
+// RMS of [1,2,3,4]: sqrt((1+4+9+16)/4) = sqrt(7.5) ~ 2.738
+// Normalized: [1/2.738, 2/2.738, 3/2.738, 4/2.738]
+let _c = check(counters, "rmsnorm len", len(normed), 4.0)
+let _c = check_near(counters, "rmsnorm[0]", normed[0], 0.365, 0.01)
+let _c = check_near(counters, "rmsnorm[3]", normed[3], 1.460, 0.01)
+
+// -- Test 2: SiLU activation --
+print("--- SiLU ---")
+
+let mut silu_in0 = []
+push(silu_in0, 0.0)
+let s0_arr = silu_cpu(silu_in0, 1.0)
+let _c = check_near(counters, "silu(0)", s0_arr[0], 0.0, 0.01)
+
+let mut silu_in1 = []
+push(silu_in1, 1.0)
+let s1_arr = silu_cpu(silu_in1, 1.0)
+// SiLU(1) ~ 0.731 (1 * sigmoid(1))
+let _c = check_near(counters, "silu(1)", s1_arr[0], 0.731, 0.1)
+
+let mut silu_in_neg = []
+push(silu_in_neg, -1.0)
+let s_neg_arr = silu_cpu(silu_in_neg, 1.0)
+// SiLU(-1) ~ -0.269
+let _c = check_near(counters, "silu(-1)", s_neg_arr[0], -0.269, 0.1)
+
+// -- Test 3: GQA expand --
+print("--- GQA expand ---")
+let mut v_in = []
+push(v_in, 1.0)
+push(v_in, 2.0)
+push(v_in, 3.0)
+push(v_in, 4.0)
+// 2 kv heads, 4 query heads, head_dim=2 => each kv head repeated 2x
+let v_exp = gqa_expand(v_in, 4.0, 2.0, 2.0)
+let _c = check(counters, "gqa len", len(v_exp), 8.0)
+// kv head 0: [1,2] repeated 2x => [1,2,1,2]
+let _c = check_near(counters, "gqa[0]", v_exp[0], 1.0, 0.001)
+let _c = check_near(counters, "gqa[2]", v_exp[2], 1.0, 0.001)
+// kv head 1: [3,4] repeated 2x => [3,4,3,4]
+let _c = check_near(counters, "gqa[4]", v_exp[4], 3.0, 0.001)
+let _c = check_near(counters, "gqa[6]", v_exp[6], 3.0, 0.001)
+
+// -- Test 4: vec_add --
+print("--- vec_add ---")
+let mut a = []
+push(a, 1.0)
+push(a, 2.0)
+push(a, 3.0)
+let mut b = []
+push(b, 10.0)
+push(b, 20.0)
+push(b, 30.0)
+let sum_ab = vec_add(a, b, 3.0)
+let _c = check(counters, "vec_add len", len(sum_ab), 3.0)
+let _c = check_near(counters, "vec_add[0]", sum_ab[0], 11.0, 0.001)
+let _c = check_near(counters, "vec_add[2]", sum_ab[2], 33.0, 0.001)
+
+// -- Test 5: RoPE --
+print("--- RoPE ---")
+let mut rope_in = []
+push(rope_in, 1.0)
+push(rope_in, 0.0)
+push(rope_in, 0.0)
+push(rope_in, 1.0)
+// 1 head, head_dim=4, pos=0 => no rotation (cos(0)=1, sin(0)=0)
+let rope_out0 = rope_cpu(rope_in, 0.0, 4.0, 1.0, 10000.0)
+let _c = check_near(counters, "rope pos0[0]", rope_out0[0], 1.0, 0.001)
+let _c = check_near(counters, "rope pos0[1]", rope_out0[1], 0.0, 0.001)
+
+// -- Test 6: Transformer layer structure --
+print("--- Transformer layer MVP ---")
+
+let mut tmodel = map()
+map_set(tmodel, "n_embd", 4.0)
+map_set(tmodel, "n_head", 2.0)
+map_set(tmodel, "n_layer", 1.0)
+
+let mut h_in = []
+push(h_in, 1.0)
+push(h_in, 2.0)
+push(h_in, 3.0)
+push(h_in, 4.0)
+
+// TODO: transformer_layer_mvp not yet implemented (requires GPU runtime)
+// let h_out = transformer_layer_mvp(h_in, 0.0, tmodel)
+// let _c = check(counters, "layer output len", len(h_out), 4.0)
+
+// -- SUMMARY --
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print(" ")
+print("=== TRANSFORMER TEST SUMMARY ===")
+print("  pass: {pass}/{total}")
+print("  fail: {fail}")
+if fail == 0.0
+  print("  ALL PASS")
+else
+  print("  FAILURES DETECTED")
+end

@@ -1,0 +1,26 @@
+// Phase 15: User-defined struct types
+// struct Name(field1, field2, ...) — creates named record type
+
+// --- Define entity types ---
+struct Entity(x, y, health, speed)
+struct Color(r, g, b)
+
+// --- Create instances ---
+let player = Entity(100.0, 200.0, 100.0, 5.0)
+let enemy = Entity(300.0, 150.0, 50.0, 3.0)
+let sky = Color(0.53, 0.81, 0.92)
+
+// --- Access fields ---
+print("Player at ({player.x}, {player.y}) with {player.health} HP")
+print("Enemy at ({enemy.x}, {enemy.y}) with {enemy.health} HP")
+print("Sky color: rgb({sky.r:.2}, {sky.g:.2}, {sky.b:.2})")
+
+// --- Field math ---
+let dx = enemy.x - player.x
+let dy = enemy.y - player.y
+let dist = sqrt(dx * dx + dy * dy)
+print("Distance to enemy: {dist:.2}")
+
+// --- Mix with vec types ---
+let pos = vec3(player.x, player.y, 0.0)
+print("3D position: ({pos.x}, {pos.y}, {pos.z})")

@@ -1,0 +1,48 @@
+// stdlib/loom/softmax.flow — GPU Softmax dispatch (buffer-handle API)
+//
+// Two modes:
+//   gpu_softmax(x) → result array  (convenience)
+//   gpu_softmax_buf(buf_in, buf_out, n) → 0.0  (zero-copy)
+
+use "runtime"
+
+fn gpu_softmax_buf(buf_in, buf_out, n)
+  let pipe = rt_load_pipeline("stdlib/loom/kernels/nn/softmax.spv", 2.0, 4.0)
+  let _cb = rt_chain_begin(1.0, 2.0)
+  let mut pc = []
+  push(pc, n)
+  let _pc = rt_chain_push_constants(pipe, pc)
+  let mut bufs = []
+  push(bufs, buf_in)
+  push(bufs, buf_out)
+  let _d = rt_chain_dispatch(pipe, bufs, 1.0)
+  let _ce = rt_chain_end()
+  let _sw = rt_chain_submit_wait()
+  return 0.0
+end
+
+fn gpu_softmax(x)
+  let n = len(x)
+  let mut x_padded = []
+  let mut i = 0.0
+  while i < 256.0
+    if i < n
+      push(x_padded, x[int(i)])
+    else
+      push(x_padded, -100000.0)
+    end
+    i = i + 1.0
+  end
+  let buf_x = rt_create_buffer(1024.0)
+  let buf_o = rt_create_buffer(1024.0)
+  let _u = rt_upload(buf_x, x_padded)
+  let _d = gpu_softmax_buf(buf_x, buf_o, n)
+  let _dl = rt_download(buf_o, n)
+  let mut result = []
+  let mut j = 0.0
+  while j < n
+    push(result, rt_result[int(j)])
+    j = j + 1.0
+  end
+  return result
+end

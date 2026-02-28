@@ -1,0 +1,35 @@
+// test_cond_ext.flow — extended if conditions: ||, contains, starts_with, ends_with
+
+let x = "hello"
+
+// || in if condition
+if x == "world" || x == "hello"
+  print("or_match=yes")
+end
+
+// starts_with as if condition
+if starts_with(x, "he")
+  print("starts_he=yes")
+end
+
+// contains as if condition
+if contains(x, "ell")
+  print("contains_ell=yes")
+end
+
+// ends_with as if condition
+if ends_with(x, "lo")
+  print("ends_lo=yes")
+end
+
+// || with first branch true (short-circuit)
+let a = 1.0
+let b = 2.0
+if a == 1.0 || b == 99.0
+  print("first_branch=yes")
+end
+
+// || with second branch true
+if a == 99.0 || b == 2.0
+  print("second_branch=yes")
+end

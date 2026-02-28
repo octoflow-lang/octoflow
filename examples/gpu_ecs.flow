@@ -1,0 +1,188 @@
+// gpu_ecs.flow — GPU Entity Component System
+//
+// "4096 entities. 3 systems. 100 timesteps. 300 dispatches. 0 CPU entity iterations."
+//
+// Structure-of-Arrays memory layout:
+//   Component arrays: pos_x[], pos_y[], vel_x[], vel_y[], alive[], grounded[]
+//   Each system is one GPU dispatch over all entities.
+//
+// Systems (executed in order each frame):
+//   1. Gravity: vel_y += gravity * dt (non-grounded entities)
+//   2. Move:    pos += vel * dt (alive entities)
+//   3. Bounce:  floor collision + restitution (alive entities)
+//
+// Run: octoflow run examples/gpu_ecs.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N = 4096.0
+let PAD = 4096.0
+let STEPS = 100.0
+let DT = 0.01
+let GRAVITY = -9.81
+let FLOOR = 0.0
+let RESTIT = 0.7
+
+rt_init()
+
+let pipe_move = rt_load_pipeline("tests/gpu_shaders/29_ecs_move.spv", 5.0, 4.0)
+let pipe_grav = rt_load_pipeline("tests/gpu_shaders/30_ecs_gravity.spv", 3.0, 8.0)
+let pipe_bounce = rt_load_pipeline("tests/gpu_shaders/31_ecs_bounce.spv", 4.0, 8.0)
+
+// ── Initialize entities ──────────────────────────────────────────────
+// All entities start at random heights with random horizontal velocities
+let mut pos_x = []
+let mut pos_y = []
+let mut vel_x = []
+let mut vel_y = []
+let mut alive_arr = []
+let mut grounded_arr = []
+
+let mut i = 0.0
+while i < N
+  // Deterministic pseudo-random position and velocity
+  let hx = i * 13.0 + 7.0
+  let hx2 = hx - floor(hx / 97.0) * 97.0
+  let px = (hx2 / 97.0 - 0.5) * 100.0
+
+  let hy = i * 17.0 + 3.0
+  let hy2 = hy - floor(hy / 89.0) * 89.0
+  let py = (hy2 / 89.0) * 50.0 + 1.0
+
+  let hv = i * 23.0 + 11.0
+  let hv2 = hv - floor(hv / 83.0) * 83.0
+  let vx = (hv2 / 83.0 - 0.5) * 10.0
+
+  push(pos_x, px)
+  push(pos_y, py)
+  push(vel_x, vx)
+  push(vel_y, 0.0)
+  push(alive_arr, 1.0)
+  push(grounded_arr, 0.0)
+  i = i + 1.0
+end
+
+// Upload SoA component arrays
+let buf_px = rt_create_buffer(PAD * 4.0)
+let buf_py = rt_create_buffer(PAD * 4.0)
+let buf_vx = rt_create_buffer(PAD * 4.0)
+let buf_vy = rt_create_buffer(PAD * 4.0)
+let buf_alive = rt_create_buffer(PAD * 4.0)
+let buf_ground = rt_create_buffer(PAD * 4.0)
+
+rt_upload(buf_px, pos_x)
+rt_upload(buf_py, pos_y)
+rt_upload(buf_vx, vel_x)
+rt_upload(buf_vy, vel_y)
+rt_upload(buf_alive, alive_arr)
+rt_upload(buf_ground, grounded_arr)
+
+// ── Simulate ─────────────────────────────────────────────────────────
+let WGS = N / 256.0
+let t0 = time()
+
+let mut step = 0.0
+while step < STEPS
+  // System 1: Gravity
+  rt_chain_begin(1.0, 3.0)
+  let mut pc_g = [GRAVITY, DT]
+  rt_chain_push_constants(pipe_grav, pc_g)
+  let mut bufs_g = [buf_vy, buf_alive, buf_ground]
+  rt_chain_dispatch(pipe_grav, bufs_g, WGS)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // System 2: Move
+  rt_chain_begin(1.0, 5.0)
+  let mut pc_m = [DT]
+  rt_chain_push_constants(pipe_move, pc_m)
+  let mut bufs_m = [buf_px, buf_py, buf_vx, buf_vy, buf_alive]
+  rt_chain_dispatch(pipe_move, bufs_m, WGS)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // System 3: Bounce
+  rt_chain_begin(1.0, 4.0)
+  let mut pc_b = [FLOOR, RESTIT]
+  rt_chain_push_constants(pipe_bounce, pc_b)
+  let mut bufs_b = [buf_py, buf_vy, buf_alive, buf_ground]
+  rt_chain_dispatch(pipe_bounce, bufs_b, WGS)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  step = step + 1.0
+end
+
+let t1 = time()
+let total_ms = (t1 - t0) * 1000.0
+
+// ── Download and analyze ─────────────────────────────────────────────
+rt_download(buf_py, N)
+let mut above_floor = 0.0
+let mut on_floor = 0.0
+let mut min_y = 999.0
+let mut max_y = -999.0
+let mut i = 0.0
+while i < N
+  let y = rt_result[int(i)]
+  if y > 0.01
+    above_floor = above_floor + 1.0
+  else
+    on_floor = on_floor + 1.0
+  end
+  if y < min_y
+    min_y = y
+  end
+  if y > max_y
+    max_y = y
+  end
+  i = i + 1.0
+end
+
+rt_download(buf_ground, N)
+let mut grounded_count = 0.0
+let mut i = 0.0
+while i < N
+  if rt_result[int(i)] == 1.0
+    grounded_count = grounded_count + 1.0
+  end
+  i = i + 1.0
+end
+
+let total_dispatches = STEPS * 3.0
+let entity_updates = N * STEPS * 3.0
+
+// Check no entity fell through the floor
+let mut pass = 1.0
+if min_y < -0.01
+  pass = 0.0
+end
+
+// ── Report ───────────────────────────────────────────────────────────
+print("")
+print("OctoFlow GPU Entity Component System")
+print("  Entities: {N}")
+print("  Components: 6 (pos_x, pos_y, vel_x, vel_y, alive, grounded)")
+print("  Systems: 3 (gravity, move, bounce)")
+print("  Timesteps: {STEPS}")
+print("  dt: {DT}")
+print("  Dispatches: {total_dispatches} (3 systems x {STEPS} steps)")
+print("  Submissions: {total_dispatches}")
+print("  Entity updates: {entity_updates}")
+print("  CPU entity iterations: 0")
+print("  Total time: {total_ms} ms")
+print("")
+print("  Final state:")
+print("    Above floor: {above_floor}")
+print("    On floor: {on_floor}")
+print("    Grounded (at rest): {grounded_count}")
+print("    Y range: [{min_y}, {max_y}]")
+
+if pass == 1.0
+  print("  PASS: {N} entities, no floor penetration, physics correct")
+else
+  print("  FAIL: entities penetrated floor (min_y={min_y})")
+end
+
+print("")
+rt_cleanup()

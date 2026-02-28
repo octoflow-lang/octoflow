@@ -1,0 +1,2512 @@
+// stdlib/compiler/ir.flow
+// OctoFlow IR — CFG + SSA Intermediate Representation
+//
+// Phase 69: Foundation for automated SPIR-V codegen.
+// The IR represents a compute shader as basic blocks with SSA instructions.
+// An emitter converts IR → SPIR-V binary, replacing hand-crafted emitters.
+//
+// Design:
+//   - Parallel arrays (OctoFlow idiom) for blocks and instructions
+//   - SSA: each instruction produces a unique result ID
+//   - Phi nodes: variable-length operands encoded as SEP-delimited strings
+//   - Block terminators: branch, cond_branch, return, loop_merge, selection_merge
+//   - Types: float, uint, bool (matching SPIR-V scalar types)
+//
+// Usage:
+//   1. Create IR with ir_new()
+//   2. Add blocks with ir_block(label)
+//   3. Add instructions with ir_inst_*(block, ...)
+//   4. Set terminators with ir_term_*(block, ...)
+//   5. Emit SPIR-V with ir_emit_spirv(out_path)
+//
+// The IR auto-allocates SPIR-V IDs: types/constants get fixed IDs,
+// instruction results get sequential IDs, blocks get label IDs.
+
+// ===================== CONSTANTS =====================
+
+// Instruction opcodes (internal, not SPIR-V opcodes)
+// Arithmetic
+let IR_OP_FADD = 1.0
+let IR_OP_FSUB = 2.0
+let IR_OP_FMUL = 3.0
+let IR_OP_FDIV = 4.0
+let IR_OP_IADD = 5.0
+let IR_OP_FNEG = 6.0
+// Conversion
+let IR_OP_FTOU = 10.0
+let IR_OP_UTOF = 11.0
+// Comparison
+let IR_OP_FOLT = 20.0
+let IR_OP_FOGT = 21.0
+let IR_OP_FOLE = 22.0
+let IR_OP_FOGE = 23.0
+let IR_OP_FOEQ = 24.0
+let IR_OP_FONE = 25.0
+let IR_OP_ULTE = 26.0
+let IR_OP_UGTE = 27.0
+// Memory
+let IR_OP_LOAD_INPUT = 30.0
+let IR_OP_STORE_OUTPUT = 31.0
+// Special
+let IR_OP_PHI = 40.0
+let IR_OP_SELECT = 41.0
+let IR_OP_CONST_F = 42.0
+let IR_OP_CONST_U = 43.0
+// Extended math (GLSL.std.450)
+let IR_OP_SQRT = 50.0
+let IR_OP_INVSQRT = 51.0
+let IR_OP_FLOOR = 56.0
+// Integer arithmetic
+let IR_OP_UDIV = 52.0
+let IR_OP_UMOD = 53.0
+let IR_OP_IMUL = 54.0
+// Logical
+let IR_OP_LAND = 55.0
+let IR_OP_LOR = 58.0
+// Extended math (cont.)
+let IR_OP_POW = 57.0
+let IR_OP_EXP = 100.0
+let IR_OP_FABS = 101.0
+let IR_OP_FMIN = 102.0
+let IR_OP_FMAX = 103.0
+// Memory
+let IR_OP_LOAD_GID = 60.0
+// Push constants
+let IR_OP_PUSH_CONST = 61.0
+// Multi-input: load from extra input binding at arbitrary index
+let IR_OP_LOAD_INPUT_AT = 32.0
+// Atomics
+let IR_OP_ATOMIC_IADD = 62.0
+// Workgroup primitives (Phase 117)
+let IR_OP_LOAD_LOCAL_ID = 63.0
+let IR_OP_LOAD_WORKGROUP_ID = 64.0
+let IR_OP_BARRIER = 65.0
+let IR_OP_SHARED_LOAD = 66.0
+let IR_OP_SHARED_STORE = 67.0
+let IR_OP_STORE_OUTPUT_AT = 68.0
+let IR_OP_LOAD_OUTPUT_AT = 69.0
+let IR_OP_ISUB = 70.0
+let IR_OP_UEQU = 71.0
+// Buffer access (uint and arbitrary-index)
+let IR_OP_BUF_LOAD_U = 80.0
+let IR_OP_BUF_STORE_U = 81.0
+let IR_OP_BUF_ATOMIC_LOAD = 82.0
+let IR_OP_BUF_ATOMIC_STORE = 83.0
+let IR_OP_BUF_ATOMIC_IADD2 = 84.0
+let IR_OP_BUF_STORE_F = 85.0
+// Bitwise ops (uint32 → uint32)
+let IR_OP_BIT_AND = 86.0
+let IR_OP_BIT_OR = 87.0
+let IR_OP_SHL = 88.0
+let IR_OP_SHR = 89.0
+let IR_OP_BITCOUNT = 90.0
+let IR_OP_NOT = 91.0
+let IR_OP_BUF_ATOMIC_AND = 92.0
+let IR_OP_UCONVERT = 110.0       // OpUConvert (uint width conversion: u32↔u64)
+
+// Type tags
+let IR_TYPE_FLOAT = 1.0
+let IR_TYPE_UINT = 2.0
+let IR_TYPE_BOOL = 3.0
+let IR_TYPE_VOID = 4.0
+let IR_TYPE_UINT64 = 5.0
+
+// Terminator kinds
+let IR_TERM_BRANCH = 1.0
+let IR_TERM_COND_BRANCH = 2.0
+let IR_TERM_RETURN = 3.0
+
+// Merge annotations (placed before terminator)
+let IR_MERGE_NONE = 0.0
+let IR_MERGE_LOOP = 1.0
+let IR_MERGE_SELECTION = 2.0
+
+// ===================== IR STATE =====================
+// All mutable — built up incrementally by the user
+
+// Blocks
+let mut ir_bb_label = []        // string label for debugging
+let mut ir_bb_first_inst = []   // index of first instruction (-1 if empty)
+let mut ir_bb_last_inst = []    // index of last instruction (-1 if empty)
+let mut ir_bb_term_kind = []    // IR_TERM_*
+let mut ir_bb_term_arg1 = []    // target block index (branch) or condition inst (cond_branch)
+let mut ir_bb_term_arg2 = []    // true target (cond_branch)
+let mut ir_bb_term_arg3 = []    // false target (cond_branch)
+let mut ir_bb_merge_kind = []   // IR_MERGE_NONE/LOOP/SELECTION
+let mut ir_bb_merge_target = [] // merge block index
+let mut ir_bb_continue_target = [] // continue block index (loop merge only)
+
+// Instructions
+let mut ir_inst_op = []         // IR_OP_*
+let mut ir_inst_type = []       // IR_TYPE_*
+let mut ir_inst_arg1 = []       // first operand (inst index or constant)
+let mut ir_inst_arg2 = []       // second operand
+let mut ir_inst_block = []      // which block this instruction belongs to
+// Phi operands (SEP-delimited for variable length)
+let SEP = chr(1.0)
+let mut ir_phi_values = []      // SEP-delimited inst indices
+let mut ir_phi_parents = []     // SEP-delimited block indices
+// Constant values (for CONST_F, CONST_U)
+let mut ir_const_fval = []      // float value (only for CONST_F instructions)
+let mut ir_const_uval = []      // uint value (only for CONST_U instructions)
+
+// Next ID counter
+let mut ir_next_id = 0.0
+
+// Push constant infrastructure (set by ir_emit_spirv, read by emission helpers)
+let mut ir_pc_ptr_float_id = 0.0
+let mut ir_pc_var_id = 0.0
+
+// Multi-input: how many input bindings (default 1, output shifts to binding input_count)
+let mut ir_input_count = 1.0
+
+// Workgroup primitives (Phase 117)
+let mut ir_shared_size = 0.0       // shared memory float elements (0 = none)
+let mut ir_workgroup_size = 256.0  // configurable local size X
+let mut ir_uint_bindings = []      // input binding indices that are uint-typed (for atomics)
+
+// Emission context (set by ir_emit_spirv, read by _ir_emit_block_insts)
+let mut ir_em_var_local_id = 0.0
+let mut ir_em_var_wg_id = 0.0
+let mut ir_em_shared_var_id = 0.0
+let mut ir_em_shared_ptr_wg_f32_id = 0.0
+let mut ir_em_scope_wg_id = 0.0
+let mut ir_em_sem_wg_id = 0.0
+let mut ir_em_scope_device_id = 0.0
+let mut ir_em_sem_acqrel_id = 0.0
+let mut ir_em_sem_acquire_id = 0.0
+let mut ir_em_sem_release_id = 0.0
+let mut ir_em_uint_bind_var_ids = []
+let mut ir_em_uint_bind_nums = []
+let mut ir_em_extra_input_ids = []
+let mut ir_em_ptr_sb_struct_uint_id = 0.0
+let mut ir_uses_uint64 = [0.0]        // array[1]: set to 1 when any uint64 op used (array for mutation propagation)
+let mut ir_em_uint64_type_id = 0.0    // SPIR-V type ID for uint64 (allocated conditionally)
+
+// ===================== IR BUILDER API =====================
+
+fn ir_new()
+  // Reset all IR state for fresh kernel emission
+  // Block arrays
+  while len(ir_bb_label) > 0.0
+    pop(ir_bb_label)
+  end
+  while len(ir_bb_first_inst) > 0.0
+    pop(ir_bb_first_inst)
+  end
+  while len(ir_bb_last_inst) > 0.0
+    pop(ir_bb_last_inst)
+  end
+  while len(ir_bb_term_kind) > 0.0
+    pop(ir_bb_term_kind)
+  end
+  while len(ir_bb_term_arg1) > 0.0
+    pop(ir_bb_term_arg1)
+  end
+  while len(ir_bb_term_arg2) > 0.0
+    pop(ir_bb_term_arg2)
+  end
+  while len(ir_bb_term_arg3) > 0.0
+    pop(ir_bb_term_arg3)
+  end
+  while len(ir_bb_merge_kind) > 0.0
+    pop(ir_bb_merge_kind)
+  end
+  while len(ir_bb_merge_target) > 0.0
+    pop(ir_bb_merge_target)
+  end
+  while len(ir_bb_continue_target) > 0.0
+    pop(ir_bb_continue_target)
+  end
+  // Instruction arrays
+  while len(ir_inst_op) > 0.0
+    pop(ir_inst_op)
+  end
+  while len(ir_inst_type) > 0.0
+    pop(ir_inst_type)
+  end
+  while len(ir_inst_arg1) > 0.0
+    pop(ir_inst_arg1)
+  end
+  while len(ir_inst_arg2) > 0.0
+    pop(ir_inst_arg2)
+  end
+  while len(ir_inst_block) > 0.0
+    pop(ir_inst_block)
+  end
+  while len(ir_phi_values) > 0.0
+    pop(ir_phi_values)
+  end
+  while len(ir_phi_parents) > 0.0
+    pop(ir_phi_parents)
+  end
+  while len(ir_const_fval) > 0.0
+    pop(ir_const_fval)
+  end
+  while len(ir_const_uval) > 0.0
+    pop(ir_const_uval)
+  end
+  // Output buffer
+  while len(ir_buf) > 0.0
+    pop(ir_buf)
+  end
+  // Reset uint bindings array
+  while len(ir_uint_bindings) > 0.0
+    pop(ir_uint_bindings)
+  end
+  // Note: ir_input_count, ir_shared_size, ir_workgroup_size, ir_uses_uint64
+  // are scalars — reset them DIRECTLY in caller scope (scalar snapshot semantics)
+  ir_uses_uint64[0] = 0.0
+  return 0.0
+end
+
+fn ir_block(label)
+  let idx = len(ir_bb_label)
+  push(ir_bb_label, label)
+  push(ir_bb_first_inst, -1.0)
+  push(ir_bb_last_inst, -1.0)
+  push(ir_bb_term_kind, 0.0)
+  push(ir_bb_term_arg1, 0.0)
+  push(ir_bb_term_arg2, 0.0)
+  push(ir_bb_term_arg3, 0.0)
+  push(ir_bb_merge_kind, IR_MERGE_NONE)
+  push(ir_bb_merge_target, 0.0)
+  push(ir_bb_continue_target, 0.0)
+  return idx
+end
+
+// Internal: add instruction to block, return instruction index
+fn _ir_add_inst(block_idx, op, typ, a1, a2)
+  let idx = len(ir_inst_op)
+  push(ir_inst_op, op)
+  push(ir_inst_type, typ)
+  push(ir_inst_arg1, a1)
+  push(ir_inst_arg2, a2)
+  push(ir_inst_block, block_idx)
+  push(ir_phi_values, "")
+  push(ir_phi_parents, "")
+  push(ir_const_fval, 0.0)
+  push(ir_const_uval, 0.0)
+  // Update block first/last
+  if ir_bb_first_inst[block_idx] < 0.0
+    ir_bb_first_inst[block_idx] = idx
+  end
+  ir_bb_last_inst[block_idx] = idx
+  return idx
+end
+
+// Arithmetic instructions
+fn ir_fadd(block, a, b)
+  return _ir_add_inst(block, IR_OP_FADD, IR_TYPE_FLOAT, a, b)
+end
+fn ir_fsub(block, a, b)
+  return _ir_add_inst(block, IR_OP_FSUB, IR_TYPE_FLOAT, a, b)
+end
+fn ir_fmul(block, a, b)
+  return _ir_add_inst(block, IR_OP_FMUL, IR_TYPE_FLOAT, a, b)
+end
+fn ir_fdiv(block, a, b)
+  return _ir_add_inst(block, IR_OP_FDIV, IR_TYPE_FLOAT, a, b)
+end
+fn ir_iadd(block, a, b)
+  return _ir_add_inst(block, IR_OP_IADD, IR_TYPE_UINT, a, b)
+end
+fn ir_fneg(block, a)
+  return _ir_add_inst(block, IR_OP_FNEG, IR_TYPE_FLOAT, a, 0.0)
+end
+
+// Conversion
+fn ir_ftou(block, a)
+  return _ir_add_inst(block, IR_OP_FTOU, IR_TYPE_UINT, a, 0.0)
+end
+fn ir_utof(block, a)
+  return _ir_add_inst(block, IR_OP_UTOF, IR_TYPE_FLOAT, a, 0.0)
+end
+
+// Comparison
+fn ir_folt(block, a, b)
+  return _ir_add_inst(block, IR_OP_FOLT, IR_TYPE_BOOL, a, b)
+end
+fn ir_fogt(block, a, b)
+  return _ir_add_inst(block, IR_OP_FOGT, IR_TYPE_BOOL, a, b)
+end
+fn ir_fole(block, a, b)
+  return _ir_add_inst(block, IR_OP_FOLE, IR_TYPE_BOOL, a, b)
+end
+fn ir_foge(block, a, b)
+  return _ir_add_inst(block, IR_OP_FOGE, IR_TYPE_BOOL, a, b)
+end
+fn ir_foeq(block, a, b)
+  return _ir_add_inst(block, IR_OP_FOEQ, IR_TYPE_BOOL, a, b)
+end
+fn ir_fone(block, a, b)
+  return _ir_add_inst(block, IR_OP_FONE, IR_TYPE_BOOL, a, b)
+end
+fn ir_ulte(block, a, b)
+  return _ir_add_inst(block, IR_OP_ULTE, IR_TYPE_BOOL, a, b)
+end
+fn ir_ugte(block, a, b)
+  return _ir_add_inst(block, IR_OP_UGTE, IR_TYPE_BOOL, a, b)
+end
+
+// Extended math (GLSL.std.450)
+fn ir_sqrt(block, a)
+  return _ir_add_inst(block, IR_OP_SQRT, IR_TYPE_FLOAT, a, 0.0)
+end
+fn ir_invsqrt(block, a)
+  return _ir_add_inst(block, IR_OP_INVSQRT, IR_TYPE_FLOAT, a, 0.0)
+end
+fn ir_floor(block, a)
+  return _ir_add_inst(block, IR_OP_FLOOR, IR_TYPE_FLOAT, a, 0.0)
+end
+
+// Integer arithmetic
+fn ir_udiv(block, a, b)
+  return _ir_add_inst(block, IR_OP_UDIV, IR_TYPE_UINT, a, b)
+end
+fn ir_umod(block, a, b)
+  return _ir_add_inst(block, IR_OP_UMOD, IR_TYPE_UINT, a, b)
+end
+fn ir_imul(block, a, b)
+  return _ir_add_inst(block, IR_OP_IMUL, IR_TYPE_UINT, a, b)
+end
+
+// Logical
+fn ir_land(block, a, b)
+  return _ir_add_inst(block, IR_OP_LAND, IR_TYPE_BOOL, a, b)
+end
+
+fn ir_lor(block, a, b)
+  return _ir_add_inst(block, IR_OP_LOR, IR_TYPE_BOOL, a, b)
+end
+
+// Extended math: pow(base, exp) → float
+fn ir_pow(block, base, exp)
+  return _ir_add_inst(block, IR_OP_POW, IR_TYPE_FLOAT, base, exp)
+end
+
+// Extended math: exp(a) → float (GLSL.std.450 Exp = 27)
+fn ir_exp(block, a)
+  return _ir_add_inst(block, IR_OP_EXP, IR_TYPE_FLOAT, a, 0.0)
+end
+
+// Extended math: fabs(a) → float (GLSL.std.450 FAbs = 4)
+fn ir_fabs(block, a)
+  return _ir_add_inst(block, IR_OP_FABS, IR_TYPE_FLOAT, a, 0.0)
+end
+
+// Extended math: fmin(a, b) → float (GLSL.std.450 FMin = 37)
+fn ir_fmin(block, a, b)
+  return _ir_add_inst(block, IR_OP_FMIN, IR_TYPE_FLOAT, a, b)
+end
+
+// Extended math: fmax(a, b) → float (GLSL.std.450 FMax = 40)
+fn ir_fmax(block, a, b)
+  return _ir_add_inst(block, IR_OP_FMAX, IR_TYPE_FLOAT, a, b)
+end
+
+// Memory: load input[gid] → float (binding 0)
+fn ir_load_input(block)
+  return _ir_add_inst(block, IR_OP_LOAD_INPUT, IR_TYPE_FLOAT, 0.0, 0.0)
+end
+
+// Multi-input: set ir_input_count DIRECTLY in caller scope (scalar snapshot)
+// Example: ir_input_count = 4.0   (after ir_new(), before adding instructions)
+
+// Multi-input: load from input binding K at uint index idx → float
+// binding = 0.0, 1.0, 2.0 etc; idx = uint SSA value (from ir_load_gid, ir_udiv, etc.)
+fn ir_load_input_at(block, binding, idx)
+  return _ir_add_inst(block, IR_OP_LOAD_INPUT_AT, IR_TYPE_FLOAT, binding, idx)
+end
+
+// Memory: load gid → uint
+fn ir_load_gid(block)
+  return _ir_add_inst(block, IR_OP_LOAD_GID, IR_TYPE_UINT, 0.0, 0.0)
+end
+
+// Push constant: load float at index from push constant block
+fn ir_push_const(block, idx)
+  let i = _ir_add_inst(block, IR_OP_PUSH_CONST, IR_TYPE_FLOAT, 0.0, 0.0)
+  ir_const_uval[i] = idx
+  return i
+end
+
+// Atomic operations: atomically add value to memory and return old value
+// pointer_id: uint pointer SSA value (from a previous AccessChain instruction)
+// value_id: uint value to add (from ir_const_u or other uint instruction)
+// Returns: old value before increment (uint)
+//
+// Note: Currently, creating AccessChain pointers must be done at a lower level.
+// For atomics on output buffer, you need to manually construct the buffer structure.
+// This is typically used in hand-crafted SPIR-V emitters, not general IR construction.
+fn ir_atomic_iadd(block, pointer_id, value_id)
+  return _ir_add_inst(block, IR_OP_ATOMIC_IADD, IR_TYPE_UINT, pointer_id, value_id)
+end
+
+// Memory: store float to output[gid]
+fn ir_store_output(block, val)
+  return _ir_add_inst(block, IR_OP_STORE_OUTPUT, IR_TYPE_VOID, val, 0.0)
+end
+
+// Constants
+fn ir_const_f(block, val)
+  let idx = _ir_add_inst(block, IR_OP_CONST_F, IR_TYPE_FLOAT, 0.0, 0.0)
+  ir_const_fval[idx] = val
+  return idx
+end
+fn ir_const_u(block, val)
+  let idx = _ir_add_inst(block, IR_OP_CONST_U, IR_TYPE_UINT, 0.0, 0.0)
+  ir_const_uval[idx] = val
+  return idx
+end
+
+// Select (ternary: cond ? a : b)
+fn ir_select(block, typ, cond, a, b)
+  let idx = _ir_add_inst(block, IR_OP_SELECT, typ, cond, a)
+  // Encode third arg in phi_values as a hack (we only have arg1/arg2)
+  ir_phi_values[idx] = str(b)
+  return idx
+end
+
+// Phi node (variable operands)
+fn ir_phi(block, typ)
+  let idx = _ir_add_inst(block, IR_OP_PHI, typ, 0.0, 0.0)
+  return idx
+end
+
+fn ir_phi_add(phi_idx, value_inst, parent_block)
+  if ir_phi_values[phi_idx] == ""
+    ir_phi_values[phi_idx] = str(value_inst)
+    ir_phi_parents[phi_idx] = str(parent_block)
+  else
+    ir_phi_values[phi_idx] = ir_phi_values[phi_idx] + SEP + str(value_inst)
+    ir_phi_parents[phi_idx] = ir_phi_parents[phi_idx] + SEP + str(parent_block)
+  end
+  return 0.0
+end
+
+// ===================== WORKGROUP PRIMITIVES (Phase 117) =====================
+
+// Load LocalInvocationId.x → uint
+fn ir_load_local_id(block)
+  return _ir_add_inst(block, IR_OP_LOAD_LOCAL_ID, IR_TYPE_UINT, 0.0, 0.0)
+end
+
+// Load WorkgroupId.x → uint
+fn ir_load_workgroup_id(block)
+  return _ir_add_inst(block, IR_OP_LOAD_WORKGROUP_ID, IR_TYPE_UINT, 0.0, 0.0)
+end
+
+// OpControlBarrier — workgroup execution + workgroup memory semantics
+fn ir_barrier(block)
+  return _ir_add_inst(block, IR_OP_BARRIER, IR_TYPE_VOID, 0.0, 0.0)
+end
+
+// Load from shared memory: shared[idx] → float (idx = uint SSA)
+fn ir_shared_load(block, idx)
+  return _ir_add_inst(block, IR_OP_SHARED_LOAD, IR_TYPE_FLOAT, idx, 0.0)
+end
+
+// Store to shared memory: val → shared[idx] (idx = uint SSA, val = float SSA)
+fn ir_shared_store(block, idx, val)
+  return _ir_add_inst(block, IR_OP_SHARED_STORE, IR_TYPE_VOID, idx, val)
+end
+
+// Store float to output[idx] at arbitrary index (not just gid)
+fn ir_store_output_at(block, idx, val)
+  return _ir_add_inst(block, IR_OP_STORE_OUTPUT_AT, IR_TYPE_VOID, idx, val)
+end
+
+// Load float from output[idx] at arbitrary index
+fn ir_load_output_at(block, idx)
+  return _ir_add_inst(block, IR_OP_LOAD_OUTPUT_AT, IR_TYPE_FLOAT, idx, 0.0)
+end
+
+// Integer subtraction: a - b → uint
+fn ir_isub(block, a, b)
+  return _ir_add_inst(block, IR_OP_ISUB, IR_TYPE_UINT, a, b)
+end
+
+// Unsigned integer equality: a == b → bool
+fn ir_uequ(block, a, b)
+  return _ir_add_inst(block, IR_OP_UEQU, IR_TYPE_BOOL, a, b)
+end
+
+// ===================== UINT64 OPS =====================
+// 64-bit integer arithmetic. Same SPIR-V opcodes as uint32 — the width is
+// determined by the result type (SPIR-V integer ops are polymorphic).
+// Use ir_u32_to_u64/ir_u64_to_u32 for width conversion (OpUConvert).
+// Small uint64 constants: ir_u32_to_u64(block, ir_const_u(block, val)).
+
+fn ir_iadd64(block, a, b)
+  ir_uses_uint64[0] = 1.0
+  return _ir_add_inst(block, IR_OP_IADD, IR_TYPE_UINT64, a, b)
+end
+fn ir_isub64(block, a, b)
+  ir_uses_uint64[0] = 1.0
+  return _ir_add_inst(block, IR_OP_ISUB, IR_TYPE_UINT64, a, b)
+end
+fn ir_imul64(block, a, b)
+  ir_uses_uint64[0] = 1.0
+  return _ir_add_inst(block, IR_OP_IMUL, IR_TYPE_UINT64, a, b)
+end
+fn ir_udiv64(block, a, b)
+  ir_uses_uint64[0] = 1.0
+  return _ir_add_inst(block, IR_OP_UDIV, IR_TYPE_UINT64, a, b)
+end
+fn ir_umod64(block, a, b)
+  ir_uses_uint64[0] = 1.0
+  return _ir_add_inst(block, IR_OP_UMOD, IR_TYPE_UINT64, a, b)
+end
+
+// 64-bit comparisons (result is bool, operands are uint64)
+fn ir_ugte64(block, a, b)
+  ir_uses_uint64[0] = 1.0
+  return _ir_add_inst(block, IR_OP_UGTE, IR_TYPE_BOOL, a, b)
+end
+fn ir_ulte64(block, a, b)
+  ir_uses_uint64[0] = 1.0
+  return _ir_add_inst(block, IR_OP_ULTE, IR_TYPE_BOOL, a, b)
+end
+fn ir_uequ64(block, a, b)
+  ir_uses_uint64[0] = 1.0
+  return _ir_add_inst(block, IR_OP_UEQU, IR_TYPE_BOOL, a, b)
+end
+
+// Width conversions (OpUConvert)
+fn ir_u32_to_u64(block, a)
+  ir_uses_uint64[0] = 1.0
+  return _ir_add_inst(block, IR_OP_UCONVERT, IR_TYPE_UINT64, a, 0.0)
+end
+fn ir_u64_to_u32(block, a)
+  ir_uses_uint64[0] = 1.0
+  return _ir_add_inst(block, IR_OP_UCONVERT, IR_TYPE_UINT, a, 0.0)
+end
+
+// ===================== BITWISE OPS =====================
+// All operate on uint32, return uint32.
+
+// Bitwise AND: a & b → uint
+fn ir_bit_and(block, a, b)
+  return _ir_add_inst(block, IR_OP_BIT_AND, IR_TYPE_UINT, a, b)
+end
+
+// Bitwise OR: a | b → uint
+fn ir_bit_or(block, a, b)
+  return _ir_add_inst(block, IR_OP_BIT_OR, IR_TYPE_UINT, a, b)
+end
+
+// Shift left: a << b → uint
+fn ir_shl(block, a, b)
+  return _ir_add_inst(block, IR_OP_SHL, IR_TYPE_UINT, a, b)
+end
+
+// Shift right (logical): a >> b → uint
+fn ir_shr(block, a, b)
+  return _ir_add_inst(block, IR_OP_SHR, IR_TYPE_UINT, a, b)
+end
+
+// Population count (number of set bits): popcount(a) → uint
+fn ir_bitcount(block, a)
+  return _ir_add_inst(block, IR_OP_BITCOUNT, IR_TYPE_UINT, a, 0.0)
+end
+
+// Bitwise NOT: ~a → uint
+fn ir_not(block, a)
+  return _ir_add_inst(block, IR_OP_NOT, IR_TYPE_UINT, a, 0.0)
+end
+
+// ===================== BUFFER ACCESS (Phase 117) =====================
+// High-level buffer read/write for arbitrary bindings and uint types.
+// 3-arg instructions encode 3rd arg in ir_phi_values[] (same as ir_select).
+
+// Load uint from buffer[binding][idx] → uint
+fn ir_buf_load_u(block, binding, idx)
+  return _ir_add_inst(block, IR_OP_BUF_LOAD_U, IR_TYPE_UINT, binding, idx)
+end
+
+// Store uint to buffer[binding][idx]
+fn ir_buf_store_u(block, binding, idx, val)
+  let i = _ir_add_inst(block, IR_OP_BUF_STORE_U, IR_TYPE_VOID, binding, idx)
+  ir_phi_values[i] = str(val)
+  return i
+end
+
+// Atomic load uint from buffer[binding][idx] → uint
+fn ir_buf_atomic_load(block, binding, idx)
+  return _ir_add_inst(block, IR_OP_BUF_ATOMIC_LOAD, IR_TYPE_UINT, binding, idx)
+end
+
+// Atomic store uint to buffer[binding][idx]
+fn ir_buf_atomic_store(block, binding, idx, val)
+  let i = _ir_add_inst(block, IR_OP_BUF_ATOMIC_STORE, IR_TYPE_VOID, binding, idx)
+  ir_phi_values[i] = str(val)
+  return i
+end
+
+// Atomic add uint on buffer[binding][idx], return old value → uint
+fn ir_buf_atomic_iadd(block, binding, idx, val)
+  let i = _ir_add_inst(block, IR_OP_BUF_ATOMIC_IADD2, IR_TYPE_UINT, binding, idx)
+  ir_phi_values[i] = str(val)
+  return i
+end
+
+// Atomic AND uint on buffer[binding][idx], return old value → uint
+fn ir_buf_atomic_and(block, binding, idx, val)
+  let i = _ir_add_inst(block, IR_OP_BUF_ATOMIC_AND, IR_TYPE_UINT, binding, idx)
+  ir_phi_values[i] = str(val)
+  return i
+end
+
+// Store float to input buffer[binding][idx] (arbitrary-index write to input buffer)
+fn ir_buf_store_f(block, binding, idx, val)
+  let i = _ir_add_inst(block, IR_OP_BUF_STORE_F, IR_TYPE_VOID, binding, idx)
+  ir_phi_values[i] = str(val)
+  return i
+end
+
+// ===================== TERMINATORS =====================
+
+fn ir_term_branch(block, target)
+  ir_bb_term_kind[block] = IR_TERM_BRANCH
+  ir_bb_term_arg1[block] = target
+  return 0.0
+end
+
+fn ir_term_cond_branch(block, cond_inst, true_block, false_block)
+  ir_bb_term_kind[block] = IR_TERM_COND_BRANCH
+  ir_bb_term_arg1[block] = cond_inst
+  ir_bb_term_arg2[block] = true_block
+  ir_bb_term_arg3[block] = false_block
+  return 0.0
+end
+
+fn ir_term_return(block)
+  ir_bb_term_kind[block] = IR_TERM_RETURN
+  return 0.0
+end
+
+// ===================== MERGE ANNOTATIONS =====================
+
+fn ir_loop_merge(block, merge_block, continue_block)
+  ir_bb_merge_kind[block] = IR_MERGE_LOOP
+  ir_bb_merge_target[block] = merge_block
+  ir_bb_continue_target[block] = continue_block
+  return 0.0
+end
+
+fn ir_selection_merge(block, merge_block)
+  ir_bb_merge_kind[block] = IR_MERGE_SELECTION
+  ir_bb_merge_target[block] = merge_block
+  return 0.0
+end
+
+// ===================== SPIR-V EMISSION =====================
+// Converts IR → SPIR-V binary
+
+fn make_op(wc, op)
+  return (wc << 16.0) | op
+end
+fn wb0(w)
+  return w & 255.0
+end
+fn wb1(w)
+  return (w >> 8.0) & 255.0
+end
+fn wb2(w)
+  return (w >> 16.0) & 255.0
+end
+fn wb3(w)
+  return (w >> 24.0) & 255.0
+end
+
+fn emit_word(val)
+  push(ir_buf, wb0(val))
+  push(ir_buf, wb1(val))
+  push(ir_buf, wb2(val))
+  push(ir_buf, wb3(val))
+  return 0.0
+end
+
+fn emit_op(wc, opcode)
+  let _w = make_op(wc, opcode)
+  push(ir_buf, wb0(_w))
+  push(ir_buf, wb1(_w))
+  push(ir_buf, wb2(_w))
+  push(ir_buf, wb3(_w))
+  return 0.0
+end
+
+// SPIR-V output buffer
+let mut ir_buf = []
+
+// ID mapping: we need to assign SPIR-V IDs to:
+//   Fixed types/vars: IDs 1-20 (pre-allocated)
+//   Constants: collected from CONST_F/CONST_U instructions
+//   Block labels: one ID per block
+//   Instruction results: one ID per instruction (except stores/terminators)
+//
+// Pre-allocated IDs:
+//   1 = void, 2 = fn_type, 3 = fn_main, 4 = float, 5 = uint
+//   6 = uvec3, 7 = ptr_in_uvec3, 8 = gid_var, 9 = rt_array
+//   10 = struct, 11 = ptr_sb_struct, 12 = input_var, 13 = output_var
+//   14 = entry_block (first block), 15 = ptr_in_uint, 16 = uint_0
+//   17 = ptr_sb_float, 18 = (reserved), 19 = gid_chain, 20 = gid_load
+//   21 = input_chain, 22 = val_load, 23 = bool_type, 24 = ptr_sb_uint
+//   25+ = dynamic (constants, block labels, instruction results)
+
+let SPIR_ID_VOID = 1.0
+let SPIR_ID_FN_TYPE = 2.0
+let SPIR_ID_FN_MAIN = 3.0
+let SPIR_ID_FLOAT = 4.0
+let SPIR_ID_UINT = 5.0
+let SPIR_ID_UVEC3 = 6.0
+let SPIR_ID_PTR_IN_UVEC3 = 7.0
+let SPIR_ID_GID_VAR = 8.0
+let SPIR_ID_RT_ARRAY = 9.0
+let SPIR_ID_STRUCT = 10.0
+let SPIR_ID_PTR_SB_STRUCT = 11.0
+let SPIR_ID_INPUT = 12.0
+let SPIR_ID_OUTPUT = 13.0
+let SPIR_ID_PTR_IN_UINT = 15.0
+let SPIR_ID_UINT_0 = 16.0
+let SPIR_ID_PTR_SB_FLOAT = 17.0
+let SPIR_ID_GID_CHAIN = 19.0
+let SPIR_ID_GID_LOAD = 20.0
+let SPIR_ID_INPUT_CHAIN = 21.0
+let SPIR_ID_VAL_LOAD = 22.0
+let SPIR_ID_GLSL_EXT = 18.0
+let SPIR_ID_BOOL = 23.0
+let SPIR_ID_PTR_SB_UINT = 24.0
+let SPIR_ID_DYNAMIC_START = 25.0
+
+// SPIR-V opcodes
+let SPIRV_OP_LABEL = 248.0
+let SPIRV_OP_BRANCH = 249.0
+let SPIRV_OP_BRANCH_COND = 250.0
+let SPIRV_OP_LOOP_MERGE = 246.0
+let SPIRV_OP_SEL_MERGE = 247.0
+let SPIRV_OP_PHI = 245.0
+let SPIRV_OP_RETURN = 253.0
+let SPIRV_OP_FN_END = 56.0
+let SPIRV_OP_FADD = 129.0
+let SPIRV_OP_FSUB = 131.0
+let SPIRV_OP_FMUL = 133.0
+let SPIRV_OP_FDIV = 136.0
+let SPIRV_OP_FNEG = 127.0
+let SPIRV_OP_IADD = 128.0
+let SPIRV_OP_FTOU = 109.0
+let SPIRV_OP_UTOF = 112.0
+let SPIRV_OP_FOLT = 184.0
+let SPIRV_OP_FOGT = 186.0
+let SPIRV_OP_FOLE = 188.0
+let SPIRV_OP_FOGE = 190.0
+let SPIRV_OP_FOEQ = 180.0
+let SPIRV_OP_FONE = 182.0
+let SPIRV_OP_ULTE = 178.0
+let SPIRV_OP_UGTE = 174.0
+let SPIRV_OP_SELECT = 169.0
+let SPIRV_OP_EXT_INST_IMPORT = 11.0
+let SPIRV_OP_EXT_INST = 12.0
+let SPIRV_OP_CONST = 43.0
+let SPIRV_OP_ACCESS_CHAIN = 65.0
+let SPIRV_OP_IMUL = 132.0
+let SPIRV_OP_UDIV = 134.0
+let SPIRV_OP_UMOD = 137.0
+let SPIRV_OP_LAND = 167.0
+let SPIRV_OP_LOR = 166.0
+let SPIRV_OP_LOAD = 61.0
+let SPIRV_OP_STORE = 62.0
+let SPIRV_OP_ATOMIC_IADD = 234.0
+// Phase 117 additions
+let SPIRV_OP_CONTROL_BARRIER = 224.0
+let SPIRV_OP_ATOMIC_LOAD = 227.0
+let SPIRV_OP_ATOMIC_STORE = 228.0
+let SPIRV_OP_ISUB = 130.0
+let SPIRV_OP_IEQUAL = 170.0
+// Bitwise SPIR-V opcodes (verified against SPIR-V 1.6 spec)
+let SPIRV_OP_SHR_LOGICAL = 194.0
+let SPIRV_OP_SHL_LOGICAL = 196.0
+let SPIRV_OP_BITWISE_OR = 197.0
+let SPIRV_OP_BITWISE_AND = 199.0
+let SPIRV_OP_NOT = 200.0
+let SPIRV_OP_BITCOUNT = 205.0
+let SPIRV_OP_ATOMIC_AND = 240.0
+let SPIRV_OP_UCONVERT = 113.0    // OpUConvert (SPIR-V 1.6 §3.32.11)
+
+fn ir_emit_spirv(out_path)
+  // Phase 1: Assign SPIR-V IDs
+  let mut next_id = SPIR_ID_DYNAMIC_START
+
+  // Allocate uint64 type ID if needed (before any other dynamic IDs)
+  if ir_uses_uint64[0] > 0.5
+    ir_em_uint64_type_id = next_id
+    next_id = next_id + 1.0
+  end
+
+  // Collect unique float constants
+  let mut fconst_vals = []
+  let mut fconst_ids = []
+  let mut uconst_vals = []
+  let mut uconst_ids = []
+
+  let num_insts = len(ir_inst_op)
+  let num_blocks = len(ir_bb_label)
+
+  // Scan for constants and assign IDs
+  for i in range(0.0, num_insts)
+    if ir_inst_op[i] == IR_OP_CONST_F
+      // Check if already registered
+      let val = ir_const_fval[i]
+      let mut found = -1.0
+      for j in range(0.0, len(fconst_vals))
+        // Compare via float_byte for exact match
+        if float_byte(fconst_vals[j], 0.0) == float_byte(val, 0.0)
+          if float_byte(fconst_vals[j], 1.0) == float_byte(val, 1.0)
+            if float_byte(fconst_vals[j], 2.0) == float_byte(val, 2.0)
+              if float_byte(fconst_vals[j], 3.0) == float_byte(val, 3.0)
+                found = j
+              end
+            end
+          end
+        end
+      end
+      if found < 0.0
+        push(fconst_vals, val)
+        push(fconst_ids, next_id)
+        next_id = next_id + 1.0
+        found = len(fconst_vals) - 1.0
+      end
+    end
+    if ir_inst_op[i] == IR_OP_CONST_U
+      let val = ir_const_uval[i]
+      let mut found = -1.0
+      for j in range(0.0, len(uconst_vals))
+        if uconst_vals[j] == val
+          found = j
+        end
+      end
+      if found < 0.0
+        push(uconst_vals, val)
+        push(uconst_ids, next_id)
+        next_id = next_id + 1.0
+        found = len(uconst_vals) - 1.0
+      end
+    end
+  end
+
+  // Scan for push constants — find max index and ensure uint constants exist
+  let mut pc_count = 0.0
+  for i in range(0.0, num_insts)
+    if ir_inst_op[i] == IR_OP_PUSH_CONST
+      let pcidx = ir_const_uval[i]
+      if pcidx + 1.0 > pc_count
+        pc_count = pcidx + 1.0
+      end
+      // Ensure uint constant for this index exists (for AccessChain member index)
+      let mut found_pc = -1.0
+      for j in range(0.0, len(uconst_vals))
+        if uconst_vals[j] == pcidx
+          found_pc = j
+        end
+      end
+      if found_pc < 0.0
+        push(uconst_vals, pcidx)
+        push(uconst_ids, next_id)
+        next_id = next_id + 1.0
+      end
+    end
+  end
+
+  // Allocate push constant infrastructure IDs (if any push constants used)
+  let mut pc_struct_id = 0.0
+  let mut pc_ptr_struct_id = 0.0
+  let mut pc_ptr_float_id = 0.0
+  let mut pc_var_id = 0.0
+  if pc_count > 0.0
+    pc_struct_id = next_id
+    next_id = next_id + 1.0
+    pc_ptr_struct_id = next_id
+    next_id = next_id + 1.0
+    pc_ptr_float_id = next_id
+    next_id = next_id + 1.0
+    pc_var_id = next_id
+    next_id = next_id + 1.0
+  end
+  // Store in module-level vars for emission helper functions
+  ir_pc_ptr_float_id = pc_ptr_float_id
+  ir_pc_var_id = pc_var_id
+
+  // Scan for atomic operations and allocate constants
+  let mut uses_atomics = 0.0
+  let mut uses_local_id = 0.0
+  let mut uses_workgroup_id = 0.0
+  let mut uses_shared = 0.0
+  let mut uses_barrier = 0.0
+  let mut uses_uint_bufs = 0.0
+  for i in range(0.0, num_insts)
+    if ir_inst_op[i] == IR_OP_ATOMIC_IADD
+      uses_atomics = 1.0
+    end
+    if ir_inst_op[i] == IR_OP_LOAD_LOCAL_ID
+      uses_local_id = 1.0
+    end
+    if ir_inst_op[i] == IR_OP_LOAD_WORKGROUP_ID
+      uses_workgroup_id = 1.0
+    end
+    if ir_inst_op[i] == IR_OP_SHARED_LOAD || ir_inst_op[i] == IR_OP_SHARED_STORE
+      uses_shared = 1.0
+    end
+    if ir_inst_op[i] == IR_OP_BARRIER
+      uses_barrier = 1.0
+    end
+    if ir_inst_op[i] == IR_OP_BUF_LOAD_U || ir_inst_op[i] == IR_OP_BUF_STORE_U
+      uses_uint_bufs = 1.0
+    end
+    if ir_inst_op[i] == IR_OP_BUF_ATOMIC_LOAD || ir_inst_op[i] == IR_OP_BUF_ATOMIC_STORE
+      uses_uint_bufs = 1.0
+      uses_atomics = 1.0
+    end
+    if ir_inst_op[i] == IR_OP_BUF_ATOMIC_IADD2
+      uses_uint_bufs = 1.0
+      uses_atomics = 1.0
+    end
+    if ir_inst_op[i] == IR_OP_BUF_ATOMIC_AND
+      uses_uint_bufs = 1.0
+      uses_atomics = 1.0
+    end
+  end
+  // Also check ir_uint_bindings
+  if len(ir_uint_bindings) > 0.0
+    uses_uint_bufs = 1.0
+  end
+  // Shared memory from state variable
+  if ir_shared_size > 0.0
+    uses_shared = 1.0
+  end
+  // Barrier needs workgroup scope constant
+  if uses_barrier > 0.0 || uses_shared > 0.0
+    uses_barrier = 1.0
+  end
+
+  let mut scope_device_id = 0.0
+  let mut sem_acqrel_id = 0.0
+  let mut sem_acquire_id = 0.0
+  let mut sem_release_id = 0.0
+  if uses_atomics > 0.0
+    scope_device_id = next_id
+    next_id = next_id + 1.0
+    sem_acqrel_id = next_id
+    next_id = next_id + 1.0
+    sem_acquire_id = next_id
+    next_id = next_id + 1.0
+    sem_release_id = next_id
+    next_id = next_id + 1.0
+  end
+
+  // Workgroup barrier constants
+  let mut scope_wg_id = 0.0
+  let mut sem_wg_id = 0.0
+  if uses_barrier > 0.0
+    scope_wg_id = next_id
+    next_id = next_id + 1.0
+    sem_wg_id = next_id
+    next_id = next_id + 1.0
+  end
+
+  // Uint buffer types (RuntimeArray<uint>, struct, pointer)
+  let mut rt_array_uint_id = 0.0
+  let mut struct_uint_id = 0.0
+  let mut ptr_sb_struct_uint_id = 0.0
+  if uses_uint_bufs > 0.0
+    rt_array_uint_id = next_id
+    next_id = next_id + 1.0
+    struct_uint_id = next_id
+    next_id = next_id + 1.0
+    ptr_sb_struct_uint_id = next_id
+    next_id = next_id + 1.0
+  end
+
+  // Local/workgroup ID variable IDs
+  let mut var_local_id = 0.0
+  let mut var_wg_id = 0.0
+  if uses_local_id > 0.0
+    var_local_id = next_id
+    next_id = next_id + 1.0
+  end
+  if uses_workgroup_id > 0.0
+    var_wg_id = next_id
+    next_id = next_id + 1.0
+  end
+
+  // Shared memory type and variable IDs
+  let mut shared_const_n_id = 0.0
+  let mut shared_type_arr_id = 0.0
+  let mut shared_ptr_wg_arr_id = 0.0
+  let mut shared_ptr_wg_f32_id = 0.0
+  let mut shared_var_id = 0.0
+  if uses_shared > 0.0
+    // Allocate dedicated ID for shared size constant (emitted before OpTypeArray)
+    // Do NOT add to uconst_vals/uconst_ids to avoid double emission
+    shared_const_n_id = next_id
+    next_id = next_id + 1.0
+    shared_type_arr_id = next_id
+    next_id = next_id + 1.0
+    shared_ptr_wg_arr_id = next_id
+    next_id = next_id + 1.0
+    shared_ptr_wg_f32_id = next_id
+    next_id = next_id + 1.0
+    shared_var_id = next_id
+    next_id = next_id + 1.0
+  end
+
+  // Uint binding variable IDs (separate from float extra_input_ids)
+  // Each uint binding gets its own variable with ptr_sb_struct_uint type
+  let mut uint_bind_var_ids = []
+  let mut uint_bind_nums = []
+  for ubi in range(0.0, len(ir_uint_bindings))
+    push(uint_bind_var_ids, next_id)
+    push(uint_bind_nums, ir_uint_bindings[ubi])
+    next_id = next_id + 1.0
+  end
+
+  // Allocate extra input variable IDs for multi-input (binding 1..input_count-1)
+  // Binding 0 uses fixed SPIR_ID_INPUT; extras get dynamic IDs
+  // Skip uint bindings — they have their own variables in uint_bind_var_ids
+  let mut extra_input_ids = []
+  if ir_input_count > 1.0
+    for ei in range(1.0, ir_input_count)
+      // Check if this binding is a uint binding
+      let mut is_uint = 0.0
+      for ubi in range(0.0, len(ir_uint_bindings))
+        if ir_uint_bindings[ubi] == ei
+          is_uint = 1.0
+        end
+      end
+      if is_uint < 1.0
+        push(extra_input_ids, next_id)
+        next_id = next_id + 1.0
+      else
+        // Placeholder — uint bindings use uint_bind_var_ids
+        push(extra_input_ids, 0.0)
+      end
+    end
+  end
+
+  // Assign block label IDs
+  let mut bb_spirv_id = []
+  for i in range(0.0, num_blocks)
+    push(bb_spirv_id, next_id)
+    next_id = next_id + 1.0
+  end
+
+  // Assign instruction result IDs (skip stores and consts — consts use shared IDs)
+  let mut inst_spirv_id = []
+  for i in range(0.0, num_insts)
+    if ir_inst_op[i] == IR_OP_STORE_OUTPUT
+      // Store needs an access chain ID — allocate one
+      push(inst_spirv_id, next_id)
+      next_id = next_id + 1.0
+    elif ir_inst_op[i] == IR_OP_CONST_F
+      // Look up the shared constant ID
+      let val = ir_const_fval[i]
+      let mut cid = 0.0
+      for j in range(0.0, len(fconst_vals))
+        if float_byte(fconst_vals[j], 0.0) == float_byte(val, 0.0)
+          if float_byte(fconst_vals[j], 1.0) == float_byte(val, 1.0)
+            if float_byte(fconst_vals[j], 2.0) == float_byte(val, 2.0)
+              if float_byte(fconst_vals[j], 3.0) == float_byte(val, 3.0)
+                cid = fconst_ids[j]
+              end
+            end
+          end
+        end
+      end
+      push(inst_spirv_id, cid)
+    elif ir_inst_op[i] == IR_OP_CONST_U
+      let val = ir_const_uval[i]
+      let mut cid = 0.0
+      for j in range(0.0, len(uconst_vals))
+        if uconst_vals[j] == val
+          cid = uconst_ids[j]
+        end
+      end
+      push(inst_spirv_id, cid)
+    elif ir_inst_op[i] == IR_OP_LOAD_INPUT
+      // Special: uses fixed ID for val_load
+      push(inst_spirv_id, SPIR_ID_VAL_LOAD)
+    elif ir_inst_op[i] == IR_OP_LOAD_GID
+      // Special: uses fixed ID for gid_load
+      push(inst_spirv_id, SPIR_ID_GID_LOAD)
+    elif ir_inst_op[i] == IR_OP_LOAD_INPUT_AT
+      // Need 2 IDs: access chain + load (load result is what others reference)
+      push(inst_spirv_id, next_id + 1.0)
+      next_id = next_id + 2.0
+    elif ir_inst_op[i] == IR_OP_PUSH_CONST
+      // Need 2 IDs: access chain + load (load result is what others reference)
+      push(inst_spirv_id, next_id + 1.0)
+      next_id = next_id + 2.0
+    // Phase 117: new opcode ID allocation
+    elif ir_inst_op[i] == IR_OP_LOAD_LOCAL_ID || ir_inst_op[i] == IR_OP_LOAD_WORKGROUP_ID
+      // Need 2 IDs: access chain + load (load result is what others reference)
+      push(inst_spirv_id, next_id + 1.0)
+      next_id = next_id + 2.0
+    elif ir_inst_op[i] == IR_OP_SHARED_LOAD
+      // Need 2 IDs: access chain + load
+      push(inst_spirv_id, next_id + 1.0)
+      next_id = next_id + 2.0
+    elif ir_inst_op[i] == IR_OP_SHARED_STORE
+      // Need 1 ID: access chain (store has no result)
+      push(inst_spirv_id, next_id)
+      next_id = next_id + 1.0
+    elif ir_inst_op[i] == IR_OP_STORE_OUTPUT_AT
+      // Need 1 ID: access chain
+      push(inst_spirv_id, next_id)
+      next_id = next_id + 1.0
+    elif ir_inst_op[i] == IR_OP_LOAD_OUTPUT_AT
+      // Need 2 IDs: access chain + load
+      push(inst_spirv_id, next_id + 1.0)
+      next_id = next_id + 2.0
+    elif ir_inst_op[i] == IR_OP_BARRIER
+      // No result, but allocate placeholder for array alignment
+      push(inst_spirv_id, 0.0)
+    elif ir_inst_op[i] == IR_OP_BUF_LOAD_U
+      // Need 2 IDs: access chain + load
+      push(inst_spirv_id, next_id + 1.0)
+      next_id = next_id + 2.0
+    elif ir_inst_op[i] == IR_OP_BUF_STORE_U || ir_inst_op[i] == IR_OP_BUF_STORE_F
+      // Need 1 ID: access chain
+      push(inst_spirv_id, next_id)
+      next_id = next_id + 1.0
+    elif ir_inst_op[i] == IR_OP_BUF_ATOMIC_LOAD
+      // Need 2 IDs: access chain + atomic load result
+      push(inst_spirv_id, next_id + 1.0)
+      next_id = next_id + 2.0
+    elif ir_inst_op[i] == IR_OP_BUF_ATOMIC_STORE
+      // Need 1 ID: access chain
+      push(inst_spirv_id, next_id)
+      next_id = next_id + 1.0
+    elif ir_inst_op[i] == IR_OP_BUF_ATOMIC_IADD2
+      // Need 2 IDs: access chain + atomic result
+      push(inst_spirv_id, next_id + 1.0)
+      next_id = next_id + 2.0
+    elif ir_inst_op[i] == IR_OP_BUF_ATOMIC_AND
+      // Need 2 IDs: access chain + atomic result
+      push(inst_spirv_id, next_id + 1.0)
+      next_id = next_id + 2.0
+    else
+      push(inst_spirv_id, next_id)
+      next_id = next_id + 1.0
+    end
+  end
+
+  let bound = next_id
+
+  // Phase 2: Emit SPIR-V binary
+  // Note: ir_buf starts empty from global declaration; single-use per session
+
+  // === Header ===
+  // Magic
+  push(ir_buf, 3.0)
+  push(ir_buf, 2.0)
+  push(ir_buf, 35.0)
+  push(ir_buf, 7.0)
+  // Version 1.4
+  let _w = 66560.0
+  emit_word(_w)
+  // Generator (0)
+  emit_word(0.0)
+  // Bound
+  emit_word(bound)
+  // Schema
+  emit_word(0.0)
+
+  // === Capability ===
+  emit_op(2.0, 17.0)
+  emit_word(1.0)          // Shader
+  if ir_uses_uint64[0] > 0.5
+    emit_op(2.0, 17.0)
+    emit_word(11.0)       // Int64
+  end
+
+  // === GLSL Import ===
+  // OpExtInstImport %18 "GLSL.std.450"
+  emit_op(6.0, SPIRV_OP_EXT_INST_IMPORT)
+  emit_word(SPIR_ID_GLSL_EXT)
+  // "GLSL.std.450\0" = 13 chars + null + 2 pad = 16 bytes = 4 words
+  push(ir_buf, 71.0)
+  push(ir_buf, 76.0)
+  push(ir_buf, 83.0)
+  push(ir_buf, 76.0)
+  push(ir_buf, 46.0)
+  push(ir_buf, 115.0)
+  push(ir_buf, 116.0)
+  push(ir_buf, 100.0)
+  push(ir_buf, 46.0)
+  push(ir_buf, 52.0)
+  push(ir_buf, 53.0)
+  push(ir_buf, 48.0)
+  push(ir_buf, 0.0)
+  push(ir_buf, 0.0)
+  push(ir_buf, 0.0)
+  push(ir_buf, 0.0)
+
+  // === Memory Model ===
+  emit_op(3.0, 14.0)
+  emit_word(0.0)
+  emit_word(1.0)
+
+  // === Entry Point ===
+  // OpEntryPoint GLCompute %main "main" %gid %input %output [%extras] [%pc_var]
+  //   + [%local_id] [%wg_id] [%shared] [%uint_bindings]
+  let extra_count = len(extra_input_ids)
+  // Count non-zero extras (uint bindings are placeholders with value 0)
+  let mut extra_float_count = 0.0
+  for ei in range(0.0, extra_count)
+    if extra_input_ids[ei] > 0.0
+      extra_float_count = extra_float_count + 1.0
+    end
+  end
+  let mut ep_wc = 8.0 + extra_float_count
+  if pc_count > 0.0
+    ep_wc = ep_wc + 1.0
+  end
+  if uses_local_id > 0.0
+    ep_wc = ep_wc + 1.0
+  end
+  if uses_workgroup_id > 0.0
+    ep_wc = ep_wc + 1.0
+  end
+  if uses_shared > 0.0
+    ep_wc = ep_wc + 1.0
+  end
+  ep_wc = ep_wc + len(uint_bind_var_ids)
+  emit_op(ep_wc, 15.0)
+  emit_word(5.0)
+  emit_word(SPIR_ID_FN_MAIN)
+  // "main" + null + padding
+  push(ir_buf, 109.0)
+  push(ir_buf, 97.0)
+  push(ir_buf, 105.0)
+  push(ir_buf, 110.0)
+  push(ir_buf, 0.0)
+  push(ir_buf, 0.0)
+  push(ir_buf, 0.0)
+  push(ir_buf, 0.0)
+  emit_word(SPIR_ID_GID_VAR)
+  emit_word(SPIR_ID_INPUT)
+  // Extra input bindings in interface list (skip uint bindings — they're separate)
+  for ei in range(0.0, extra_count)
+    let eid = extra_input_ids[ei]
+    if eid > 0.0
+      emit_word(eid)
+    end
+  end
+  emit_word(SPIR_ID_OUTPUT)
+  if pc_count > 0.0
+    emit_word(pc_var_id)
+  end
+  if uses_local_id > 0.0
+    emit_word(var_local_id)
+  end
+  if uses_workgroup_id > 0.0
+    emit_word(var_wg_id)
+  end
+  if uses_shared > 0.0
+    emit_word(shared_var_id)
+  end
+  for ubi in range(0.0, len(uint_bind_var_ids))
+    emit_word(uint_bind_var_ids[ubi])
+  end
+
+  // === Execution Mode ===
+  emit_op(6.0, 16.0)
+  emit_word(SPIR_ID_FN_MAIN)
+  emit_word(17.0)
+  emit_word(ir_workgroup_size)
+  emit_word(1.0)
+  emit_word(1.0)
+
+  // === Annotations ===
+  // BuiltIn GlobalInvocationId
+  emit_op(4.0, 71.0)
+  emit_word(SPIR_ID_GID_VAR)
+  emit_word(11.0)
+  emit_word(28.0)
+  // Block decoration on struct
+  emit_op(3.0, 71.0)
+  emit_word(SPIR_ID_STRUCT)
+  emit_word(2.0)
+  // MemberDecorate struct 0 Offset 0
+  emit_op(5.0, 72.0)
+  emit_word(SPIR_ID_STRUCT)
+  emit_word(0.0)
+  emit_word(35.0)
+  emit_word(0.0)
+  // ArrayStride 4
+  emit_op(4.0, 71.0)
+  emit_word(SPIR_ID_RT_ARRAY)
+  emit_word(6.0)
+  emit_word(4.0)
+  // DescriptorSet 0 for input (binding 0)
+  emit_op(4.0, 71.0)
+  emit_word(SPIR_ID_INPUT)
+  emit_word(34.0)
+  emit_word(0.0)
+  // Binding 0 for input
+  emit_op(4.0, 71.0)
+  emit_word(SPIR_ID_INPUT)
+  emit_word(33.0)
+  emit_word(0.0)
+  // Extra input bindings (1..input_count-1), skip uint bindings
+  for ei in range(0.0, extra_count)
+    let bind_num = ei + 1.0
+    let eid = extra_input_ids[ei]
+    if eid > 0.0
+      // DescriptorSet 0
+      emit_op(4.0, 71.0)
+      emit_word(eid)
+      emit_word(34.0)
+      emit_word(0.0)
+      // Binding K
+      emit_op(4.0, 71.0)
+      emit_word(eid)
+      emit_word(33.0)
+      emit_word(bind_num)
+    end
+  end
+  // DescriptorSet 0 for output
+  emit_op(4.0, 71.0)
+  emit_word(SPIR_ID_OUTPUT)
+  emit_word(34.0)
+  emit_word(0.0)
+  // Binding N for output (shifts with extra inputs)
+  emit_op(4.0, 71.0)
+  emit_word(SPIR_ID_OUTPUT)
+  emit_word(33.0)
+  emit_word(ir_input_count)
+
+  // Phase 117: BuiltIn decorations for local/workgroup ID
+  if uses_local_id > 0.0
+    // Decorate var_local_id BuiltIn LocalInvocationId (27)
+    emit_op(4.0, 71.0)
+    emit_word(var_local_id)
+    emit_word(11.0)
+    emit_word(27.0)
+  end
+  if uses_workgroup_id > 0.0
+    // Decorate var_wg_id BuiltIn WorkgroupId (26)
+    emit_op(4.0, 71.0)
+    emit_word(var_wg_id)
+    emit_word(11.0)
+    emit_word(26.0)
+  end
+
+  // Phase 117: Uint buffer type decorations
+  if uses_uint_bufs > 0.0
+    // ArrayStride 4 on RuntimeArray<uint>
+    emit_op(4.0, 71.0)
+    emit_word(rt_array_uint_id)
+    emit_word(6.0)
+    emit_word(4.0)
+    // Block decoration on uint struct
+    emit_op(3.0, 71.0)
+    emit_word(struct_uint_id)
+    emit_word(2.0)
+    // MemberDecorate struct_uint 0 Offset 0
+    emit_op(5.0, 72.0)
+    emit_word(struct_uint_id)
+    emit_word(0.0)
+    emit_word(35.0)
+    emit_word(0.0)
+    // Decorate each uint binding variable
+    for ubi in range(0.0, len(uint_bind_var_ids))
+      // DescriptorSet 0
+      emit_op(4.0, 71.0)
+      emit_word(uint_bind_var_ids[ubi])
+      emit_word(34.0)
+      emit_word(0.0)
+      // Binding K
+      emit_op(4.0, 71.0)
+      emit_word(uint_bind_var_ids[ubi])
+      emit_word(33.0)
+      emit_word(uint_bind_nums[ubi])
+    end
+  end
+
+  // Phase 117: Shared memory array stride decoration
+  if uses_shared > 0.0
+    // ArrayStride 4 on shared array type
+    emit_op(4.0, 71.0)
+    emit_word(shared_type_arr_id)
+    emit_word(6.0)
+    emit_word(4.0)
+  end
+
+  // Push constant decorations
+  if pc_count > 0.0
+    // Block decoration on PC struct
+    emit_op(3.0, 71.0)
+    emit_word(pc_struct_id)
+    emit_word(2.0)
+    // MemberDecorate Offset for each member (4 bytes per float)
+    for mi in range(0.0, pc_count)
+      emit_op(5.0, 72.0)
+      emit_word(pc_struct_id)
+      emit_word(mi)
+      emit_word(35.0)
+      emit_word(mi * 4.0)
+    end
+  end
+
+  // === Types ===
+  // %1 void
+  emit_op(2.0, 19.0)
+  emit_word(SPIR_ID_VOID)
+  // %2 fn_type
+  emit_op(3.0, 33.0)
+  emit_word(SPIR_ID_FN_TYPE)
+  emit_word(SPIR_ID_VOID)
+  // %4 float
+  emit_op(3.0, 22.0)
+  emit_word(SPIR_ID_FLOAT)
+  emit_word(32.0)
+  // %5 uint
+  emit_op(4.0, 21.0)
+  emit_word(SPIR_ID_UINT)
+  emit_word(32.0)
+  emit_word(0.0)
+  // uint64 (conditional — only emitted when ir_uses_uint64)
+  if ir_uses_uint64[0] > 0.5
+    emit_op(4.0, 21.0)           // OpTypeInt
+    emit_word(ir_em_uint64_type_id)
+    emit_word(64.0)              // 64-bit width
+    emit_word(0.0)               // unsigned
+  end
+  // %6 uvec3
+  emit_op(4.0, 23.0)
+  emit_word(SPIR_ID_UVEC3)
+  emit_word(SPIR_ID_UINT)
+  emit_word(3.0)
+  // %7 ptr_in_uvec3
+  emit_op(4.0, 32.0)
+  emit_word(SPIR_ID_PTR_IN_UVEC3)
+  emit_word(1.0)
+  emit_word(SPIR_ID_UVEC3)
+  // %9 rt_array
+  emit_op(3.0, 29.0)
+  emit_word(SPIR_ID_RT_ARRAY)
+  emit_word(SPIR_ID_FLOAT)
+  // %10 struct
+  emit_op(3.0, 30.0)
+  emit_word(SPIR_ID_STRUCT)
+  emit_word(SPIR_ID_RT_ARRAY)
+  // %11 ptr_sb_struct
+  emit_op(4.0, 32.0)
+  emit_word(SPIR_ID_PTR_SB_STRUCT)
+  emit_word(12.0)
+  emit_word(SPIR_ID_STRUCT)
+  // %15 ptr_in_uint
+  emit_op(4.0, 32.0)
+  emit_word(SPIR_ID_PTR_IN_UINT)
+  emit_word(1.0)
+  emit_word(SPIR_ID_UINT)
+  // %17 ptr_sb_float
+  emit_op(4.0, 32.0)
+  emit_word(SPIR_ID_PTR_SB_FLOAT)
+  emit_word(12.0)
+  emit_word(SPIR_ID_FLOAT)
+  // %23 bool
+  emit_op(2.0, 20.0)
+  emit_word(SPIR_ID_BOOL)
+  // %24 ptr_sb_uint (for atomics)
+  emit_op(4.0, 32.0)
+  emit_word(SPIR_ID_PTR_SB_UINT)
+  emit_word(12.0)
+  emit_word(SPIR_ID_UINT)
+
+  // Push constant types
+  if pc_count > 0.0
+    // OpTypeStruct { float, float, ... } (pc_count members)
+    let pc_wc = 2.0 + pc_count
+    emit_op(pc_wc, 30.0)
+    emit_word(pc_struct_id)
+    for mi in range(0.0, pc_count)
+      emit_word(SPIR_ID_FLOAT)
+    end
+    // OpTypePointer PushConstant pc_struct
+    emit_op(4.0, 32.0)
+    emit_word(pc_ptr_struct_id)
+    emit_word(9.0)
+    emit_word(pc_struct_id)
+    // OpTypePointer PushConstant float
+    emit_op(4.0, 32.0)
+    emit_word(pc_ptr_float_id)
+    emit_word(9.0)
+    emit_word(SPIR_ID_FLOAT)
+  end
+
+  // Phase 117: Uint buffer types
+  if uses_uint_bufs > 0.0
+    // OpTypeRuntimeArray %uint
+    emit_op(3.0, 29.0)
+    emit_word(rt_array_uint_id)
+    emit_word(SPIR_ID_UINT)
+    // OpTypeStruct { RuntimeArray<uint> }
+    emit_op(3.0, 30.0)
+    emit_word(struct_uint_id)
+    emit_word(rt_array_uint_id)
+    // OpTypePointer StorageBuffer struct_uint
+    emit_op(4.0, 32.0)
+    emit_word(ptr_sb_struct_uint_id)
+    emit_word(12.0)
+    emit_word(struct_uint_id)
+  end
+
+  // Phase 117: Shared memory types
+  if uses_shared > 0.0
+    // Emit the shared size constant BEFORE OpTypeArray (it requires a prior definition)
+    // OpConstant %uint shared_size
+    emit_op(4.0, SPIRV_OP_CONST)
+    emit_word(SPIR_ID_UINT)
+    emit_word(shared_const_n_id)
+    emit_word(ir_shared_size)
+    // OpTypeArray %float %const_N
+    emit_op(4.0, 28.0)
+    emit_word(shared_type_arr_id)
+    emit_word(SPIR_ID_FLOAT)
+    emit_word(shared_const_n_id)
+    // OpTypePointer Workgroup array
+    emit_op(4.0, 32.0)
+    emit_word(shared_ptr_wg_arr_id)
+    emit_word(4.0)
+    emit_word(shared_type_arr_id)
+    // OpTypePointer Workgroup float
+    emit_op(4.0, 32.0)
+    emit_word(shared_ptr_wg_f32_id)
+    emit_word(4.0)
+    emit_word(SPIR_ID_FLOAT)
+  end
+
+  // === Constants ===
+  // uint 0 (fixed)
+  emit_op(4.0, SPIRV_OP_CONST)
+  emit_word(SPIR_ID_UINT)
+  emit_word(SPIR_ID_UINT_0)
+  emit_word(0.0)
+
+  // Float constants
+  for i in range(0.0, len(fconst_vals))
+    emit_op(4.0, SPIRV_OP_CONST)
+    emit_word(SPIR_ID_FLOAT)
+    emit_word(fconst_ids[i])
+    let fv = fconst_vals[i]
+    push(ir_buf, float_byte(fv, 0.0))
+    push(ir_buf, float_byte(fv, 1.0))
+    push(ir_buf, float_byte(fv, 2.0))
+    push(ir_buf, float_byte(fv, 3.0))
+  end
+
+  // Uint constants
+  for i in range(0.0, len(uconst_vals))
+    emit_op(4.0, SPIRV_OP_CONST)
+    emit_word(SPIR_ID_UINT)
+    emit_word(uconst_ids[i])
+    emit_word(uconst_vals[i])
+  end
+
+  // Atomic operation constants (if used)
+  if uses_atomics > 0.0
+    // %scope_device = OpConstant %uint 1 (Device scope)
+    emit_op(4.0, SPIRV_OP_CONST)
+    emit_word(SPIR_ID_UINT)
+    emit_word(scope_device_id)
+    emit_word(1.0)
+    // %sem_acqrel = OpConstant %uint 72 (AcquireRelease | UniformMemory = 0x48)
+    emit_op(4.0, SPIRV_OP_CONST)
+    emit_word(SPIR_ID_UINT)
+    emit_word(sem_acqrel_id)
+    emit_word(72.0)
+    // %sem_acquire = OpConstant %uint 66 (Acquire | UniformMemory = 0x42)
+    emit_op(4.0, SPIRV_OP_CONST)
+    emit_word(SPIR_ID_UINT)
+    emit_word(sem_acquire_id)
+    emit_word(66.0)
+    // %sem_release = OpConstant %uint 68 (Release | UniformMemory = 0x44)
+    emit_op(4.0, SPIRV_OP_CONST)
+    emit_word(SPIR_ID_UINT)
+    emit_word(sem_release_id)
+    emit_word(68.0)
+  end
+
+  // Barrier constants (workgroup scope + workgroup memory semantics)
+  if uses_barrier > 0.0
+    // %scope_wg = OpConstant %uint 2 (Workgroup)
+    emit_op(4.0, SPIRV_OP_CONST)
+    emit_word(SPIR_ID_UINT)
+    emit_word(scope_wg_id)
+    emit_word(2.0)
+    // %sem_wg = OpConstant %uint 0x148 (AcquireRelease=0x8 | WorkgroupMemory=0x100 = 264)
+    emit_op(4.0, SPIRV_OP_CONST)
+    emit_word(SPIR_ID_UINT)
+    emit_word(sem_wg_id)
+    emit_word(264.0)
+  end
+
+  // === Variables ===
+  // %8 gid_var
+  emit_op(4.0, 59.0)
+  emit_word(SPIR_ID_PTR_IN_UVEC3)
+  emit_word(SPIR_ID_GID_VAR)
+  emit_word(1.0)
+  // %12 input (binding 0)
+  emit_op(4.0, 59.0)
+  emit_word(SPIR_ID_PTR_SB_STRUCT)
+  emit_word(SPIR_ID_INPUT)
+  emit_word(12.0)
+  // Extra input variables (same float struct type, skip uint bindings)
+  for ei in range(0.0, extra_count)
+    let eid = extra_input_ids[ei]
+    if eid > 0.0
+      emit_op(4.0, 59.0)
+      emit_word(SPIR_ID_PTR_SB_STRUCT)
+      emit_word(eid)
+      emit_word(12.0)
+    end
+  end
+  // output (binding = input_count)
+  emit_op(4.0, 59.0)
+  emit_word(SPIR_ID_PTR_SB_STRUCT)
+  emit_word(SPIR_ID_OUTPUT)
+  emit_word(12.0)
+
+  // Push constant variable
+  if pc_count > 0.0
+    emit_op(4.0, 59.0)
+    emit_word(pc_ptr_struct_id)
+    emit_word(pc_var_id)
+    emit_word(9.0)
+  end
+
+  // Phase 117: uint binding variables
+  for ubi in range(0.0, len(uint_bind_var_ids))
+    emit_op(4.0, 59.0)
+    emit_word(ptr_sb_struct_uint_id)
+    emit_word(uint_bind_var_ids[ubi])
+    emit_word(12.0)
+  end
+
+  // Phase 117: local_id and workgroup_id input variables
+  if uses_local_id > 0.0
+    emit_op(4.0, 59.0)
+    emit_word(SPIR_ID_PTR_IN_UVEC3)
+    emit_word(var_local_id)
+    emit_word(1.0)
+  end
+  if uses_workgroup_id > 0.0
+    emit_op(4.0, 59.0)
+    emit_word(SPIR_ID_PTR_IN_UVEC3)
+    emit_word(var_wg_id)
+    emit_word(1.0)
+  end
+
+  // Phase 117: shared memory variable
+  if uses_shared > 0.0
+    emit_op(4.0, 59.0)
+    emit_word(shared_ptr_wg_arr_id)
+    emit_word(shared_var_id)
+    emit_word(4.0)
+  end
+
+  // === Function ===
+  emit_op(5.0, 54.0)
+  emit_word(SPIR_ID_VOID)
+  emit_word(SPIR_ID_FN_MAIN)
+  emit_word(0.0)
+  emit_word(SPIR_ID_FN_TYPE)
+
+  // === Entry block (fixed preamble) ===
+  // First block is always the entry — emit gid load + input load
+  emit_op(2.0, SPIRV_OP_LABEL)
+  emit_word(bb_spirv_id[0.0])
+
+  // %19 = AccessChain ptr_in_uint gid_var uint_0
+  emit_op(5.0, SPIRV_OP_ACCESS_CHAIN)
+  emit_word(SPIR_ID_PTR_IN_UINT)
+  emit_word(SPIR_ID_GID_CHAIN)
+  emit_word(SPIR_ID_GID_VAR)
+  emit_word(SPIR_ID_UINT_0)
+  // %20 = Load uint gid_chain
+  emit_op(4.0, SPIRV_OP_LOAD)
+  emit_word(SPIR_ID_UINT)
+  emit_word(SPIR_ID_GID_LOAD)
+  emit_word(SPIR_ID_GID_CHAIN)
+  // %21 = AccessChain ptr_sb_float input uint_0 gid
+  emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+  emit_word(SPIR_ID_PTR_SB_FLOAT)
+  emit_word(SPIR_ID_INPUT_CHAIN)
+  emit_word(SPIR_ID_INPUT)
+  emit_word(SPIR_ID_UINT_0)
+  emit_word(SPIR_ID_GID_LOAD)
+  // %22 = Load float input_chain
+  emit_op(4.0, SPIRV_OP_LOAD)
+  emit_word(SPIR_ID_FLOAT)
+  emit_word(SPIR_ID_VAL_LOAD)
+  emit_word(SPIR_ID_INPUT_CHAIN)
+
+  // Phase 117: copy emission context to module-level vars for _ir_emit_block_insts
+  ir_em_var_local_id = var_local_id
+  ir_em_var_wg_id = var_wg_id
+  ir_em_shared_var_id = shared_var_id
+  ir_em_shared_ptr_wg_f32_id = shared_ptr_wg_f32_id
+  ir_em_scope_wg_id = scope_wg_id
+  ir_em_sem_wg_id = sem_wg_id
+  ir_em_scope_device_id = scope_device_id
+  ir_em_sem_acqrel_id = sem_acqrel_id
+  ir_em_sem_acquire_id = sem_acquire_id
+  ir_em_sem_release_id = sem_release_id
+  ir_em_ptr_sb_struct_uint_id = ptr_sb_struct_uint_id
+  // Copy arrays
+  while len(ir_em_uint_bind_var_ids) > 0.0
+    pop(ir_em_uint_bind_var_ids)
+  end
+  for ubi in range(0.0, len(uint_bind_var_ids))
+    push(ir_em_uint_bind_var_ids, uint_bind_var_ids[ubi])
+  end
+  while len(ir_em_uint_bind_nums) > 0.0
+    pop(ir_em_uint_bind_nums)
+  end
+  for ubi in range(0.0, len(uint_bind_nums))
+    push(ir_em_uint_bind_nums, uint_bind_nums[ubi])
+  end
+  while len(ir_em_extra_input_ids) > 0.0
+    pop(ir_em_extra_input_ids)
+  end
+  for ei in range(0.0, len(extra_input_ids))
+    push(ir_em_extra_input_ids, extra_input_ids[ei])
+  end
+
+  // Emit instructions for entry block (block 0)
+  _ir_emit_block_insts(0.0, inst_spirv_id, bb_spirv_id)
+  _ir_emit_block_term(0.0, inst_spirv_id, bb_spirv_id)
+
+  // Emit remaining blocks
+  for bi in range(1.0, num_blocks)
+    emit_op(2.0, SPIRV_OP_LABEL)
+    emit_word(bb_spirv_id[bi])
+    _ir_emit_block_insts(bi, inst_spirv_id, bb_spirv_id)
+    _ir_emit_block_term(bi, inst_spirv_id, bb_spirv_id)
+  end
+
+  // Function end
+  emit_op(1.0, SPIRV_OP_FN_END)
+
+  // Write
+  let byte_count = len(ir_buf)
+  let word_count = byte_count / 4.0
+  print("IR SPIR-V emitted: {word_count} words ({byte_count} bytes), bound={bound}")
+  write_bytes(out_path, ir_buf)
+  print("Written to {out_path}")
+  return 0.0
+end
+
+// Return a copy of the SPIR-V byte buffer after emission.
+// Each element is one byte (0-255). Use with vm_dispatch_mem().
+fn ir_get_buf()
+  return ir_buf
+end
+
+// Helper: get SPIR-V type ID for an IR type tag
+fn _ir_type_to_spirv(typ)
+  if typ == IR_TYPE_FLOAT
+    return SPIR_ID_FLOAT
+  elif typ == IR_TYPE_UINT
+    return SPIR_ID_UINT
+  elif typ == IR_TYPE_UINT64
+    return ir_em_uint64_type_id
+  elif typ == IR_TYPE_BOOL
+    return SPIR_ID_BOOL
+  end
+  return SPIR_ID_VOID
+end
+
+// Helper: get SPIR-V ID for an instruction's result
+fn _ir_get_spirv_id(inst_idx, inst_spirv_id)
+  return inst_spirv_id[inst_idx]
+end
+
+// Emit all instructions for a block (excluding terminators)
+fn _ir_emit_block_insts(block_idx, inst_spirv_id, bb_spirv_id)
+  let num_insts = len(ir_inst_op)
+  for i in range(0.0, num_insts)
+    if ir_inst_block[i] == block_idx
+      let op = ir_inst_op[i]
+      let typ = ir_inst_type[i]
+      let sid = inst_spirv_id[i]
+      let typ_id = _ir_type_to_spirv(typ)
+
+      // Skip constants and load_input (handled in preamble/constant section)
+      if op == IR_OP_CONST_F
+        // already emitted in constants section
+      elif op == IR_OP_CONST_U
+        // already emitted in constants section
+      elif op == IR_OP_LOAD_INPUT
+        // already emitted in entry block preamble
+      elif op == IR_OP_LOAD_INPUT_AT
+        // Multi-input: AccessChain + Load from extra binding at arbitrary index
+        // arg1 = binding number (float literal), arg2 = index (uint SSA value)
+        let bind_f = ir_inst_arg1[i]
+        let idx_inst = ir_inst_arg2[i]
+        let idx_id = inst_spirv_id[idx_inst]
+        // Determine input variable ID for this binding
+        let mut input_var_id = SPIR_ID_INPUT
+        if bind_f > 0.0
+          input_var_id = extra_input_ids[int(bind_f - 1.0)]
+        end
+        // sid = load result ID; access chain ID = sid - 1 (pre-allocated pair)
+        let ac_id = sid - 1.0
+        // OpAccessChain %ptr_sb_float %ac %input_var %uint_0 %idx
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_FLOAT)
+        emit_word(ac_id)
+        emit_word(input_var_id)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(idx_id)
+        // OpLoad %float %result %ac
+        emit_op(4.0, SPIRV_OP_LOAD)
+        emit_word(SPIR_ID_FLOAT)
+        emit_word(sid)
+        emit_word(ac_id)
+      elif op == IR_OP_STORE_OUTPUT
+        // AccessChain + Store — sid holds the pre-allocated access chain ID
+        let val_id = inst_spirv_id[ir_inst_arg1[i]]
+        let oc_id = sid
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_FLOAT)
+        emit_word(oc_id)
+        emit_word(SPIR_ID_OUTPUT)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(SPIR_ID_GID_LOAD)
+        emit_op(3.0, SPIRV_OP_STORE)
+        emit_word(oc_id)
+        emit_word(val_id)
+
+      elif op == IR_OP_PHI
+        // Emit OpPhi with variable operands
+        let vals_str = ir_phi_values[i]
+        let pars_str = ir_phi_parents[i]
+        let vals = split(vals_str, SEP)
+        let pars = split(pars_str, SEP)
+        let n_pairs = len(vals)
+        let wc = 3.0 + n_pairs * 2.0
+        emit_op(wc, SPIRV_OP_PHI)
+        emit_word(typ_id)
+        emit_word(sid)
+        for pi in range(0.0, n_pairs)
+          let vi = float(vals[pi])
+          let pbi = float(pars[pi])
+          emit_word(inst_spirv_id[vi])
+          emit_word(bb_spirv_id[pbi])
+        end
+
+      elif op == IR_OP_SELECT
+        let cond_id = inst_spirv_id[ir_inst_arg1[i]]
+        let a_id = inst_spirv_id[ir_inst_arg2[i]]
+        let b_idx = float(ir_phi_values[i])
+        let b_id = inst_spirv_id[b_idx]
+        emit_op(6.0, SPIRV_OP_SELECT)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(cond_id)
+        emit_word(a_id)
+        emit_word(b_id)
+
+      elif op == IR_OP_FADD
+        emit_op(5.0, SPIRV_OP_FADD)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_FSUB
+        emit_op(5.0, SPIRV_OP_FSUB)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_FMUL
+        emit_op(5.0, SPIRV_OP_FMUL)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_FDIV
+        emit_op(5.0, SPIRV_OP_FDIV)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_IADD
+        emit_op(5.0, SPIRV_OP_IADD)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_FNEG
+        emit_op(4.0, SPIRV_OP_FNEG)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_FTOU
+        emit_op(4.0, SPIRV_OP_FTOU)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_UTOF
+        emit_op(4.0, SPIRV_OP_UTOF)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_UCONVERT
+        emit_op(4.0, SPIRV_OP_UCONVERT)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_FOLT
+        emit_op(5.0, SPIRV_OP_FOLT)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_FOGT
+        emit_op(5.0, SPIRV_OP_FOGT)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_FOLE
+        emit_op(5.0, SPIRV_OP_FOLE)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_FOGE
+        emit_op(5.0, SPIRV_OP_FOGE)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_FOEQ
+        emit_op(5.0, SPIRV_OP_FOEQ)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_FONE
+        emit_op(5.0, SPIRV_OP_FONE)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_ULTE
+        emit_op(5.0, SPIRV_OP_ULTE)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_UGTE
+        emit_op(5.0, SPIRV_OP_UGTE)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_SQRT
+        // OpExtInst %float %result %glsl 31(Sqrt) %operand
+        emit_op(6.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(31.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_INVSQRT
+        // OpExtInst %float %result %glsl 32(InverseSqrt) %operand
+        emit_op(6.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(32.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_FLOOR
+        // OpExtInst %float %result %glsl 8(Floor) %operand
+        emit_op(6.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(8.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_UDIV
+        emit_op(5.0, SPIRV_OP_UDIV)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_UMOD
+        emit_op(5.0, SPIRV_OP_UMOD)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_IMUL
+        emit_op(5.0, SPIRV_OP_IMUL)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_LAND
+        emit_op(5.0, SPIRV_OP_LAND)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_LOR
+        emit_op(5.0, SPIRV_OP_LOR)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_POW
+        // GLSL.std.450 Pow = 26
+        emit_op(7.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(26.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_EXP
+        // GLSL.std.450 Exp = 27
+        emit_op(6.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(27.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_FABS
+        // GLSL.std.450 FAbs = 4
+        emit_op(6.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(4.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_FMIN
+        // GLSL.std.450 FMin = 37
+        emit_op(7.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(37.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_FMAX
+        // GLSL.std.450 FMax = 40
+        emit_op(7.0, SPIRV_OP_EXT_INST)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(SPIR_ID_GLSL_EXT)
+        emit_word(40.0)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_LOAD_GID
+        // Pre-emitted in preamble — no code to emit
+      elif op == IR_OP_PUSH_CONST
+        // AccessChain + Load from push constant block
+        let pcidx = ir_const_uval[i]
+        let ac_id = sid - 1.0
+        // Find uint constant ID for the member index
+        let mut idx_id = SPIR_ID_UINT_0
+        for j in range(0.0, len(uconst_vals))
+          if uconst_vals[j] == pcidx
+            idx_id = uconst_ids[j]
+          end
+        end
+        // OpAccessChain %ptr_pc_float %ac_id %pc_var %idx
+        emit_op(5.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(ir_pc_ptr_float_id)
+        emit_word(ac_id)
+        emit_word(ir_pc_var_id)
+        emit_word(idx_id)
+        // OpLoad %float %sid %ac_id
+        emit_op(4.0, SPIRV_OP_LOAD)
+        emit_word(SPIR_ID_FLOAT)
+        emit_word(sid)
+        emit_word(ac_id)
+      elif op == IR_OP_ATOMIC_IADD
+        // OpAtomicIAdd %uint %result %pointer %scope %semantics %value
+        // arg1 = pointer (uint ptr from AccessChain), arg2 = value (uint)
+        let ptr_id = inst_spirv_id[ir_inst_arg1[i]]
+        let val_id = inst_spirv_id[ir_inst_arg2[i]]
+        emit_op(7.0, SPIRV_OP_ATOMIC_IADD)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(ptr_id)
+        emit_word(ir_em_scope_device_id)
+        emit_word(ir_em_sem_acqrel_id)
+        emit_word(val_id)
+
+      // =============== Phase 117: New opcodes ===============
+
+      elif op == IR_OP_LOAD_LOCAL_ID
+        // AccessChain + Load LocalInvocationId.x
+        let ac_id = sid - 1.0
+        emit_op(5.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_IN_UINT)
+        emit_word(ac_id)
+        emit_word(ir_em_var_local_id)
+        emit_word(SPIR_ID_UINT_0)
+        emit_op(4.0, SPIRV_OP_LOAD)
+        emit_word(SPIR_ID_UINT)
+        emit_word(sid)
+        emit_word(ac_id)
+
+      elif op == IR_OP_LOAD_WORKGROUP_ID
+        // AccessChain + Load WorkgroupId.x
+        let ac_id = sid - 1.0
+        emit_op(5.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_IN_UINT)
+        emit_word(ac_id)
+        emit_word(ir_em_var_wg_id)
+        emit_word(SPIR_ID_UINT_0)
+        emit_op(4.0, SPIRV_OP_LOAD)
+        emit_word(SPIR_ID_UINT)
+        emit_word(sid)
+        emit_word(ac_id)
+
+      elif op == IR_OP_BARRIER
+        // OpControlBarrier %scope_wg %scope_wg %sem_wg
+        emit_op(4.0, SPIRV_OP_CONTROL_BARRIER)
+        emit_word(ir_em_scope_wg_id)
+        emit_word(ir_em_scope_wg_id)
+        emit_word(ir_em_sem_wg_id)
+
+      elif op == IR_OP_SHARED_LOAD
+        // AccessChain into shared[idx] + Load
+        let idx_id = inst_spirv_id[ir_inst_arg1[i]]
+        let ac_id = sid - 1.0
+        emit_op(5.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(ir_em_shared_ptr_wg_f32_id)
+        emit_word(ac_id)
+        emit_word(ir_em_shared_var_id)
+        emit_word(idx_id)
+        emit_op(4.0, SPIRV_OP_LOAD)
+        emit_word(SPIR_ID_FLOAT)
+        emit_word(sid)
+        emit_word(ac_id)
+
+      elif op == IR_OP_SHARED_STORE
+        // AccessChain into shared[idx] + Store val
+        let idx_id = inst_spirv_id[ir_inst_arg1[i]]
+        let val_id = inst_spirv_id[ir_inst_arg2[i]]
+        let ac_id = sid
+        emit_op(5.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(ir_em_shared_ptr_wg_f32_id)
+        emit_word(ac_id)
+        emit_word(ir_em_shared_var_id)
+        emit_word(idx_id)
+        emit_op(3.0, SPIRV_OP_STORE)
+        emit_word(ac_id)
+        emit_word(val_id)
+
+      elif op == IR_OP_STORE_OUTPUT_AT
+        // AccessChain output[idx] + Store val (arbitrary index, not gid)
+        let idx_id = inst_spirv_id[ir_inst_arg1[i]]
+        let val_id = inst_spirv_id[ir_inst_arg2[i]]
+        let ac_id = sid
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_FLOAT)
+        emit_word(ac_id)
+        emit_word(SPIR_ID_OUTPUT)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(idx_id)
+        emit_op(3.0, SPIRV_OP_STORE)
+        emit_word(ac_id)
+        emit_word(val_id)
+
+      elif op == IR_OP_LOAD_OUTPUT_AT
+        // AccessChain output[idx] + Load
+        let idx_id = inst_spirv_id[ir_inst_arg1[i]]
+        let ac_id = sid - 1.0
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_FLOAT)
+        emit_word(ac_id)
+        emit_word(SPIR_ID_OUTPUT)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(idx_id)
+        emit_op(4.0, SPIRV_OP_LOAD)
+        emit_word(SPIR_ID_FLOAT)
+        emit_word(sid)
+        emit_word(ac_id)
+
+      elif op == IR_OP_ISUB
+        emit_op(5.0, SPIRV_OP_ISUB)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+
+      elif op == IR_OP_UEQU
+        emit_op(5.0, SPIRV_OP_IEQUAL)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+
+      // ── Bitwise ops (uint32 → uint32) ──
+      elif op == IR_OP_BIT_AND
+        emit_op(5.0, SPIRV_OP_BITWISE_AND)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_BIT_OR
+        emit_op(5.0, SPIRV_OP_BITWISE_OR)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_SHL
+        emit_op(5.0, SPIRV_OP_SHL_LOGICAL)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_SHR
+        emit_op(5.0, SPIRV_OP_SHR_LOGICAL)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_BITCOUNT
+        emit_op(4.0, SPIRV_OP_BITCOUNT)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+      elif op == IR_OP_NOT
+        emit_op(4.0, SPIRV_OP_NOT)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+
+      elif op == IR_OP_BUF_LOAD_U
+        // Load uint from buffer[binding][idx]
+        // arg1 = binding (literal), arg2 = index (uint SSA)
+        let bind_f = ir_inst_arg1[i]
+        let idx_id = inst_spirv_id[ir_inst_arg2[i]]
+        let ac_id = sid - 1.0
+        // Find the variable for this uint binding
+        let mut buf_var = 0.0
+        for ub in range(0.0, len(ir_em_uint_bind_nums))
+          if ir_em_uint_bind_nums[ub] == bind_f
+            buf_var = ir_em_uint_bind_var_ids[ub]
+          end
+        end
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_UINT)
+        emit_word(ac_id)
+        emit_word(buf_var)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(idx_id)
+        emit_op(4.0, SPIRV_OP_LOAD)
+        emit_word(SPIR_ID_UINT)
+        emit_word(sid)
+        emit_word(ac_id)
+
+      elif op == IR_OP_BUF_STORE_U
+        // Store uint to buffer[binding][idx], val in phi_values
+        let bind_f = ir_inst_arg1[i]
+        let idx_id = inst_spirv_id[ir_inst_arg2[i]]
+        let val_idx = float(ir_phi_values[i])
+        let val_id = inst_spirv_id[val_idx]
+        let ac_id = sid
+        let mut buf_var = 0.0
+        for ub in range(0.0, len(ir_em_uint_bind_nums))
+          if ir_em_uint_bind_nums[ub] == bind_f
+            buf_var = ir_em_uint_bind_var_ids[ub]
+          end
+        end
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_UINT)
+        emit_word(ac_id)
+        emit_word(buf_var)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(idx_id)
+        emit_op(3.0, SPIRV_OP_STORE)
+        emit_word(ac_id)
+        emit_word(val_id)
+
+      elif op == IR_OP_BUF_ATOMIC_LOAD
+        // Atomic load uint from buffer[binding][idx]
+        let bind_f = ir_inst_arg1[i]
+        let idx_id = inst_spirv_id[ir_inst_arg2[i]]
+        let ac_id = sid - 1.0
+        let mut buf_var = 0.0
+        for ub in range(0.0, len(ir_em_uint_bind_nums))
+          if ir_em_uint_bind_nums[ub] == bind_f
+            buf_var = ir_em_uint_bind_var_ids[ub]
+          end
+        end
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_UINT)
+        emit_word(ac_id)
+        emit_word(buf_var)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(idx_id)
+        // OpAtomicLoad %uint %result %pointer %scope %semantics(Acquire)
+        emit_op(6.0, SPIRV_OP_ATOMIC_LOAD)
+        emit_word(SPIR_ID_UINT)
+        emit_word(sid)
+        emit_word(ac_id)
+        emit_word(ir_em_scope_device_id)
+        emit_word(ir_em_sem_acquire_id)
+
+      elif op == IR_OP_BUF_ATOMIC_STORE
+        // Atomic store uint to buffer[binding][idx], val in phi_values
+        let bind_f = ir_inst_arg1[i]
+        let idx_id = inst_spirv_id[ir_inst_arg2[i]]
+        let val_idx = float(ir_phi_values[i])
+        let val_id = inst_spirv_id[val_idx]
+        let ac_id = sid
+        let mut buf_var = 0.0
+        for ub in range(0.0, len(ir_em_uint_bind_nums))
+          if ir_em_uint_bind_nums[ub] == bind_f
+            buf_var = ir_em_uint_bind_var_ids[ub]
+          end
+        end
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_UINT)
+        emit_word(ac_id)
+        emit_word(buf_var)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(idx_id)
+        // OpAtomicStore %pointer %scope %semantics(Release) %value
+        emit_op(5.0, SPIRV_OP_ATOMIC_STORE)
+        emit_word(ac_id)
+        emit_word(ir_em_scope_device_id)
+        emit_word(ir_em_sem_release_id)
+        emit_word(val_id)
+
+      elif op == IR_OP_BUF_ATOMIC_IADD2
+        // Atomic add on buffer[binding][idx], val in phi_values → old value
+        let bind_f = ir_inst_arg1[i]
+        let idx_id = inst_spirv_id[ir_inst_arg2[i]]
+        let val_idx = float(ir_phi_values[i])
+        let val_id = inst_spirv_id[val_idx]
+        let ac_id = sid - 1.0
+        let mut buf_var = 0.0
+        for ub in range(0.0, len(ir_em_uint_bind_nums))
+          if ir_em_uint_bind_nums[ub] == bind_f
+            buf_var = ir_em_uint_bind_var_ids[ub]
+          end
+        end
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_UINT)
+        emit_word(ac_id)
+        emit_word(buf_var)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(idx_id)
+        // OpAtomicIAdd %uint %result %pointer %scope %semantics %value
+        emit_op(7.0, SPIRV_OP_ATOMIC_IADD)
+        emit_word(SPIR_ID_UINT)
+        emit_word(sid)
+        emit_word(ac_id)
+        emit_word(ir_em_scope_device_id)
+        emit_word(ir_em_sem_acqrel_id)
+        emit_word(val_id)
+
+      elif op == IR_OP_BUF_ATOMIC_AND
+        // Atomic AND on buffer[binding][idx], val in phi_values → old value
+        let bind_f = ir_inst_arg1[i]
+        let idx_id = inst_spirv_id[ir_inst_arg2[i]]
+        let val_idx = float(ir_phi_values[i])
+        let val_id = inst_spirv_id[val_idx]
+        let ac_id = sid - 1.0
+        let mut buf_var = 0.0
+        for ub in range(0.0, len(ir_em_uint_bind_nums))
+          if ir_em_uint_bind_nums[ub] == bind_f
+            buf_var = ir_em_uint_bind_var_ids[ub]
+          end
+        end
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_UINT)
+        emit_word(ac_id)
+        emit_word(buf_var)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(idx_id)
+        // OpAtomicAnd %uint %result %pointer %scope %semantics %value
+        emit_op(7.0, SPIRV_OP_ATOMIC_AND)
+        emit_word(SPIR_ID_UINT)
+        emit_word(sid)
+        emit_word(ac_id)
+        emit_word(ir_em_scope_device_id)
+        emit_word(ir_em_sem_acqrel_id)
+        emit_word(val_id)
+
+      elif op == IR_OP_BUF_STORE_F
+        // Store float to input buffer[binding][idx], val in phi_values
+        let bind_f = ir_inst_arg1[i]
+        let idx_id = inst_spirv_id[ir_inst_arg2[i]]
+        let val_idx = float(ir_phi_values[i])
+        let val_id = inst_spirv_id[val_idx]
+        let ac_id = sid
+        // Find float binding variable
+        let mut buf_var = SPIR_ID_INPUT
+        if bind_f > 0.0
+          let ei_idx = bind_f - 1.0
+          buf_var = ir_em_extra_input_ids[ei_idx]
+        end
+        emit_op(6.0, SPIRV_OP_ACCESS_CHAIN)
+        emit_word(SPIR_ID_PTR_SB_FLOAT)
+        emit_word(ac_id)
+        emit_word(buf_var)
+        emit_word(SPIR_ID_UINT_0)
+        emit_word(idx_id)
+        emit_op(3.0, SPIRV_OP_STORE)
+        emit_word(ac_id)
+        emit_word(val_id)
+      end
+    end
+  end
+  return 0.0
+end
+
+// Emit terminator for a block
+fn _ir_emit_block_term(block_idx, inst_spirv_id, bb_spirv_id)
+  let kind = ir_bb_term_kind[block_idx]
+  let merge = ir_bb_merge_kind[block_idx]
+
+  // Emit merge instruction before terminator
+  if merge == IR_MERGE_LOOP
+    emit_op(4.0, SPIRV_OP_LOOP_MERGE)
+    emit_word(bb_spirv_id[ir_bb_merge_target[block_idx]])
+    emit_word(bb_spirv_id[ir_bb_continue_target[block_idx]])
+    emit_word(0.0)
+  elif merge == IR_MERGE_SELECTION
+    emit_op(3.0, SPIRV_OP_SEL_MERGE)
+    emit_word(bb_spirv_id[ir_bb_merge_target[block_idx]])
+    emit_word(0.0)
+  end
+
+  // Emit terminator
+  if kind == IR_TERM_BRANCH
+    emit_op(2.0, SPIRV_OP_BRANCH)
+    emit_word(bb_spirv_id[ir_bb_term_arg1[block_idx]])
+  elif kind == IR_TERM_COND_BRANCH
+    let cond_id = inst_spirv_id[ir_bb_term_arg1[block_idx]]
+    emit_op(4.0, SPIRV_OP_BRANCH_COND)
+    emit_word(cond_id)
+    emit_word(bb_spirv_id[ir_bb_term_arg2[block_idx]])
+    emit_word(bb_spirv_id[ir_bb_term_arg3[block_idx]])
+  elif kind == IR_TERM_RETURN
+    emit_op(1.0, SPIRV_OP_RETURN)
+  end
+  return 0.0
+end

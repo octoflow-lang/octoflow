@@ -1,0 +1,102 @@
+// stdlib/devops/fs.flow — Filesystem utilities
+//
+// Functions: find_files, walk_dir, file_info, glob_files, copy_file,
+//            path_join, path_parent, path_name, path_ext
+
+fn find_files(dir, extension)
+  let entries = list_dir(dir)
+  let mut result = []
+  for entry in entries
+    if ends_with(entry, extension)
+      push(result, dir + "/" + entry)
+    end
+  end
+  return result
+end
+
+fn walk_dir(dir)
+  // Recursive directory listing (flat list of all files)
+  let entries = list_dir(dir)
+  let mut result = []
+  for entry in entries
+    let path = dir + "/" + entry
+    if is_dir(path) == 1.0
+      let mut sub = walk_dir(path)
+      for f in sub
+        push(result, f)
+      end
+    else
+      push(result, path)
+    end
+  end
+  return result
+end
+
+fn file_info(path)
+  let mut info = map()
+  map_set(info, "path", path)
+  map_set(info, "exists", str(file_exists(path)))
+  map_set(info, "is_file", str(is_file(path)))
+  map_set(info, "is_dir", str(is_dir(path)))
+  // Extract name from path
+  let parts = split(path, "/")
+  let n = len(parts)
+  if n > 0.0
+    map_set(info, "name", parts[n - 1.0])
+  end
+  // Extract extension
+  let name = parts[n - 1.0]
+  let dot = index_of(name, ".")
+  if dot >= 0.0
+    map_set(info, "ext", substr(name, dot + 1.0, len(name)))
+  else
+    map_set(info, "ext", "")
+  end
+  return info
+end
+
+fn glob_files(dir, pattern)
+  // Simple glob: *.ext matching
+  let entries = list_dir(dir)
+  let mut result = []
+  for entry in entries
+    if starts_with(pattern, "*.")
+      let ext = substr(pattern, 1.0, len(pattern))
+      if ends_with(entry, ext)
+        push(result, dir + "/" + entry)
+      end
+    elif pattern == "*"
+      push(result, dir + "/" + entry)
+    elif contains(entry, pattern)
+      push(result, dir + "/" + entry)
+    end
+  end
+  return result
+end
+
+fn copy_file(src, dst)
+  let content = read_file(src)
+  write_file(dst, content)
+  return 1.0
+end
+
+fn path_join(parts)
+  return join(parts, "/")
+end
+
+fn path_parent(path)
+  return dirname(path)
+end
+
+fn path_name(path)
+  return basename(path)
+end
+
+fn path_ext(path)
+  let name = basename(path)
+  let dot = index_of(name, ".")
+  if dot >= 0.0
+    return substr(name, dot + 1.0, len(name))
+  end
+  return ""
+end

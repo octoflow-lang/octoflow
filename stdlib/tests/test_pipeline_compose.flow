@@ -1,0 +1,102 @@
+// test_pipeline_compose.flow — Heterogeneous Pipeline Composition test
+// Two different shaders (scale + offset) chained in ONE command buffer.
+// scale(3.0): A → B, then offset(10.0): B → C
+// Verify: [1, 2, 3, 4] * 3 + 10 = [13, 16, 19, 22]
+//
+// Run: octoflow run stdlib/tests/test_pipeline_compose.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+let N = 256.0
+let BUF_BYTES = N * 4.0
+
+// Boot GPU
+rt_init()
+
+// Load TWO different pipelines (both with 1 push constant float)
+let pipe_scale = rt_load_pipeline("tests/gpu_shaders/13_scale.spv", 2.0, 4.0)
+let pipe_offset = rt_load_pipeline("tests/gpu_shaders/14_offset.spv", 2.0, 4.0)
+
+// Create 3 buffers: A (input), B (intermediate), C (output)
+let buf_a = rt_create_buffer(BUF_BYTES)
+let buf_b = rt_create_buffer(BUF_BYTES)
+let buf_c = rt_create_buffer(BUF_BYTES)
+
+// Upload data: [1, 2, 3, ..., 256]
+let mut data = []
+let mut i = 0.0
+while i < N
+  push(data, i + 1.0)
+  i = i + 1.0
+end
+rt_upload(buf_a, data)
+
+// Zero intermediate and output buffers
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_b, zeros)
+rt_upload(buf_c, zeros)
+
+// Chain: 2 dispatches, 2 bindings each
+rt_chain_begin(2.0, 2.0)
+
+// Stage 1: scale by 3.0 (A → B)
+let mut pc1 = [3.0]
+rt_chain_push_constants(pipe_scale, pc1)
+let mut bufs1 = [buf_a, buf_b]
+rt_chain_dispatch(pipe_scale, bufs1, 1.0)
+
+// Stage 2: offset by 10.0 (B → C)
+let mut pc2 = [10.0]
+rt_chain_push_constants(pipe_offset, pc2)
+let mut bufs2 = [buf_b, buf_c]
+rt_chain_dispatch(pipe_offset, bufs2, 1.0)
+
+rt_chain_end()
+
+// Single submit — GPU runs both stages
+rt_chain_submit_wait()
+
+// Download and verify
+rt_download(buf_c, 4.0)
+
+let mut pass = 1.0
+// [1, 2, 3, 4] * 3 + 10 = [13, 16, 19, 22]
+let expected_0 = 13.0
+let expected_1 = 16.0
+let expected_2 = 19.0
+let expected_3 = 22.0
+
+let v0 = rt_result[0]
+let v1 = rt_result[1]
+let v2 = rt_result[2]
+let v3 = rt_result[3]
+print("Result: [{v0}, {v1}, {v2}, {v3}]")
+print("Expected: [{expected_0}, {expected_1}, {expected_2}, {expected_3}]")
+
+if v0 != expected_0
+  print("FAIL: v0={v0} expected {expected_0}")
+  pass = 0.0
+end
+if v1 != expected_1
+  print("FAIL: v1={v1} expected {expected_1}")
+  pass = 0.0
+end
+if v2 != expected_2
+  print("FAIL: v2={v2} expected {expected_2}")
+  pass = 0.0
+end
+if v3 != expected_3
+  print("FAIL: v3={v3} expected {expected_3}")
+  pass = 0.0
+end
+
+if pass == 1.0
+  print("PASS: pipeline_compose scale(3)+offset(10), 2 shaders, 1 submit")
+end
+
+rt_cleanup()

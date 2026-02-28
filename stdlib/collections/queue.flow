@@ -1,4 +1,8 @@
 // stdlib/collections/queue.flow — Queue (FIFO) data structure
+//
+// Functions: queue_create, queue_enqueue, queue_dequeue, queue_peek,
+//            queue_size, queue_is_empty, queue_clear
+//
 // Uses map-based O(1) dequeue (same pattern as collections.flow)
 
 fn queue_create()

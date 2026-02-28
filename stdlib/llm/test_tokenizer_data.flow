@@ -1,0 +1,78 @@
+// test_tokenizer_data.flow — Inspect tokenizer-related KV pairs in GGUF model
+// Run: octoflow run stdlib/ai/test_tokenizer_data.flow --allow-read --allow-ffi
+
+use "gguf"
+
+let model_path = "G:/ollama_models/blobs/sha256-29d8c98fa6b098e200069bfb88b9508dc3e85586d20cba59f8dda9a808165104"
+
+print("=== Tokenizer Data Inspection ===")
+print("Loading GGUF model...")
+
+let model = gguf_load_from_file(model_path)
+
+// Basic model info
+let arch = map_get(model, "arch")
+let vocab_size = map_get(model, "vocab_size")
+print(" ")
+print("Architecture: {arch}")
+print("Vocab size: {vocab_size}")
+
+// Tokenizer model type
+print(" ")
+print("--- Tokenizer KV Pairs ---")
+
+let has_tok_model = map_has(model, "kv.tokenizer.ggml.model")
+print("has kv.tokenizer.ggml.model: {has_tok_model}")
+if has_tok_model == 1.0
+  let tok_model = map_get(model, "kv.tokenizer.ggml.model")
+  print("  value: {tok_model}")
+end
+
+let has_bos = map_has(model, "kv.tokenizer.ggml.bos_token_id")
+print("has kv.tokenizer.ggml.bos_token_id: {has_bos}")
+if has_bos == 1.0
+  let bos_id = map_get(model, "kv.tokenizer.ggml.bos_token_id")
+  print("  value: {bos_id}")
+end
+
+let has_eos = map_has(model, "kv.tokenizer.ggml.eos_token_id")
+print("has kv.tokenizer.ggml.eos_token_id: {has_eos}")
+if has_eos == 1.0
+  let eos_id = map_get(model, "kv.tokenizer.ggml.eos_token_id")
+  print("  value: {eos_id}")
+end
+
+let has_pad = map_has(model, "kv.tokenizer.ggml.padding_token_id")
+print("has kv.tokenizer.ggml.padding_token_id: {has_pad}")
+if has_pad == 1.0
+  let pad_id = map_get(model, "kv.tokenizer.ggml.padding_token_id")
+  print("  value: {pad_id}")
+end
+
+// Additional tokenizer keys that might exist
+print(" ")
+print("--- Additional Tokenizer Keys ---")
+
+let has_add_bos = map_has(model, "kv.tokenizer.ggml.add_bos_token")
+print("has kv.tokenizer.ggml.add_bos_token: {has_add_bos}")
+if has_add_bos == 1.0
+  let add_bos = map_get(model, "kv.tokenizer.ggml.add_bos_token")
+  print("  value: {add_bos}")
+end
+
+let has_add_eos = map_has(model, "kv.tokenizer.ggml.add_eos_token")
+print("has kv.tokenizer.ggml.add_eos_token: {has_add_eos}")
+if has_add_eos == 1.0
+  let add_eos = map_get(model, "kv.tokenizer.ggml.add_eos_token")
+  print("  value: {add_eos}")
+end
+
+let has_chat = map_has(model, "kv.tokenizer.chat_template")
+print("has kv.tokenizer.chat_template: {has_chat}")
+if has_chat == 1.0
+  let chat_tmpl = map_get(model, "kv.tokenizer.chat_template")
+  print("  value (truncated): present")
+end
+
+print(" ")
+print("=== DONE ===")

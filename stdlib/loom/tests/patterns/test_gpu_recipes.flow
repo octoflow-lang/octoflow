@@ -1,0 +1,569 @@
+// stdlib/loom/test_gpu_recipes.flow — Integration Test for All patterns.flow Functions
+//
+// Tests every public function in patterns.flow with known inputs and expected outputs.
+// Small arrays (< 64) exercise CPU fallback paths; GPU-only functions require --allow-ffi.
+//
+// Categories tested:
+//   Statistics (6):    mean, sum, std, min, max, median
+//   Math (4):          matmul, dot, matvec, transpose
+//   Arrays (7):        sort, filter, unique, top_k, normalize, clamp, zscore
+//   Signal (2):        rolling_mean, ema
+//   Finance (5):       bollinger, roc, momentum, log_returns, pct_change
+//   Element-wise (7):  map(sqrt), map(abs), add, sub, mul, div, where
+//   Analysis (2):      gpu_analyze, gpu_compare
+//
+// Total: 33 tests
+//
+// Run: flowgpu-cli run stdlib/loom/test_gpu_recipes.flow --allow-read --allow-ffi
+
+use "../patterns"
+
+let mut passed = 0.0
+let mut failed = 0.0
+let tol = 0.01
+let mut i = 0.0
+let mut ok = 1.0
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
+fn check_scalar(actual, expected, tolerance)
+    if abs(actual - expected) <= tolerance
+        return 1.0
+    end
+    return 0.0
+end
+
+fn check_array(actual, expected, tolerance)
+    if len(actual) != len(expected)
+        return 0.0
+    end
+    let mut idx = 0.0
+    while idx < len(actual)
+        if abs(actual[int(idx)] - expected[int(idx)]) > tolerance
+            return 0.0
+        end
+        idx = idx + 1.0
+    end
+    return 1.0
+end
+
+print("=== GPU Recipes Integration Test (33 tests) ===")
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  STATISTICS (6 tests)
+// ═══════════════════════════════════════════════════════════════════════
+print("--- Statistics (6 tests) ---")
+
+let data5 = [2.0, 4.0, 6.0, 8.0, 10.0]
+
+// Test 1: gpu_mean_auto
+let r1 = gpu_mean_auto(data5)
+if check_scalar(r1, 6.0, tol) == 1.0
+    print("  PASS 1: gpu_mean_auto = {r1}")
+    passed = passed + 1.0
+else
+    print("  FAIL 1: gpu_mean_auto = {r1}, expected 6.0")
+    failed = failed + 1.0
+end
+
+// Test 2: gpu_sum_auto
+let r2 = gpu_sum_auto(data5)
+if check_scalar(r2, 30.0, tol) == 1.0
+    print("  PASS 2: gpu_sum_auto = {r2}")
+    passed = passed + 1.0
+else
+    print("  FAIL 2: gpu_sum_auto = {r2}, expected 30.0")
+    failed = failed + 1.0
+end
+
+// Test 3: gpu_std_auto — mean=6, sq_devs=[16,4,0,4,16], var=40/4=10, std=sqrt(10)=3.162
+let r3 = gpu_std_auto(data5)
+if check_scalar(r3, 3.162, 0.01) == 1.0
+    print("  PASS 3: gpu_std_auto = {r3:.3}")
+    passed = passed + 1.0
+else
+    print("  FAIL 3: gpu_std_auto = {r3:.3}, expected 3.162")
+    failed = failed + 1.0
+end
+
+// Test 4: gpu_min_auto
+let r4 = gpu_min_auto(data5)
+if check_scalar(r4, 2.0, tol) == 1.0
+    print("  PASS 4: gpu_min_auto = {r4}")
+    passed = passed + 1.0
+else
+    print("  FAIL 4: gpu_min_auto = {r4}, expected 2.0")
+    failed = failed + 1.0
+end
+
+// Test 5: gpu_max_auto
+let r5 = gpu_max_auto(data5)
+if check_scalar(r5, 10.0, tol) == 1.0
+    print("  PASS 5: gpu_max_auto = {r5}")
+    passed = passed + 1.0
+else
+    print("  FAIL 5: gpu_max_auto = {r5}, expected 10.0")
+    failed = failed + 1.0
+end
+
+// Test 6: gpu_median_auto — sorted [2,4,6,8,10], mid=2, median=6
+let r6 = gpu_median_auto(data5)
+if check_scalar(r6, 6.0, tol) == 1.0
+    print("  PASS 6: gpu_median_auto = {r6}")
+    passed = passed + 1.0
+else
+    print("  FAIL 6: gpu_median_auto = {r6}, expected 6.0")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  MATH (4 tests)
+// ═══════════════════════════════════════════════════════════════════════
+print(" ")
+print("--- Math (4 tests) ---")
+
+// Test 7: gpu_matmul_auto — A(2x3) * B(3x2) = C(2x2)
+// A=[1,2,3;4,5,6], B=[7,8;9,10;11,12]
+// C[0,0]=1*7+2*9+3*11=58, C[0,1]=1*8+2*10+3*12=64
+// C[1,0]=4*7+5*9+6*11=139, C[1,1]=4*8+5*10+6*12=154
+let mat_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+let mat_b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+let r7 = gpu_matmul_auto(mat_a, mat_b, 2.0, 2.0, 3.0)
+let r7_exp = [58.0, 64.0, 139.0, 154.0]
+if check_array(r7, r7_exp, 0.5) == 1.0
+    print("  PASS 7: gpu_matmul_auto [58,64,139,154]")
+    passed = passed + 1.0
+else
+    let r7_len = len(r7)
+    print("  FAIL 7: gpu_matmul_auto, len={r7_len}")
+    failed = failed + 1.0
+end
+
+// Test 8: gpu_dot_auto — [1,2,3].[4,5,6] = 4+10+18 = 32
+let va = [1.0, 2.0, 3.0]
+let vb = [4.0, 5.0, 6.0]
+let r8 = gpu_dot_auto(va, vb)
+if check_scalar(r8, 32.0, tol) == 1.0
+    print("  PASS 8: gpu_dot_auto = {r8}")
+    passed = passed + 1.0
+else
+    print("  FAIL 8: gpu_dot_auto = {r8}, expected 32.0")
+    failed = failed + 1.0
+end
+
+// Test 9: gpu_matvec_auto — [1,2,3;4,5,6](2x3) * [1,2,3] = [14, 32]
+let r9 = gpu_matvec_auto(mat_a, va, 2.0, 3.0)
+let r9_exp = [14.0, 32.0]
+if check_array(r9, r9_exp, 0.5) == 1.0
+    print("  PASS 9: gpu_matvec_auto [14, 32]")
+    passed = passed + 1.0
+else
+    let r9_len = len(r9)
+    print("  FAIL 9: gpu_matvec_auto, len={r9_len}")
+    failed = failed + 1.0
+end
+
+// Test 10: gpu_transpose_auto — [1,2,3;4,5,6](2x3) -> [1,4;2,5;3,6](3x2)
+let r10 = gpu_transpose_auto(mat_a, 2.0, 3.0)
+let r10_exp = [1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+if check_array(r10, r10_exp, 0.5) == 1.0
+    print("  PASS 10: gpu_transpose_auto [1,4,2,5,3,6]")
+    passed = passed + 1.0
+else
+    let r10_len = len(r10)
+    print("  FAIL 10: gpu_transpose_auto, len={r10_len}")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ARRAYS (7 tests)
+// ═══════════════════════════════════════════════════════════════════════
+print(" ")
+print("--- Arrays (7 tests) ---")
+
+// Test 11: gpu_sort_auto
+let d11 = [5.0, 3.0, 1.0, 4.0, 2.0]
+let r11 = gpu_sort_auto(d11)
+let r11_exp = [1.0, 2.0, 3.0, 4.0, 5.0]
+if check_array(r11, r11_exp, tol) == 1.0
+    print("  PASS 11: gpu_sort_auto [1,2,3,4,5]")
+    passed = passed + 1.0
+else
+    let r11_len = len(r11)
+    print("  FAIL 11: gpu_sort_auto, got len={r11_len}")
+    if r11_len > 0.0
+        let r11_0 = r11[0]
+        let r11_1 = r11[1]
+        print("    first two: {r11_0}, {r11_1}")
+    end
+    failed = failed + 1.0
+end
+
+// Test 12: gpu_filter_auto (> 3.0)
+let d12 = [1.0, 5.0, 3.0, 7.0, 2.0]
+let r12 = gpu_filter_auto(d12, 3.0, "gt")
+let r12_exp = [5.0, 7.0]
+if check_array(r12, r12_exp, tol) == 1.0
+    print("  PASS 12: gpu_filter_auto(>3) = [5, 7]")
+    passed = passed + 1.0
+else
+    let r12_len = len(r12)
+    print("  FAIL 12: gpu_filter_auto(>3), got len={r12_len}")
+    failed = failed + 1.0
+end
+
+// Test 13: gpu_unique_auto — [3,1,2,3,1] -> [1,2,3]
+let d13 = [3.0, 1.0, 2.0, 3.0, 1.0]
+let r13 = gpu_unique_auto(d13)
+let r13_exp = [1.0, 2.0, 3.0]
+if check_array(r13, r13_exp, tol) == 1.0
+    print("  PASS 13: gpu_unique_auto [1, 2, 3]")
+    passed = passed + 1.0
+else
+    let r13_len = len(r13)
+    print("  FAIL 13: gpu_unique_auto, got len={r13_len}")
+    failed = failed + 1.0
+end
+
+// Test 14: gpu_top_k_auto — top 3 from [3,1,4,1,5,9,2,6] = [9,6,5]
+let d14 = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0]
+let r14 = gpu_top_k_auto(d14, 3.0)
+let r14_exp = [9.0, 6.0, 5.0]
+if check_array(r14, r14_exp, tol) == 1.0
+    print("  PASS 14: gpu_top_k_auto(3) = [9, 6, 5]")
+    passed = passed + 1.0
+else
+    let r14_len = len(r14)
+    print("  FAIL 14: gpu_top_k_auto, got len={r14_len}")
+    failed = failed + 1.0
+end
+
+// Test 15: gpu_normalize_auto — [0, 5, 10] -> [0, 0.5, 1.0]
+let d15 = [0.0, 5.0, 10.0]
+let r15 = gpu_normalize_auto(d15)
+let r15_exp = [0.0, 0.5, 1.0]
+if check_array(r15, r15_exp, tol) == 1.0
+    print("  PASS 15: gpu_normalize_auto [0, 0.5, 1.0]")
+    passed = passed + 1.0
+else
+    print("  FAIL 15: gpu_normalize_auto")
+    failed = failed + 1.0
+end
+
+// Test 16: gpu_clamp_auto — [1,5,10,15,20] clamped to [5,15]
+let d16 = [1.0, 5.0, 10.0, 15.0, 20.0]
+let r16 = gpu_clamp_auto(d16, 5.0, 15.0)
+let r16_exp = [5.0, 5.0, 10.0, 15.0, 15.0]
+if check_array(r16, r16_exp, tol) == 1.0
+    print("  PASS 16: gpu_clamp_auto [5,5,10,15,15]")
+    passed = passed + 1.0
+else
+    print("  FAIL 16: gpu_clamp_auto")
+    failed = failed + 1.0
+end
+
+// Test 17: gpu_zscore_auto — [10,20,30,40,50]
+// mean=30, deviations=[-20,-10,0,10,20], sum_sq=1000, var=250, std=15.811
+// z = [-1.265, -0.632, 0, 0.632, 1.265]
+let d17 = [10.0, 20.0, 30.0, 40.0, 50.0]
+let r17 = gpu_zscore_auto(d17)
+let r17_exp = [-1.265, -0.632, 0.0, 0.632, 1.265]
+if check_array(r17, r17_exp, 0.01) == 1.0
+    print("  PASS 17: gpu_zscore_auto [-1.27,-0.63,0,0.63,1.27]")
+    passed = passed + 1.0
+else
+    print("  FAIL 17: gpu_zscore_auto")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SIGNAL (2 tests)
+// ═══════════════════════════════════════════════════════════════════════
+print(" ")
+print("--- Signal (2 tests) ---")
+
+// Test 18: gpu_rolling_mean_auto — [1,2,3,4,5] window=3 -> [2, 3, 4]
+let d18 = [1.0, 2.0, 3.0, 4.0, 5.0]
+let r18 = gpu_rolling_mean_auto(d18, 3.0)
+let r18_exp = [2.0, 3.0, 4.0]
+if check_array(r18, r18_exp, 0.1) == 1.0
+    print("  PASS 18: gpu_rolling_mean_auto [2, 3, 4]")
+    passed = passed + 1.0
+else
+    let r18_len = len(r18)
+    print("  FAIL 18: gpu_rolling_mean_auto, got len={r18_len}")
+    failed = failed + 1.0
+end
+
+// Test 19: gpu_ema_auto — [10,20,30,40,50] alpha=0.5
+// ema[0]=10, ema[1]=15, ema[2]=22.5, ema[3]=31.25, ema[4]=40.625
+let d19 = [10.0, 20.0, 30.0, 40.0, 50.0]
+let r19 = gpu_ema_auto(d19, 0.5)
+let r19_exp = [10.0, 15.0, 22.5, 31.25, 40.625]
+if check_array(r19, r19_exp, 0.5) == 1.0
+    print("  PASS 19: gpu_ema_auto [10,15,22.5,31.25,40.625]")
+    passed = passed + 1.0
+else
+    let r19_len = len(r19)
+    print("  FAIL 19: gpu_ema_auto, got len={r19_len}")
+    // Print actual values for diagnosis
+    if r19_len > 0.0
+        let r19_0 = r19[0]
+        print("    actual[0]={r19_0}")
+    end
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FINANCE (5 tests)
+// ═══════════════════════════════════════════════════════════════════════
+print(" ")
+print("--- Finance (5 tests) ---")
+
+let prices = [10.0, 20.0, 30.0, 40.0, 50.0]
+
+// Test 20: gpu_bollinger — window=3, num_std=2
+// Returns flat array: [mid..., upper..., lower...] with k=3 elements each
+// ma=[20,30,40], std=[10,10,10], upper=[40,50,60], lower=[0,10,20]
+let r20 = gpu_bollinger(prices, 3.0, 2.0)
+let r20_exp = [20.0, 30.0, 40.0, 40.0, 50.0, 60.0, 0.0, 10.0, 20.0]
+if check_array(r20, r20_exp, 1.0) == 1.0
+    print("  PASS 20: gpu_bollinger flat=[20,30,40|40,50,60|0,10,20]")
+    passed = passed + 1.0
+else
+    let r20_len = len(r20)
+    print("  FAIL 20: gpu_bollinger, got len={r20_len}")
+    if r20_len > 0.0
+        let r20_0 = r20[0]
+        print("    first element: {r20_0}")
+    end
+    failed = failed + 1.0
+end
+
+// Test 21: gpu_roc_auto — [10,20,30,40,50] period=2
+// i=2: (30-10)/10*100=200, i=3: (40-20)/20*100=100, i=4: (50-30)/30*100=66.67
+let r21 = gpu_roc_auto(prices, 2.0)
+let r21_exp = [200.0, 100.0, 66.667]
+if check_array(r21, r21_exp, 0.1) == 1.0
+    print("  PASS 21: gpu_roc_auto [200, 100, 66.67]")
+    passed = passed + 1.0
+else
+    let r21_len = len(r21)
+    print("  FAIL 21: gpu_roc_auto, got len={r21_len}")
+    failed = failed + 1.0
+end
+
+// Test 22: gpu_momentum_auto — [10,20,30,40,50] period=2
+// i=2: 30-10=20, i=3: 40-20=20, i=4: 50-30=20
+let r22 = gpu_momentum_auto(prices, 2.0)
+let r22_exp = [20.0, 20.0, 20.0]
+if check_array(r22, r22_exp, tol) == 1.0
+    print("  PASS 22: gpu_momentum_auto [20, 20, 20]")
+    passed = passed + 1.0
+else
+    let r22_len = len(r22)
+    print("  FAIL 22: gpu_momentum_auto, got len={r22_len}")
+    failed = failed + 1.0
+end
+
+// Test 23: gpu_log_returns_auto — [100, 110, 121, 133.1]
+// log(1.1)=0.0953 for each step
+let d23 = [100.0, 110.0, 121.0, 133.1]
+let r23 = gpu_log_returns_auto(d23)
+let r23_exp = [0.0953, 0.0953, 0.0953]
+if check_array(r23, r23_exp, 0.01) == 1.0
+    print("  PASS 23: gpu_log_returns_auto [0.095, 0.095, 0.095]")
+    passed = passed + 1.0
+else
+    let r23_len = len(r23)
+    print("  FAIL 23: gpu_log_returns_auto, got len={r23_len}")
+    failed = failed + 1.0
+end
+
+// Test 24: gpu_pct_change_auto — [100, 110, 121, 133.1]
+// each step is +10%
+let d24 = [100.0, 110.0, 121.0, 133.1]
+let r24 = gpu_pct_change_auto(d24)
+let r24_exp = [10.0, 10.0, 10.0]
+if check_array(r24, r24_exp, 0.1) == 1.0
+    print("  PASS 24: gpu_pct_change_auto [10, 10, 10]")
+    passed = passed + 1.0
+else
+    let r24_len = len(r24)
+    print("  FAIL 24: gpu_pct_change_auto, got len={r24_len}")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ELEMENT-WISE (7 tests)
+// ═══════════════════════════════════════════════════════════════════════
+print(" ")
+print("--- Element-wise (7 tests) ---")
+
+// Test 25: gpu_map_auto("sqrt")
+let d25 = [1.0, 4.0, 9.0, 16.0, 25.0]
+let r25 = gpu_map_auto(d25, "sqrt")
+let r25_exp = [1.0, 2.0, 3.0, 4.0, 5.0]
+if check_array(r25, r25_exp, tol) == 1.0
+    print("  PASS 25: gpu_map_auto(sqrt) [1,2,3,4,5]")
+    passed = passed + 1.0
+else
+    print("  FAIL 25: gpu_map_auto(sqrt)")
+    failed = failed + 1.0
+end
+
+// Test 26: gpu_map_auto("abs")
+let d26 = [-3.0, -1.0, 0.0, 1.0, 3.0]
+let r26 = gpu_map_auto(d26, "abs")
+let r26_exp = [3.0, 1.0, 0.0, 1.0, 3.0]
+if check_array(r26, r26_exp, tol) == 1.0
+    print("  PASS 26: gpu_map_auto(abs) [3,1,0,1,3]")
+    passed = passed + 1.0
+else
+    print("  FAIL 26: gpu_map_auto(abs)")
+    failed = failed + 1.0
+end
+
+// Test 27: gpu_add_auto
+let d27a = [1.0, 2.0, 3.0]
+let d27b = [4.0, 5.0, 6.0]
+let r27 = gpu_add_auto(d27a, d27b)
+let r27_exp = [5.0, 7.0, 9.0]
+if check_array(r27, r27_exp, tol) == 1.0
+    print("  PASS 27: gpu_add_auto [5, 7, 9]")
+    passed = passed + 1.0
+else
+    print("  FAIL 27: gpu_add_auto")
+    failed = failed + 1.0
+end
+
+// Test 28: gpu_sub_auto
+let d28a = [10.0, 20.0, 30.0]
+let d28b = [1.0, 2.0, 3.0]
+let r28 = gpu_sub_auto(d28a, d28b)
+let r28_exp = [9.0, 18.0, 27.0]
+if check_array(r28, r28_exp, tol) == 1.0
+    print("  PASS 28: gpu_sub_auto [9, 18, 27]")
+    passed = passed + 1.0
+else
+    print("  FAIL 28: gpu_sub_auto")
+    failed = failed + 1.0
+end
+
+// Test 29: gpu_mul_auto
+let d29a = [2.0, 3.0, 4.0]
+let d29b = [5.0, 6.0, 7.0]
+let r29 = gpu_mul_auto(d29a, d29b)
+let r29_exp = [10.0, 18.0, 28.0]
+if check_array(r29, r29_exp, tol) == 1.0
+    print("  PASS 29: gpu_mul_auto [10, 18, 28]")
+    passed = passed + 1.0
+else
+    print("  FAIL 29: gpu_mul_auto")
+    failed = failed + 1.0
+end
+
+// Test 30: gpu_div_auto
+let d30a = [10.0, 20.0, 30.0]
+let d30b = [2.0, 4.0, 5.0]
+let r30 = gpu_div_auto(d30a, d30b)
+let r30_exp = [5.0, 5.0, 6.0]
+if check_array(r30, r30_exp, tol) == 1.0
+    print("  PASS 30: gpu_div_auto [5, 5, 6]")
+    passed = passed + 1.0
+else
+    print("  FAIL 30: gpu_div_auto")
+    failed = failed + 1.0
+end
+
+// Test 31: gpu_where_auto — cond>0 ? a : b
+let d31c = [1.0, 0.0, 1.0, 0.0]
+let d31a = [10.0, 20.0, 30.0, 40.0]
+let d31b = [50.0, 60.0, 70.0, 80.0]
+let r31 = gpu_where_auto(d31c, d31a, d31b)
+let r31_exp = [10.0, 60.0, 30.0, 80.0]
+if check_array(r31, r31_exp, tol) == 1.0
+    print("  PASS 31: gpu_where_auto [10, 60, 30, 80]")
+    passed = passed + 1.0
+else
+    print("  FAIL 31: gpu_where_auto")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ANALYSIS (2 tests)
+// ═══════════════════════════════════════════════════════════════════════
+print(" ")
+print("--- Analysis (2 tests) ---")
+
+// Test 32: gpu_analyze — [2,4,6,8,10,12,14,16,18,20]
+let analysis_data = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0]
+let r32 = gpu_analyze(analysis_data)
+let r32_mean = r32["mean"]
+let r32_count = r32["count"]
+let r32_min = r32["min"]
+let r32_max = r32["max"]
+let r32_range = r32["range"]
+ok = 1.0
+if check_scalar(r32_mean, 11.0, 0.1) == 0.0
+    print("    mean: got {r32_mean}, expected 11.0")
+    ok = 0.0
+end
+if check_scalar(r32_count, 10.0, tol) == 0.0
+    print("    count: got {r32_count}, expected 10.0")
+    ok = 0.0
+end
+if check_scalar(r32_min, 2.0, tol) == 0.0
+    print("    min: got {r32_min}, expected 2.0")
+    ok = 0.0
+end
+if check_scalar(r32_max, 20.0, tol) == 0.0
+    print("    max: got {r32_max}, expected 20.0")
+    ok = 0.0
+end
+if check_scalar(r32_range, 18.0, tol) == 0.0
+    print("    range: got {r32_range}, expected 18.0")
+    ok = 0.0
+end
+if ok == 1.0
+    print("  PASS 32: gpu_analyze mean=11 count=10 min=2 max=20 range=18")
+    passed = passed + 1.0
+else
+    print("  FAIL 32: gpu_analyze")
+    failed = failed + 1.0
+end
+
+// Test 33: gpu_compare — identical arrays -> correlation=1.0
+let cmp_data = [1.0, 2.0, 3.0, 4.0, 5.0]
+let r33 = gpu_compare(cmp_data, cmp_data)
+let r33_corr = r33["correlation"]
+let r33_diff = r33["mean_diff"]
+ok = 1.0
+if check_scalar(r33_corr, 1.0, 0.01) == 0.0
+    print("    correlation: got {r33_corr}, expected 1.0")
+    ok = 0.0
+end
+if check_scalar(r33_diff, 0.0, tol) == 0.0
+    print("    mean_diff: got {r33_diff}, expected 0.0")
+    ok = 0.0
+end
+if ok == 1.0
+    print("  PASS 33: gpu_compare identical -> corr=1.0, diff=0.0")
+    passed = passed + 1.0
+else
+    print("  FAIL 33: gpu_compare")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SUMMARY
+// ═══════════════════════════════════════════════════════════════════════
+print(" ")
+let total = passed + failed
+print("=== Results: {passed}/{total} passed, {failed} failed ===")
+if failed == 0.0
+    print("ALL 33 TESTS PASSED")
+else
+    print("SOME TESTS FAILED — see above for details")
+end

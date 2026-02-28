@@ -1,0 +1,185 @@
+// demo_gui.flow — OctoFlow GUI Widget Toolkit Demo
+//
+// Demonstrates all 13 widget types: panel, label, button, checkbox,
+// slider, text input, progress bar, radio buttons, separator,
+// listbox, spinbox, dropdown, tabs.
+//
+// Usage:
+//   octoflow run stdlib/gui/demo_gui.flow
+
+use "gui"
+
+// ── Initialize window ────────────────────────────────────────────────
+let app = gui_init(720.0, 660.0, "OctoFlow GUI Demo - 13 Widgets")
+
+// ── Main panel ───────────────────────────────────────────────────────
+let panel = gui_panel(10.0, 10.0, 700.0, 640.0)
+
+// ── Title ────────────────────────────────────────────────────────────
+let title = gui_label(30.0, 22.0, "OCTOFLOW GUI TOOLKIT")
+let sep1 = gui_separator(30.0, 48.0, 660.0)
+
+// ── Buttons row ──────────────────────────────────────────────────────
+let btn_hello = gui_button(30.0, 60.0, 130.0, 34.0, "HELLO")
+let btn_count = gui_button(170.0, 60.0, 130.0, 34.0, "COUNT")
+let btn_reset = gui_button(310.0, 60.0, 130.0, 34.0, "RESET")
+let status = gui_label(30.0, 106.0, "CLICK A BUTTON...")
+
+let sep2 = gui_separator(30.0, 132.0, 660.0)
+
+// ── Checkboxes + Radio Buttons ───────────────────────────────────────
+let chk_show = gui_checkbox(30.0, 145.0, "SHOW SLIDER")
+let _ss = gui_set_checked(chk_show, 1.0)
+
+let theme_label = gui_label(280.0, 145.0, "THEME:")
+let rad_dark = gui_radio(370.0, 145.0, "DARK", 1.0)
+let _rsd = gui_set_checked(rad_dark, 1.0)
+let rad_light = gui_radio(470.0, 145.0, "LIGHT", 1.0)
+let rad_ocean = gui_radio(570.0, 145.0, "OCEAN", 1.0)
+
+let sep3 = gui_separator(30.0, 178.0, 660.0)
+
+// ── Slider + Progress Bar ────────────────────────────────────────────
+let sl_label = gui_label(30.0, 192.0, "SLIDER:")
+let slider1 = gui_slider(120.0, 192.0, 280.0, 0.0, 100.0, 50.0)
+let slider_val = gui_label(410.0, 192.0, "VALUE: 50")
+
+let pg_label = gui_label(30.0, 228.0, "PROGRESS:")
+let prog1 = gui_progress(150.0, 228.0, 280.0)
+let _sp = gui_set_progress(prog1, 50.0)
+
+let sep4 = gui_separator(30.0, 260.0, 660.0)
+
+// ── Spinbox + Dropdown ─────────────────────────────────────────────
+let spn_label = gui_label(30.0, 275.0, "SPINBOX:")
+let spin1 = gui_spinbox(140.0, 270.0, 160.0, 0.0, 50.0, 10.0, 1.0)
+let spn_val = gui_label(310.0, 275.0, "COUNT: 10")
+
+let dd_label = gui_label(430.0, 275.0, "COLOR:")
+let drop1 = gui_dropdown(510.0, 270.0, 170.0)
+let _d1 = gui_dropdown_add(drop1, "RED")
+let _d2 = gui_dropdown_add(drop1, "GREEN")
+let _d3 = gui_dropdown_add(drop1, "BLUE")
+let _d4 = gui_dropdown_add(drop1, "YELLOW")
+let _d5 = gui_dropdown_add(drop1, "PURPLE")
+let dd_val = gui_label(430.0, 305.0, "PICKED: RED")
+
+let sep5 = gui_separator(30.0, 330.0, 660.0)
+
+// ── Listbox ──────────────────────────────────────────────────────────
+let lb_label = gui_label(30.0, 344.0, "LISTBOX:")
+let list1 = gui_listbox(130.0, 340.0, 250.0, 120.0)
+let _l1 = gui_listbox_add(list1, "OCTOFLOW")
+let _l2 = gui_listbox_add(list1, "GPU NATIVE")
+let _l3 = gui_listbox_add(list1, "ZERO DEPS")
+let _l4 = gui_listbox_add(list1, "SELF HOSTED")
+let _l5 = gui_listbox_add(list1, "100% .FLOW")
+let _l6 = gui_listbox_add(list1, "12 WIDGETS")
+let lb_sel = gui_label(400.0, 344.0, "SELECTED: NONE")
+
+let sep6 = gui_separator(30.0, 472.0, 660.0)
+
+// ── Tab Panel ────────────────────────────────────────────────────────
+let tab1 = gui_tabs(30.0, 484.0, 340.0, 100.0)
+let _t1 = gui_tab_add(tab1, "INFO")
+let _t2 = gui_tab_add(tab1, "INPUT")
+let _t3 = gui_tab_add(tab1, "ABOUT")
+let tab_content = gui_label(40.0, 522.0, "TAB: INFO")
+
+// ── Text input ───────────────────────────────────────────────────────
+let input_label = gui_label(400.0, 490.0, "INPUT:")
+let input1 = gui_textinput(470.0, 484.0, 210.0)
+
+// ── Footer ───────────────────────────────────────────────────────────
+let sep7 = gui_separator(30.0, 596.0, 660.0)
+let footer = gui_label(30.0, 608.0, "OCTOFLOW V1.28 - 13 WIDGETS - PURE .FLOW")
+
+// ── State ────────────────────────────────────────────────────────────
+let mut click_count = 0.0
+
+// ── Main loop ────────────────────────────────────────────────────────
+while gui_running() == 1.0
+  let _u = gui_update()
+
+  // Button clicks
+  if gui_clicked(btn_hello) == 1.0
+    let _s = gui_set_text(status, "HELLO FROM OCTOFLOW!")
+  end
+  if gui_clicked(btn_count) == 1.0
+    click_count = click_count + 1.0
+    let count_text = "CLICKED " + str(click_count) + " TIMES"
+    let _s2 = gui_set_text(status, count_text)
+  end
+  if gui_clicked(btn_reset) == 1.0
+    click_count = 0.0
+    let _s3 = gui_set_text(status, "COUNTER RESET")
+  end
+
+  // Show/hide slider
+  if gui_clicked(chk_show) == 1.0
+    if gui_checked(chk_show) == 1.0
+      let _sv = gui_set_visible(slider1, 1.0)
+      let _sl = gui_set_visible(slider_val, 1.0)
+    else
+      let _sv2 = gui_set_visible(slider1, 0.0)
+      let _sl2 = gui_set_visible(slider_val, 0.0)
+    end
+  end
+
+  // Theme switching via radio buttons
+  if gui_clicked(rad_dark) == 1.0
+    let _td = gui_theme_dark()
+  end
+  if gui_clicked(rad_light) == 1.0
+    let _tl = gui_theme_light()
+  end
+  if gui_clicked(rad_ocean) == 1.0
+    let _to = gui_theme_ocean()
+  end
+
+  // Slider drives progress bar
+  let sv = gui_slider_value(slider1)
+  let sv_int = floor(sv)
+  let sv_text = "VALUE: " + str(sv_int)
+  let _slt = gui_set_text(slider_val, sv_text)
+  let _sp2 = gui_set_progress(prog1, sv)
+
+  // Spinbox value display
+  let spv = gui_spinbox_value(spin1)
+  let spv_text = "COUNT: " + str(spv)
+  let _spvt = gui_set_text(spn_val, spv_text)
+
+  // Dropdown selection display
+  if gui_clicked(drop1) == 1.0
+    let dd_idx = gui_dropdown_selected(drop1)
+    if dd_idx >= 0.0
+      let dd_text = gui_dropdown_text(drop1, dd_idx)
+      let dd_msg = "PICKED: " + dd_text
+      let _ddm = gui_set_text(dd_val, dd_msg)
+    end
+  end
+
+  // Listbox selection display
+  if gui_clicked(list1) == 1.0
+    let sel_idx = gui_listbox_selected(list1)
+    if sel_idx >= 0.0
+      let sel_text = gui_listbox_text(list1, sel_idx)
+      let sel_msg = "SELECTED: " + sel_text
+      let _slm = gui_set_text(lb_sel, sel_msg)
+    end
+  end
+
+  // Tab switching
+  if gui_clicked(tab1) == 1.0
+    let tab_idx = gui_tab_active(tab1)
+    if tab_idx == 0.0
+      let _tc1 = gui_set_text(tab_content, "TAB: INFO - OCTOFLOW GPU LANG")
+    elif tab_idx == 1.0
+      let _tc2 = gui_set_text(tab_content, "TAB: INPUT - TYPE SOMETHING")
+    elif tab_idx == 2.0
+      let _tc3 = gui_set_text(tab_content, "TAB: ABOUT - V1.28 PURE .FLOW")
+    end
+  end
+end
+
+print("GUI demo closed.")

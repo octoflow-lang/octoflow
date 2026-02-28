@@ -1,4 +1,7 @@
 // stdlib/data/io.flow — Data I/O utilities
+//
+// Functions: load_json, save_json, load_text, save_text, load_lines,
+//            save_lines, file_size_str
 
 fn load_json(path)
   let content = read_file(path)

@@ -1,0 +1,114 @@
+// test_bias_check.flow — Check if Qwen2.5 model has attention bias tensors
+// Run: octoflow run stdlib/ai/test_bias_check.flow --allow-read
+use "../formats/gguf"
+
+let model_path = "G:/ollama_models/blobs/sha256-29d8c98fa6b098e200069bfb88b9508dc3e85586d20cba59f8dda9a808165104"
+let model = gguf_load_from_file(model_path)
+
+print("=== Bias Tensor Check ===")
+print(" ")
+
+// Check attention biases for layer 0
+let has_qb = gguf_has_tensor(model, "blk.0.attn_q.bias")
+let has_kb = gguf_has_tensor(model, "blk.0.attn_k.bias")
+let has_vb = gguf_has_tensor(model, "blk.0.attn_v.bias")
+let has_ob = gguf_has_tensor(model, "blk.0.attn_output.bias")
+print("blk.0.attn_q.bias:      {has_qb}")
+print("blk.0.attn_k.bias:      {has_kb}")
+print("blk.0.attn_v.bias:      {has_vb}")
+print("blk.0.attn_output.bias: {has_ob}")
+
+// Check FFN biases
+let has_gb = gguf_has_tensor(model, "blk.0.ffn_gate.bias")
+let has_ub = gguf_has_tensor(model, "blk.0.ffn_up.bias")
+let has_db = gguf_has_tensor(model, "blk.0.ffn_down.bias")
+print("blk.0.ffn_gate.bias:    {has_gb}")
+print("blk.0.ffn_up.bias:      {has_ub}")
+print("blk.0.ffn_down.bias:    {has_db}")
+
+// Check output bias
+let has_out_b = gguf_has_tensor(model, "output.bias")
+print("output.bias:             {has_out_b}")
+
+// Check embedding norm
+let has_enorm = gguf_has_tensor(model, "token_embd_norm.weight")
+print("token_embd_norm.weight:  {has_enorm}")
+
+print(" ")
+// Check Q weight dimensions
+let q_dim0 = map_get(model, "t.blk.0.attn_q.weight.dim0")
+let q_dim1 = map_get(model, "t.blk.0.attn_q.weight.dim1")
+let q_type = map_get(model, "t.blk.0.attn_q.weight.type")
+let q_count = map_get(model, "t.blk.0.attn_q.weight.count")
+print("attn_q.weight: dim0={q_dim0} dim1={q_dim1} type={q_type} count={q_count}")
+
+let k_dim0 = map_get(model, "t.blk.0.attn_k.weight.dim0")
+let k_dim1 = map_get(model, "t.blk.0.attn_k.weight.dim1")
+let k_type = map_get(model, "t.blk.0.attn_k.weight.type")
+let k_count = map_get(model, "t.blk.0.attn_k.weight.count")
+print("attn_k.weight: dim0={k_dim0} dim1={k_dim1} type={k_type} count={k_count}")
+
+let v_dim0 = map_get(model, "t.blk.0.attn_v.weight.dim0")
+let v_dim1 = map_get(model, "t.blk.0.attn_v.weight.dim1")
+let v_type = map_get(model, "t.blk.0.attn_v.weight.type")
+let v_count = map_get(model, "t.blk.0.attn_v.weight.count")
+print("attn_v.weight: dim0={v_dim0} dim1={v_dim1} type={v_type} count={v_count}")
+
+let o_dim0 = map_get(model, "t.blk.0.attn_output.weight.dim0")
+let o_dim1 = map_get(model, "t.blk.0.attn_output.weight.dim1")
+let o_type = map_get(model, "t.blk.0.attn_output.weight.type")
+print("attn_output.weight: dim0={o_dim0} dim1={o_dim1} type={o_type}")
+
+// Check bias dimensions if they exist
+if has_qb == 1.0
+  let qb_dim0 = map_get(model, "t.blk.0.attn_q.bias.dim0")
+  let qb_type = map_get(model, "t.blk.0.attn_q.bias.type")
+  let qb_count = map_get(model, "t.blk.0.attn_q.bias.count")
+  print("attn_q.bias: dim0={qb_dim0} type={qb_type} count={qb_count}")
+end
+if has_kb == 1.0
+  let kb_dim0 = map_get(model, "t.blk.0.attn_k.bias.dim0")
+  let kb_type = map_get(model, "t.blk.0.attn_k.bias.type")
+  let kb_count = map_get(model, "t.blk.0.attn_k.bias.count")
+  print("attn_k.bias: dim0={kb_dim0} type={kb_type} count={kb_count}")
+end
+
+print(" ")
+// Check FFN dimensions
+let g_dim0 = map_get(model, "t.blk.0.ffn_gate.weight.dim0")
+let g_dim1 = map_get(model, "t.blk.0.ffn_gate.weight.dim1")
+print("ffn_gate.weight: dim0={g_dim0} dim1={g_dim1}")
+
+let u_dim0 = map_get(model, "t.blk.0.ffn_up.weight.dim0")
+let u_dim1 = map_get(model, "t.blk.0.ffn_up.weight.dim1")
+print("ffn_up.weight: dim0={u_dim0} dim1={u_dim1}")
+
+let d_dim0 = map_get(model, "t.blk.0.ffn_down.weight.dim0")
+let d_dim1 = map_get(model, "t.blk.0.ffn_down.weight.dim1")
+print("ffn_down.weight: dim0={d_dim0} dim1={d_dim1}")
+
+// Check embedding
+let e_dim0 = map_get(model, "t.token_embd.weight.dim0")
+let e_dim1 = map_get(model, "t.token_embd.weight.dim1")
+let e_type = map_get(model, "t.token_embd.weight.type")
+print("token_embd.weight: dim0={e_dim0} dim1={e_dim1} type={e_type}")
+
+// Check output
+let has_output = gguf_has_tensor(model, "output.weight")
+print("output.weight exists: {has_output}")
+if has_output == 1.0
+  let out_dim0 = map_get(model, "t.output.weight.dim0")
+  let out_dim1 = map_get(model, "t.output.weight.dim1")
+  print("output.weight: dim0={out_dim0} dim1={out_dim1}")
+end
+
+// Check model metadata
+print(" ")
+print("=== Model Metadata ===")
+let n_embd = map_get(model, "n_embd")
+let n_head = map_get(model, "n_head")
+let n_kv_head = map_get(model, "n_kv_head")
+let n_ff = map_get(model, "n_ff")
+let n_layer = map_get(model, "n_layer")
+let vocab_size = map_get(model, "vocab_size")
+print("n_embd={n_embd} n_head={n_head} n_kv_head={n_kv_head} n_ff={n_ff} n_layer={n_layer} vocab={vocab_size}")

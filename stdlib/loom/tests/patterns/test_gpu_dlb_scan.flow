@@ -1,0 +1,89 @@
+// test_gpu_dlb_scan.flow — Test gpu_prefix_scan stdlib wrapper
+//
+// Run: octoflow run stdlib/loom/test_gpu_dlb_scan.flow --allow-read --allow-write --allow-exec
+
+use "../gpu_dlb_scan"
+
+print("=== GPU Prefix Scan (DLB) Stdlib Test ===")
+
+// Test 1: Simple ascending sequence
+print("")
+print("--- Test 1: sum(1..256) ---")
+let mut in1 = []
+let mut i = 0.0
+while i < 256.0
+  push(in1, i + 1.0)
+  i = i + 1.0
+end
+gpu_prefix_scan(in1)
+let last1 = dlb_result[255.0]
+if last1 == 32896.0
+  print("  PASS (last={last1})")
+else
+  print("  FAIL (last={last1}, expected 32896)")
+end
+
+// Test 2: Multi-workgroup (all ones)
+print("")
+print("--- Test 2: 1024 ones ---")
+let mut in2 = []
+i = 0.0
+while i < 1024.0
+  push(in2, 1.0)
+  i = i + 1.0
+end
+gpu_prefix_scan(in2)
+let last2 = dlb_result[1023.0]
+if last2 == 1024.0
+  print("  PASS (last={last2})")
+else
+  print("  FAIL (last={last2}, expected 1024)")
+end
+
+// Test 3: Non-multiple of 256 (padding test)
+print("")
+print("--- Test 3: 300 ones (padding test) ---")
+let mut in3 = []
+i = 0.0
+while i < 300.0
+  push(in3, 1.0)
+  i = i + 1.0
+end
+gpu_prefix_scan(in3)
+let last3 = dlb_result[299.0]
+if last3 == 300.0
+  print("  PASS (last={last3})")
+else
+  print("  FAIL (last={last3}, expected 300)")
+end
+
+// Test 4: Full correctness check (re-use test 2 data)
+print("")
+print("--- Test 4: Full correctness (1024 ones) ---")
+gpu_prefix_scan(in2)
+let mut pass4 = 1.0
+let mut cpu_sum = 0.0
+i = 0.0
+while i < 1024.0
+  cpu_sum = cpu_sum + 1.0
+  let got4 = dlb_result[i]
+  let mut diff4 = got4 - cpu_sum
+  if diff4 < 0.0
+    diff4 = 0.0 - diff4
+  end
+  if diff4 > 0.1
+    if pass4 == 1.0
+      print("  First mismatch at [{i}]: got {got4}, expected {cpu_sum}")
+    end
+    pass4 = 0.0
+  end
+  i = i + 1.0
+end
+if pass4 == 1.0
+  print("  PASS (all 1024 verified)")
+else
+  print("  FAIL")
+end
+
+print("")
+print("=== All tests complete ===")

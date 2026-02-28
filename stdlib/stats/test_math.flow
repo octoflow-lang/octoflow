@@ -1,0 +1,52 @@
+use math_ext
+
+let f5 = factorial(5.0)
+let g = gcd(12.0, 8.0)
+let fib8 = fibonacci(8.0)
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+if abs(f5 - 120.0) < 0.01
+  pass = pass + 1.0
+  print("  PASS: factorial(5) = 120")
+else
+  fail = fail + 1.0
+  print("  FAIL: factorial(5) expected 120 got {f5}")
+end
+
+if abs(g - 4.0) < 0.01
+  pass = pass + 1.0
+  print("  PASS: gcd(12,8) = 4")
+else
+  fail = fail + 1.0
+  print("  FAIL: gcd(12,8) expected 4 got {g}")
+end
+
+if abs(fib8 - 21.0) < 0.01
+  pass = pass + 1.0
+  print("  PASS: fibonacci(8) = 21")
+else
+  fail = fail + 1.0
+  print("  FAIL: fibonacci(8) expected 21 got {fib8}")
+end
+
+let p = is_prime(7.0)
+if p == 1.0
+  pass = pass + 1.0
+  print("  PASS: is_prime(7)")
+else
+  fail = fail + 1.0
+  print("  FAIL: is_prime(7)")
+end
+
+let perm = permutations(5.0, 2.0)
+if abs(perm - 20.0) < 0.01
+  pass = pass + 1.0
+  print("  PASS: permutations(5,2) = 20")
+else
+  fail = fail + 1.0
+  print("  FAIL: permutations(5,2) expected 20 got {perm}")
+end
+
+print("math_ext: {pass} passed, {fail} failed")

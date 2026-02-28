@@ -1,0 +1,339 @@
+// test_gguf_weights.flow — End-to-end GGUF weight loading test
+// Creates a tiny GGUF binary, loads it, extracts weights.
+// Tests both legacy shorthand API and new kv.* / gguf_meta API.
+// Run: octoflow run test_gguf_weights.flow --allow-read --allow-write --allow-exec
+
+use "../formats/gguf"
+use "weight_loader"
+
+let mut counters = [0.0, 0.0]
+
+fn check_near(counters, label, got, expected, tol)
+  let d = abs(got - expected)
+  if d < tol
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}, diff={d}")
+  return 0.0
+end
+
+fn check_eq(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+fn check_str(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+// ── Helper: write u32 LE to byte array ──────────────────────────
+fn write_u32(arr, val)
+  let b0 = val - floor(val / 256.0) * 256.0
+  let r1 = floor(val / 256.0)
+  let b1 = r1 - floor(r1 / 256.0) * 256.0
+  let r2 = floor(r1 / 256.0)
+  let b2 = r2 - floor(r2 / 256.0) * 256.0
+  let b3 = floor(r2 / 256.0)
+  push(arr, b0)
+  push(arr, b1)
+  push(arr, b2)
+  push(arr, b3)
+  return 0.0
+end
+
+fn write_u64(arr, val)
+  // Write low 32 bits then high 32 bits
+  let low = val - floor(val / 4294967296.0) * 4294967296.0
+  let high = floor(val / 4294967296.0)
+  let _w1 = write_u32(arr, low)
+  let _w2 = write_u32(arr, high)
+  return 0.0
+end
+
+fn write_f32(arr, val)
+  // Write IEEE 754 f32 as 4 bytes LE
+  let bits = float_to_bits(val)
+  let _w = write_u32(arr, bits)
+  return 0.0
+end
+
+fn write_gguf_string(arr, s)
+  // GGUF string: u64 length + UTF-8 bytes
+  let slen = len(s)
+  let _wl = write_u64(arr, slen)
+  let mut i = 0.0
+  while i < slen
+    let c = char_at(s, i)
+    push(arr, ord(c))
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+print("=== GGUF WEIGHT LOADING TEST ===")
+print(" ")
+
+// ── Build a tiny GGUF file ──────────────────────────────────────
+// Model: 1 layer, 4 heads, 8 dim, 16 ff_dim, 16 vocab
+// All tensors: F32 (type 0) for testability
+print("--- Building synthetic GGUF file ---")
+
+let mut gguf = []
+
+// Header: magic (GGUF LE) + version (3) + tensor_count + kv_count
+let _m = write_u32(gguf, 1179993927.0)  // 0x46554747
+let _v = write_u32(gguf, 3.0)            // version 3
+let _tc = write_u64(gguf, 3.0)           // 3 tensors
+let _kc = write_u64(gguf, 6.0)           // 6 KV pairs (added vocab_size)
+
+// KV pairs:
+// 1. general.architecture = "llama" (string, type 8)
+let _k1 = write_gguf_string(gguf, "general.architecture")
+let _t1 = write_u32(gguf, 8.0)  // GGUF_TYPE_STRING
+let _v1 = write_gguf_string(gguf, "llama")
+
+// 2. llama.block_count = 1 (uint32, type 4)
+let _k2 = write_gguf_string(gguf, "llama.block_count")
+let _t2 = write_u32(gguf, 4.0)  // GGUF_TYPE_UINT32
+let _v2 = write_u32(gguf, 1.0)
+
+// 3. llama.attention.head_count = 4 (uint32)
+let _k3 = write_gguf_string(gguf, "llama.attention.head_count")
+let _t3 = write_u32(gguf, 4.0)
+let _v3 = write_u32(gguf, 4.0)
+
+// 4. llama.embedding_length = 8 (uint32)
+let _k4 = write_gguf_string(gguf, "llama.embedding_length")
+let _t4 = write_u32(gguf, 4.0)
+let _v4 = write_u32(gguf, 8.0)
+
+// 5. llama.feed_forward_length = 16 (uint32)
+let _k5 = write_gguf_string(gguf, "llama.feed_forward_length")
+let _t5 = write_u32(gguf, 4.0)
+let _v5 = write_u32(gguf, 16.0)
+
+// 6. llama.vocab_size = 16 (uint32)
+let _k6 = write_gguf_string(gguf, "llama.vocab_size")
+let _t6 = write_u32(gguf, 4.0)
+let _v6 = write_u32(gguf, 16.0)
+
+// Tensor infos:
+// 1. blk.0.attn_norm.weight — F32, [8] — 8 elements = 32 bytes
+let _tn1 = write_gguf_string(gguf, "blk.0.attn_norm.weight")
+let _nd1 = write_u32(gguf, 1.0)   // n_dims = 1
+let _d1 = write_u64(gguf, 8.0)    // dim0 = 8
+let _tt1 = write_u32(gguf, 0.0)   // type = F32
+let _to1 = write_u64(gguf, 0.0)   // offset = 0 (relative to data start)
+
+// 2. blk.0.ffn_norm.weight — F32, [8] — 8 elements = 32 bytes
+let _tn2 = write_gguf_string(gguf, "blk.0.ffn_norm.weight")
+let _nd2 = write_u32(gguf, 1.0)
+let _d2 = write_u64(gguf, 8.0)
+let _tt2 = write_u32(gguf, 0.0)
+let _to2 = write_u64(gguf, 32.0)  // offset = 32 (after first tensor)
+
+// 3. blk.0.attn_q.weight — F32, [8, 8] — 64 elements = 256 bytes
+let _tn3 = write_gguf_string(gguf, "blk.0.attn_q.weight")
+let _nd3 = write_u32(gguf, 2.0)   // n_dims = 2
+let _d3a = write_u64(gguf, 8.0)   // dim0 = 8
+let _d3b = write_u64(gguf, 8.0)   // dim1 = 8
+let _tt3 = write_u32(gguf, 0.0)   // type = F32
+let _to3 = write_u64(gguf, 64.0)  // offset = 64 (after norm tensors)
+
+// Pad to alignment (32 bytes)
+let current_pos = len(gguf)
+let rem = current_pos - floor(current_pos / 32.0) * 32.0
+let mut pad_needed = 32.0 - rem
+if rem == 0.0
+  pad_needed = 0.0
+end
+let mut pi = 0.0
+while pi < pad_needed
+  push(gguf, 0.0)
+  pi = pi + 1.0
+end
+
+let data_start_pos = len(gguf)
+print("  Data section starts at byte {data_start_pos}")
+
+// Tensor data:
+// 1. attn_norm: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+let mut ti = 0.0
+while ti < 8.0
+  let _wf = write_f32(gguf, 1.0)
+  ti = ti + 1.0
+end
+
+// 2. ffn_norm: [2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
+let mut ti2 = 0.0
+while ti2 < 8.0
+  let _wf2 = write_f32(gguf, 2.0)
+  ti2 = ti2 + 1.0
+end
+
+// 3. attn_q: 8x8 identity matrix
+let mut row = 0.0
+while row < 8.0
+  let mut col = 0.0
+  while col < 8.0
+    if row == col
+      let _wid = write_f32(gguf, 1.0)
+    else
+      let _wz = write_f32(gguf, 0.0)
+    end
+    col = col + 1.0
+  end
+  row = row + 1.0
+end
+
+let file_size = len(gguf)
+print("  Total file size: {file_size} bytes")
+
+write_bytes("_test_model.gguf", gguf)
+print("  Written _test_model.gguf")
+
+// ── Load the GGUF file ──────────────────────────────────────────
+print(" ")
+print("--- Loading GGUF model ---")
+let model = gguf_load("_test_model.gguf")
+
+// ── Test 1: Legacy shorthand metadata ────────────────────────────
+print("--- Test 1: Legacy shorthand metadata ---")
+let n_layer = map_get(model, "n_layer")
+let n_head = map_get(model, "n_head")
+let n_embd = map_get(model, "n_embd")
+let n_ff = map_get(model, "n_ff")
+let arch = map_get(model, "arch")
+
+print("  arch={arch} layers={n_layer} heads={n_head} embd={n_embd} ff={n_ff}")
+
+let _c1 = check_eq(counters, "n_layer=1", n_layer, 1.0)
+let _c2 = check_eq(counters, "n_head=4", n_head, 4.0)
+let _c3 = check_eq(counters, "n_embd=8", n_embd, 8.0)
+let _c4 = check_eq(counters, "n_ff=16", n_ff, 16.0)
+let _c5 = check_str(counters, "arch=llama", arch, "llama")
+
+// ── Test 2: New kv.* prefixed keys ───────────────────────────────
+print("--- Test 2: kv.* prefixed keys ---")
+let has_arch_kv = map_has(model, "kv.general.architecture")
+let _c6 = check_eq(counters, "has kv.general.architecture", has_arch_kv, 1.0)
+
+let arch_kv = map_get(model, "kv.general.architecture")
+let _c7 = check_str(counters, "kv.general.architecture=llama", arch_kv, "llama")
+
+let block_kv = map_get(model, "kv.llama.block_count")
+let _c8 = check_eq(counters, "kv.llama.block_count=1", block_kv, 1.0)
+
+let head_kv = map_get(model, "kv.llama.attention.head_count")
+let _c9 = check_eq(counters, "kv.llama.attention.head_count=4", head_kv, 4.0)
+
+let embd_kv = map_get(model, "kv.llama.embedding_length")
+let _c10 = check_eq(counters, "kv.llama.embedding_length=8", embd_kv, 8.0)
+
+let ff_kv = map_get(model, "kv.llama.feed_forward_length")
+let _c11 = check_eq(counters, "kv.llama.feed_forward_length=16", ff_kv, 16.0)
+
+// ── Test 3: gguf_meta convenience helper ─────────────────────────
+print("--- Test 3: gguf_meta helper ---")
+let meta_blocks = gguf_meta(model, "block_count")
+let _c12 = check_eq(counters, "gguf_meta block_count=1", meta_blocks, 1.0)
+
+let meta_heads = gguf_meta(model, "attention.head_count")
+let _c13 = check_eq(counters, "gguf_meta attention.head_count=4", meta_heads, 4.0)
+
+let meta_embd = gguf_meta(model, "embedding_length")
+let _c14 = check_eq(counters, "gguf_meta embedding_length=8", meta_embd, 8.0)
+
+// Test gguf_meta_default with missing key
+let meta_eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+let _c15 = check_near(counters, "gguf_meta_default eps=0.00001", meta_eps, 0.00001, 0.000001)
+
+// ── Test 4: Data start alignment ─────────────────────────────────
+print("--- Test 4: Data start ---")
+let ds = map_get(model, "data_start")
+print("  data_start={ds}")
+// Should be aligned to 32 bytes
+let ds_rem = ds - floor(ds / 32.0) * 32.0
+let _c16 = check_eq(counters, "data_start aligned", ds_rem, 0.0)
+
+// ── Test 5: Tensor info (flat key API) ───────────────────────────
+print("--- Test 5: Tensor info ---")
+let has_norm = gguf_has_tensor(model, "blk.0.attn_norm.weight")
+let _c17 = check_eq(counters, "has attn_norm", has_norm, 1.0)
+
+if has_norm == 1.0
+  let norm_type = gguf_tensor_type(model, "blk.0.attn_norm.weight")
+  let norm_dim0 = gguf_tensor_dim(model, "blk.0.attn_norm.weight", 0.0)
+  let _c18 = check_eq(counters, "norm type=F32", norm_type, 0.0)
+  let _c19 = check_eq(counters, "norm dim0=8", norm_dim0, 8.0)
+end
+
+// ── Test 6: Load F32 tensor via read_tensor_by_name ──────────────
+print("--- Test 6: Load attn_norm weights ---")
+let file_bytes = read_bytes("_test_model.gguf")
+let norm_data = read_tensor_by_name(file_bytes, model, "blk.0.attn_norm.weight")
+let norm_len = len(norm_data)
+let _c20 = check_eq(counters, "norm_data len=8", norm_len, 8.0)
+let _c21 = check_near(counters, "norm[0]=1.0", norm_data[0], 1.0, 0.001)
+let _c22 = check_near(counters, "norm[7]=1.0", norm_data[7], 1.0, 0.001)
+
+// ── Test 7: Load ffn_norm weights ────────────────────────────────
+print("--- Test 7: Load ffn_norm weights ---")
+let fn_data = read_tensor_by_name(file_bytes, model, "blk.0.ffn_norm.weight")
+let fn_len = len(fn_data)
+let _c23 = check_eq(counters, "ffn_norm len=8", fn_len, 8.0)
+let _c24 = check_near(counters, "ffn_norm[0]=2.0", fn_data[0], 2.0, 0.001)
+
+// ── Test 8: Load Q weight matrix ─────────────────────────────────
+print("--- Test 8: Load attn_q weights (identity) ---")
+let q_data = read_tensor_by_name(file_bytes, model, "blk.0.attn_q.weight")
+let q_len = len(q_data)
+let _c25 = check_eq(counters, "q_weight len=64", q_len, 64.0)
+// Identity matrix: [0,0]=1, [0,1]=0, [1,1]=1
+let _c26 = check_near(counters, "q[0,0]=1 (identity)", q_data[0], 1.0, 0.001)
+let _c27 = check_near(counters, "q[0,1]=0 (identity)", q_data[1], 0.0, 0.001)
+let _c28 = check_near(counters, "q[1,1]=1 (identity)", q_data[9], 1.0, 0.001)
+let _c29 = check_near(counters, "q[7,7]=1 (identity)", q_data[63], 1.0, 0.001)
+
+// ── Test 9: Layer tensor discovery ───────────────────────────────
+print("--- Test 9: Layer tensor discovery ---")
+let has_an = gguf_has_tensor(model, "blk.0.attn_norm.weight")
+let has_fn2 = gguf_has_tensor(model, "blk.0.ffn_norm.weight")
+let has_wq = gguf_has_tensor(model, "blk.0.attn_q.weight")
+let _c30 = check_eq(counters, "has attn_norm tensor", has_an, 1.0)
+let _c31 = check_eq(counters, "has ffn_norm tensor", has_fn2, 1.0)
+let _c32 = check_eq(counters, "has wq tensor", has_wq, 1.0)
+
+// ── Test 10: gguf_load_from_bytes ────────────────────────────────
+print("--- Test 10: gguf_load_from_bytes ---")
+let model2 = gguf_load_from_bytes(file_bytes)
+let arch2 = map_get(model2, "arch")
+let _c33 = check_str(counters, "from_bytes arch=llama", arch2, "llama")
+let n_layer2 = map_get(model2, "n_layer")
+let _c34 = check_eq(counters, "from_bytes n_layer=1", n_layer2, 1.0)
+// Verify model loaded correctly via from_bytes
+let vocab2 = gguf_meta(model2, "vocab_size")
+let _c35 = check_eq(counters, "from_bytes vocab_size=16", vocab2, 16.0)
+
+// ── Cleanup ─────────────────────────────────────────────────────
+let _rm = exec("rm", "_test_model.gguf")
+
+// ── Summary ─────────────────────────────────────────────────────
+print(" ")
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print("=== RESULTS: {pass}/{total} passed ===")

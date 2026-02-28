@@ -1,0 +1,69 @@
+// Phase 23: If/Elif/Else statement blocks
+//
+// Demonstrates conditional statement execution with
+// if, elif, else, and end keywords.
+
+// Simple if block
+let mut result = 0.0
+if true
+  result = 42.0
+end
+print("simple if: {result:.0}")
+
+// If/else
+let mut branch = 0.0
+if false
+  branch = 1.0
+else
+  branch = 2.0
+end
+print("if/else: {branch:.0}")
+
+// If/elif/else chain
+let score = 75.0
+let mut grade = 0.0
+if score >= 90.0
+  grade = 4.0
+elif score >= 80.0
+  grade = 3.0
+elif score >= 70.0
+  grade = 2.0
+elif score >= 60.0
+  grade = 1.0
+else
+  grade = 0.0
+end
+print("score {score:.0} -> grade {grade:.0}")
+
+// If block inside a for loop — conditional break
+let mut first_over_5 = 0.0
+for i in range(0, 20)
+  if i > 5.0
+    first_over_5 = i
+    break
+  end
+end
+print("first > 5: {first_over_5:.0}")
+
+// If block inside a loop — conditional continue (skip evens)
+let mut odd_sum = 0.0
+for i in range(0, 10)
+  let rem = i - floor(i / 2.0) * 2.0
+  if rem == 0.0
+    continue
+  end
+  odd_sum = odd_sum + i
+end
+print("odd sum 0..10: {odd_sum:.0}")
+
+// Nested if blocks
+let x = 7.0
+let mut category = 0.0
+if x > 0.0
+  if x > 5.0
+    category = 2.0
+  else
+    category = 1.0
+  end
+end
+print("x={x:.0} category={category:.0}")

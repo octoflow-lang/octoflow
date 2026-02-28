@@ -1,0 +1,40 @@
+// ffi_demo.flow — Phase 44: extern FFI
+//
+// Demonstrates calling native C library functions via the extern block.
+// Run with: flowgpu --allow-ffi ffi_demo.flow
+//
+// The extern block declares foreign functions — no implementation here,
+// just the signature. OctoFlow loads the library at runtime and calls
+// through the OS dynamic linker (LoadLibraryA on Windows, dlopen on Linux).
+
+// ── Declare C runtime math functions ──────────────────────────────────
+extern "msvcrt" {
+    fn ceil(x: f64) -> f64
+    fn floor(x: f64) -> f64
+    fn fabs(x: f64) -> f64
+    fn pow(base: f64, exp: f64) -> f64
+}
+
+// ── Use the extern functions ──────────────────────────────────────────
+let value = -3.7
+
+let ceiled = ceil(value)
+let floored = floor(value)
+let absolute = fabs(value)
+let squared = pow(2.0, 8.0)
+
+print("value    = {value}")
+print("ceil     = {ceiled}")
+print("floor    = {floored}")
+print("fabs     = {absolute}")
+print("2^8      = {squared}")
+
+// ── Example: calling strlen to measure a string ────────────────────────
+// (demonstrates ptr-typed arguments)
+//
+// extern "msvcrt" {
+//     fn strlen(s: ptr) -> u32
+// }
+// let msg = "hello world"
+// let len = strlen(msg)
+// print("length of msg = {len}")

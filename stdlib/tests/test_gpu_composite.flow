@@ -1,0 +1,402 @@
+// Tests for Composite GPU Functions
+
+use "../gpu/composite.flow"
+
+let pass_count = 0.0
+let fail_count = 0.0
+
+fn test_describe()
+    print("Testing gpu_describe...")
+
+    let arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let stats = gpu_describe(arr)
+
+    if map_has(stats, "mean")
+        if map_has(stats, "std")
+            if map_has(stats, "min")
+                if map_has(stats, "max")
+                    print("  PASS: describe has all keys")
+                    let pass_count = pass_count + 1.0
+                    return
+
+    print("  FAIL: describe missing keys")
+    let fail_count = fail_count + 1.0
+
+fn test_outlier_detection()
+    print("Testing gpu_outlier_detection...")
+
+    let arr = [1.0, 2.0, 3.0, 4.0, 100.0]
+    let threshold = 2.0
+
+    let outliers = gpu_outlier_detection(arr, threshold)
+
+    if len(outliers) == 5.0
+        // Last element should be outlier
+        if outliers[4.0] == 1.0
+            print("  PASS: outlier_detection finds outlier")
+            let pass_count = pass_count + 1.0
+            return
+
+    print("  FAIL: outlier_detection")
+    let fail_count = fail_count + 1.0
+
+fn test_standardize()
+    print("Testing gpu_standardize...")
+
+    let arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let result = gpu_standardize(arr)
+
+    if len(result) == 5.0
+        // Mean should be ~0
+        let mean = (result[0.0] + result[1.0] + result[2.0] + result[3.0] + result[4.0]) / 5.0
+        if abs(mean) < 0.01
+            print("  PASS: standardize mean ≈ 0")
+            let pass_count = pass_count + 1.0
+            return
+
+    print("  FAIL: standardize")
+    let fail_count = fail_count + 1.0
+
+fn test_minmax_scale()
+    print("Testing gpu_minmax_scale...")
+
+    let arr = [0.0, 5.0, 10.0]
+    let result = gpu_minmax_scale(arr)
+
+    if len(result) == 3.0
+        // Should be [0, 0.5, 1]
+        if abs(result[0.0]) < 0.01
+            if abs(result[1.0] - 0.5) < 0.01
+                if abs(result[2.0] - 1.0) < 0.01
+                    print("  PASS: minmax_scale [0,1]")
+                    let pass_count = pass_count + 1.0
+                    return
+
+    print("  FAIL: minmax_scale")
+    let fail_count = fail_count + 1.0
+
+fn test_rank()
+    print("Testing gpu_rank...")
+
+    let arr = [30.0, 10.0, 20.0]
+    let ranks = gpu_rank(arr)
+
+    if len(ranks) == 3.0
+        // 30 is rank 3, 10 is rank 1, 20 is rank 2
+        if ranks[0.0] == 3.0
+            if ranks[1.0] == 1.0
+                if ranks[2.0] == 2.0
+                    print("  PASS: rank correct")
+                    let pass_count = pass_count + 1.0
+                    return
+
+    print("  FAIL: rank")
+    let fail_count = fail_count + 1.0
+
+fn test_argsort()
+    print("Testing gpu_argsort...")
+
+    let arr = [30.0, 10.0, 20.0]
+    let indices = gpu_argsort(arr)
+
+    if len(indices) == 3.0
+        // Should be [1, 2, 0] (indices of sorted order)
+        if indices[0.0] == 1.0
+            if indices[1.0] == 2.0
+                if indices[2.0] == 0.0
+                    print("  PASS: argsort correct")
+                    let pass_count = pass_count + 1.0
+                    return
+
+    print("  FAIL: argsort")
+    let fail_count = fail_count + 1.0
+
+fn test_searchsorted()
+    print("Testing gpu_searchsorted...")
+
+    let sorted_arr = [10.0, 20.0, 30.0, 40.0]
+    let values = [15.0, 25.0, 35.0]
+
+    let positions = gpu_searchsorted(sorted_arr, values)
+
+    if len(positions) == 3.0
+        // 15 -> pos 1, 25 -> pos 2, 35 -> pos 3
+        if positions[0.0] == 1.0
+            if positions[1.0] == 2.0
+                if positions[2.0] == 3.0
+                    print("  PASS: searchsorted correct")
+                    let pass_count = pass_count + 1.0
+                    return
+
+    print("  FAIL: searchsorted")
+    let fail_count = fail_count + 1.0
+
+fn test_interpolate_linear()
+    print("Testing gpu_interpolate_linear...")
+
+    let x_old = [0.0, 1.0, 2.0]
+    let y_old = [0.0, 10.0, 20.0]
+    let x_new = [0.5, 1.5]
+
+    let y_new = gpu_interpolate_linear(x_old, y_old, x_new)
+
+    if len(y_new) == 2.0
+        // 0.5 -> 5.0, 1.5 -> 15.0
+        if abs(y_new[0.0] - 5.0) < 0.1
+            if abs(y_new[1.0] - 15.0) < 0.1
+                print("  PASS: interpolate_linear")
+                let pass_count = pass_count + 1.0
+                return
+
+    print("  FAIL: interpolate_linear")
+    let fail_count = fail_count + 1.0
+
+fn test_resample()
+    print("Testing gpu_resample...")
+
+    let arr = [10.0, 20.0, 30.0]
+    let new_length = 5.0
+
+    let resampled = gpu_resample(arr, new_length)
+
+    if len(resampled) == 5.0
+        print("  PASS: resample length")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: resample")
+        let fail_count = fail_count + 1.0
+
+fn test_pct_change()
+    print("Testing gpu_pct_change...")
+
+    let arr = [100.0, 110.0, 99.0]
+    let result = gpu_pct_change(arr)
+
+    if len(result) == 2.0
+        // (110-100)/100 * 100 = 10%
+        if abs(result[0.0] - 10.0) < 0.1
+            print("  PASS: pct_change")
+            let pass_count = pass_count + 1.0
+            return
+
+    print("  FAIL: pct_change")
+    let fail_count = fail_count + 1.0
+
+fn test_clip()
+    print("Testing gpu_clip...")
+
+    let arr = [1.0, 5.0, 10.0, 15.0]
+    let clipped = gpu_clip(arr, 5.0, 10.0)
+
+    if len(clipped) == 4.0
+        // Should be [5, 5, 10, 10]
+        if abs(clipped[0.0] - 5.0) < 0.01
+            if abs(clipped[3.0] - 10.0) < 0.01
+                print("  PASS: clip")
+                let pass_count = pass_count + 1.0
+                return
+
+    print("  FAIL: clip")
+    let fail_count = fail_count + 1.0
+
+fn test_count_nonzero()
+    print("Testing gpu_count_nonzero...")
+
+    let arr = [0.0, 1.0, 0.0, 2.0, 0.0, 3.0]
+    let count = gpu_count_nonzero(arr)
+
+    if count == 3.0
+        print("  PASS: count_nonzero")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: count_nonzero: {count}")
+        let fail_count = fail_count + 1.0
+
+fn test_all()
+    print("Testing gpu_all...")
+
+    let arr = [5.0, 6.0, 7.0, 8.0]
+    let result = gpu_all(arr, 4.0, "gt")
+
+    if result == 1.0
+        print("  PASS: all gt")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: all gt")
+        let fail_count = fail_count + 1.0
+
+fn test_any()
+    print("Testing gpu_any...")
+
+    let arr = [1.0, 2.0, 3.0, 4.0]
+    let result = gpu_any(arr, 3.0, "gt")
+
+    if result == 1.0
+        print("  PASS: any gt")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: any gt")
+        let fail_count = fail_count + 1.0
+
+fn test_cumprod()
+    print("Testing gpu_cumprod...")
+
+    let arr = [2.0, 3.0, 4.0]
+    let result = gpu_cumprod(arr)
+
+    if len(result) == 3.0
+        // [2, 6, 24]
+        if abs(result[0.0] - 2.0) < 0.01
+            if abs(result[2.0] - 24.0) < 0.01
+                print("  PASS: cumprod")
+                let pass_count = pass_count + 1.0
+                return
+
+    print("  FAIL: cumprod")
+    let fail_count = fail_count + 1.0
+
+fn test_cummax()
+    print("Testing gpu_cummax...")
+
+    let arr = [1.0, 5.0, 3.0, 7.0, 2.0]
+    let result = gpu_cummax(arr)
+
+    if len(result) == 5.0
+        // [1, 5, 5, 7, 7]
+        if abs(result[3.0] - 7.0) < 0.01
+            if abs(result[4.0] - 7.0) < 0.01
+                print("  PASS: cummax")
+                let pass_count = pass_count + 1.0
+                return
+
+    print("  FAIL: cummax")
+    let fail_count = fail_count + 1.0
+
+fn test_cummin()
+    print("Testing gpu_cummin...")
+
+    let arr = [5.0, 3.0, 7.0, 1.0, 9.0]
+    let result = gpu_cummin(arr)
+
+    if len(result) == 5.0
+        // [5, 3, 3, 1, 1]
+        if abs(result[3.0] - 1.0) < 0.01
+            if abs(result[4.0] - 1.0) < 0.01
+                print("  PASS: cummin")
+                let pass_count = pass_count + 1.0
+                return
+
+    print("  FAIL: cummin")
+    let fail_count = fail_count + 1.0
+
+fn test_log_returns()
+    print("Testing gpu_log_returns...")
+
+    let arr = [100.0, 110.0, 121.0]
+    let result = gpu_log_returns(arr)
+
+    if len(result) == 2.0
+        // log(110/100) ≈ 0.0953
+        if abs(result[0.0] - 0.0953) < 0.01
+            print("  PASS: log_returns")
+            let pass_count = pass_count + 1.0
+            return
+
+    print("  FAIL: log_returns")
+    let fail_count = fail_count + 1.0
+
+fn test_sign()
+    print("Testing gpu_sign...")
+
+    let arr = [-5.0, 0.0, 3.0]
+    let result = gpu_sign(arr)
+
+    if len(result) == 3.0
+        if abs(result[0.0] + 1.0) < 0.01
+            if abs(result[1.0]) < 0.01
+                if abs(result[2.0] - 1.0) < 0.01
+                    print("  PASS: sign")
+                    let pass_count = pass_count + 1.0
+                    return
+
+    print("  FAIL: sign")
+    let fail_count = fail_count + 1.0
+
+fn test_sma()
+    print("Testing gpu_sma...")
+
+    let arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let window = 3.0
+
+    let result = gpu_sma(arr, window)
+
+    if len(result) > 0.0
+        print("  PASS: sma runs")
+        let pass_count = pass_count + 1.0
+    else
+        print("  FAIL: sma")
+        let fail_count = fail_count + 1.0
+
+fn test_roc()
+    print("Testing gpu_roc...")
+
+    let arr = [100.0, 110.0, 121.0]
+    let period = 1.0
+
+    let result = gpu_roc(arr, period)
+
+    if len(result) == 2.0
+        // (110-100)/100 * 100 = 10%
+        if abs(result[0.0] - 10.0) < 0.1
+            print("  PASS: roc")
+            let pass_count = pass_count + 1.0
+            return
+
+    print("  FAIL: roc")
+    let fail_count = fail_count + 1.0
+
+fn test_momentum()
+    print("Testing gpu_momentum...")
+
+    let arr = [100.0, 105.0, 110.0]
+    let period = 1.0
+
+    let result = gpu_momentum(arr, period)
+
+    if len(result) == 2.0
+        // 105-100 = 5
+        if abs(result[0.0] - 5.0) < 0.01
+            print("  PASS: momentum")
+            let pass_count = pass_count + 1.0
+            return
+
+    print("  FAIL: momentum")
+    let fail_count = fail_count + 1.0
+
+// Run tests
+print("=== Composite Functions Tests ===")
+test_describe()
+test_outlier_detection()
+test_standardize()
+test_minmax_scale()
+test_rank()
+test_argsort()
+test_searchsorted()
+test_interpolate_linear()
+test_resample()
+test_pct_change()
+test_clip()
+test_count_nonzero()
+test_all()
+test_any()
+test_cumprod()
+test_cummax()
+test_cummin()
+test_log_returns()
+test_sign()
+test_sma()
+test_roc()
+test_momentum()
+
+print("")
+print("Composite tests: {pass_count} passed, {fail_count} failed")

@@ -1,0 +1,479 @@
+// stdlib/compiler/lower.flow
+// Phase 70: AST → IR Lowering
+//
+// Takes parser.flow AST (nd_* parallel arrays) and produces ir.flow IR.
+// This is the bridge from .flow source to SPIR-V binary.
+//
+// Subset: GPU compute kernel — arithmetic, if/else, while loops, input/output.
+// All variables are float (matching SPIR-V float32).
+//
+// Architecture:
+//   1. Expression parser: space-delimited tokens → IR instructions (Pratt-style)
+//   2. Symbol table: variable name → current IR instruction index (SSA)
+//   3. Statement walker: nd_kind/nd_child/nd_next → IR blocks + terminators
+//
+// Usage: use ir; use lower
+//        Set up nd_* arrays (from parser.flow or manually), then call lower_to_ir()
+
+// AST node arrays — populated by parser.flow or manually by the caller
+let mut nd_kind = []
+let mut nd_lhs = []
+let mut nd_op = []
+let mut nd_rhs = []
+let mut nd_rhs2 = []
+let mut nd_child = []
+let mut nd_next = []
+let mut nd_line = []
+let mut nd_mut = []
+
+// Block tracking from parser
+let mut cur_block_first = []
+let mut cur_block_last = []
+
+// Symbol table: parallel arrays mapping name → IR instruction index
+let mut sym_names = []
+let mut sym_values = []
+
+fn sym_set(name, val)
+  for si in range(0.0, len(sym_names))
+    if sym_names[si] == name
+      sym_values[si] = val
+      return 0.0
+    end
+  end
+  push(sym_names, name)
+  push(sym_values, val)
+  return 0.0
+end
+
+fn sym_get(name)
+  for si in range(0.0, len(sym_names))
+    if sym_names[si] == name
+      return sym_values[si]
+    end
+  end
+  return -1.0
+end
+
+// ===================== EXPRESSION PARSER =====================
+// Converts space-delimited expression string into IR instructions.
+// Returns the IR instruction index of the result.
+//
+// Implements operator precedence via recursive descent:
+//   expr         → comparison
+//   comparison   → additive (("<"|">"|"<="|">="|"=="|"!=") additive)?
+//   additive     → multiplicative (("+"|"-") multiplicative)*
+//   multiplicative → unary (("*"|"/") unary)*
+//   unary        → "-" unary | primary
+//   primary      → number | ident | "(" expr ")" | ident "[" expr "]" | ident "(" args ")"
+
+// Expression parser state
+// ex_tokens: array of token strings (populated by lower_expr_load)
+// ex_state: [pos, block_idx] — stored in array so mutations propagate through functions
+let mut ex_tokens = []
+let mut ex_state = [0.0, 0.0]
+
+fn ex_peek()
+  let p = ex_state[0]
+  if p >= len(ex_tokens)
+    return ""
+  end
+  return ex_tokens[p]
+end
+
+fn ex_advance()
+  let p = ex_state[0]
+  let t = ex_tokens[p]
+  ex_state[0] = p + 1.0
+  return t
+end
+
+fn ex_blk()
+  return ex_state[1]
+end
+
+fn ex_parse_expr()
+  return ex_parse_comparison()
+end
+
+fn ex_parse_comparison()
+  let left = ex_parse_additive()
+  let op = ex_peek()
+  if op == "<"
+    ex_state[0] = ex_state[0] + 1.0
+    let right = ex_parse_additive()
+    return ir_folt(ex_blk(), left, right)
+  elif op == ">"
+    ex_state[0] = ex_state[0] + 1.0
+    let right = ex_parse_additive()
+    return ir_fogt(ex_blk(), left, right)
+  elif op == "<="
+    ex_state[0] = ex_state[0] + 1.0
+    let right = ex_parse_additive()
+    return ir_fole(ex_blk(), left, right)
+  elif op == ">="
+    ex_state[0] = ex_state[0] + 1.0
+    let right = ex_parse_additive()
+    return ir_foge(ex_blk(), left, right)
+  elif op == "=="
+    ex_state[0] = ex_state[0] + 1.0
+    let right = ex_parse_additive()
+    return ir_foeq(ex_blk(), left, right)
+  elif op == "!="
+    ex_state[0] = ex_state[0] + 1.0
+    let right = ex_parse_additive()
+    return ir_fone(ex_blk(), left, right)
+  end
+  return left
+end
+
+fn ex_parse_additive()
+  let mut result = ex_parse_multiplicative()
+  let mut aop = ex_peek()
+  while aop == "+" || aop == "-"
+    ex_state[0] = ex_state[0] + 1.0
+    let right = ex_parse_multiplicative()
+    if aop == "+"
+      result = ir_fadd(ex_blk(), result, right)
+    else
+      result = ir_fsub(ex_blk(), result, right)
+    end
+    aop = ex_peek()
+  end
+  return result
+end
+
+fn ex_parse_multiplicative()
+  let mut result = ex_parse_unary()
+  let mut mop = ex_peek()
+  while mop == "*" || mop == "/"
+    ex_state[0] = ex_state[0] + 1.0
+    let right = ex_parse_unary()
+    if mop == "*"
+      result = ir_fmul(ex_blk(), result, right)
+    else
+      result = ir_fdiv(ex_blk(), result, right)
+    end
+    mop = ex_peek()
+  end
+  return result
+end
+
+fn ex_parse_unary()
+  let t = ex_peek()
+  if t == "-"
+    ex_state[0] = ex_state[0] + 1.0
+    let operand = ex_parse_unary()
+    return ir_fneg(ex_blk(), operand)
+  end
+  return ex_parse_primary()
+end
+
+fn ex_parse_primary()
+  let t = ex_advance()
+  // Parenthesized expression
+  if t == "("
+    let inner = ex_parse_expr()
+    ex_state[0] = ex_state[0] + 1.0  // skip ")"
+    return inner
+  end
+  // Number literal
+  let c0 = char_at(t, 0.0)
+  let is_digit = ord(c0) >= 48.0 && ord(c0) <= 57.0
+  if is_digit
+    return ir_const_f(ex_blk(), float(t))
+  end
+  // Identifier — check for array access or function call
+  let next = ex_peek()
+  if next == "["
+    // Array access: input[gid] → ir_load_input
+    if t == "input"
+      ex_state[0] = ex_state[0] + 1.0  // skip "["
+      let _idx = ex_parse_expr()
+      ex_state[0] = ex_state[0] + 1.0  // skip "]"
+      return ir_load_input(ex_blk())
+    end
+    // Generic array access not yet supported
+    return -1.0
+  elif next == "("
+    // Function call: float(x), etc.
+    ex_state[0] = ex_state[0] + 1.0  // skip "("
+    let arg1 = ex_parse_expr()
+    // Check for comma (multi-arg functions)
+    let mut arg2 = -1.0
+    if ex_peek() == ","
+      ex_state[0] = ex_state[0] + 1.0  // skip ","
+      arg2 = ex_parse_expr()
+    end
+    ex_state[0] = ex_state[0] + 1.0  // skip ")"
+    // Map known functions to IR ops
+    if t == "float"
+      return ir_utof(ex_blk(), arg1)
+    elif t == "abs"
+      // abs(x) → select(x < 0, -x, x)
+      let zero = ir_const_f(ex_blk(), 0.0)
+      let cond = ir_folt(ex_blk(), arg1, zero)
+      let neg = ir_fneg(ex_blk(), arg1)
+      return ir_select(ex_blk(), IR_TYPE_FLOAT, cond, neg, arg1)
+    end
+    return -1.0
+  end
+  // Variable reference → look up in symbol table
+  let val = sym_get(t)
+  return val
+end
+
+// Populate ex_tokens from a space-delimited expression string.
+// Must be called before lower_expr_run().
+// Uses manual character-by-character tokenization (split returns array, can't reassign).
+fn lower_expr_load(expr_str)
+  // Clear token array
+  while len(ex_tokens) > 0.0
+    pop(ex_tokens)
+  end
+  // Tokenize: split on spaces, preserving multi-char operators
+  let mut tok = ""
+  let elen = len(expr_str)
+  for ci in range(0.0, elen)
+    let c = char_at(expr_str, ci)
+    if c == " "
+      if len(tok) > 0.0
+        push(ex_tokens, tok)
+        tok = ""
+      end
+    else
+      tok = tok + c
+    end
+  end
+  if len(tok) > 0.0
+    push(ex_tokens, tok)
+  end
+  return 0.0
+end
+
+// Top-level expression evaluator: tokenize string, parse, return IR instruction
+fn lower_expr(block, expr_str)
+  lower_expr_load(expr_str)
+  ex_state[0] = 0.0
+  ex_state[1] = block
+  return ex_parse_expr()
+end
+
+// ===================== STATEMENT LOWERING =====================
+// Walks the AST node tree and emits IR blocks + instructions.
+
+// Mutable state for block tracking during lowering
+// Stored in array so mutations propagate through function calls
+let mut lower_state = [0.0]
+
+// Lower a single output assignment: output[gid] = expr
+fn lower_output_assign(expr_str)
+  let val = lower_expr(lower_state[0], expr_str)
+  ir_store_output(lower_state[0], val)
+  return 0.0
+end
+
+// Lower an if/elif/else chain into selection merge blocks
+fn lower_if_chain(node_idx)
+  let cond_str = nd_lhs[node_idx]
+  let body_first = float(nd_child[node_idx])
+  let chain_next = nd_rhs2[node_idx]
+
+  // Create blocks
+  let b_header = lower_state[0]
+  let b_then = ir_block("then")
+  let mut b_else = -1.0
+  let b_merge = ir_block("merge")
+
+  // Determine if there's an else/elif chain
+  if chain_next != "" && chain_next != "-1"
+    b_else = ir_block("else")
+  else
+    b_else = b_merge
+  end
+
+  // Selection merge annotation
+  ir_selection_merge(b_header, b_merge)
+
+  // Condition
+  let cond_val = lower_expr(b_header, cond_str)
+  ir_term_cond_branch(b_header, cond_val, b_then, b_else)
+
+  // Then body
+  lower_state[0] = b_then
+  lower_block(body_first)
+  // If current block has no terminator yet, branch to merge
+  if ir_bb_term_kind[lower_state[0]] == 0.0
+    ir_term_branch(lower_state[0], b_merge)
+  end
+
+  // Else/elif chain
+  if b_else != b_merge
+    lower_state[0] = b_else
+    let chain_idx = float(chain_next)
+    let ck = nd_kind[chain_idx]
+    if ck == "Elif"
+      lower_if_chain(chain_idx)
+    elif ck == "Else"
+      let else_body = float(nd_child[chain_idx])
+      lower_block(else_body)
+    end
+    if ir_bb_term_kind[lower_state[0]] == 0.0
+      ir_term_branch(lower_state[0], b_merge)
+    end
+  end
+
+  lower_state[0] = b_merge
+  return 0.0
+end
+
+// Lower a while loop into loop merge blocks
+fn lower_while(node_idx)
+  let cond_str = nd_lhs[node_idx]
+  let body_first = float(nd_child[node_idx])
+
+  // Save variables that need phi nodes (snapshot before loop)
+  // For simplicity: collect all currently-defined variable names
+  let mut loop_vars = []
+  let mut loop_vals_before = []
+  for vi in range(0.0, len(sym_names))
+    push(loop_vars, sym_names[vi])
+    push(loop_vals_before, sym_values[vi])
+  end
+
+  // Create blocks: header, body, continue, merge
+  let b_pre = lower_state[0]
+  let b_header = ir_block("loop_header")
+  let b_body = ir_block("loop_body")
+  let b_cont = ir_block("loop_continue")
+  let b_merge = ir_block("loop_merge")
+
+  // Branch from pre-loop to header
+  ir_term_branch(b_pre, b_header)
+
+  // Create phi nodes in header for all known variables
+  let mut phi_indices = []
+  ir_loop_merge(b_header, b_merge, b_cont)
+  for vi in range(0.0, len(loop_vars))
+    let phi = ir_phi(b_header, IR_TYPE_FLOAT)
+    ir_phi_add(phi, loop_vals_before[vi], b_pre)
+    push(phi_indices, phi)
+    // Update symbol table to use phi result
+    sym_set(loop_vars[vi], phi)
+  end
+
+  // Condition in header
+  let cond_val = lower_expr(b_header, cond_str)
+  ir_term_cond_branch(b_header, cond_val, b_body, b_merge)
+
+  // Body
+  lower_state[0] = b_body
+  lower_block(body_first)
+  if ir_bb_term_kind[lower_state[0]] == 0.0
+    ir_term_branch(lower_state[0], b_cont)
+  end
+
+  // Continue block: branch back to header
+  lower_state[0] = b_cont
+  ir_term_branch(b_cont, b_header)
+
+  // Wire phi back-edges: add (current value, continue_block) to each phi
+  for vi in range(0.0, len(loop_vars))
+    let current_val = sym_get(loop_vars[vi])
+    ir_phi_add(phi_indices[vi], current_val, b_cont)
+  end
+
+  // Restore symbol table to phi values (for code after the loop)
+  for vi in range(0.0, len(loop_vars))
+    sym_set(loop_vars[vi], phi_indices[vi])
+  end
+
+  lower_state[0] = b_merge
+  return 0.0
+end
+
+// Lower a block of statements (linked via nd_next)
+fn lower_block(first_node)
+  let mut node = first_node
+  while node >= 0.0
+    let kind = nd_kind[node]
+
+    if kind == "Let" || kind == "Assign"
+      let name = nd_lhs[node]
+      let expr_str = nd_rhs[node]
+      // Check for output[gid] = expr pattern
+      if kind == "Assign" && name == "output"
+        // ArrSet to output — but parser stores this differently
+        // For now, handle in ArrSet kind below
+        let val = lower_expr(lower_state[0], expr_str)
+        sym_set(name, val)
+      else
+        let val = lower_expr(lower_state[0], expr_str)
+        sym_set(name, val)
+      end
+
+    elif kind == "ArrSet"
+      let arr_name = nd_lhs[node]
+      let expr_str = nd_rhs[node]
+      if arr_name == "output"
+        lower_output_assign(expr_str)
+      end
+
+    elif kind == "If"
+      lower_if_chain(node)
+
+    elif kind == "While"
+      lower_while(node)
+
+    elif kind == "Return"
+      let expr_str = nd_lhs[node]
+      let val = lower_expr(lower_state[0], expr_str)
+      ir_store_output(lower_state[0], val)
+
+    elif kind == "Call"
+      // Bare function call — evaluate for side effects
+      let fn_name = nd_lhs[node]
+      let args_str = nd_rhs[node]
+      // No-op for GPU compute (no side-effect fns in compute kernels)
+
+    end
+
+    let nx = nd_next[node]
+    if nx == "-1" || nx == ""
+      node = -1.0
+    else
+      node = float(nx)
+    end
+  end
+  return 0.0
+end
+
+// ===================== MAIN ENTRY POINT =====================
+
+// lower_to_ir(): Takes the parsed AST (nd_* arrays) and produces IR.
+// Assumes parser.flow has already been run and nd_* arrays are populated.
+// Assumes ir.flow is available (use ir).
+//
+// Convention: The source is a GPU compute kernel:
+//   - `input` is the input buffer (input[gid])
+//   - `output` is the output buffer (output[gid])
+//   - All variables are float32
+//   - The function body runs per-thread (one invocation per element)
+fn lower_to_ir()
+  ir_new()
+
+  // Entry block
+  let b_entry = ir_block("entry")
+  lower_state[0] = b_entry
+
+  // Walk top-level statements
+  let first = cur_block_first[0.0]
+  lower_block(first)
+
+  // If current block has no terminator, add return
+  if ir_bb_term_kind[lower_state[0]] == 0.0
+    ir_term_return(lower_state[0])
+  end
+
+  return 0.0
+end

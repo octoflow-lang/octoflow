@@ -1,0 +1,1196 @@
+// stdlib/ai/weight_loader.flow — GGUF Weight Loader for LLM Inference
+//
+// Loads quantized weights from GGUF file bytes, dequantizes to F32,
+// and builds weight maps compatible with transformer.flow.
+//
+// Uses FLAT key API from gguf.flow — no nested maps.
+// Tensor info stored as: t.NAME.type, t.NAME.offset, t.NAME.count, etc.
+//
+// Supports:
+//   - F32 tensors (norm weights, small tensors)
+//   - F16 tensors (embedding, output)
+//   - Q4_K_M tensors (bulk weights) — CPU dequant, GPU dequant later
+//
+// Functions:
+//   load_layer_weights(file_bytes, model, layer_idx) → weight map
+//   load_embedding_row(file_bytes, model, token_id, n_embd) → float array
+//   load_output_norm(file_bytes, model) → float array
+//   load_output_proj(file_bytes, model) → float array
+//   read_tensor_by_name(file_bytes, model, tname) → float array
+//
+// Requirements: --allow-read (for GGUF file access)
+
+use "gguf"
+
+// ── Q4_K Dequantization (CPU) ──────────────────────────────────
+
+fn get_scale_min_k4(j, bytes, scales_off)
+  // Decode 6-bit scale and min from Q4_K 12-byte scales field
+  // Returns [scale, min] as 2-element array
+  let mut sm = [0.0, 0.0]
+
+  if j < 4.0
+    // Simple case: direct 6-bit values
+    let d_val = bytes[int(scales_off + j)]
+    // d = q[j] & 63
+    let d = d_val - floor(d_val / 64.0) * 64.0
+    let m_val = bytes[int(scales_off + j + 4.0)]
+    // m = q[j+4] & 63
+    let m = m_val - floor(m_val / 64.0) * 64.0
+    sm[0] = d
+    sm[1] = m
+  else
+    // Complex case: split across bytes
+    let qj4 = bytes[int(scales_off + j + 4.0)]
+    let qj_4 = bytes[int(scales_off + j - 4.0)]
+    let qj0 = bytes[int(scales_off + j)]
+    // d = (q[j+4] & 0xF) | ((q[j-4] >> 6) << 4)
+    let low_d = qj4 - floor(qj4 / 16.0) * 16.0
+    let high_d = floor(qj_4 / 64.0)
+    sm[0] = low_d + high_d * 16.0
+    // m = (q[j+4] >> 4) | ((q[j] >> 6) << 4)
+    let low_m = floor(qj4 / 16.0)
+    let high_m = floor(qj0 / 64.0)
+    sm[1] = low_m + high_m * 16.0
+  end
+
+  return sm
+end
+
+fn dequant_q4k_block(bytes, block_off)
+  // Dequantize one Q4_K block: 256 weights from 144 bytes
+  // Layout: d(f16, 2B) + dmin(f16, 2B) + scales(12B) + qs(128B) = 144
+  let d = read_f16_le(bytes, block_off)
+  let dmin = read_f16_le(bytes, block_off + 2.0)
+  let scales_off = block_off + 4.0
+  let qs_off = block_off + 16.0
+
+  let mut _dq4_out = []
+  let mut is_idx = 0.0
+  let mut q_off = qs_off
+
+  // 4 iterations x 64 weights = 256 weights
+  let mut j = 0.0
+  while j < 4.0
+    // Get scale/min for sub-block pair
+    let sm1 = get_scale_min_k4(is_idx, bytes, scales_off)
+    let d1 = d * sm1[0]
+    let m1 = dmin * sm1[1]
+
+    let sm2 = get_scale_min_k4(is_idx + 1.0, bytes, scales_off)
+    let d2 = d * sm2[0]
+    let m2 = dmin * sm2[1]
+
+    // 32 weights from low nibbles
+    let mut l = 0.0
+    while l < 32.0
+      let q_byte = bytes[int(q_off + l)]
+      let q_low = q_byte - floor(q_byte / 16.0) * 16.0
+      push(_dq4_out, d1 * q_low - m1)
+      l = l + 1.0
+    end
+
+    // 32 weights from high nibbles
+    let mut l2 = 0.0
+    while l2 < 32.0
+      let q_byte2 = bytes[int(q_off + l2)]
+      let q_high = floor(q_byte2 / 16.0)
+      push(_dq4_out, d2 * q_high - m2)
+      l2 = l2 + 1.0
+    end
+
+    q_off = q_off + 32.0
+    is_idx = is_idx + 2.0
+    j = j + 1.0
+  end
+
+  return _dq4_out
+end
+
+fn dequant_q4k_tensor(bytes, abs_offset, n_elements)
+  // Dequantize full Q4_K tensor to F32
+  let block_size = 256.0
+  let block_bytes = 144.0
+  let n_blocks = ceil(n_elements / block_size)
+
+  let mut _dqt_out = []
+  let mut b = 0.0
+  while b < n_blocks
+    let bo = abs_offset + b * block_bytes
+    let block_data = dequant_q4k_block(bytes, bo)
+
+    // Copy block (possibly partial for last block)
+    let remaining = n_elements - b * block_size
+    let mut copy_count = block_size
+    if remaining < copy_count
+      copy_count = remaining
+    end
+
+    let mut ci = 0.0
+    while ci < copy_count
+      push(_dqt_out, block_data[int(ci)])
+      ci = ci + 1.0
+    end
+
+    b = b + 1.0
+  end
+
+  return _dqt_out
+end
+
+// ── F16 Tensor Loading ─────────────────────────────────────────
+
+fn load_f16_tensor(bytes, abs_offset, n_elements)
+  // Load F16 tensor, convert each to F32
+  let mut _f16_out = []
+  let mut i = 0.0
+  while i < n_elements
+    let f = read_f16_le(bytes, abs_offset + i * 2.0)
+    push(_f16_out, f)
+    i = i + 1.0
+  end
+  return _f16_out
+end
+
+// ── Generic Tensor Loading (flat key API) ──────────────────────
+
+fn load_tensor_named(file_bytes, model, tname)
+  // Load tensor by name using flat keys in model map
+  // Auto-dispatches F32/F16/Q4_K based on tensor type
+  let data_start = map_get(model, "data_start")
+  let prefix = "t." + tname
+  let ttype = map_get(model, prefix + ".type")
+  let offset = data_start + map_get(model, prefix + ".offset")
+  let count = map_get(model, prefix + ".count")
+
+  if ttype == 0.0
+    // F32: read directly
+    let mut _ltn_out = []
+    let mut i = 0.0
+    while i < count
+      let f = read_f32_le(file_bytes, offset + i * 4.0)
+      push(_ltn_out, f)
+      i = i + 1.0
+    end
+    return _ltn_out
+  elif ttype == 1.0
+    // F16
+    return load_f16_tensor(file_bytes, offset, count)
+  elif ttype == 12.0
+    // Q4_K
+    return dequant_q4k_tensor(file_bytes, offset, count)
+  end
+
+  // Unsupported type — return zeros
+  print("WARNING: Unsupported tensor type {ttype}, returning zeros")
+  let mut _ltn_zeros = []
+  let mut i2 = 0.0
+  while i2 < count
+    push(_ltn_zeros, 0.0)
+    i2 = i2 + 1.0
+  end
+  return _ltn_zeros
+end
+
+// ── Tensor Name Builder ────────────────────────────────────────
+
+fn tensor_name(layer_idx, suffix)
+  // Build GGUF tensor name: "blk.{N}.{suffix}"
+  return "blk." + str(layer_idx) + "." + suffix
+end
+
+// ── Layer Weight Loading ───────────────────────────────────────
+// NOTE: OctoFlow maps can only store scalars (Float/Str), NOT arrays.
+// So we cannot bundle weight arrays into a map. Instead, callers load
+// each weight individually with read_tensor_by_name():
+//
+//   let attn_norm = read_tensor_by_name(file_bytes, model, "blk.0.attn_norm.weight")
+//   let wq = read_tensor_by_name(file_bytes, model, "blk.0.attn_q.weight")
+//   // ... pass arrays directly to GPU functions
+
+// ── Embedding Row Loading ──────────────────────────────────────
+
+fn load_embedding_row(file_bytes, model, token_id, n_embd)
+  // Load one row from the embedding table
+  let data_start = map_get(model, "data_start")
+  let emb_name = "token_embd.weight"
+
+  if gguf_has_tensor(model, emb_name) == 0.0
+    print("ERROR: token_embd.weight not found")
+    let mut zeros = []
+    let mut i = 0.0
+    while i < n_embd
+      push(zeros, 0.0)
+      i = i + 1.0
+    end
+    return zeros
+  end
+
+  let ttype = gguf_tensor_type(model, emb_name)
+  let base_offset = data_start + gguf_tensor_offset(model, emb_name)
+
+  // Row offset depends on quantization type
+  if ttype == 0.0
+    // F32: row_offset = token_id * n_embd * 4
+    let row_offset = base_offset + token_id * n_embd * 4.0
+    let mut row = []
+    let mut i = 0.0
+    while i < n_embd
+      let f = read_f32_le(file_bytes, row_offset + i * 4.0)
+      push(row, f)
+      i = i + 1.0
+    end
+    return row
+  elif ttype == 1.0
+    // F16: row_offset = token_id * n_embd * 2
+    let row_offset = base_offset + token_id * n_embd * 2.0
+    let mut row = []
+    let mut i = 0.0
+    while i < n_embd
+      let f = read_f16_le(file_bytes, row_offset + i * 2.0)
+      push(row, f)
+      i = i + 1.0
+    end
+    return row
+  elif ttype == 12.0
+    // Q4_K: need to find correct block and extract row
+    let block_size = 256.0
+    let block_bytes = 144.0
+    let weight_idx = token_id * n_embd
+    let block_idx = floor(weight_idx / block_size)
+
+    // Dequant the entire block(s) containing this row
+    let weights_start = block_idx * block_size
+    let weights_end = weight_idx + n_embd
+    let blocks_needed = ceil((weights_end - weights_start) / block_size)
+
+    let mut all_weights = []
+    let mut b = 0.0
+    while b < blocks_needed
+      let bo = base_offset + (block_idx + b) * block_bytes
+      let bdata = dequant_q4k_block(file_bytes, bo)
+      let mut bi = 0.0
+      while bi < 256.0
+        push(all_weights, bdata[int(bi)])
+        bi = bi + 1.0
+      end
+      b = b + 1.0
+    end
+
+    // Extract the row from dequantized data
+    let local_start = weight_idx - weights_start
+    let mut row = []
+    let mut i = 0.0
+    while i < n_embd
+      push(row, all_weights[int(local_start + i)])
+      i = i + 1.0
+    end
+    return row
+  end
+
+  // Unsupported type
+  print("WARNING: Unsupported embedding type {ttype}")
+  let mut zeros = []
+  let mut zi = 0.0
+  while zi < n_embd
+    push(zeros, 0.0)
+    zi = zi + 1.0
+  end
+  return zeros
+end
+
+// ── Output Weights Loading ─────────────────────────────────────
+
+fn load_output_norm(file_bytes, model)
+  // Load final RMSNorm weights
+  let norm_name = "output_norm.weight"
+  if gguf_has_tensor(model, norm_name) == 1.0
+    return load_tensor_named(file_bytes, model, norm_name)
+  end
+
+  print("WARNING: output_norm.weight not found")
+  let mut _empty_arr = []
+  return _empty_arr
+end
+
+fn load_output_proj(file_bytes, model)
+  // Load lm_head projection weights (vocab x n_embd)
+  let out_name = "output.weight"
+  if gguf_has_tensor(model, out_name) == 1.0
+    return load_tensor_named(file_bytes, model, out_name)
+  end
+
+  // Some models tie embedding and output weights
+  let emb_name = "token_embd.weight"
+  if gguf_has_tensor(model, emb_name) == 1.0
+    print("NOTE: Using tied embedding weights for output projection")
+    return load_tensor_named(file_bytes, model, emb_name)
+  end
+
+  print("WARNING: output.weight not found")
+  let mut _empty_arr = []
+  return _empty_arr
+end
+
+// ── Convenience: Read tensor by name from model ────────────────
+
+fn read_tensor_by_name(file_bytes, model, tname)
+  // Load a specific tensor from GGUF model by name
+  if gguf_has_tensor(model, tname) == 1.0
+    return load_tensor_named(file_bytes, model, tname)
+  end
+
+  print("WARNING: tensor not found: {tname}")
+  let mut _ea2 = []
+  return _ea2
+end
+
+// ══════════════════════════════════════════════════════════════════════
+// FILE-BASED TENSOR LOADING — reads from file via MEM_TABLE, no OOM.
+// For use with gguf_load_from_file() models.
+// ══════════════════════════════════════════════════════════════════════
+
+// ── MEM-based F16 decode ─────────────────────────────────────────
+
+fn read_f16_le_m(buf, offset)
+  let b0 = mem_get_u8(buf, offset)
+  let b1 = mem_get_u8(buf, offset + 1.0)
+  let bits = b0 + b1 * 256.0
+  let sign_bit = floor(bits / 32768.0)
+  let remainder = bits - sign_bit * 32768.0
+  let exp_bits = floor(remainder / 1024.0)
+  let mantissa_bits = remainder - exp_bits * 1024.0
+  if exp_bits == 0.0
+    if mantissa_bits == 0.0
+      return 0.0
+    end
+    let val = mantissa_bits / 1024.0 * pow(2.0, -14.0)
+    if sign_bit == 1.0
+      return val * -1.0
+    end
+    return val
+  elif exp_bits == 31.0
+    return 0.0
+  end
+  let val = (1.0 + mantissa_bits / 1024.0) * pow(2.0, exp_bits - 15.0)
+  if sign_bit == 1.0
+    return val * -1.0
+  end
+  return val
+end
+
+// ── MEM-based Q4_K dequant ───────────────────────────────────────
+
+fn get_scale_min_k4_m(j, buf, scales_off)
+  let mut sm = [0.0, 0.0]
+  if j < 4.0
+    let d_val = mem_get_u8(buf, scales_off + j)
+    let d = d_val - floor(d_val / 64.0) * 64.0
+    let m_val = mem_get_u8(buf, scales_off + j + 4.0)
+    let m = m_val - floor(m_val / 64.0) * 64.0
+    sm[0] = d
+    sm[1] = m
+  else
+    let qj4 = mem_get_u8(buf, scales_off + j + 4.0)
+    let qj_4 = mem_get_u8(buf, scales_off + j - 4.0)
+    let qj0 = mem_get_u8(buf, scales_off + j)
+    let low_d = qj4 - floor(qj4 / 16.0) * 16.0
+    let high_d = floor(qj_4 / 64.0)
+    sm[0] = low_d + high_d * 16.0
+    let low_m = floor(qj4 / 16.0)
+    let high_m = floor(qj0 / 64.0)
+    sm[1] = low_m + high_m * 16.0
+  end
+  return sm
+end
+
+fn dequant_q4k_block_m(buf, block_off)
+  let d = read_f16_le_m(buf, block_off)
+  let dmin = read_f16_le_m(buf, block_off + 2.0)
+  let scales_off = block_off + 4.0
+  let qs_off = block_off + 16.0
+
+  let mut _dq4_out = []
+  let mut is_idx = 0.0
+  let mut q_off = qs_off
+
+  let mut j = 0.0
+  while j < 4.0
+    let sm1 = get_scale_min_k4_m(is_idx, buf, scales_off)
+    let d1 = d * sm1[0]
+    let m1 = dmin * sm1[1]
+    let sm2 = get_scale_min_k4_m(is_idx + 1.0, buf, scales_off)
+    let d2 = d * sm2[0]
+    let m2 = dmin * sm2[1]
+
+    let mut l = 0.0
+    while l < 32.0
+      let q_byte = mem_get_u8(buf, q_off + l)
+      let q_low = q_byte - floor(q_byte / 16.0) * 16.0
+      push(_dq4_out, d1 * q_low - m1)
+      l = l + 1.0
+    end
+
+    let mut l2 = 0.0
+    while l2 < 32.0
+      let q_byte2 = mem_get_u8(buf, q_off + l2)
+      let q_high = floor(q_byte2 / 16.0)
+      push(_dq4_out, d2 * q_high - m2)
+      l2 = l2 + 1.0
+    end
+
+    q_off = q_off + 32.0
+    is_idx = is_idx + 2.0
+    j = j + 1.0
+  end
+  return _dq4_out
+end
+
+// ── Load tensor from file (no OOM) ──────────────────────────────
+// Reads raw bytes from GGUF file, dequants to f32 array.
+// Uses gguf_tensor_file_offset for u64-precise seeking.
+
+fn load_tensor_from_file(file_path, model, tname)
+  if gguf_has_tensor(model, tname) == 0.0
+    print("WARNING: tensor not found: {tname}")
+    let mut _ea3 = []
+    return _ea3
+  end
+
+  let ttype = gguf_tensor_type(model, tname)
+  let count = gguf_tensor_count(model, tname)
+  let byte_size = gguf_tensor_byte_size(model, tname)
+
+  // Get precise u64 file offset
+  let off_buf = gguf_tensor_file_offset(model, tname)
+
+  // Allocate temp buffer and read raw bytes from file
+  let raw = mem_alloc(byte_size)
+  let _rd = file_read_into_mem_u64(file_path, raw, off_buf, 0.0, byte_size)
+  mem_free(off_buf)
+
+  // Dequant based on type
+  let mut result = []
+
+  if ttype == 0.0
+    // F32: read directly
+    let mut i = 0.0
+    while i < count
+      let f = bits_to_float(mem_get_u32(raw, i * 4.0))
+      push(result, f)
+      i = i + 1.0
+    end
+  elif ttype == 1.0
+    // F16: convert each value
+    let mut i = 0.0
+    while i < count
+      let f = read_f16_le_m(raw, i * 2.0)
+      push(result, f)
+      i = i + 1.0
+    end
+  elif ttype == 12.0
+    // Q4_K: inline dequant — no function calls to avoid O(n^2) clone overhead
+    // Q4_K block: 256 weights from 144 bytes
+    // Layout: d(f16,2B) + dmin(f16,2B) + scales(12B) + qs(128B) = 144
+    let block_size = 256.0
+    let block_bytes = 144.0
+    let n_blocks = ceil(count / block_size)
+    let mut b = 0.0
+    while b < n_blocks
+      let bo = b * block_bytes
+      // Inline F16 decode for d
+      let db0 = mem_get_u8(raw, bo)
+      let db1 = mem_get_u8(raw, bo + 1.0)
+      let d_bits = db0 + db1 * 256.0
+      let d_sign = floor(d_bits / 32768.0)
+      let d_rem = d_bits - d_sign * 32768.0
+      let d_exp = floor(d_rem / 1024.0)
+      let d_man = d_rem - d_exp * 1024.0
+      let mut d_val = 0.0
+      if d_exp > 0.0
+        if d_exp < 31.0
+          d_val = (1.0 + d_man / 1024.0) * pow(2.0, d_exp - 15.0)
+          if d_sign == 1.0
+            d_val = d_val * -1.0
+          end
+        end
+      end
+      // Inline F16 decode for dmin
+      let mb0 = mem_get_u8(raw, bo + 2.0)
+      let mb1 = mem_get_u8(raw, bo + 3.0)
+      let m_bits = mb0 + mb1 * 256.0
+      let m_sign = floor(m_bits / 32768.0)
+      let m_rem = m_bits - m_sign * 32768.0
+      let m_exp = floor(m_rem / 1024.0)
+      let m_man = m_rem - m_exp * 1024.0
+      let mut dm_val = 0.0
+      if m_exp > 0.0
+        if m_exp < 31.0
+          dm_val = (1.0 + m_man / 1024.0) * pow(2.0, m_exp - 15.0)
+          if m_sign == 1.0
+            dm_val = dm_val * -1.0
+          end
+        end
+      end
+      let sc_off = bo + 4.0
+      let qs_off = bo + 16.0
+      // 4 sub-block pairs × 64 weights = 256
+      let mut j = 0.0
+      let mut q_ptr = qs_off
+      let mut is_idx = 0.0
+      while j < 4.0
+        // Decode scale/min for sub-block pair (inline get_scale_min_k4_m)
+        let mut sc1 = 0.0
+        let mut mn1 = 0.0
+        if is_idx < 4.0
+          let sv1 = mem_get_u8(raw, sc_off + is_idx)
+          sc1 = sv1 - floor(sv1 / 64.0) * 64.0
+          let mv1 = mem_get_u8(raw, sc_off + is_idx + 4.0)
+          mn1 = mv1 - floor(mv1 / 64.0) * 64.0
+        else
+          let qj4_1 = mem_get_u8(raw, sc_off + is_idx + 4.0)
+          let qj_4_1 = mem_get_u8(raw, sc_off + is_idx - 4.0)
+          let qj0_1 = mem_get_u8(raw, sc_off + is_idx)
+          sc1 = (qj4_1 - floor(qj4_1 / 16.0) * 16.0) + floor(qj_4_1 / 64.0) * 16.0
+          mn1 = floor(qj4_1 / 16.0) + floor(qj0_1 / 64.0) * 16.0
+        end
+        let d1 = d_val * sc1
+        let m1 = dm_val * mn1
+        // Second sub-block
+        let is2 = is_idx + 1.0
+        let mut sc2 = 0.0
+        let mut mn2 = 0.0
+        if is2 < 4.0
+          let sv2 = mem_get_u8(raw, sc_off + is2)
+          sc2 = sv2 - floor(sv2 / 64.0) * 64.0
+          let mv2 = mem_get_u8(raw, sc_off + is2 + 4.0)
+          mn2 = mv2 - floor(mv2 / 64.0) * 64.0
+        else
+          let qj4_2 = mem_get_u8(raw, sc_off + is2 + 4.0)
+          let qj_4_2 = mem_get_u8(raw, sc_off + is2 - 4.0)
+          let qj0_2 = mem_get_u8(raw, sc_off + is2)
+          sc2 = (qj4_2 - floor(qj4_2 / 16.0) * 16.0) + floor(qj_4_2 / 64.0) * 16.0
+          mn2 = floor(qj4_2 / 16.0) + floor(qj0_2 / 64.0) * 16.0
+        end
+        let d2 = d_val * sc2
+        let m2 = dm_val * mn2
+        // 32 weights from low nibbles
+        let mut l = 0.0
+        while l < 32.0
+          let qb = mem_get_u8(raw, q_ptr + l)
+          push(result, d1 * (qb - floor(qb / 16.0) * 16.0) - m1)
+          l = l + 1.0
+        end
+        // 32 weights from high nibbles
+        let mut l2 = 0.0
+        while l2 < 32.0
+          let qb2 = mem_get_u8(raw, q_ptr + l2)
+          push(result, d2 * floor(qb2 / 16.0) - m2)
+          l2 = l2 + 1.0
+        end
+        q_ptr = q_ptr + 32.0
+        is_idx = is_idx + 2.0
+        j = j + 1.0
+      end
+      b = b + 1.0
+    end
+  elif ttype == 14.0
+    // Q6_K: inline dequant — 256 elements per block, 210 bytes
+    // Layout: ql(128B) + qh(64B) + scales(16B int8) + d(f16,2B)
+    let block_size6 = 256.0
+    let block_bytes6 = 210.0
+    let n_blocks6 = ceil(count / block_size6)
+    let mut b6 = 0.0
+    while b6 < n_blocks6
+      let bo6 = b6 * block_bytes6
+      // Decode d (f16) — at END of block (bytes 208-209)
+      let d6b0 = mem_get_u8(raw, bo6 + 208.0)
+      let d6b1 = mem_get_u8(raw, bo6 + 209.0)
+      let d6_bits = d6b0 + d6b1 * 256.0
+      let d6_sign = floor(d6_bits / 32768.0)
+      let d6_rem = d6_bits - d6_sign * 32768.0
+      let d6_exp = floor(d6_rem / 1024.0)
+      let d6_man = d6_rem - d6_exp * 1024.0
+      let mut d6v = 0.0
+      if d6_exp > 0.0
+        if d6_exp < 31.0
+          d6v = (1.0 + d6_man / 1024.0) * pow(2.0, d6_exp - 15.0)
+          if d6_sign == 1.0
+            d6v = d6v * -1.0
+          end
+        end
+      end
+      let ql6 = bo6
+      let qh6 = bo6 + 128.0
+      let sc6 = bo6 + 192.0
+      // Pre-allocate block output
+      let mut _b6o = []
+      let mut _f6 = 0.0
+      while _f6 < 256.0
+        push(_b6o, 0.0)
+        _f6 = _f6 + 1.0
+      end
+      // 2 halves of 128
+      let mut h6 = 0.0
+      while h6 < 2.0
+        let hb6 = h6 * 128.0
+        let ql6o = ql6 + h6 * 64.0
+        let qh6o = qh6 + h6 * 32.0
+        let sc6o = sc6 + h6 * 8.0
+        let mut l6 = 0.0
+        while l6 < 32.0
+          let qla6 = mem_get_u8(raw, ql6o + l6)
+          let qlb6 = mem_get_u8(raw, ql6o + l6 + 32.0)
+          let qhv6 = mem_get_u8(raw, qh6o + l6)
+          // is = l/16 selects which sub-block scale pair to use
+          let is6 = floor(l6 / 16.0)
+          // Scales (signed int8) — indexed by is6 offset
+          let r0 = mem_get_u8(raw, sc6o + is6)
+          let mut sv0 = r0
+          if sv0 > 127.0
+            sv0 = sv0 - 256.0
+          end
+          let r2 = mem_get_u8(raw, sc6o + is6 + 2.0)
+          let mut sv2 = r2
+          if sv2 > 127.0
+            sv2 = sv2 - 256.0
+          end
+          let r4 = mem_get_u8(raw, sc6o + is6 + 4.0)
+          let mut sv4 = r4
+          if sv4 > 127.0
+            sv4 = sv4 - 256.0
+          end
+          let r6 = mem_get_u8(raw, sc6o + is6 + 6.0)
+          let mut sv6 = r6
+          if sv6 > 127.0
+            sv6 = sv6 - 256.0
+          end
+          // q1: pos l — ql lower nibble, qh bits 0-1
+          let q61_lo = qla6 - floor(qla6 / 16.0) * 16.0
+          let q61_hi = qhv6 - floor(qhv6 / 4.0) * 4.0
+          _b6o[int(hb6 + l6)] = d6v * sv0 * ((q61_lo + q61_hi * 16.0) - 32.0)
+          // q2: pos l+32 — ql[+32] lower nibble, qh bits 2-3
+          let q62_lo = qlb6 - floor(qlb6 / 16.0) * 16.0
+          let qhs2 = floor(qhv6 / 4.0)
+          let q62_hi = qhs2 - floor(qhs2 / 4.0) * 4.0
+          _b6o[int(hb6 + l6 + 32.0)] = d6v * sv2 * ((q62_lo + q62_hi * 16.0) - 32.0)
+          // q3: pos l+64 — ql upper nibble, qh bits 4-5
+          let q63_lo = floor(qla6 / 16.0)
+          let qhs4 = floor(qhv6 / 16.0)
+          let q63_hi = qhs4 - floor(qhs4 / 4.0) * 4.0
+          _b6o[int(hb6 + l6 + 64.0)] = d6v * sv4 * ((q63_lo + q63_hi * 16.0) - 32.0)
+          // q4: pos l+96 — ql[+32] upper nibble, qh bits 6-7
+          let q64_lo = floor(qlb6 / 16.0)
+          let q64_hi = floor(qhv6 / 64.0)
+          _b6o[int(hb6 + l6 + 96.0)] = d6v * sv6 * ((q64_lo + q64_hi * 16.0) - 32.0)
+          l6 = l6 + 1.0
+        end
+        h6 = h6 + 1.0
+      end
+      // Copy block to result (handle partial last block)
+      let rem6 = count - b6 * block_size6
+      let mut cc6 = block_size6
+      if rem6 < cc6
+        cc6 = rem6
+      end
+      let mut ci6 = 0.0
+      while ci6 < cc6
+        push(result, _b6o[int(ci6)])
+        ci6 = ci6 + 1.0
+      end
+      b6 = b6 + 1.0
+    end
+  else
+    print("WARNING: Unsupported tensor type {ttype}")
+    let mut i = 0.0
+    while i < count
+      push(result, 0.0)
+      i = i + 1.0
+    end
+  end
+
+  mem_free(raw)
+  return result
+end
+
+// ── Load embedding row from file ─────────────────────────────────
+
+fn load_embedding_row_from_file(file_path, model, token_id, n_embd)
+  let emb_name = "token_embd.weight"
+  if gguf_has_tensor(model, emb_name) == 0.0
+    print("ERROR: token_embd.weight not found")
+    let mut zeros = []
+    let mut i = 0.0
+    while i < n_embd
+      push(zeros, 0.0)
+      i = i + 1.0
+    end
+    return zeros
+  end
+
+  let ttype = gguf_tensor_type(model, emb_name)
+  let off_buf = gguf_tensor_file_offset(model, emb_name)
+
+  if ttype == 0.0
+    // F32: read one row (token_id * n_embd * 4 bytes)
+    let row_byte_off = token_id * n_embd * 4.0
+    // Add row offset to file offset
+    let row_off = mem_alloc(8)
+    mem_set_u64(row_off, 0.0, row_byte_off)
+    let _a = mem_u64_add(off_buf, 0.0, row_off, 0.0)
+    mem_free(row_off)
+
+    let row_bytes = n_embd * 4.0
+    let raw = mem_alloc(row_bytes)
+    let _rd = file_read_into_mem_u64(file_path, raw, off_buf, 0.0, row_bytes)
+    mem_free(off_buf)
+
+    let mut row = []
+    let mut i = 0.0
+    while i < n_embd
+      let f = bits_to_float(mem_get_u32(raw, i * 4.0))
+      push(row, f)
+      i = i + 1.0
+    end
+    mem_free(raw)
+    return row
+  elif ttype == 1.0
+    // F16: row_offset = token_id * n_embd * 2
+    let row_byte_off = token_id * n_embd * 2.0
+    let row_off = mem_alloc(8)
+    mem_set_u64(row_off, 0.0, row_byte_off)
+    let _a = mem_u64_add(off_buf, 0.0, row_off, 0.0)
+    mem_free(row_off)
+
+    let row_bytes = n_embd * 2.0
+    let raw = mem_alloc(row_bytes)
+    let _rd = file_read_into_mem_u64(file_path, raw, off_buf, 0.0, row_bytes)
+    mem_free(off_buf)
+
+    let mut row = []
+    let mut i = 0.0
+    while i < n_embd
+      let f = read_f16_le_m(raw, i * 2.0)
+      push(row, f)
+      i = i + 1.0
+    end
+    mem_free(raw)
+    return row
+  elif ttype == 12.0
+    // Q4_K: find the block(s) containing this row
+    let block_size = 256.0
+    let block_bytes = 144.0
+    let weight_idx = token_id * n_embd
+    let block_idx = floor(weight_idx / block_size)
+    let weights_end = weight_idx + n_embd
+    let blocks_needed = ceil((weights_end - block_idx * block_size) / block_size)
+
+    // Read just the needed blocks
+    let read_bytes_count = blocks_needed * block_bytes
+    let block_byte_off = block_idx * block_bytes
+    let blk_off = mem_alloc(8)
+    mem_set_u64(blk_off, 0.0, block_byte_off)
+    let _a = mem_u64_add(off_buf, 0.0, blk_off, 0.0)
+    mem_free(blk_off)
+
+    let raw = mem_alloc(read_bytes_count)
+    let _rd = file_read_into_mem_u64(file_path, raw, off_buf, 0.0, read_bytes_count)
+    mem_free(off_buf)
+
+    // Dequant and extract row
+    let mut all_weights = []
+    let mut b = 0.0
+    while b < blocks_needed
+      let bo = b * block_bytes
+      let bdata = dequant_q4k_block_m(raw, bo)
+      let mut bi = 0.0
+      while bi < 256.0
+        push(all_weights, bdata[int(bi)])
+        bi = bi + 1.0
+      end
+      b = b + 1.0
+    end
+    mem_free(raw)
+
+    let local_start = weight_idx - block_idx * block_size
+    let mut row = []
+    let mut i = 0.0
+    while i < n_embd
+      push(row, all_weights[int(local_start + i)])
+      i = i + 1.0
+    end
+    return row
+  elif ttype == 14.0
+    // Q6_K: 256 elements per block, 210 bytes per block
+    // Layout: ql(128B) + qh(64B) + scales(16B int8) + d(f16,2B) = 210
+    let block_size = 256.0
+    let block_bytes = 210.0
+    let weight_idx = token_id * n_embd
+    let block_idx = floor(weight_idx / block_size)
+    let weights_end = weight_idx + n_embd
+    let blocks_needed = ceil((weights_end - block_idx * block_size) / block_size)
+
+    let read_bytes_count = blocks_needed * block_bytes
+    let block_byte_off = block_idx * block_bytes
+    let blk_off = mem_alloc(8)
+    mem_set_u64(blk_off, 0.0, block_byte_off)
+    let _a = mem_u64_add(off_buf, 0.0, blk_off, 0.0)
+    mem_free(blk_off)
+
+    let raw = mem_alloc(read_bytes_count)
+    let _rd = file_read_into_mem_u64(file_path, raw, off_buf, 0.0, read_bytes_count)
+    mem_free(off_buf)
+
+    // Inline Q6_K dequant for all needed blocks
+    let mut all_weights = []
+    let mut blki = 0.0
+    while blki < blocks_needed
+      let bo = blki * block_bytes
+      // Decode d (f16) — at END of block (bytes 208-209)
+      let d6b0 = mem_get_u8(raw, bo + 208.0)
+      let d6b1 = mem_get_u8(raw, bo + 209.0)
+      let d6_bits = d6b0 + d6b1 * 256.0
+      let d6_sign = floor(d6_bits / 32768.0)
+      let d6_rem = d6_bits - d6_sign * 32768.0
+      let d6_exp = floor(d6_rem / 1024.0)
+      let d6_man = d6_rem - d6_exp * 1024.0
+      let mut d6 = 0.0
+      if d6_exp > 0.0
+        if d6_exp < 31.0
+          d6 = (1.0 + d6_man / 1024.0) * pow(2.0, d6_exp - 15.0)
+          if d6_sign == 1.0
+            d6 = d6 * -1.0
+          end
+        end
+      end
+      let ql_base = bo
+      let qh_base = bo + 128.0
+      let sc_base = bo + 192.0
+
+      // Pre-allocate 256-element block output (indexed writes for correct order)
+      let mut _blk6 = []
+      let mut _fi = 0.0
+      while _fi < 256.0
+        push(_blk6, 0.0)
+        _fi = _fi + 1.0
+      end
+
+      // Process 256 elements in 2 halves of 128
+      let mut half = 0.0
+      while half < 2.0
+        let hbase = half * 128.0
+        let ql_off = ql_base + half * 64.0
+        let qh_off = qh_base + half * 32.0
+        let sc_off = sc_base + half * 8.0
+        let mut l = 0.0
+        while l < 32.0
+          let ql_a = mem_get_u8(raw, ql_off + l)
+          let ql_b = mem_get_u8(raw, ql_off + l + 32.0)
+          let qh_v = mem_get_u8(raw, qh_off + l)
+          // is = l/16 selects which sub-block scale pair to use
+          let is6 = floor(l / 16.0)
+          // Decode scales (signed int8) — indexed by is6 offset
+          let sc0r = mem_get_u8(raw, sc_off + is6)
+          let mut s0 = sc0r
+          if s0 > 127.0
+            s0 = s0 - 256.0
+          end
+          let sc2r = mem_get_u8(raw, sc_off + is6 + 2.0)
+          let mut s2 = sc2r
+          if s2 > 127.0
+            s2 = s2 - 256.0
+          end
+          let sc4r = mem_get_u8(raw, sc_off + is6 + 4.0)
+          let mut s4 = sc4r
+          if s4 > 127.0
+            s4 = s4 - 256.0
+          end
+          let sc6r = mem_get_u8(raw, sc_off + is6 + 6.0)
+          let mut s6 = sc6r
+          if s6 > 127.0
+            s6 = s6 - 256.0
+          end
+          // q1: low nibble ql[l] + bits 0-1 of qh → position l
+          let q1_lo = ql_a - floor(ql_a / 16.0) * 16.0
+          let q1_hi = qh_v - floor(qh_v / 4.0) * 4.0
+          let q1 = (q1_lo + q1_hi * 16.0) - 32.0
+          _blk6[int(hbase + l)] = d6 * s0 * q1
+          // q2: low nibble ql[l+32] + bits 2-3 of qh → position l+32
+          let q2_lo = ql_b - floor(ql_b / 16.0) * 16.0
+          let qh_s2 = floor(qh_v / 4.0)
+          let q2_hi = qh_s2 - floor(qh_s2 / 4.0) * 4.0
+          let q2 = (q2_lo + q2_hi * 16.0) - 32.0
+          _blk6[int(hbase + l + 32.0)] = d6 * s2 * q2
+          // q3: high nibble ql[l] + bits 4-5 of qh → position l+64
+          let q3_lo = floor(ql_a / 16.0)
+          let qh_s4 = floor(qh_v / 16.0)
+          let q3_hi = qh_s4 - floor(qh_s4 / 4.0) * 4.0
+          let q3 = (q3_lo + q3_hi * 16.0) - 32.0
+          _blk6[int(hbase + l + 64.0)] = d6 * s4 * q3
+          // q4: high nibble ql[l+32] + bits 6-7 of qh → position l+96
+          let q4_lo = floor(ql_b / 16.0)
+          let q4_hi = floor(qh_v / 64.0)
+          let q4 = (q4_lo + q4_hi * 16.0) - 32.0
+          _blk6[int(hbase + l + 96.0)] = d6 * s6 * q4
+          l = l + 1.0
+        end
+        half = half + 1.0
+      end
+
+      // Copy block to all_weights
+      let mut _bi6 = 0.0
+      while _bi6 < 256.0
+        push(all_weights, _blk6[int(_bi6)])
+        _bi6 = _bi6 + 1.0
+      end
+      blki = blki + 1.0
+    end
+    mem_free(raw)
+
+    let local_start = weight_idx - block_idx * block_size
+    let mut row = []
+    let mut i = 0.0
+    while i < n_embd
+      push(row, all_weights[int(local_start + i)])
+      i = i + 1.0
+    end
+    return row
+  end
+
+  mem_free(off_buf)
+  print("WARNING: Unsupported embedding type {ttype}")
+  let mut zeros = []
+  let mut zi = 0.0
+  while zi < n_embd
+    push(zeros, 0.0)
+    zi = zi + 1.0
+  end
+  return zeros
+end
+
+// ── Generic tensor row loader ─────────────────────────────────────
+// Loads row `row_idx` (of `row_size` elements) from tensor `tname`.
+// Works for any GGUF tensor — parameterized version of load_embedding_row_from_file.
+// Used by streaming matmul for CPU-only inference (O(row_size) memory per call).
+
+fn load_tensor_row_from_file(file_path, model, tname, row_idx, row_size)
+  if gguf_has_tensor(model, tname) == 0.0
+    print("ERROR: tensor not found: {tname}")
+    let mut _trz = []
+    let mut _zi = 0.0
+    while _zi < row_size
+      push(_trz, 0.0)
+      _zi = _zi + 1.0
+    end
+    return _trz
+  end
+
+  let ttype = gguf_tensor_type(model, tname)
+  let off_buf = gguf_tensor_file_offset(model, tname)
+
+  if ttype == 0.0
+    let row_byte_off = row_idx * row_size * 4.0
+    let row_off = mem_alloc(8)
+    mem_set_u64(row_off, 0.0, row_byte_off)
+    let _a = mem_u64_add(off_buf, 0.0, row_off, 0.0)
+    mem_free(row_off)
+    let row_bytes = row_size * 4.0
+    let raw = mem_alloc(row_bytes)
+    let _rd = file_read_into_mem_u64(file_path, raw, off_buf, 0.0, row_bytes)
+    mem_free(off_buf)
+    let mut _trf = []
+    let mut _ti = 0.0
+    while _ti < row_size
+      push(_trf, bits_to_float(mem_get_u32(raw, _ti * 4.0)))
+      _ti = _ti + 1.0
+    end
+    mem_free(raw)
+    return _trf
+  elif ttype == 1.0
+    let row_byte_off = row_idx * row_size * 2.0
+    let row_off = mem_alloc(8)
+    mem_set_u64(row_off, 0.0, row_byte_off)
+    let _a = mem_u64_add(off_buf, 0.0, row_off, 0.0)
+    mem_free(row_off)
+    let row_bytes = row_size * 2.0
+    let raw = mem_alloc(row_bytes)
+    let _rd = file_read_into_mem_u64(file_path, raw, off_buf, 0.0, row_bytes)
+    mem_free(off_buf)
+    let mut _trf = []
+    let mut _ti = 0.0
+    while _ti < row_size
+      push(_trf, read_f16_le_m(raw, _ti * 2.0))
+      _ti = _ti + 1.0
+    end
+    mem_free(raw)
+    return _trf
+  elif ttype == 12.0
+    let block_size = 256.0
+    let block_bytes = 144.0
+    let weight_idx = row_idx * row_size
+    let block_idx = floor(weight_idx / block_size)
+    let weights_end = weight_idx + row_size
+    let blocks_needed = ceil((weights_end - block_idx * block_size) / block_size)
+    let read_bytes_count = blocks_needed * block_bytes
+    let block_byte_off = block_idx * block_bytes
+    let blk_off = mem_alloc(8)
+    mem_set_u64(blk_off, 0.0, block_byte_off)
+    let _a = mem_u64_add(off_buf, 0.0, blk_off, 0.0)
+    mem_free(blk_off)
+    let raw = mem_alloc(read_bytes_count)
+    let _rd = file_read_into_mem_u64(file_path, raw, off_buf, 0.0, read_bytes_count)
+    mem_free(off_buf)
+    let mut _trw = []
+    let mut b = 0.0
+    while b < blocks_needed
+      let bo = b * block_bytes
+      let bdata = dequant_q4k_block_m(raw, bo)
+      let mut bi = 0.0
+      while bi < 256.0
+        push(_trw, bdata[int(bi)])
+        bi = bi + 1.0
+      end
+      b = b + 1.0
+    end
+    mem_free(raw)
+    let local_start = weight_idx - block_idx * block_size
+    let mut _trf = []
+    let mut _ti = 0.0
+    while _ti < row_size
+      push(_trf, _trw[int(local_start + _ti)])
+      _ti = _ti + 1.0
+    end
+    return _trf
+  elif ttype == 14.0
+    let block_size = 256.0
+    let block_bytes = 210.0
+    let weight_idx = row_idx * row_size
+    let block_idx = floor(weight_idx / block_size)
+    let weights_end = weight_idx + row_size
+    let blocks_needed = ceil((weights_end - block_idx * block_size) / block_size)
+    let read_bytes_count = blocks_needed * block_bytes
+    let block_byte_off = block_idx * block_bytes
+    let blk_off = mem_alloc(8)
+    mem_set_u64(blk_off, 0.0, block_byte_off)
+    let _a = mem_u64_add(off_buf, 0.0, blk_off, 0.0)
+    mem_free(blk_off)
+    let raw = mem_alloc(read_bytes_count)
+    let _rd = file_read_into_mem_u64(file_path, raw, off_buf, 0.0, read_bytes_count)
+    mem_free(off_buf)
+    let mut _trw = []
+    let mut blki = 0.0
+    while blki < blocks_needed
+      let bo = blki * block_bytes
+      let d6b0 = mem_get_u8(raw, bo)
+      let d6b1 = mem_get_u8(raw, bo + 1.0)
+      let d6_bits = d6b0 + d6b1 * 256.0
+      let d6_sign = floor(d6_bits / 32768.0)
+      let d6_rem = d6_bits - d6_sign * 32768.0
+      let d6_exp = floor(d6_rem / 1024.0)
+      let d6_man = d6_rem - d6_exp * 1024.0
+      let mut d6 = 0.0
+      if d6_exp > 0.0
+        if d6_exp < 31.0
+          d6 = (1.0 + d6_man / 1024.0) * pow(2.0, d6_exp - 15.0)
+          if d6_sign == 1.0
+            d6 = d6 * -1.0
+          end
+        end
+      end
+      let ql_base = bo + 2.0
+      let qh_base = bo + 130.0
+      let sc_base = bo + 194.0
+      let mut _blk6 = []
+      let mut _fi = 0.0
+      while _fi < 256.0
+        push(_blk6, 0.0)
+        _fi = _fi + 1.0
+      end
+      let mut half = 0.0
+      while half < 2.0
+        let hbase = half * 128.0
+        let ql_off = ql_base + half * 64.0
+        let qh_off = qh_base + half * 32.0
+        let sc_off = sc_base + half * 8.0
+        let mut l = 0.0
+        while l < 32.0
+          let ql_a = mem_get_u8(raw, ql_off + l)
+          let ql_b = mem_get_u8(raw, ql_off + l + 32.0)
+          let qh_v = mem_get_u8(raw, qh_off + l)
+          let sc0r = mem_get_u8(raw, sc_off)
+          let mut s0 = sc0r
+          if s0 > 127.0
+            s0 = s0 - 256.0
+          end
+          let sc2r = mem_get_u8(raw, sc_off + 2.0)
+          let mut s2 = sc2r
+          if s2 > 127.0
+            s2 = s2 - 256.0
+          end
+          let sc4r = mem_get_u8(raw, sc_off + 4.0)
+          let mut s4 = sc4r
+          if s4 > 127.0
+            s4 = s4 - 256.0
+          end
+          let sc6r = mem_get_u8(raw, sc_off + 6.0)
+          let mut s6 = sc6r
+          if s6 > 127.0
+            s6 = s6 - 256.0
+          end
+          let q1_lo = ql_a - floor(ql_a / 16.0) * 16.0
+          let q1_hi = qh_v - floor(qh_v / 4.0) * 4.0
+          let q1 = (q1_lo + q1_hi * 16.0) - 32.0
+          _blk6[int(hbase + l)] = d6 * s0 * q1
+          let q2_lo = ql_b - floor(ql_b / 16.0) * 16.0
+          let qh_s2 = floor(qh_v / 4.0)
+          let q2_hi = qh_s2 - floor(qh_s2 / 4.0) * 4.0
+          let q2 = (q2_lo + q2_hi * 16.0) - 32.0
+          _blk6[int(hbase + l + 32.0)] = d6 * s2 * q2
+          let q3_lo = floor(ql_a / 16.0)
+          let qh_s4 = floor(qh_v / 16.0)
+          let q3_hi = qh_s4 - floor(qh_s4 / 4.0) * 4.0
+          let q3 = (q3_lo + q3_hi * 16.0) - 32.0
+          _blk6[int(hbase + l + 64.0)] = d6 * s4 * q3
+          let q4_lo = floor(ql_b / 16.0)
+          let q4_hi = floor(qh_v / 64.0)
+          let q4 = (q4_lo + q4_hi * 16.0) - 32.0
+          _blk6[int(hbase + l + 96.0)] = d6 * s6 * q4
+          l = l + 1.0
+        end
+        half = half + 1.0
+      end
+      let mut _bi6 = 0.0
+      while _bi6 < 256.0
+        push(_trw, _blk6[int(_bi6)])
+        _bi6 = _bi6 + 1.0
+      end
+      blki = blki + 1.0
+    end
+    mem_free(raw)
+    let local_start = weight_idx - block_idx * block_size
+    let mut _trf = []
+    let mut _ti = 0.0
+    while _ti < row_size
+      push(_trf, _trw[int(local_start + _ti)])
+      _ti = _ti + 1.0
+    end
+    return _trf
+  end
+
+  mem_free(off_buf)
+  print("WARNING: Unsupported type {ttype} for tensor {tname}")
+  let mut _trz = []
+  let mut _zi = 0.0
+  while _zi < row_size
+    push(_trz, 0.0)
+    _zi = _zi + 1.0
+  end
+  return _trz
+end
+
+// ══════════════════════════════════════════════════════════════════════
+// FAST TENSOR LOADING — Rust OS-boundary dequant (v1.22)
+// Use gguf_load_tensor(file_path, model, tensor_name) directly.
+// It's a Rust builtin: returns GpuFloats array (never cloned).
+// API: gguf_load_tensor(file_path, model_map, "blk.0.attn_q.weight")
+// ══════════════════════════════════════════════════════════════════════

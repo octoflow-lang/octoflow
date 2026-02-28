@@ -1,0 +1,65 @@
+// test_validate.flow — Verify data validation stdlib functions
+// Run from stdlib/data/: octoflow run test_validate.flow
+
+use "validate"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+print("=== DATA VALIDATE STDLIB VERIFICATION ===")
+print(" ")
+
+// ── is_numeric ───────────────────────────────────────────
+print("--- is_numeric ---")
+let _c = check(counters, "num 42", is_numeric("42"), 1.0)
+let _c = check(counters, "num 3.14", is_numeric("3.14"), 1.0)
+let _c = check(counters, "num -5", is_numeric("-5"), 1.0)
+let _c = check(counters, "num abc", is_numeric("abc"), 0.0)
+let _c = check(counters, "num space", is_numeric(" "), 0.0)
+
+// ── is_email ─────────────────────────────────────────────
+print("--- is_email ---")
+let _c = check(counters, "email valid", is_email("user@example.com"), 1.0)
+let _c = check(counters, "email no@", is_email("invalid"), 0.0)
+
+// ── is_url ───────────────────────────────────────────────
+print("--- is_url ---")
+let _c = check(counters, "url http", is_url("http://example.com"), 1.0)
+let _c = check(counters, "url https", is_url("https://example.com"), 1.0)
+let _c = check(counters, "url bad", is_url("not-a-url"), 0.0)
+
+// ── in_range ─────────────────────────────────────────────
+print("--- in_range ---")
+let _c = check(counters, "range in", in_range(5.0, 0.0, 10.0), 1.0)
+let _c = check(counters, "range out", in_range(15.0, 0.0, 10.0), 0.0)
+let _c = check(counters, "range edge lo", in_range(0.0, 0.0, 10.0), 1.0)
+let _c = check(counters, "range edge hi", in_range(10.0, 0.0, 10.0), 1.0)
+
+// ── clamp_value ──────────────────────────────────────────
+print("--- clamp_value ---")
+let _c = check(counters, "clamp mid", clamp_value(5.0, 0.0, 10.0), 5.0)
+let _c = check(counters, "clamp low", clamp_value(-5.0, 0.0, 10.0), 0.0)
+let _c = check(counters, "clamp high", clamp_value(15.0, 0.0, 10.0), 10.0)
+
+// ── SUMMARY ──────────────────────────────────────────────
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print(" ")
+print("=== DATA VALIDATE VERIFICATION SUMMARY ===")
+print("  pass: {pass}/{total}")
+print("  fail: {fail}")
+if fail == 0.0
+  print("  ALL PASS")
+else
+  print("  FAILURES DETECTED")
+end

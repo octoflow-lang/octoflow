@@ -1,0 +1,238 @@
+// stdlib/llm/generate_streaming.flow — Streaming Token Generation
+//
+// Autoregressive inference with layer streaming + eviction.
+// Uses gguf_infer_layer with bounded memory (2-layer eviction window).
+// Staging infrastructure ready for async double-buffered prefetch.
+//
+// Current architecture:
+//   - gguf_infer_layer handles tensor load + GPU matvec (Steps 1-3)
+//   - Layer eviction bounds memory to ~2 layers in TENSOR_CACHE + GPU_BUFFER_CACHE
+//   - Staging builtins provide the API for future async I/O
+//
+// Future enhancement (requires gguf_infer_layer_buf):
+//   - Decompose GGUF → per-layer files via decompose_gguf.flow
+//   - Double-buffer staging: load layer N+1 while computing layer N
+//   - Direct file→GPU transfer (skip TENSOR_CACHE for weights)
+//
+// Usage:
+//   use "generate_streaming"
+//   let _r = run_generate_streaming("path/to/model.gguf", "Hello world")
+//
+// Or standalone:
+//   octoflow run stdlib/llm/run_generate_streaming.flow --allow-read --allow-ffi
+
+use "gguf"
+use "ops"
+use "sampling"
+use "chat"
+use "stream"
+
+fn run_generate_streaming(model_path, prompt)
+  // ── Configuration ──────────────────────────────────────────────
+  let max_tokens = 50.0
+  let max_seq = 64.0
+  let strategy = "top_p"
+  let temperature = 0.8
+  let top_k = 40.0
+  let top_p = 0.9
+  let evict_window = 2.0
+
+  print("=== OctoFlow Streaming Generation ===")
+  print("Loading model metadata...")
+
+  let model = gguf_load_from_file(model_path)
+
+  let n_embd = map_get(model, "n_embd")
+  let n_head = map_get(model, "n_head")
+  let mut n_kv_head = map_get(model, "n_kv_head")
+  let n_ff = map_get(model, "n_ff")
+  let n_layer = map_get(model, "n_layer")
+  let vocab_size = map_get(model, "vocab_size")
+  let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+
+  if n_kv_head == 0.0
+    n_kv_head = n_head
+  end
+
+  let head_dim = n_embd / n_head
+
+  let arch = map_get(model, "arch")
+  print("  {arch} -- {n_layer} layers, {n_embd} dim, {vocab_size} vocab")
+  print("  eviction window: {evict_window} layers")
+
+  // ── Load vocabulary ────────────────────────────────────────────
+  print("Loading vocabulary...")
+  let vocab = gguf_load_vocab(model_path)
+
+  // ── Build adaptive chat template ──────────────────────────────
+  print("Building chat template...")
+  let chat_tokens = resolve_chat_tokens(model_path, model, vocab)
+  let prompt_ids = build_chat_tokens(model_path, model, vocab, prompt)
+  let stop_tokens = get_stop_tokens(model, chat_tokens)
+
+  let n_prompt = len(prompt_ids)
+  print("  Prompt: {prompt}")
+  print("  Template tokens: {n_prompt}")
+
+  // ── Load persistent weights ────────────────────────────────────
+  print("Loading output norm...")
+  let out_norm_w = gguf_load_tensor(model_path, model, "output_norm.weight")
+
+  // ── Initialize streaming infrastructure ────────────────────────
+  // Estimate layer size for staging buffers (n_embd * n_embd * 4 bytes rough estimate)
+  let est_layer_floats = n_embd * n_embd * 7.0
+  let est_layer_bytes = est_layer_floats * 4.0
+  print("  Staging buffer size: {est_layer_bytes} bytes (estimated)")
+
+  // Allocate double buffers (A/B for ping-pong)
+  let staging_bufs = stream_init(est_layer_bytes)
+  let staging_a = staging_bufs[0]
+  let staging_b = staging_bufs[1]
+  print("  Staging handles: A={staging_a} B={staging_b}")
+
+  // KV cache is managed in Rust (gguf_infer_layer auto-initializes)
+  print("KV cache: Rust-managed (auto-initialized)")
+
+  // ── Main inference loop ────────────────────────────────────────
+  let total_steps = n_prompt + max_tokens
+  print(" ")
+  print("--- Prefilling {n_prompt} tokens + generating {max_tokens} tokens ---")
+
+  let mut current_token = prompt_ids[0]
+  let mut generated_text = " "
+  let mut seq_pos = 0.0
+  let mut gen_count = 0.0
+  let mut done = 0.0
+  let mut total_layer_time = 0.0
+  let mut total_tokens = 0.0
+
+  while seq_pos < total_steps
+    if done == 1.0
+      seq_pos = total_steps
+    end
+    if seq_pos >= max_seq
+      print("  (max sequence length reached)")
+      seq_pos = total_steps
+    end
+    if seq_pos < total_steps
+
+    let t_token_start = time()
+
+    // 1. Load embedding for current token
+    let tok_emb = gguf_load_tensor(model_path, model, "token_embd.weight", current_token)
+    let mut hidden = []
+    let mut ei = 0.0
+    while ei < n_embd
+      push(hidden, tok_emb[int(ei)])
+      ei = ei + 1.0
+    end
+
+    // 2. Run transformer layers with eviction + async prefetch
+    let mut layer_idx = 0.0
+    while layer_idx < n_layer
+      // Complete prefetch from previous iteration (layer_idx weights ready)
+      if layer_idx > 0.0
+        let _pw = gguf_prefetch_complete()
+      end
+
+      // Prefetch next layer while current layer computes
+      let next_layer = layer_idx + 1.0
+      if next_layer < n_layer
+        let _pf = gguf_prefetch_layer(model_path, model, next_layer)
+      end
+
+      let layer_out = gguf_infer_layer(model_path, model, hidden, layer_idx, seq_pos, max_seq)
+
+      // Copy output back to hidden
+      let mut hi = 0.0
+      while hi < n_embd
+        hidden[int(hi)] = layer_out[int(hi)]
+        hi = hi + 1.0
+      end
+
+      // Evict old layers to bound memory
+      if layer_idx >= evict_window
+        let evict_idx = layer_idx - evict_window
+        let _ev = gguf_evict_layer_ram(model_path, model, evict_idx)
+      end
+
+      layer_idx = layer_idx + 1.0
+    end
+    // Complete final prefetch (if last layer triggered one — it won't, but safe)
+    let _pw_final = gguf_prefetch_complete()
+
+    // Evict the last layers after all are processed
+    let mut final_evict = n_layer - evict_window
+    while final_evict < n_layer
+      if final_evict >= 0.0
+        let _ev = gguf_evict_layer_ram(model_path, model, final_evict)
+      end
+      final_evict = final_evict + 1.0
+    end
+
+    // 3. Post-transformer: prefill vs generation
+    let prefill_end = n_prompt - 1.0
+    if seq_pos < prefill_end
+      // Prefill: advance to next prompt token (skip logits)
+      let npos = seq_pos + 1.0
+      current_token = prompt_ids[int(npos)]
+      let ptext = vocab[int(current_token)]
+      print("  [prefill {npos}/{n_prompt}] token={current_token} text={ptext}")
+    else
+      // Last prefill position or generation: compute logits
+      let normed_out = rmsnorm_cpu(hidden, out_norm_w, n_embd, eps)
+      let logits = gguf_matvec(model_path, model, "token_embd.weight", normed_out)
+
+      let mut sampled_idx = 0.0
+      if strategy == "greedy"
+        sampled_idx = sample_greedy(logits)
+      elif strategy == "top_k"
+        sampled_idx = sample_top_k(logits, top_k, temperature)
+      elif strategy == "top_p"
+        sampled_idx = sample_top_p(logits, top_p, temperature)
+      elif strategy == "min_p"
+        sampled_idx = sample_min_p(logits, 0.05, temperature)
+      else
+        sampled_idx = sample_temperature(logits, temperature)
+      end
+      let sampled_logit = logits[int(sampled_idx)]
+
+      // Decode token
+      let token_text = vocab[int(sampled_idx)]
+      generated_text = generated_text + token_text
+      gen_count = gen_count + 1.0
+      print("  [gen {gen_count}] pos={seq_pos} token={sampled_idx} logit={sampled_logit} text={token_text}")
+
+      // Check for stop tokens
+      if is_stop_token(stop_tokens, sampled_idx) == 1.0
+        print("  (stop token -- stopping)")
+        done = 1.0
+      end
+      if gen_count >= max_tokens
+        done = 1.0
+      end
+
+      current_token = sampled_idx
+    end
+
+    total_tokens = total_tokens + 1.0
+
+    end
+    seq_pos = seq_pos + 1.0
+  end
+
+  // ── Cleanup ────────────────────────────────────────────────────
+  let _sf = stream_free_all()
+
+  // ── Output ─────────────────────────────────────────────────────
+  print("---")
+  print("Prompt: {prompt}")
+  print("Raw: {generated_text}")
+  let decoded = bpe_decode(generated_text)
+  print(" ")
+  print("=== Output ===")
+  print("{decoded}")
+  print(" ")
+  print("Tokens processed: {total_tokens} ({gen_count} generated)")
+  return 0.0
+end

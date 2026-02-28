@@ -1,4 +1,7 @@
 // bmp.flow — Pure OctoFlow BMP image file decoder
+//
+// Functions: bmp_u16le, bmp_u32le, bmp_parse, bmp_decode
+//
 // Decodes uncompressed BMP files from raw bytes
 // Supports: 24-bit BGR, 32-bit BGRA, 8-bit with palette
 //

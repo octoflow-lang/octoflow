@@ -1,0 +1,318 @@
+// stdlib/loom/test_gpu_edge_cases.flow — Boundary Condition Tests
+//
+// Tests edge cases that exercise defensive code paths in patterns.flow:
+// empty arrays, single elements, identical values, negative numbers,
+// large values, zero-variance z-scores, and more.
+//
+// All arrays are < 64 elements to exercise CPU fallback paths (no FFI needed).
+//
+// 14 tests
+//
+// Run: flowgpu-cli run stdlib/loom/test_gpu_edge_cases.flow --allow-read
+
+use "../patterns"
+
+let mut passed = 0.0
+let mut failed = 0.0
+let tol = 0.01
+let mut ok = 1.0
+
+fn check_scalar(actual, expected, tolerance)
+    if abs(actual - expected) <= tolerance
+        return 1.0
+    end
+    return 0.0
+end
+
+fn check_array(actual, expected, tolerance)
+    if len(actual) != len(expected)
+        return 0.0
+    end
+    let mut idx = 0.0
+    while idx < len(actual)
+        if abs(actual[int(idx)] - expected[int(idx)]) > tolerance
+            return 0.0
+        end
+        idx = idx + 1.0
+    end
+    return 1.0
+end
+
+print("=== GPU Edge Cases Test (14 tests) ===")
+print(" ")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  EMPTY ARRAYS
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 1: Empty array through gpu_sum_auto should return 0
+let empty = []
+let r1 = gpu_sum_auto(empty)
+if check_scalar(r1, 0.0, tol) == 1.0
+    print("  PASS 1: gpu_sum_auto([]) = 0")
+    passed = passed + 1.0
+else
+    print("  FAIL 1: gpu_sum_auto([]) = {r1}, expected 0")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SINGLE ELEMENT
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 2: Single-element mean/sum/min/max
+let single = [42.0]
+let r2_mean = gpu_mean_auto(single)
+let r2_sum = gpu_sum_auto(single)
+let r2_min = gpu_min_auto(single)
+let r2_max = gpu_max_auto(single)
+ok = 1.0
+if check_scalar(r2_mean, 42.0, tol) == 0.0
+    print("    mean: got {r2_mean}")
+    ok = 0.0
+end
+if check_scalar(r2_sum, 42.0, tol) == 0.0
+    print("    sum: got {r2_sum}")
+    ok = 0.0
+end
+if check_scalar(r2_min, 42.0, tol) == 0.0
+    print("    min: got {r2_min}")
+    ok = 0.0
+end
+if check_scalar(r2_max, 42.0, tol) == 0.0
+    print("    max: got {r2_max}")
+    ok = 0.0
+end
+if ok == 1.0
+    print("  PASS 2: Single-element mean/sum/min/max all = 42.0")
+    passed = passed + 1.0
+else
+    print("  FAIL 2: Single-element stats")
+    failed = failed + 1.0
+end
+
+// Test 3: Single-element median
+let r3 = gpu_median_auto(single)
+if check_scalar(r3, 42.0, tol) == 1.0
+    print("  PASS 3: gpu_median_auto([42]) = {r3}")
+    passed = passed + 1.0
+else
+    print("  FAIL 3: gpu_median_auto([42]) = {r3}, expected 42.0")
+    failed = failed + 1.0
+end
+
+// Test 4: Two-element std — [10, 20]
+// mean=15, deviations=[-5, 5], sq=[25, 25], sum=50, var=50/1=50, std=sqrt(50)=7.071
+let d4 = [10.0, 20.0]
+let r4 = gpu_std_auto(d4)
+if check_scalar(r4, 7.071, 0.01) == 1.0
+    print("  PASS 4: gpu_std_auto([10,20]) = {r4:.3}")
+    passed = passed + 1.0
+else
+    print("  FAIL 4: gpu_std_auto([10,20]) = {r4:.3}, expected 7.071")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  IDENTICAL VALUES
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 5: All-identical values through normalize — [5,5,5,5] -> [0,0,0,0]
+let identical = [5.0, 5.0, 5.0, 5.0]
+let r5 = gpu_normalize_auto(identical)
+let r5_exp = [0.0, 0.0, 0.0, 0.0]
+if check_array(r5, r5_exp, tol) == 1.0
+    print("  PASS 5: gpu_normalize_auto([5,5,5,5]) = [0,0,0,0]")
+    passed = passed + 1.0
+else
+    print("  FAIL 5: gpu_normalize_auto([5,5,5,5])")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  NEGATIVE VALUES
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 6: Negative values through all stats
+let negdata = [-10.0, -5.0, -3.0, -1.0, -8.0]
+let r6_mean = gpu_mean_auto(negdata)
+let r6_min = gpu_min_auto(negdata)
+let r6_max = gpu_max_auto(negdata)
+let r6_sum = gpu_sum_auto(negdata)
+// mean = (-10-5-3-1-8)/5 = -27/5 = -5.4
+// min = -10, max = -1, sum = -27
+ok = 1.0
+if check_scalar(r6_mean, -5.4, 0.01) == 0.0
+    print("    mean: got {r6_mean}, expected -5.4")
+    ok = 0.0
+end
+if check_scalar(r6_min, -10.0, tol) == 0.0
+    print("    min: got {r6_min}, expected -10.0")
+    ok = 0.0
+end
+if check_scalar(r6_max, -1.0, tol) == 0.0
+    print("    max: got {r6_max}, expected -1.0")
+    ok = 0.0
+end
+if check_scalar(r6_sum, -27.0, tol) == 0.0
+    print("    sum: got {r6_sum}, expected -27.0")
+    ok = 0.0
+end
+if ok == 1.0
+    print("  PASS 6: Negative values: mean=-5.4 min=-10 max=-1 sum=-27")
+    passed = passed + 1.0
+else
+    print("  FAIL 6: Negative values through stats")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TOP-K EDGE CASE
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 7: Top-K with K >= array length — should return all elements sorted descending
+let small_arr = [3.0, 1.0, 2.0]
+let r7 = gpu_top_k_auto(small_arr, 5.0)
+// K=5 > len=3, so returns all 3 elements sorted descending: [3, 2, 1]
+let r7_exp = [3.0, 2.0, 1.0]
+if check_array(r7, r7_exp, tol) == 1.0
+    print("  PASS 7: gpu_top_k_auto(k>=n) = [3, 2, 1]")
+    passed = passed + 1.0
+else
+    let r7_len = len(r7)
+    print("  FAIL 7: gpu_top_k_auto(k>=n), got len={r7_len}")
+    // Show what we got
+    if r7_len > 0.0
+        let r7_0 = r7[0]
+        print("    first element: {r7_0}")
+    end
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FILTER RETURNING EMPTY
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 8: Filter returning empty result
+let d8 = [1.0, 2.0, 3.0]
+let r8 = gpu_filter_auto(d8, 100.0, "gt")
+let r8_len = len(r8)
+if r8_len == 0.0
+    print("  PASS 8: gpu_filter_auto(>100) returns empty array")
+    passed = passed + 1.0
+else
+    print("  FAIL 8: gpu_filter_auto(>100) returned {r8_len} elements, expected 0")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  LARGE VALUES
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 9: Very large values (1e10 scale) through mean
+let big = [1000000000.0, 2000000000.0, 3000000000.0]
+let r9 = gpu_mean_auto(big)
+// mean = 2e9
+if check_scalar(r9, 2000000000.0, 1000.0) == 1.0
+    print("  PASS 9: gpu_mean_auto(1e9 scale) = {r9}")
+    passed = passed + 1.0
+else
+    print("  FAIL 9: gpu_mean_auto(1e9 scale) = {r9}")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  MIXED POSITIVE/NEGATIVE
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 10: Mixed positive/negative normalization
+// [-10, 0, 10] -> min=-10, max=10, range=20
+// normalized: [(-10-(-10))/20, (0-(-10))/20, (10-(-10))/20] = [0, 0.5, 1.0]
+let d10 = [-10.0, 0.0, 10.0]
+let r10 = gpu_normalize_auto(d10)
+let r10_exp = [0.0, 0.5, 1.0]
+if check_array(r10, r10_exp, tol) == 1.0
+    print("  PASS 10: gpu_normalize_auto([-10,0,10]) = [0, 0.5, 1.0]")
+    passed = passed + 1.0
+else
+    print("  FAIL 10: gpu_normalize_auto([-10,0,10])")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  CLAMP
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 11: Clamp to [3, 7]
+let d11 = [1.0, 3.0, 5.0, 7.0, 9.0]
+let r11 = gpu_clamp_auto(d11, 3.0, 7.0)
+let r11_exp = [3.0, 3.0, 5.0, 7.0, 7.0]
+if check_array(r11, r11_exp, tol) == 1.0
+    print("  PASS 11: gpu_clamp_auto([1,3,5,7,9], 3, 7) = [3,3,5,7,7]")
+    passed = passed + 1.0
+else
+    print("  FAIL 11: gpu_clamp_auto")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ZERO-VARIANCE Z-SCORE
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 12: Z-score of identical values (std=0, should not produce NaN)
+// gpu_zscore_auto CPU path: if s > 0 push z-score, else push 0.0
+let d12 = [5.0, 5.0, 5.0, 5.0]
+let r12 = gpu_zscore_auto(d12)
+let r12_exp = [0.0, 0.0, 0.0, 0.0]
+if check_array(r12, r12_exp, tol) == 1.0
+    print("  PASS 12: gpu_zscore_auto([5,5,5,5]) = [0,0,0,0] (no NaN)")
+    passed = passed + 1.0
+else
+    print("  FAIL 12: gpu_zscore_auto([5,5,5,5]) — possible NaN from std=0")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ORTHOGONAL DOT PRODUCT
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 13: Dot product of orthogonal vectors -> 0
+// [1, 0, 0] . [0, 1, 0] = 0
+let d13a = [1.0, 0.0, 0.0]
+let d13b = [0.0, 1.0, 0.0]
+let r13 = gpu_dot_auto(d13a, d13b)
+if check_scalar(r13, 0.0, tol) == 1.0
+    print("  PASS 13: gpu_dot_auto(orthogonal) = {r13}")
+    passed = passed + 1.0
+else
+    print("  FAIL 13: gpu_dot_auto(orthogonal) = {r13}, expected 0.0")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  IDENTICAL ARRAY COMPARISON
+// ═══════════════════════════════════════════════════════════════════════
+
+// Test 14: Compare identical arrays -> correlation = 1.0
+let cmp = [10.0, 20.0, 30.0, 40.0, 50.0]
+let r14 = gpu_compare(cmp, cmp)
+let r14_corr = r14["correlation"]
+if check_scalar(r14_corr, 1.0, 0.01) == 1.0
+    print("  PASS 14: gpu_compare(identical) correlation = {r14_corr}")
+    passed = passed + 1.0
+else
+    print("  FAIL 14: gpu_compare(identical) correlation = {r14_corr}, expected 1.0")
+    failed = failed + 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SUMMARY
+// ═══════════════════════════════════════════════════════════════════════
+print(" ")
+let total = passed + failed
+print("=== Results: {passed}/{total} passed, {failed} failed ===")
+if failed == 0.0
+    print("ALL 14 EDGE CASE TESTS PASSED")
+else
+    print("SOME TESTS FAILED — see above for details")
+end

@@ -1,4 +1,9 @@
 // stdlib/stats/math_ext.flow — Extended math functions
+//
+// Functions: factorial, permutations, gcd, lcm, is_prime, fibonacci,
+//            power_mod, sigmoid, tanh_fn, relu, softplus, logistic,
+//            linspace, arange, dot_product, magnitude, normalize_vec,
+//            cross_product_3d
 
 let PI = 3.14159265358979
 let E = 2.71828182845905

@@ -1,0 +1,94 @@
+// test_runtime_spirv.flow — Proof of concept: runtime SPIR-V synthesis + dispatch
+//
+// 1. Build a trivial kernel (R0[gid] = gid * 2) using the IR builder
+// 2. Emit to .spv file (for spirv-val validation)
+// 3. Capture in-memory bytes with ir_get_buf()
+// 4. Boot VM, dispatch from memory with vm_dispatch_mem()
+// 5. Read results, verify R0[0..8] == [0, 2, 4, 6, 8, 10, 12, 14]
+//
+// Run: octoflow run stdlib/loom/tests/test_runtime_spirv.flow --allow-read --allow-write
+
+use "../../compiler/ir"
+
+print("=== Test: Runtime SPIR-V Synthesis + Dispatch ===")
+print("")
+
+// ── Step 1: Build kernel using IR builder ────────────────────────────
+// Kernel: R0[gid] = gid * 2  (8 threads)
+
+fn emit_double_kernel(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // Entry: gid, bounds check (8 threads)
+  let gid    = ir_load_gid(entry)
+  let c8     = ir_const_u(entry, 8.0)
+  let oob    = ir_ugte(entry, gid, c8)
+  let _sm    = ir_selection_merge(entry, exit_block)
+  let _br    = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // Body: R0[gid] = gid * 2
+  let c2     = ir_const_u(body, 2.0)
+  let result = ir_imul(body, gid, c2)
+  let _store = ir_buf_store_u(body, 0.0, gid, result)
+  let _br2   = ir_term_branch(body, exit_block)
+
+  // Exit
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let spv_path = "stdlib/loom/kernels/ops/_test_rt.spv"
+let _emit = emit_double_kernel(spv_path)
+print("  Emitted kernel to {spv_path}")
+
+// ── Step 2: Capture in-memory SPIR-V bytes ───────────────────────────
+let spirv_bytes = ir_get_buf()
+let byte_count = len(spirv_bytes)
+print("  Captured {byte_count:.0} SPIR-V bytes in memory")
+
+// ── Step 3: Boot VM ──────────────────────────────────────────────────
+let REG_SIZE = 16.0
+let GLOBALS_SIZE = 4.0
+let vm = vm_boot(1.0, REG_SIZE, GLOBALS_SIZE)
+print("  Booted VM #{vm:.0}")
+
+// ── Step 4: Dispatch from memory ─────────────────────────────────────
+let pc = [0.0, 0.0]
+let _d = vm_dispatch_mem(vm, spirv_bytes, pc, 1.0)
+let prog = vm_build(vm)
+let _exec = vm_execute(prog)
+print("  Dispatched + executed from memory")
+
+// ── Step 5: Read results and verify ──────────────────────────────────
+let result = vm_read_register(vm, 0.0, 0.0, REG_SIZE)
+
+let mut pass = 1.0
+let mut i = 0.0
+while i < 8.0
+  let expected = i * 2.0
+  let got = float_to_bits(result[i])
+  if got > expected + 0.5 || got < expected - 0.5
+    print("  FAIL: R0[{i:.0}] expected {expected:.0} got {got:.0}")
+    pass = 0.0
+  end
+  i = i + 1.0
+end
+
+if pass > 0.5
+  print("  PASS: R0[0..8] = [0, 2, 4, 6, 8, 10, 12, 14]")
+else
+  print("  FAIL: some values incorrect")
+end
+
+// ── Cleanup ──────────────────────────────────────────────────────────
+let _s = vm_shutdown(vm)
+print("")
+print("=== Runtime SPIR-V test complete ===")

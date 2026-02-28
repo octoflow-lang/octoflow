@@ -1,0 +1,760 @@
+// gui_core.flow — OctoFlow GUI Core State + Primitives
+//
+// Foundation module for the GUI toolkit. Contains:
+// - Widget type constants
+// - All mutable state arrays (shared across modules)
+// - Bitmap font data
+// - Low-level drawing primitives
+// - Base widget registration
+//
+// All other GUI modules import this first.
+
+// ── Widget Type Constants ───────────────────────────────────────────
+let GUI_PANEL = 1.0
+let GUI_LABEL = 2.0
+let GUI_BUTTON = 3.0
+let GUI_CHECKBOX = 4.0
+let GUI_SLIDER = 5.0
+let GUI_TEXTINPUT = 6.0
+let GUI_PROGRESS = 7.0
+let GUI_RADIO = 8.0
+let GUI_SEPARATOR = 9.0
+let GUI_LISTBOX = 10.0
+let GUI_SPINBOX = 11.0
+let GUI_DROPDOWN = 12.0
+let GUI_TABS = 13.0
+let GUI_CANVAS = 14.0
+let GUI_TREEVIEW = 15.0
+let GUI_TOOLTIP = 16.0
+
+// ── State Array: _gs[] ──────────────────────────────────────────────
+// [0]=running [1]=win_w [2]=win_h [3]=mouse_x [4]=mouse_y
+// [5]=mouse_down [6]=mouse_clicked [7]=key_pressed [8]=focus_id
+// [9]=dirty [10]=font_inited [11]=dropdown_open_id
+let mut _gs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 1.0, 0.0, -1.0]
+
+// ── String State: _gss[] ────────────────────────────────────────────
+// [0]=key_name [1]=char_input
+let mut _gss = [" ", " "]
+
+// ── Theme Colors: _tc[] ─────────────────────────────────────────────
+// [0-2]=bg [3-5]=panel [6-8]=widget [9-11]=hover [12-14]=active
+// [15-17]=text [18-20]=text_dim [21-23]=border [24-26]=check [27-29]=slider
+let mut _tc = [30.0, 30.0, 35.0, 45.0, 45.0, 50.0, 60.0, 62.0, 68.0, 75.0, 78.0, 85.0, 90.0, 130.0, 240.0, 220.0, 222.0, 228.0, 140.0, 142.0, 148.0, 80.0, 82.0, 88.0, 100.0, 180.0, 100.0, 90.0, 130.0, 240.0]
+
+// ── Widget Registry (Parallel Arrays) ───────────────────────────────
+let mut _gui_types = []
+let mut _gui_x = []
+let mut _gui_y = []
+let mut _gui_w = []
+let mut _gui_h = []
+let mut _gui_visible = []
+let mut _gui_enabled = []
+let mut _gui_parent = []
+let mut _gui_texts = []
+
+// ── Widget State Arrays ─────────────────────────────────────────────
+let mut _gui_hovered = []
+let mut _gui_pressed = []
+let mut _gui_clicked = []
+let mut _gui_checked = []
+let mut _gui_slider_val = []
+let mut _gui_slider_min = []
+let mut _gui_slider_max = []
+let mut _gui_input_text = []
+let mut _gui_input_cursor = []
+let mut _gui_input_focused = []
+
+// ── Listbox State ─────────────────────────────────────────────────
+// Flat item storage: all items across all listboxes in one array
+let mut _gui_list_items = []
+let mut _gui_list_start = []
+let mut _gui_list_count = []
+let mut _gui_list_selected = []
+let mut _gui_list_scroll = []
+
+// ── Canvas State ──────────────────────────────────────────────────
+let mut _gui_canvas_cmds = []
+
+// ── Treeview State ────────────────────────────────────────────────
+let mut _gui_tree_labels = []
+let mut _gui_tree_parents = []
+let mut _gui_tree_depth = []
+let mut _gui_tree_expanded = []
+
+// ── Pixel Buffers ───────────────────────────────────────────────────
+let mut _gui_px_r = []
+let mut _gui_px_g = []
+let mut _gui_px_b = []
+
+// ── Bitmap Font (4x6, ASCII 32-90) ──────────────────────────────────
+// Each char = 6 rows of 4-bit patterns (bit3=left pixel)
+let mut _font_data = []
+
+fn _font_init(dummy)
+  // Space (32)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  // ! (33)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 0.0)
+  push(_font_data, 4.0)
+  // " (34)
+  push(_font_data, 10.0)
+  push(_font_data, 10.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  // # (35)
+  push(_font_data, 5.0)
+  push(_font_data, 15.0)
+  push(_font_data, 5.0)
+  push(_font_data, 15.0)
+  push(_font_data, 5.0)
+  push(_font_data, 0.0)
+  // $ (36)
+  push(_font_data, 6.0)
+  push(_font_data, 8.0)
+  push(_font_data, 6.0)
+  push(_font_data, 1.0)
+  push(_font_data, 14.0)
+  push(_font_data, 0.0)
+  // % (37)
+  push(_font_data, 9.0)
+  push(_font_data, 1.0)
+  push(_font_data, 2.0)
+  push(_font_data, 4.0)
+  push(_font_data, 8.0)
+  push(_font_data, 9.0)
+  // & (38)
+  push(_font_data, 4.0)
+  push(_font_data, 10.0)
+  push(_font_data, 4.0)
+  push(_font_data, 11.0)
+  push(_font_data, 10.0)
+  push(_font_data, 7.0)
+  // ' (39)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  // ( (40)
+  push(_font_data, 2.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 2.0)
+  // ) (41)
+  push(_font_data, 4.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 4.0)
+  // * (42)
+  push(_font_data, 0.0)
+  push(_font_data, 10.0)
+  push(_font_data, 4.0)
+  push(_font_data, 10.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  // + (43)
+  push(_font_data, 0.0)
+  push(_font_data, 4.0)
+  push(_font_data, 14.0)
+  push(_font_data, 4.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  // , (44)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 4.0)
+  push(_font_data, 8.0)
+  // - (45)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 14.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  // . (46)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 4.0)
+  // / (47)
+  push(_font_data, 1.0)
+  push(_font_data, 1.0)
+  push(_font_data, 2.0)
+  push(_font_data, 4.0)
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  // 0 (48)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 11.0)
+  push(_font_data, 13.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  // 1 (49)
+  push(_font_data, 2.0)
+  push(_font_data, 6.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 7.0)
+  // 2 (50)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 2.0)
+  push(_font_data, 4.0)
+  push(_font_data, 8.0)
+  push(_font_data, 15.0)
+  // 3 (51)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 2.0)
+  push(_font_data, 1.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  // 4 (52)
+  push(_font_data, 2.0)
+  push(_font_data, 6.0)
+  push(_font_data, 10.0)
+  push(_font_data, 15.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  // 5 (53)
+  push(_font_data, 15.0)
+  push(_font_data, 8.0)
+  push(_font_data, 14.0)
+  push(_font_data, 1.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  // 6 (54)
+  push(_font_data, 6.0)
+  push(_font_data, 8.0)
+  push(_font_data, 14.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  // 7 (55)
+  push(_font_data, 15.0)
+  push(_font_data, 1.0)
+  push(_font_data, 2.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  // 8 (56)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  // 9 (57)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 7.0)
+  push(_font_data, 1.0)
+  push(_font_data, 6.0)
+  // : (58)
+  push(_font_data, 0.0)
+  push(_font_data, 4.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 4.0)
+  push(_font_data, 0.0)
+  // ; (59)
+  push(_font_data, 0.0)
+  push(_font_data, 4.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 4.0)
+  push(_font_data, 8.0)
+  // < (60)
+  push(_font_data, 1.0)
+  push(_font_data, 2.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 2.0)
+  push(_font_data, 1.0)
+  // = (61)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 14.0)
+  push(_font_data, 0.0)
+  push(_font_data, 14.0)
+  push(_font_data, 0.0)
+  // > (62)
+  push(_font_data, 8.0)
+  push(_font_data, 4.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 4.0)
+  push(_font_data, 8.0)
+  // ? (63)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 2.0)
+  push(_font_data, 4.0)
+  push(_font_data, 0.0)
+  push(_font_data, 4.0)
+  // @ (64)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 11.0)
+  push(_font_data, 11.0)
+  push(_font_data, 8.0)
+  push(_font_data, 6.0)
+  // A (65)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 15.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  // B
+  push(_font_data, 14.0)
+  push(_font_data, 9.0)
+  push(_font_data, 14.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 14.0)
+  // C
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  // D
+  push(_font_data, 14.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 14.0)
+  // E
+  push(_font_data, 15.0)
+  push(_font_data, 8.0)
+  push(_font_data, 14.0)
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  push(_font_data, 15.0)
+  // F
+  push(_font_data, 15.0)
+  push(_font_data, 8.0)
+  push(_font_data, 14.0)
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  // G
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 8.0)
+  push(_font_data, 11.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  // H
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 15.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  // I
+  push(_font_data, 14.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 14.0)
+  // J
+  push(_font_data, 7.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 10.0)
+  push(_font_data, 4.0)
+  // K
+  push(_font_data, 9.0)
+  push(_font_data, 10.0)
+  push(_font_data, 12.0)
+  push(_font_data, 12.0)
+  push(_font_data, 10.0)
+  push(_font_data, 9.0)
+  // L
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  push(_font_data, 15.0)
+  // M
+  push(_font_data, 9.0)
+  push(_font_data, 15.0)
+  push(_font_data, 15.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  // N
+  push(_font_data, 9.0)
+  push(_font_data, 13.0)
+  push(_font_data, 13.0)
+  push(_font_data, 11.0)
+  push(_font_data, 11.0)
+  push(_font_data, 9.0)
+  // O
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  // P
+  push(_font_data, 14.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 14.0)
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  // Q
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 10.0)
+  push(_font_data, 5.0)
+  // R
+  push(_font_data, 14.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 14.0)
+  push(_font_data, 10.0)
+  push(_font_data, 9.0)
+  // S
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 4.0)
+  push(_font_data, 2.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  // T
+  push(_font_data, 15.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  // U
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  // V
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  push(_font_data, 6.0)
+  // W
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 15.0)
+  push(_font_data, 15.0)
+  push(_font_data, 9.0)
+  // X
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  // Y
+  push(_font_data, 9.0)
+  push(_font_data, 9.0)
+  push(_font_data, 6.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  // Z
+  push(_font_data, 15.0)
+  push(_font_data, 1.0)
+  push(_font_data, 2.0)
+  push(_font_data, 4.0)
+  push(_font_data, 8.0)
+  push(_font_data, 15.0)
+  // [ (91)
+  push(_font_data, 6.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 4.0)
+  push(_font_data, 6.0)
+  // \ (92)
+  push(_font_data, 8.0)
+  push(_font_data, 8.0)
+  push(_font_data, 4.0)
+  push(_font_data, 2.0)
+  push(_font_data, 1.0)
+  push(_font_data, 1.0)
+  // ] (93)
+  push(_font_data, 6.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 2.0)
+  push(_font_data, 6.0)
+  // ^ (94)
+  push(_font_data, 6.0)
+  push(_font_data, 9.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  // _ (95)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 0.0)
+  push(_font_data, 15.0)
+  return 0.0
+end
+
+// ── Drawing Primitives ──────────────────────────────────────────────
+
+fn _gui_fill_rect(px_r, px_g, px_b, x0, y0, rw, rh, cr, cg, cb, win_w, win_h)
+  let mut py = y0
+  let y_end = y0 + rh
+  let x_end = x0 + rw
+  while py < y_end
+    if py >= 0.0
+      if py < win_h
+        let mut px = x0
+        while px < x_end
+          if px >= 0.0
+            if px < win_w
+              let idx = int(py * win_w + px)
+              px_r[idx] = cr
+              px_g[idx] = cg
+              px_b[idx] = cb
+            end
+          end
+          px = px + 1.0
+        end
+      end
+    end
+    py = py + 1.0
+  end
+  return 0.0
+end
+
+fn _gui_draw_border(px_r, px_g, px_b, x0, y0, rw, rh, cr, cg, cb, win_w, win_h)
+  let _t = _gui_fill_rect(px_r, px_g, px_b, x0, y0, rw, 1.0, cr, cg, cb, win_w, win_h)
+  let _b = _gui_fill_rect(px_r, px_g, px_b, x0, y0 + rh - 1.0, rw, 1.0, cr, cg, cb, win_w, win_h)
+  let _l = _gui_fill_rect(px_r, px_g, px_b, x0, y0, 1.0, rh, cr, cg, cb, win_w, win_h)
+  let _r2 = _gui_fill_rect(px_r, px_g, px_b, x0 + rw - 1.0, y0, 1.0, rh, cr, cg, cb, win_w, win_h)
+  return 0.0
+end
+
+fn _gui_draw_char(px_r, px_g, px_b, ch_code, cx, cy, scale, cr, cg, cb, win_w, win_h)
+  if ch_code < 32.0
+    return 0.0
+  end
+  let mut idx_base = ch_code - 32.0
+  // Lowercase maps to uppercase
+  if ch_code >= 97.0
+    if ch_code <= 122.0
+      idx_base = ch_code - 97.0 + 33.0
+    end
+  end
+  if idx_base < 0.0
+    return 0.0
+  end
+  let font_len = len(_font_data)
+  let row_start = idx_base * 6.0
+  if row_start + 6.0 > font_len
+    return 0.0
+  end
+  let mut row = 0.0
+  while row < 6.0
+    let pattern = _font_data[int(row_start + row)]
+    let mut col = 0.0
+    while col < 4.0
+      let bit_pos = 3.0 - col
+      let shifted = floor(pattern / pow(2.0, bit_pos))
+      let is_set = shifted - floor(shifted / 2.0) * 2.0
+      if is_set >= 1.0
+        let px_x = cx + col * scale
+        let px_y = cy + row * scale
+        let _f = _gui_fill_rect(px_r, px_g, px_b, px_x, px_y, scale, scale, cr, cg, cb, win_w, win_h)
+      end
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+  return 0.0
+end
+
+fn _gui_draw_text(px_r, px_g, px_b, text, tx, ty, scale, cr, cg, cb, win_w, win_h)
+  let tlen = len(text)
+  let char_w = 5.0 * scale
+  let mut i = 0.0
+  while i < tlen
+    let c = char_at(text, i)
+    let code = ord(c)
+    let cx = tx + i * char_w
+    let _d = _gui_draw_char(px_r, px_g, px_b, code, cx, ty, scale, cr, cg, cb, win_w, win_h)
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn _gui_set_pixel(px_r, px_g, px_b, x, y, cr, cg, cb, win_w, win_h)
+  if x >= 0.0
+    if x < win_w
+      if y >= 0.0
+        if y < win_h
+          let idx = int(y * win_w + x)
+          px_r[idx] = cr
+          px_g[idx] = cg
+          px_b[idx] = cb
+        end
+      end
+    end
+  end
+  return 0.0
+end
+
+fn _gui_draw_line(px_r, px_g, px_b, x0, y0, x1, y1, cr, cg, cb, win_w, win_h)
+  let mut dx = x1 - x0
+  let mut dy = y1 - y0
+  if dx < 0.0
+    dx = 0.0 - dx
+  end
+  if dy < 0.0
+    dy = 0.0 - dy
+  end
+  let mut sx = 1.0
+  if x0 > x1
+    sx = -1.0
+  end
+  let mut sy = 1.0
+  if y0 > y1
+    sy = -1.0
+  end
+  let mut err = dx - dy
+  let mut cx = floor(x0)
+  let mut cy = floor(y0)
+  let tx = floor(x1)
+  let ty = floor(y1)
+  let mut steps = 0.0
+  let max_steps = dx + dy + 2.0
+  while steps < max_steps
+    let _sp = _gui_set_pixel(px_r, px_g, px_b, cx, cy, cr, cg, cb, win_w, win_h)
+    if cx == tx
+      if cy == ty
+        return 0.0
+      end
+    end
+    let e2 = 2.0 * err
+    if e2 > 0.0 - dy
+      err = err - dy
+      cx = cx + sx
+    end
+    if e2 < dx
+      err = err + dx
+      cy = cy + sy
+    end
+    steps = steps + 1.0
+  end
+  return 0.0
+end
+
+fn _gui_draw_circle(px_r, px_g, px_b, cx, cy, radius, cr, cg, cb, win_w, win_h)
+  let mut x = floor(radius)
+  let mut y = 0.0
+  let mut d = 1.0 - x
+  while x >= y
+    let _p1 = _gui_set_pixel(px_r, px_g, px_b, cx+x, cy+y, cr, cg, cb, win_w, win_h)
+    let _p2 = _gui_set_pixel(px_r, px_g, px_b, cx-x, cy+y, cr, cg, cb, win_w, win_h)
+    let _p3 = _gui_set_pixel(px_r, px_g, px_b, cx+x, cy-y, cr, cg, cb, win_w, win_h)
+    let _p4 = _gui_set_pixel(px_r, px_g, px_b, cx-x, cy-y, cr, cg, cb, win_w, win_h)
+    let _p5 = _gui_set_pixel(px_r, px_g, px_b, cx+y, cy+x, cr, cg, cb, win_w, win_h)
+    let _p6 = _gui_set_pixel(px_r, px_g, px_b, cx-y, cy+x, cr, cg, cb, win_w, win_h)
+    let _p7 = _gui_set_pixel(px_r, px_g, px_b, cx+y, cy-x, cr, cg, cb, win_w, win_h)
+    let _p8 = _gui_set_pixel(px_r, px_g, px_b, cx-y, cy-x, cr, cg, cb, win_w, win_h)
+    y = y + 1.0
+    if d <= 0.0
+      d = d + 2.0 * y + 1.0
+    else
+      x = x - 1.0
+      d = d + 2.0 * y - 2.0 * x + 1.0
+    end
+  end
+  return 0.0
+end
+
+fn _gui_fill_circle(px_r, px_g, px_b, cx, cy, radius, cr, cg, cb, win_w, win_h)
+  let r = floor(radius)
+  let mut y = 0.0 - r
+  while y <= r
+    let x_span = floor(sqrt(r * r - y * y))
+    let _fl = _gui_fill_rect(px_r, px_g, px_b, cx - x_span, cy + y, 2.0 * x_span + 1.0, 1.0, cr, cg, cb, win_w, win_h)
+    y = y + 1.0
+  end
+  return 0.0
+end
+
+// ── Base Widget Registration ────────────────────────────────────────
+
+fn _gui_add_widget(wtype, x, y, w, h, text)
+  let id = len(_gui_types)
+  push(_gui_types, wtype)
+  push(_gui_x, x)
+  push(_gui_y, y)
+  push(_gui_w, w)
+  push(_gui_h, h)
+  push(_gui_visible, 1.0)
+  push(_gui_enabled, 1.0)
+  push(_gui_parent, -1.0)
+  push(_gui_texts, text)
+  push(_gui_hovered, 0.0)
+  push(_gui_pressed, 0.0)
+  push(_gui_clicked, 0.0)
+  push(_gui_checked, 0.0)
+  push(_gui_slider_val, 0.0)
+  push(_gui_slider_min, 0.0)
+  push(_gui_slider_max, 100.0)
+  push(_gui_input_text, " ")
+  push(_gui_input_cursor, 0.0)
+  push(_gui_input_focused, 0.0)
+  push(_gui_list_start, 0.0)
+  push(_gui_list_count, 0.0)
+  push(_gui_list_selected, -1.0)
+  push(_gui_list_scroll, 0.0)
+  _gs[9] = 1.0
+  return id
+end

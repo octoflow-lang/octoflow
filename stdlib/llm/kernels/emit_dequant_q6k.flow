@@ -1,0 +1,152 @@
+// emit_dequant_q6k.flow — Q6_K GPU Dequantization Kernel Emitter
+//
+// HYBRID APPROACH: CPU pre-decodes d and 16 signed int8 scales into float
+// params buffer. GPU handles 6-bit weight reconstruction only.
+//
+// ALL-FLOAT DESIGN (avoids f32 precision loss with uint32 packing):
+//   Binding 0 (float): Raw bytes — 1 byte per float, 192 floats/block
+//     [ql_0..ql_127, qh_0..qh_63] (128 ql + 64 qh bytes)
+//   Binding 1 (float): Pre-decoded params — 16 floats/block
+//     [d*sc0, d*sc1, ..., d*sc15]
+//   Binding 2 (float): Output — 256 dequantized weights/block
+//
+// Q6_K block layout (210 bytes, 256 weights):
+//   ql[0..127]   — lower 4 bits of each weight
+//   qh[128..191] — upper 2 bits of each weight
+//   sc[192..207] — 16 signed int8 scales
+//   d[208..209]  — f16 super-scale
+//
+// Per-thread: gid = output weight index
+//   block = gid / 256
+//   local = gid % 256
+//   half = local / 128        (0 or 1)
+//   pos = local % 128
+//   sub_pos = pos / 32        (0-3, extraction pattern)
+//   l = pos % 32
+//
+// 6-bit extraction (4 patterns based on sub_pos):
+//   sub_pos=0: q_lo = ql_a % 16,     q_hi = qh_v % 4
+//   sub_pos=1: q_lo = ql_b % 16,     q_hi = floor(qh_v/4) % 4
+//   sub_pos=2: q_lo = floor(ql_a/16), q_hi = floor(qh_v/16) % 4
+//   sub_pos=3: q_lo = floor(ql_b/16), q_hi = floor(qh_v/64)
+//
+// Scale index: half * 8 + sub_pos * 2 + floor(l / 16)
+// output = param[scale_idx] * (q_lo + q_hi * 16 - 32)
+
+use "../../compiler/ir"
+
+fn emit_dequant_q6k(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+
+  // ── Float constants ──
+  let f0 = ir_const_f(entry, 0.0)
+  let f1c = ir_const_f(entry, 1.0)
+  let f2c = ir_const_f(entry, 2.0)
+  let f4c = ir_const_f(entry, 4.0)
+  let f8c = ir_const_f(entry, 8.0)
+  let f16c = ir_const_f(entry, 16.0)
+  let f32c = ir_const_f(entry, 32.0)
+  let f64c = ir_const_f(entry, 64.0)
+  let f128c = ir_const_f(entry, 128.0)
+  let f192c = ir_const_f(entry, 192.0)
+  let f256c = ir_const_f(entry, 256.0)
+
+  // ── Compute indices ──
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+
+  // block = floor(gid / 256)
+  let block_f = ir_floor(entry, ir_fdiv(entry, gid_f, f256c))
+  // local = gid - block * 256
+  let local_f = ir_fsub(entry, gid_f, ir_fmul(entry, block_f, f256c))
+
+  // half = floor(local / 128)
+  let half_f = ir_floor(entry, ir_fdiv(entry, local_f, f128c))
+  // pos = local - half * 128
+  let pos_f = ir_fsub(entry, local_f, ir_fmul(entry, half_f, f128c))
+  // sub_pos = floor(pos / 32)
+  let sub_pos_f = ir_floor(entry, ir_fdiv(entry, pos_f, f32c))
+  // l = pos - sub_pos * 32
+  let l_f = ir_fsub(entry, pos_f, ir_fmul(entry, sub_pos_f, f32c))
+
+  // ── Load pre-decoded param (binding 1) ──
+  // scale_idx = half * 8 + sub_pos * 2 + floor(l / 16)
+  let l_d16 = ir_floor(entry, ir_fdiv(entry, l_f, f16c))
+  let si_f = ir_fadd(entry, ir_fmul(entry, half_f, f8c), ir_fadd(entry, ir_fmul(entry, sub_pos_f, f2c), l_d16))
+  // param_idx = block * 16 + scale_idx
+  let pi_f = ir_fadd(entry, ir_fmul(entry, block_f, f16c), si_f)
+  let pi_u = ir_ftou(entry, pi_f)
+  let d_scale = ir_load_input_at(entry, 1.0, pi_u)
+
+  // ── Load ql_a, ql_b, qh_v bytes from binding 0 ──
+  // Block base in float buffer: block * 192
+  let blk_base = ir_fmul(entry, block_f, f192c)
+  // ql_a: offset = half * 64 + l  (within ql bytes 0..127)
+  let qla_off = ir_fadd(entry, blk_base, ir_fadd(entry, ir_fmul(entry, half_f, f64c), l_f))
+  let qla_u = ir_ftou(entry, qla_off)
+  let qla = ir_load_input_at(entry, 0.0, qla_u)
+
+  // ql_b: offset = half * 64 + l + 32  (within ql bytes 0..127)
+  let qlb_off = ir_fadd(entry, qla_off, f32c)
+  let qlb_u = ir_ftou(entry, qlb_off)
+  let qlb = ir_load_input_at(entry, 0.0, qlb_u)
+
+  // qh_v: offset = 128 + half * 32 + l  (within qh bytes 128..191)
+  let qh_off = ir_fadd(entry, blk_base, ir_fadd(entry, f128c, ir_fadd(entry, ir_fmul(entry, half_f, f32c), l_f)))
+  let qh_u = ir_ftou(entry, qh_off)
+  let qhv = ir_load_input_at(entry, 0.0, qh_u)
+
+  // ── 6-bit extraction based on sub_pos ──
+  // sub_pos=0: q_lo = qla % 16,      q_hi = qhv % 4
+  let qla_d16 = ir_floor(entry, ir_fdiv(entry, qla, f16c))
+  let lo_0 = ir_fsub(entry, qla, ir_fmul(entry, qla_d16, f16c))
+  let qhv_d4 = ir_floor(entry, ir_fdiv(entry, qhv, f4c))
+  let hi_0 = ir_fsub(entry, qhv, ir_fmul(entry, qhv_d4, f4c))
+
+  // sub_pos=1: q_lo = qlb % 16,      q_hi = floor(qhv/4) % 4
+  let qlb_d16 = ir_floor(entry, ir_fdiv(entry, qlb, f16c))
+  let lo_1 = ir_fsub(entry, qlb, ir_fmul(entry, qlb_d16, f16c))
+  let qhv_d4_d4 = ir_floor(entry, ir_fdiv(entry, qhv_d4, f4c))
+  let hi_1 = ir_fsub(entry, qhv_d4, ir_fmul(entry, qhv_d4_d4, f4c))
+
+  // sub_pos=2: q_lo = floor(qla/16), q_hi = floor(qhv/16) % 4
+  let lo_2 = qla_d16
+  let qhv_d16 = ir_floor(entry, ir_fdiv(entry, qhv, f16c))
+  let qhv_d16_d4 = ir_floor(entry, ir_fdiv(entry, qhv_d16, f4c))
+  let hi_2 = ir_fsub(entry, qhv_d16, ir_fmul(entry, qhv_d16_d4, f4c))
+
+  // sub_pos=3: q_lo = floor(qlb/16), q_hi = floor(qhv/64)
+  let lo_3 = qlb_d16
+  let hi_3 = ir_floor(entry, ir_fdiv(entry, qhv, f64c))
+
+  // Select q_lo based on sub_pos (4-way select chain)
+  let sp_is2 = ir_foeq(entry, sub_pos_f, f2c)
+  let sp_is1 = ir_foeq(entry, sub_pos_f, f1c)
+  let sp_is0 = ir_foeq(entry, sub_pos_f, f0)
+  let lo_s1 = ir_select(entry, 1.0, sp_is2, lo_2, lo_3)
+  let lo_s2 = ir_select(entry, 1.0, sp_is1, lo_1, lo_s1)
+  let q_lo = ir_select(entry, 1.0, sp_is0, lo_0, lo_s2)
+
+  // Select q_hi based on sub_pos
+  let hi_s1 = ir_select(entry, 1.0, sp_is2, hi_2, hi_3)
+  let hi_s2 = ir_select(entry, 1.0, sp_is1, hi_1, hi_s1)
+  let q_hi = ir_select(entry, 1.0, sp_is0, hi_0, hi_s2)
+
+  // ── Reconstruct 6-bit value and dequantize ──
+  // q6 = q_lo + q_hi * 16
+  let q6 = ir_fadd(entry, q_lo, ir_fmul(entry, q_hi, f16c))
+  // centered = q6 - 32
+  let centered = ir_fsub(entry, q6, f32c)
+  // output = d_scale * centered
+  let dequant = ir_fmul(entry, d_scale, centered)
+
+  // Store result
+  let _s = ir_store_output_at(entry, gid, dequant)
+  let _t = ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

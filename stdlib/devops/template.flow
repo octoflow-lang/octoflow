@@ -1,0 +1,24 @@
+// stdlib/devops/template.flow — Simple template rendering
+//
+// Functions: render, load_template, render_file
+
+fn render(template, vars)
+  // Replace {key} with values from vars map
+  let mut result = template
+  let keys = split(map_keys(vars), ",")
+  for key in keys
+    let placeholder = "{" + key + "}"
+    let value = map_get(vars, key)
+    result = replace(result, placeholder, value)
+  end
+  return result
+end
+
+fn load_template(path)
+  return read_file(path)
+end
+
+fn render_file(template_path, vars)
+  let tmpl = read_file(template_path)
+  return render(tmpl, vars)
+end

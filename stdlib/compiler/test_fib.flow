@@ -1,0 +1,11 @@
+// Test fibonacci: exercises while + multi-step assignment
+let mut a = 0.0
+let mut b = 1.0
+let mut n = 0.0
+while n < 8.0
+  let mut tmp = b
+  b = a + b
+  a = tmp
+  n = n + 1.0
+end
+print("fib8={a}")

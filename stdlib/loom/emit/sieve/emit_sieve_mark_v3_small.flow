@@ -1,0 +1,182 @@
+// emit_sieve_mark_v3_small.flow — Small Prime Mark Kernel with Shared Memory Cache
+//
+// Same algorithm as v2 mark kernel (word-centric, bit-clear), but loads primes
+// into shared memory first. All threads in a workgroup cooperate to load primes
+// from global memory → shared memory, then barrier, then each thread reads
+// primes from fast shared memory instead of global memory.
+//
+// Phase 1 (cooperative): lid < num_primes → shared[lid] = globals[pstart + lid]
+// Phase 2 (per-word):    same as v2 but reading primes from shared[j]
+//
+// Push constants (same as v2):
+//   pc[0] = seg_idx
+//   pc[1] = num_words
+//   pc[2] = prime_start (index in globals)
+//   pc[3] = prime_end   (index in globals)
+//
+// Binding layout (same as v2):
+//   Binding 0: registers (R0 bitmap as uint32)
+//   Binding 2: globals   (read primes as float)
+//
+// Shared memory: 256 floats (prime cache, only first num_primes used)
+// Dispatch: wg = ceil(num_words / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_mark_v3_small.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_mark_v3_small(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+  ir_shared_size = 256.0
+  ir_workgroup_size = 256.0
+
+  let entry       = ir_block("entry")
+  let load_do     = ir_block("load_do")
+  let load_skip   = ir_block("load_skip")
+  let load_merge  = ir_block("load_merge")
+  let pre_loop    = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body   = ir_block("loop_body")
+  let inner_hdr   = ir_block("inner_hdr")
+  let inner_body  = ir_block("inner_body")
+  let inner_cont  = ir_block("inner_cont")
+  let inner_merge = ir_block("inner_merge")
+  let loop_cont   = ir_block("loop_cont")
+  let loop_merge  = ir_block("loop_merge")
+  let exit_block  = ir_block("exit")
+
+  // ── Entry: gid, local_id, push constants ──────────────────
+  let gid      = ir_load_gid(entry)
+  let lid      = ir_load_local_id(entry)
+  let pc_seg   = ir_push_const(entry, 0.0)   // seg_idx
+  let pc_words = ir_push_const(entry, 1.0)   // num_words
+  let pc_pst   = ir_push_const(entry, 2.0)   // prime_start
+  let pc_pen   = ir_push_const(entry, 3.0)   // prime_end
+  let pstart_u = ir_ftou(entry, pc_pst)
+  let pend_u   = ir_ftou(entry, pc_pen)
+  let num_p    = ir_isub(entry, pend_u, pstart_u)
+
+  // ── Phase 1: Cooperative prime loading into shared memory ──
+  // if lid < num_primes → load prime to shared[lid]
+  let should_load = ir_folt(entry, ir_utof(entry, lid), ir_utof(entry, num_p))
+  let _sm_ld   = ir_selection_merge(entry, load_merge)
+  let _br_ld   = ir_term_cond_branch(entry, should_load, load_do, load_skip)
+
+  // ── load_do: shared[lid] = globals[pstart + lid] ──────────
+  let prime_idx = ir_iadd(load_do, pstart_u, lid)
+  let prime_f   = ir_load_input_at(load_do, 2.0, prime_idx)
+  let _ss       = ir_shared_store(load_do, lid, prime_f)
+  let _br_ld2   = ir_term_branch(load_do, load_merge)
+
+  // ── load_skip: nothing ────────────────────────────────────
+  let _br_ls    = ir_term_branch(load_skip, load_merge)
+
+  // ── load_merge: barrier, then OOB check for sieve phase ───
+  let _bar      = ir_barrier(load_merge)
+  let words_u   = ir_ftou(load_merge, pc_words)
+  let oob       = ir_ugte(load_merge, gid, words_u)
+  let _sm_e     = ir_selection_merge(load_merge, exit_block)
+  let _br_e     = ir_term_cond_branch(load_merge, oob, exit_block, pre_loop)
+
+  // ── Phase 2: Word-centric sieve (same as v2 but reads from shared) ──
+
+  // ── pre_loop: compute word base, load initial bitmap ──────
+  let seg_u    = ir_ftou(pre_loop, pc_seg)
+
+  let c0       = ir_const_u(pre_loop, 0.0)
+  let c1       = ir_const_u(pre_loop, 1.0)
+  let c2       = ir_const_u(pre_loop, 2.0)
+  let c64      = ir_const_u(pre_loop, 64.0)
+  let c62      = ir_const_u(pre_loop, 62.0)
+
+  let seg_range = ir_imul(pre_loop, words_u, c64)
+  let seg_base  = ir_imul(pre_loop, seg_u, seg_range)
+  let seg_start = ir_iadd(pre_loop, seg_base, c1)
+
+  let gid64    = ir_imul(pre_loop, gid, c64)
+  let word_base = ir_iadd(pre_loop, seg_start, gid64)
+  let word_end = ir_iadd(pre_loop, word_base, c62)
+
+  let bm_init  = ir_buf_load_u(pre_loop, 0.0, gid)
+  let _bpl     = ir_term_branch(pre_loop, loop_header)
+
+  // ── Outer loop: iterate over primes (from shared memory) ──
+  let phi_j    = ir_phi(loop_header, 2.0)      // uint: prime index (0-based into shared)
+  let phi_bm   = ir_phi(loop_header, 2.0)      // uint: bitmap word
+  let _pj0     = ir_phi_add(phi_j,  c0, pre_loop)
+  let _pb0     = ir_phi_add(phi_bm, bm_init, pre_loop)
+  let j_done   = ir_ugte(loop_header, phi_j, num_p)
+  let _lm      = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc      = ir_term_cond_branch(loop_header, j_done, loop_merge, loop_body)
+
+  // ── loop_body: load prime from SHARED memory ──────────────
+  let prime_sf  = ir_shared_load(loop_body, phi_j)
+  let prime_u   = ir_ftou(loop_body, prime_sf)
+
+  let step     = ir_imul(loop_body, prime_u, c2)
+  let p_sq     = ir_imul(loop_body, prime_u, prime_u)
+
+  let use_psq  = ir_ugte(loop_body, p_sq, word_base)
+  let start_pt = ir_select(loop_body, IR_TYPE_UINT, use_psq, p_sq, word_base)
+
+  let rem      = ir_umod(loop_body, start_pt, prime_u)
+  let gap      = ir_isub(loop_body, prime_u, rem)
+  let gap_mod  = ir_umod(loop_body, gap, prime_u)
+  let first_m  = ir_iadd(loop_body, start_pt, gap_mod)
+
+  let is_even  = ir_uequ(loop_body, ir_bit_and(loop_body, first_m, c1), c0)
+  let first_m_adj = ir_iadd(loop_body, first_m, prime_u)
+  let mult     = ir_select(loop_body, IR_TYPE_UINT, is_even, first_m_adj, first_m)
+
+  let _br_lb = ir_term_branch(loop_body, inner_hdr)
+
+  // ── Inner loop: clear bits for this prime ─────────────────
+  let phi_m    = ir_phi(inner_hdr, 2.0)
+  let phi_bm2  = ir_phi(inner_hdr, 2.0)
+  let _pm0     = ir_phi_add(phi_m, mult, loop_body)
+  let _pb2_0   = ir_phi_add(phi_bm2, phi_bm, loop_body)
+
+  let m_past   = ir_ugte(inner_hdr, phi_m, ir_iadd(inner_hdr, word_end, c1))
+  let _lm2     = ir_loop_merge(inner_hdr, inner_merge, inner_cont)
+  let _bc2     = ir_term_cond_branch(inner_hdr, m_past, inner_merge, inner_body)
+
+  // ── inner_body: compute bit position, clear bit ───────────
+  let offset   = ir_isub(inner_body, phi_m, word_base)
+  let bit_pos  = ir_udiv(inner_body, offset, c2)
+  let one_shl  = ir_shl(inner_body, c1, bit_pos)
+  let mask     = ir_not(inner_body, one_shl)
+  let new_bm   = ir_bit_and(inner_body, phi_bm2, mask)
+
+  let _br_ib   = ir_term_branch(inner_body, inner_cont)
+
+  // ── inner_cont: advance mult by 2p ───────────────────────
+  let next_m   = ir_iadd(inner_cont, phi_m, step)
+  let _br_ic   = ir_term_branch(inner_cont, inner_hdr)
+  let _pm1     = ir_phi_add(phi_m, next_m, inner_cont)
+  let _pb2_1   = ir_phi_add(phi_bm2, new_bm, inner_cont)
+
+  // ── inner_merge: done with this prime ─────────────────────
+  let _br_im   = ir_term_branch(inner_merge, loop_cont)
+
+  // ── loop_cont: advance to next prime ──────────────────────
+  let new_j    = ir_iadd(loop_cont, phi_j, c1)
+  let _br_lc   = ir_term_branch(loop_cont, loop_header)
+  let _pj1     = ir_phi_add(phi_j,  new_j, loop_cont)
+  let _pb1     = ir_phi_add(phi_bm, phi_bm2, loop_cont)
+
+  // ── loop_merge: write final bitmap back ───────────────────
+  let _store   = ir_buf_store_u(loop_merge, 0.0, gid, phi_bm)
+  let _blm     = ir_term_branch(loop_merge, exit_block)
+
+  // ── exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_mark_v3_small.spv"
+let _r = emit_sieve_mark_v3_small(out)
+print("Emitted: {out}")

@@ -1,0 +1,67 @@
+use linalg
+use nn
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// Test matrix identity trace
+let id = mat_identity(3.0)
+let tr = mat_trace(id, 3.0)
+if abs(tr - 3.0) < 0.01
+  pass = pass + 1.0
+  print("  PASS: mat_identity trace = 3")
+else
+  fail = fail + 1.0
+  print("  FAIL: mat_identity trace expected 3 got {tr}")
+end
+
+// Test 2x2 determinant
+let mut det_in = [1.0, 2.0, 3.0, 4.0]
+let det = mat_det_2x2(det_in)
+if abs(det - -2.0) < 0.01
+  pass = pass + 1.0
+  print("  PASS: mat_det_2x2 = -2")
+else
+  fail = fail + 1.0
+  print("  FAIL: mat_det_2x2 expected -2 got {det}")
+end
+
+// Test sigmoid
+let s_in = [0.0]
+let sig = sigmoid_forward(s_in)
+if abs(sig[0] - 0.5) < 0.01
+  pass = pass + 1.0
+  print("  PASS: sigmoid(0) = 0.5")
+else
+  fail = fail + 1.0
+  let sv = sig[0]
+  print("  FAIL: sigmoid(0) expected 0.5 got {sv}")
+end
+
+// Test ReLU
+let r_in = [-1.0, 0.0, 2.0]
+let r_out = relu_forward(r_in)
+if r_out[0] == 0.0 && r_out[2] == 2.0
+  pass = pass + 1.0
+  print("  PASS: relu_forward")
+else
+  fail = fail + 1.0
+  print("  FAIL: relu_forward")
+end
+
+// Test softmax
+let logits = [1.0, 2.0, 3.0]
+let probs = softmax(logits)
+let mut prob_sum = 0.0
+for p in probs
+  prob_sum = prob_sum + p
+end
+if abs(prob_sum - 1.0) < 0.01
+  pass = pass + 1.0
+  print("  PASS: softmax sums to 1")
+else
+  fail = fail + 1.0
+  print("  FAIL: softmax expected sum 1 got {prob_sum}")
+end
+
+print("ml: {pass} passed, {fail} failed")

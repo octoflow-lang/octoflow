@@ -1,0 +1,116 @@
+// stdlib/compiler/examples/benchmark_gpu.flow
+// Phase 52: OctoFlow GPU Benchmark
+//
+// Tests GPU-accelerated element-wise sigmoid computation:
+//   sigmoid(x) = 1 / (1 + exp(-x))
+//
+// Usage:
+//   octoflow run stdlib/compiler/examples/benchmark_gpu.flow --allow-read --allow-write
+//
+// Generates input data, runs GPU pipeline, reports timing.
+
+let NL = chr(10)
+let data_path = "stdlib/compiler/examples/bench_data.csv"
+let N = 10000.0   // number of elements (10K for quick demo)
+
+// ---- Step 1: Generate benchmark data ----------------------------------
+print("=== OctoFlow GPU Benchmark (Phase 52) ===")
+print("  Elements: {N}")
+print("")
+
+print("[1] Generating {N} random floats → {data_path}")
+let t_gen0 = now_ms()
+let mut csv_out = ""
+let mut gi = 0.0
+while gi < N
+  let gv = (random() - 0.5) * 8.0   // range: -4.0 to +4.0 (good sigmoid range)
+  if gi > 0.0
+    csv_out = csv_out + NL
+  end
+  csv_out = csv_out + str(gv)
+  gi = gi + 1.0
+end
+write_file(data_path, csv_out)
+let t_gen1 = now_ms()
+let t_gen = t_gen1 - t_gen0
+print("  done in {t_gen:.1} ms")
+print("")
+
+// ---- Step 2: OctoFlow CPU baseline (scalar loop) ----------------------
+print("[2] CPU baseline: scalar sigmoid loop")
+let t_cpu0 = now_ms()
+let input_lines = read_lines(data_path)
+let input_count = len(input_lines)
+let mut cpu_sum = 0.0
+let mut ci = 0.0
+while ci < input_count
+  let xv = float(input_lines[ci])
+  let sigmoid_x = 1.0 / (1.0 + exp(0.0 - xv))
+  cpu_sum = cpu_sum + sigmoid_x
+  ci = ci + 1.0
+end
+let t_cpu1 = now_ms()
+let t_cpu = t_cpu1 - t_cpu0
+print("  sum(sigmoid(x)) = {cpu_sum:.4}")
+print("  time: {t_cpu:.1} ms  ({input_count} elements)")
+print("")
+
+// ---- Step 3: OctoFlow GPU pipeline ------------------------------------
+// sigmoid(x) = 1 / (1 + exp(-x))
+// Pipeline: multiply(-1) → exp() → add(1) → pow(-1) [x^-1 = reciprocal]
+print("[3] GPU pipeline: stream |> sigmoid ops → sum")
+let t_gpu0 = now_ms()
+stream gpu_data  = tap("bench_data.csv")
+stream negated   = gpu_data  |> negate()
+stream exped     = negated   |> exp()
+stream plus_one  = exped     |> add(1.0)
+stream sigmoid   = plus_one  |> pow(-1.0)
+let gpu_sum = sum(sigmoid)
+let t_gpu1 = now_ms()
+let t_gpu = t_gpu1 - t_gpu0
+print("  sum(sigmoid(x)) = {gpu_sum:.4}")
+print("  time: {t_gpu:.1} ms  (Vulkan GPU)")
+print("")
+
+// ---- Step 4: Speedup analysis -----------------------------------------
+print("[4] Speedup analysis")
+if t_gpu > 0.0
+  let speedup = t_cpu / t_gpu
+  print("  CPU time: {t_cpu:.1} ms")
+  print("  GPU time: {t_gpu:.1} ms")
+  print("  Speedup:  {speedup:.1}x")
+else
+  print("  GPU time < 1ms (too fast to measure accurately on {N} elements)")
+  print("  Increase N for meaningful timing")
+end
+print("")
+
+// ---- Step 5: LOC Comparison -------------------------------------------
+print("[5] Lines-of-Code Comparison")
+print("")
+print("  OctoFlow (GPU pipeline):")
+print("    stream data    = tap(file)")
+print("    stream negated = data    |> negate()")
+print("    stream exped   = negated |> exp()")
+print("    stream plus1   = exped   |> add(1.0)")
+print("    stream sigmoid = plus1   |> pow(-1.0)     // pow(-1) = reciprocal")
+print("    let result     = sum(sigmoid)")
+print("    --> 6 lines, 0 boilerplate")
+print("")
+print("  Python + NumPy (CPU):")
+print("    import numpy as np")
+print("    data = np.loadtxt(file)")
+print("    result = np.sum(1.0 / (1.0 + np.exp(-data)))")
+print("    --> 3 lines, but CPU-only")
+print("")
+print("  Python + CUDA (GPU):")
+print("    import cupy as cp")
+print("    data = cp.loadtxt(file)  # or host to device transfer")
+print("    kernel = cp.ElementwiseKernel(...)  # ~20 lines")
+print("    result = float(kernel(data).sum())")
+print("    --> 25+ lines, CUDA setup overhead")
+print("")
+print("=== BENCHMARK SUMMARY ===")
+print("  OctoFlow: {t_gpu:.1} ms (GPU)  |  {t_cpu:.1} ms (CPU scalar)")
+print("  LOC: 6 lines (GPU pipeline)  vs  25+ lines (Python+CUDA)")
+print("  Phase 52: COMPLETE")

@@ -1,0 +1,395 @@
+// ====================================================================
+//  GPU PARALLEL SIEVE v4 — CARRY-FORWARD OFFSETS + PRE-COMPILED KERNELS
+//
+//  Breakthroughs over v3:
+//    1. Carry-forward offsets: each prime remembers where it left off,
+//       eliminating expensive ceil_to_odd_multiple per-segment
+//    2. Unified mark kernel: single kernel for all primes (no small/large split)
+//    3. Pre-compiled SPIR-V: 5 kernels built offline, zero JIT overhead
+//       (vm_dispatch_mem available for kernels that genuinely need runtime gen)
+//
+//  Architecture:
+//    - CPU sieve computes small primes <= sqrt(N)
+//    - 16 GPU VMs each sieve segments of 262144 odd candidates (32KB bitmap)
+//    - B0 layout: [bitmap | count | accum | carry-forward offsets]
+//    - 5 pre-compiled kernels: init, init_offsets, mark_v4, count, accum
+//
+//  Memory layout per VM (B0 Registers):
+//    B0[0..NUM_WORDS-1]                     = bitmap (262K bits)
+//    B0[NUM_WORDS]                           = segment popcount accumulator
+//    B0[NUM_WORDS + 1]                       = running total accumulator
+//    B0[NUM_WORDS + 2 .. NUM_WORDS+1+NP]    = carry-forward prime offsets
+// ====================================================================
+
+print("")
+print("====================================================================")
+print("  GPU PARALLEL SIEVE v4 — CARRY-FORWARD OFFSETS (pre-compiled)")
+print("  16 worker VMs × carry-forward × 32KB segments")
+print("====================================================================")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  CONFIGURATION
+// ════════════════════════════════════════════════════════════════════
+
+let N = 1000000000.0            // 10^9
+let CANDS_PER_SEG = 262144.0    // 2^18 odd candidates → 32KB bitmap (L1 cache)
+let NUM_VMS = 16.0
+
+let SEG_RANGE = CANDS_PER_SEG * 2.0
+let NUM_WORDS = floor(CANDS_PER_SEG / 32.0)
+let WG_BITMAP = floor((NUM_WORDS + 255.0) / 256.0)
+let TOTAL_ODDS = floor((N - 1.0) / 2.0)
+let NUM_SEGS = floor((TOTAL_ODDS + CANDS_PER_SEG - 1.0) / CANDS_PER_SEG)
+
+print("  Target N = {N:.0}")
+print("  Candidates per segment = {CANDS_PER_SEG:.0} (odds only)")
+print("  Segment range = {SEG_RANGE:.0}")
+print("  Bitmap words = {NUM_WORDS:.0}")
+print("  Total segments = {NUM_SEGS:.0}")
+print("  Worker VMs = {NUM_VMS:.0}")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  PRE-COMPILED KERNEL PATHS
+// ════════════════════════════════════════════════════════════════════
+
+let SPV_INIT         = "stdlib/loom/kernels/sieve/sieve_v4_init.spv"
+let SPV_INIT_OFFSETS = "stdlib/loom/kernels/sieve/sieve_v4_init_offsets.spv"
+let SPV_MARK         = "stdlib/loom/kernels/sieve/sieve_v4_mark.spv"
+let SPV_COUNT        = "stdlib/loom/kernels/sieve/sieve_v4_count.spv"
+let SPV_ACCUM        = "stdlib/loom/kernels/sieve/sieve_v4_accum.spv"
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 1: CPU SIEVE — Compute small primes up to √N
+// ════════════════════════════════════════════════════════════════════
+
+let t0_cpu = now_ms()
+let sqrt_n = floor(sqrt(N)) + 1.0
+
+let mut cpu_sieve = []
+let mut csi = 0.0
+while csi < sqrt_n + 1.0
+  push(cpu_sieve, 1.0)
+  csi = csi + 1.0
+end
+cpu_sieve[0] = 0.0
+cpu_sieve[1] = 0.0
+
+let mut p = 2.0
+while p * p <= sqrt_n
+  if cpu_sieve[p] > 0.5
+    let mut m = p * p
+    while m <= sqrt_n
+      cpu_sieve[m] = 0.0
+      m = m + p
+    end
+  end
+  p = p + 1.0
+end
+
+let mut small_primes = []
+let mut spi = 3.0
+while spi <= sqrt_n
+  if cpu_sieve[spi] > 0.5
+    push(small_primes, spi)
+  end
+  spi = spi + 2.0
+end
+
+let num_primes = len(small_primes)
+let t_cpu = now_ms() - t0_cpu
+
+print("  STEP 1: CPU sieve to sqrt({N:.0}) = {sqrt_n:.0}")
+print("    Found {num_primes:.0} odd primes (excluding 2)")
+if num_primes > 0.5
+  let first_prime = small_primes[0]
+  let last_prime = small_primes[num_primes - 1.0]
+  print("    Range: {first_prime:.0} .. {last_prime:.0}")
+end
+print("    Time: {t_cpu:.0}ms")
+print("")
+
+let GLOBALS_SIZE = 4096.0
+while len(small_primes) < GLOBALS_SIZE
+  push(small_primes, 0.0)
+end
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 2: BOOT VMs + WRITE PRIMES + INIT OFFSETS
+// ════════════════════════════════════════════════════════════════════
+
+let t0_boot = now_ms()
+
+let COUNT_OFF = NUM_WORDS
+let ACCUM_OFF = NUM_WORDS + 1.0
+let OFFSET_BASE = NUM_WORDS + 2.0
+let REG_SIZE = OFFSET_BASE + num_primes
+
+let mut vms = []
+let mut bi = 0.0
+while bi < NUM_VMS
+  let r = try(vm_boot(1.0, REG_SIZE, GLOBALS_SIZE))
+  if r.ok > 0.5
+    push(vms, r.value)
+    let _w = vm_write_globals(r.value, 0.0, small_primes)
+  else
+    print("    BOOT FAILED at VM #{bi:.0}: {r.error}")
+    bi = NUM_VMS
+  end
+  bi = bi + 1.0
+end
+
+let t_boot = now_ms() - t0_boot
+let booted = len(vms)
+let mem_kb = booted * REG_SIZE * 4.0 / 1024.0
+
+let mut active_vms = booted
+if active_vms > NUM_SEGS
+  active_vms = NUM_SEGS
+end
+
+print("  STEP 2: Booted {booted:.0} VMs in {t_boot:.0}ms (~{mem_kb:.0}KB VRAM)")
+print("    Register size: {REG_SIZE:.0} (bitmap={NUM_WORDS:.0} + 2 + offsets={num_primes:.0})")
+print("    Active VMs: {active_vms:.0}")
+
+// ── Initialize carry-forward offsets (per-VM, accounts for starting segment) ──
+let t0_initoff = now_ms()
+
+let wg_primes = floor((num_primes + 255.0) / 256.0)
+let segs_per_vm_init = floor((NUM_SEGS + active_vms - 1.0) / active_vms)
+
+let mut ioi = 0.0
+while ioi < active_vms
+  let first_seg = ioi * segs_per_vm_init
+  let pc_initoff = [num_primes, OFFSET_BASE, first_seg, NUM_WORDS]
+  let _d = vm_dispatch(vms[ioi], SPV_INIT_OFFSETS, pc_initoff, wg_primes)
+  let prog_io = vm_build(vms[ioi])
+  let _exec = vm_execute(prog_io)
+  ioi = ioi + 1.0
+end
+
+let t_initoff = now_ms() - t0_initoff
+print("    Init offsets: {t_initoff:.0}ms ({active_vms:.0} VMs × {num_primes:.0} primes)")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 3: RECORD DISPATCH CHAINS (with carry-forward)
+// ════════════════════════════════════════════════════════════════════
+
+let t0_chain = now_ms()
+let segs_per_vm = floor((NUM_SEGS + active_vms - 1.0) / active_vms)
+
+let needed_vms = floor((NUM_SEGS + segs_per_vm - 1.0) / segs_per_vm)
+if active_vms > needed_vms
+  active_vms = needed_vms
+end
+
+let mut total_dispatches = 0.0
+let mut vi = 0.0
+
+while vi < active_vms
+  let seg_start_idx = vi * segs_per_vm
+  let mut seg_end_idx = (vi + 1.0) * segs_per_vm
+  if seg_end_idx > NUM_SEGS
+    seg_end_idx = NUM_SEGS
+  end
+
+  let mut pc_init  = [0.0, 0.0, 0.0, 0.0]
+  let mut pc_mark  = [0.0, 0.0, 0.0, 0.0, 0.0]
+  let pc_count = [NUM_WORDS, COUNT_OFF]
+  let pc_accum = [COUNT_OFF, ACCUM_OFF]
+
+  // Bucket sieve: prime pointer advances monotonically per VM
+  let mut prime_ptr = 0.0
+
+  let mut si = seg_start_idx
+  while si < seg_end_idx
+    // ── Init: set all bitmap bits ──
+    pc_init[0] = si
+    pc_init[1] = NUM_WORDS
+    pc_init[2] = N
+    pc_init[3] = 0.0
+    let _d0 = vm_dispatch(vms[vi], SPV_INIT, pc_init, WG_BITMAP)
+    total_dispatches = total_dispatches + 1.0
+
+    // ── Bucket sieve: advance prime pointer to sqrt(seg_end) ──
+    let seg_end_val = (si + 1.0) * SEG_RANGE
+    let seg_sqrt = floor(sqrt(seg_end_val)) + 1.0
+    while prime_ptr < num_primes
+      if small_primes[prime_ptr] > seg_sqrt
+        break
+      end
+      prime_ptr = prime_ptr + 1.0
+    end
+
+    // ── Mark: unified kernel with carry-forward ──
+    if prime_ptr > 0.5
+      pc_mark[0] = si
+      pc_mark[1] = NUM_WORDS
+      pc_mark[2] = 0.0
+      pc_mark[3] = prime_ptr
+      pc_mark[4] = OFFSET_BASE
+      let wg_mark = floor((prime_ptr + 255.0) / 256.0)
+      let _dm = vm_dispatch(vms[vi], SPV_MARK, pc_mark, wg_mark)
+      total_dispatches = total_dispatches + 1.0
+    end
+
+    // ── Count: parallel popcount + tree reduction ──
+    let _dc = vm_dispatch(vms[vi], SPV_COUNT, pc_count, WG_BITMAP)
+    total_dispatches = total_dispatches + 1.0
+
+    // ── Accum: total += seg_count, reset ──
+    let _da = vm_dispatch(vms[vi], SPV_ACCUM, pc_accum, 1.0)
+    total_dispatches = total_dispatches + 1.0
+
+    si = si + 1.0
+  end
+
+  vi = vi + 1.0
+end
+
+let t_chain = now_ms() - t0_chain
+let per_vm = total_dispatches / active_vms
+
+print("  STEP 3: Recorded dispatch chains in {t_chain:.0}ms")
+print("    Total dispatches: {total_dispatches:.0}")
+print("    Per VM: ~{per_vm:.0}")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 4: BUILD + EXECUTE (ASYNC)
+// ════════════════════════════════════════════════════════════════════
+
+let t0_build = now_ms()
+let mut progs = []
+let mut bdi = 0.0
+while bdi < active_vms
+  let prog = vm_build(vms[bdi])
+  push(progs, prog)
+  bdi = bdi + 1.0
+end
+let t_build = now_ms() - t0_build
+
+let t0_exec = now_ms()
+
+let mut ei = 0.0
+while ei < active_vms
+  let _ea = vm_execute_async(progs[ei])
+  ei = ei + 1.0
+end
+
+let mut done_flags = []
+let mut di = 0.0
+while di < active_vms
+  push(done_flags, 0.0)
+  di = di + 1.0
+end
+
+let mut done_count = 0.0
+while done_count < active_vms
+  let mut pi = 0.0
+  while pi < active_vms
+    if done_flags[pi] < 0.5
+      let status = vm_poll(progs[pi])
+      if status > 0.5
+        done_flags[pi] = 1.0
+        done_count = done_count + 1.0
+      end
+    end
+    pi = pi + 1.0
+  end
+end
+
+let t_exec = now_ms() - t0_exec
+
+print("  STEP 4: GPU execution (async)")
+print("    Build: {t_build:.0}ms")
+print("    Execute: {t_exec:.0}ms  ({total_dispatches:.0} dispatches)")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 5: READ RESULTS + TALLY
+// ════════════════════════════════════════════════════════════════════
+
+let mut total_count = 1.0
+
+let mut ri = 0.0
+while ri < active_vms
+  let result = vm_read_register(vms[ri], 0.0, 0.0, REG_SIZE)
+  let accum_raw = result[ACCUM_OFF]
+  let vm_count = float_to_bits(accum_raw)
+
+  let seg_start_idx = ri * segs_per_vm
+  let mut seg_end_idx_r = (ri + 1.0) * segs_per_vm
+  if seg_end_idx_r > NUM_SEGS
+    seg_end_idx_r = NUM_SEGS
+  end
+  let vm_segs = seg_end_idx_r - seg_start_idx
+  print("    VM {ri:.0}: {vm_count:.0} primes ({vm_segs:.0} segments)")
+
+  total_count = total_count + vm_count
+  ri = ri + 1.0
+end
+
+let t_total = now_ms() - t0_cpu
+
+print("")
+print("  ════════════════════════════════════════════")
+print("  RESULT: pi({N:.0}) = {total_count:.0}")
+print("  ════════════════════════════════════════════")
+
+// ════════════════════════════════════════════════════════════════════
+//  STEP 6: AUDIT AGAINST KNOWN VALUES
+// ════════════════════════════════════════════════════════════════════
+
+let mut expected = 0.0
+if N > 999000000.0
+  expected = 50847534.0
+elif N > 99000000.0
+  expected = 5761455.0
+elif N > 9900000.0
+  expected = 664579.0
+elif N > 990000.0
+  expected = 78498.0
+end
+
+if expected > 0.5
+  let diff = total_count - expected
+  if diff > -0.5 && diff < 0.5
+    print("  AUDIT: PASS  (exact match: {total_count:.0})")
+  else
+    print("  AUDIT: FAIL  (expected {expected:.0} got {total_count:.0}, diff={diff:.0})")
+  end
+end
+
+print("")
+print("  TIMING SUMMARY")
+print("  ──────────────────────────────────────────")
+print("    CPU primes:     {t_cpu:.0}ms")
+print("    Boot VMs:       {t_boot:.0}ms")
+print("    Init offsets:   {t_initoff:.0}ms")
+print("    Record chain:   {t_chain:.0}ms")
+print("    Build programs: {t_build:.0}ms")
+print("    GPU execute:    {t_exec:.0}ms (async)")
+print("    TOTAL:          {t_total:.0}ms")
+print("  ──────────────────────────────────────────")
+print("    Dispatches:     {total_dispatches:.0}")
+print("    GPU submits:    {active_vms:.0} (all async)")
+print("    Segments:       {NUM_SEGS:.0} (32KB L1-sized)")
+print("    Primes:         {num_primes:.0} (unified mark, carry-forward)")
+print("    Kernels:        pre-compiled .spv (zero JIT overhead)")
+print("")
+
+// ════════════════════════════════════════════════════════════════════
+//  CLEANUP
+// ════════════════════════════════════════════════════════════════════
+
+let mut si2 = 0.0
+while si2 < booted
+  let _s = vm_shutdown(vms[si2])
+  si2 = si2 + 1.0
+end
+
+print("====================================================================")
+print("")

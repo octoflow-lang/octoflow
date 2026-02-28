@@ -1,0 +1,3 @@
+stream data = tap("test_data/input_10.csv")
+stream result = data |> multiply(2.0)
+emit(result, "test_data/output_double.csv")

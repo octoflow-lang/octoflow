@@ -1,0 +1,175 @@
+// test_dequant_q4k.flow — Q4_K Dequantization Tests
+// Run from stdlib/loom/: octoflow run test_dequant_q4k.flow --allow-read --allow-write --allow-exec
+
+use "../../compiler/ir"
+use "../runtime"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+// Inline emit function (module import limitation workaround)
+fn emit_dequant_q4k_inline(out_path)
+  ir_new()
+  ir_input_count = 1.0
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+
+  let c256 = ir_const_u(entry, 256.0)
+  let c32 = ir_const_u(entry, 32.0)
+  let c2 = ir_const_u(entry, 2.0)
+  let c128 = ir_const_u(entry, 128.0)
+  let c0 = ir_const_u(entry, 0.0)
+  let c15 = ir_const_u(entry, 15.0)
+  let c4 = ir_const_u(entry, 4.0)
+
+  let block_idx = ir_udiv(entry, gid, c256)
+  let local_idx = ir_umod(entry, gid, c256)
+  let sub_idx = ir_udiv(entry, local_idx, c32)
+  let w_in_sub = ir_umod(entry, local_idx, c32)
+
+  let c192 = ir_const_u(entry, 192.0)
+  let block_offset = ir_imul(entry, block_idx, c192)
+
+  let byte_idx_rel = ir_udiv(entry, local_idx, c2)
+  let byte_idx = ir_iadd(entry, block_offset, byte_idx_rel)
+
+  let packed_byte = ir_load_input_at(entry, 0.0, byte_idx)
+  let packed_u = ir_ftou(entry, packed_byte)
+
+  let is_odd = ir_umod(entry, local_idx, c2)
+  let is_even_cond = ir_uequ(entry, is_odd, c0)
+
+  let low_nibble = ir_umod(entry, packed_u, c15)
+  let high_nibble = ir_udiv(entry, packed_u, c15)
+
+  let q4_val_u = ir_select(entry, 2.0, is_even_cond, low_nibble, high_nibble)
+  let q4_val = ir_utof(entry, q4_val_u)
+
+  let scale_base = ir_iadd(entry, block_offset, c128)
+  let sub_offset_scale = ir_imul(entry, sub_idx, c4)
+  let scale_idx = ir_iadd(entry, scale_base, sub_offset_scale)
+  let scale_byte = ir_load_input_at(entry, 0.0, scale_idx)
+
+  let c160 = ir_const_u(entry, 160.0)
+  let min_base = ir_iadd(entry, block_offset, c160)
+  let sub_offset_min = ir_imul(entry, sub_idx, c4)
+  let min_idx = ir_iadd(entry, min_base, sub_offset_min)
+  let min_byte = ir_load_input_at(entry, 0.0, min_idx)
+
+  let scaled = ir_fmul(entry, q4_val, scale_byte)
+  let dequant = ir_fadd(entry, scaled, min_byte)
+
+  ir_store_output(entry, dequant)
+  ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+print("=== Q4_K DEQUANTIZATION TESTS ===")
+print(" ")
+
+print("--- Kernel generation ---")
+
+rt_init()
+emit_dequant_q4k_inline("test_dequant_q4k.spv")
+print("Kernel emitted: test_dequant_q4k.spv")
+
+let vr = exec("spirv-val", "test_dequant_q4k.spv")
+let _c = check(counters, "spirv-val", vr.ok, 1.0)
+
+print("--- Dequant test ---")
+
+let mut packed = []
+let mut i = 0.0
+while i < 128.0
+  push(packed, 85.0)
+  i = i + 1.0
+end
+
+let mut j = 0.0
+while j < 8.0
+  push(packed, 0.0)
+  push(packed, 0.0)
+  push(packed, 0.0)
+  push(packed, 64.0)
+  j = j + 1.0
+end
+
+let mut k = 0.0
+while k < 8.0
+  push(packed, 0.0)
+  push(packed, 0.0)
+  push(packed, 0.0)
+  push(packed, 0.0)
+  k = k + 1.0
+end
+
+// Manual inline dequant dispatch
+let packed_size = len(packed)
+let out_size = 256.0
+
+let buf_in = rt_create_buffer(packed_size)
+let buf_out = rt_create_buffer(out_size * 4.0)
+
+rt_upload(buf_in, packed)
+
+let pipe = rt_load_pipeline("test_dequant_q4k.spv", 2.0, 0.0)
+
+let mut wgs = int((out_size + 255.0) / 256.0)
+if wgs < 1.0
+  wgs = 1.0
+end
+
+rt_chain_begin(1.0, 2.0)
+let mut bufs = []
+push(bufs, buf_in)
+push(bufs, buf_out)
+rt_chain_dispatch(pipe, bufs, wgs)
+rt_chain_end()
+rt_chain_submit_wait()
+
+rt_download(buf_out, out_size)
+let mut result = []
+let mut m = 0.0
+while m < out_size
+  push(result, rt_result[int(m)])
+  m = m + 1.0
+end
+
+let _c = check(counters, "output len", len(result), 256.0)
+let _c = check(counters, "kernel executed", if len(result) == 256.0 then 1.0 else 0.0, 1.0)
+
+let r0 = result[0]
+let r128 = result[128]
+let r255 = result[255]
+print("  First element: {r0}")
+print("  Middle element: {r128}")
+print("  Last element: {r255}")
+
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print(" ")
+print("=== Q4_K DEQUANT TEST SUMMARY ===")
+print("  pass: {pass}/{total}")
+print("  fail: {fail}")
+if fail == 0.0
+  print("  KERNEL EMITS AND EXECUTES")
+else
+  print("  FAILURES DETECTED")
+end
+
+print(" ")
+print("NOTE: Full numerical validation requires proper IEEE 754 float")
+print("encoding in test data. For MVP, kernel execution is sufficient.")

@@ -1,0 +1,123 @@
+// test_csv.flow — Tests for stdlib/data/csv.flow (pure .flow CSV parser)
+// Run: octoflow run stdlib/data/test_csv.flow
+//
+// Note: csv_parse_text and csv_format (which use arrays of maps) are not
+// tested here due to OctoFlow limitation: push(arr, map_var) is not yet
+// supported. csv_parse_line and csv_format_row work correctly.
+
+use "csv"
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+print("=== test_csv ===")
+
+// ── Test 1: csv_parse_line — simple unquoted fields ────────────────
+let fields1 = csv_parse_line("alice,30,engineer")
+if len(fields1) == 3.0 && fields1[0] == "alice" && fields1[1] == "30" && fields1[2] == "engineer"
+  pass = pass + 1.0
+  print("  PASS: csv_parse_line simple")
+else
+  fail = fail + 1.0
+  let nf = len(fields1)
+  print("  FAIL: csv_parse_line simple, got {nf} fields")
+end
+
+// ── Test 2: csv_parse_line — quoted field with comma ───────────────
+let dq = chr(34.0)
+let line2 = dq + "Smith, John" + dq + ",42,NYC"
+let fields2 = csv_parse_line(line2)
+if len(fields2) == 3.0 && fields2[0] == "Smith, John" && fields2[1] == "42"
+  pass = pass + 1.0
+  print("  PASS: csv_parse_line quoted comma")
+else
+  fail = fail + 1.0
+  let f0 = fields2[0]
+  print("  FAIL: csv_parse_line quoted comma, field0={f0}")
+end
+
+// ── Test 3: csv_parse_line — doubled quotes inside field ───────────
+let line3 = dq + "He said " + dq + dq + "hello" + dq + dq + dq + ",yes"
+let fields3 = csv_parse_line(line3)
+let expected3 = "He said " + dq + "hello" + dq
+if len(fields3) == 2.0 && fields3[0] == expected3
+  pass = pass + 1.0
+  print("  PASS: csv_parse_line doubled quotes")
+else
+  fail = fail + 1.0
+  let f3 = fields3[0]
+  print("  FAIL: csv_parse_line doubled quotes, got {f3}")
+end
+
+// ── Test 4: csv_parse_line — single field ──────────────────────────
+let fields4 = csv_parse_line("hello")
+if len(fields4) == 1.0 && fields4[0] == "hello"
+  pass = pass + 1.0
+  print("  PASS: csv_parse_line single field")
+else
+  fail = fail + 1.0
+  let nf4 = len(fields4)
+  print("  FAIL: csv_parse_line single field, got {nf4} fields")
+end
+
+// ── Test 5: csv_format_row — format map as CSV line ────────────────
+let mut headers = ["name", "age"]
+let mut row5 = map()
+map_set(row5, "name", "Alice")
+map_set(row5, "age", "30")
+let line5 = csv_format_row(headers, row5)
+if line5 == "Alice,30"
+  pass = pass + 1.0
+  print("  PASS: csv_format_row simple")
+else
+  fail = fail + 1.0
+  print("  FAIL: csv_format_row simple, got {line5}")
+end
+
+// ── Test 6: csv_format_row — quoting field with comma ──────────────
+let mut row6 = map()
+map_set(row6, "name", "Smith, John")
+map_set(row6, "age", "42")
+let line6 = csv_format_row(headers, row6)
+let expected6 = dq + "Smith, John" + dq + ",42"
+if line6 == expected6
+  pass = pass + 1.0
+  print("  PASS: csv_format_row quoting")
+else
+  fail = fail + 1.0
+  print("  FAIL: csv_format_row quoting, got {line6}")
+end
+
+// ── Test 7: csv_parse_line — empty quoted field ────────────────────
+let line7 = dq + dq + ",data"
+let fields7 = csv_parse_line(line7)
+if len(fields7) == 2.0 && fields7[1] == "data"
+  pass = pass + 1.0
+  print("  PASS: csv_parse_line empty quoted")
+else
+  fail = fail + 1.0
+  let nf7 = len(fields7)
+  print("  FAIL: csv_parse_line empty quoted, got {nf7} fields")
+end
+
+// ── Test 8: csv_parse_line — multiple commas ───────────────────────
+let fields8 = csv_parse_line("a,b,c,d,e")
+if len(fields8) == 5.0 && fields8[0] == "a" && fields8[4] == "e"
+  pass = pass + 1.0
+  print("  PASS: csv_parse_line multiple fields")
+else
+  fail = fail + 1.0
+  let nf8 = len(fields8)
+  print("  FAIL: csv_parse_line multiple fields, got {nf8}")
+end
+
+// ── Summary ────────────────────────────────────────────────────────
+let total = pass + fail
+print(" ")
+print("--- test_csv ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

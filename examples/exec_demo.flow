@@ -1,0 +1,21 @@
+print("=== Git Status Demo ===")
+let git = exec("git", "status", "--short")
+
+if git.ok == 1.0
+    print("Git status (exit {git.status}):")
+    print("{git.output}")
+else
+    print("Git failed: {git.error}")
+end
+
+print("=== Echo Test ===")
+let echo = exec("echo", "Hello from OctoFlow!")
+print("Output: {echo.output}")
+print("Exit code: {echo.status}")
+
+print("=== Error Handling ===")
+let fail = exec("sh", "-c", "echo error >&2; exit 1")
+if fail.ok == 0.0
+    print("Command failed with exit {fail.status}")
+    print("Error: {fail.error}")
+end

@@ -1,0 +1,129 @@
+// raytrace_diag.flow — Diagnostic: compare CPU vs GPU unpack, test all render paths
+use "../stdlib/loom/raytrace_emit"
+
+let w = 80.0
+let h = 60.0
+let total = int(w * h)
+
+// Ensure kernels compiled
+if file_exists("raytrace.spv") == 0.0
+  emit_raytrace_kernel()
+end
+if file_exists("unpack_rgb.spv") == 0.0
+  emit_unpack_rgb_kernel()
+end
+
+// Allocate + dispatch
+let mut input = []
+for i in range(0, total)
+  push(input, 0.0)
+end
+let result = gpu_run("raytrace.spv", input, w, h, 0.6, -1.0)
+
+// === GPU unpack ===
+let gpu_r = gpu_run("unpack_rgb.spv", result, 0.0)
+let gpu_g = gpu_run("unpack_rgb.spv", result, 1.0)
+let gpu_b = gpu_run("unpack_rgb.spv", result, 2.0)
+
+// === CPU unpack (reference) ===
+let mut cpu_r = []
+let mut cpu_g = []
+let mut cpu_b = []
+for i in range(0, total)
+  let packed = result[i]
+  let rv = floor(packed / 65536.0)
+  let gv = floor((packed - rv * 65536.0) / 256.0)
+  let bv = packed - rv * 65536.0 - gv * 256.0
+  push(cpu_r, rv)
+  push(cpu_g, gv)
+  push(cpu_b, bv)
+end
+
+// === Compare first 10 pixels ===
+print("=== Pixel comparison (first 10) ===")
+print("idx | packed    | CPU R G B     | GPU R G B     | match?")
+let mut mismatches = 0.0
+for i in range(0, 10)
+  let p = result[i]
+  let cr = cpu_r[i]
+  let cg = cpu_g[i]
+  let cb = cpu_b[i]
+  let gr = gpu_r[i]
+  let gg = gpu_g[i]
+  let gb = gpu_b[i]
+  let mut ok = "YES"
+  if cr != gr
+    ok = "NO"
+    mismatches = mismatches + 1.0
+  end
+  if cg != gg
+    ok = "NO"
+    mismatches = mismatches + 1.0
+  end
+  if cb != gb
+    ok = "NO"
+    mismatches = mismatches + 1.0
+  end
+  print("{i}: packed={p} CPU=({cr},{cg},{cb}) GPU=({gr},{gg},{gb}) {ok}")
+end
+
+// === Count total mismatches ===
+let mut total_diff = 0.0
+for i in range(0, total)
+  if cpu_r[i] != gpu_r[i]
+    total_diff = total_diff + 1.0
+  end
+  if cpu_g[i] != gpu_g[i]
+    total_diff = total_diff + 1.0
+  end
+  if cpu_b[i] != gpu_b[i]
+    total_diff = total_diff + 1.0
+  end
+end
+print("")
+print("Total channel mismatches: {total_diff} / {total} pixels")
+
+// === Value ranges ===
+let mut rmin = 999.0
+let mut rmax = -1.0
+let mut gmin = 999.0
+let mut gmax = -1.0
+let mut bmin = 999.0
+let mut bmax = -1.0
+for i in range(0, total)
+  if gpu_r[i] < rmin
+    rmin = gpu_r[i]
+  end
+  if gpu_r[i] > rmax
+    rmax = gpu_r[i]
+  end
+  if gpu_g[i] < gmin
+    gmin = gpu_g[i]
+  end
+  if gpu_g[i] > gmax
+    gmax = gpu_g[i]
+  end
+  if gpu_b[i] < bmin
+    bmin = gpu_b[i]
+  end
+  if gpu_b[i] > bmax
+    bmax = gpu_b[i]
+  end
+end
+print("GPU R range: [{rmin}, {rmax}]")
+print("GPU G range: [{gmin}, {gmax}]")
+print("GPU B range: [{bmin}, {bmax}]")
+
+// === Render with CPU unpack (known good) ===
+print("")
+print("=== CPU unpack render (halfblock) ===")
+term_image(w, h, cpu_r, cpu_g, cpu_b, "halfblock")
+
+print("")
+print("=== GPU unpack render (halfblock) ===")
+term_image(w, h, gpu_r, gpu_g, gpu_b, "halfblock")
+
+// === Test auto-detect ===
+let proto = term_supports_graphics()
+print("")
+print("Auto-detected protocol: {proto}")

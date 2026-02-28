@@ -1,0 +1,428 @@
+// generate_vm.flow — Adaptive GGUF Inference via GPU VM
+//
+// Full autoregressive inference with:
+//   - VM: all 7 large matvecs per layer (Q/K/V/O/gate/up/down)
+//   - CPU: rmsnorm, bias add, rope, attention, silu, gate*up, residual
+//   - CPU: KV cache, sampling, token decode
+//
+// Adaptive: works with any GGUF model (Qwen2, LLaMA, Gemma, Phi, etc.)
+// by resolving chat template and dimensions from GGUF metadata.
+//
+// Architecture: "GPU is the Computer, CPU is the BIOS"
+//   CPU boots the VM, loads weights, submits command buffers.
+//   GPU executes all heavy matrix-vector multiplies autonomously.
+//   VM buffers adapt to model dimensions (reg_size, weight globals).
+//
+// Usage:
+//   use "generate_vm"
+//   let _r = run_generate_vm("path/to/model.gguf", "Hello")
+//
+// Or standalone:
+//   octoflow run stdlib/loom/run_generate_vm.flow --allow-read --allow-ffi
+
+use "../llm/gguf"
+use "../llm/ops"
+use "../llm/sampling"
+use "../llm/chat"
+
+fn run_generate_vm(model_path, prompt)
+  // ── Configuration ──
+  let max_tokens = 20.0
+  let max_seq = 64.0
+
+  print("=== OctoFlow VM-Hosted Inference ===")
+  print(" ")
+
+  // ── 1. Load model metadata ──
+  print("Loading model metadata...")
+  let model = gguf_load_from_file(model_path)
+
+  let n_embd = map_get(model, "n_embd")
+  let n_head = map_get(model, "n_head")
+  let mut n_kv_head = map_get(model, "n_kv_head")
+  let n_ff = map_get(model, "n_ff")
+  let n_layer = map_get(model, "n_layer")
+  let vocab_size = map_get(model, "vocab_size")
+  let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+  let rope_theta = gguf_meta_default(model, "rope.freq_base", 10000.0)
+
+  if n_kv_head == 0.0
+    n_kv_head = n_head
+  end
+
+  let head_dim = n_embd / n_head
+  let kv_dim = n_kv_head * head_dim
+  let heads_per_kv = n_head / n_kv_head
+  let inv_sqrt_dh = 1.0 / sqrt(head_dim)
+
+  let arch = map_get(model, "arch")
+  print("  {arch} -- {n_layer} layers, {n_embd} dim, {vocab_size} vocab")
+  print("  n_head={n_head} n_kv_head={n_kv_head} head_dim={head_dim}")
+  print("  kv_dim={kv_dim} n_ff={n_ff} rope_theta={rope_theta}")
+
+  // Check if model has attention biases (Qwen2 has them, LLaMA does not)
+  let has_qbias = map_has(model, "t.blk.0.attn_q.bias.type")
+  if has_qbias == 1.0
+    print("  Attention biases: yes")
+  else
+    print("  Attention biases: no")
+  end
+
+  // ── 2. Load vocab + adaptive chat template ──
+  print("Loading vocabulary...")
+  let vocab = gguf_load_vocab(model_path)
+
+  print("Building chat template...")
+  let chat_tokens = resolve_chat_tokens(model_path, model, vocab)
+  let prompt_ids = build_chat_tokens(model_path, model, vocab, prompt)
+  let stop_tokens = get_stop_tokens(model, chat_tokens)
+
+  let n_prompt = len(prompt_ids)
+  print("  Prompt: {prompt} ({n_prompt} tokens)")
+
+  // ── 3. Load persistent weights ──
+  print("Loading output norm...")
+  let out_norm_w = gguf_load_tensor(model_path, model, "output_norm.weight")
+
+  // ── 4. Initialize KV cache (flat arrays in .flow) ──
+  let kv_total = n_layer * max_seq * kv_dim
+  let mut cache_k = []
+  let mut cache_v = []
+  let mut ki = 0.0
+  while ki < kv_total
+    push(cache_k, 0.0)
+    push(cache_v, 0.0)
+    ki = ki + 1.0
+  end
+  print("  KV cache: {kv_total} floats per K/V")
+
+  // ── 5. Boot GPU VM ──
+  // reg_size = max(n_embd, n_ff) to fit any intermediate
+  let mut reg_size = n_ff
+  if n_embd > n_ff
+    reg_size = n_embd
+  end
+  // Globals: sized for largest single weight matrix
+  // For most models: ffn_gate/ffn_up = n_ff * n_embd is the largest
+  // For models with n_embd > n_ff: attn_q = n_embd * n_embd might be larger
+  let mut max_weight = n_ff * n_embd
+  let q_weight_size = n_embd * n_embd
+  if q_weight_size > max_weight
+    max_weight = q_weight_size
+  end
+  let vm = vm_boot(1.0, reg_size, max_weight)
+  print("  VM booted: reg_size={reg_size}, globals={max_weight}")
+
+  // Workgroup counts: ceil(dim / WG_SIZE) where WG_SIZE=256
+  // vm_matvec uses one thread per output row → dispatch = ceil(M / 256)
+  let wg_n_embd = floor((n_embd + 255.0) / 256.0)
+  let wg_kv_dim = floor((kv_dim + 255.0) / 256.0)
+  let wg_n_ff   = floor((n_ff   + 255.0) / 256.0)
+  print("  WG counts: n_embd={wg_n_embd} kv_dim={wg_kv_dim} n_ff={wg_n_ff}")
+
+  // ── 5b. Pre-build 4 reusable matvec programs (built ONCE, re-submitted per token/layer) ──
+  // All matvecs: weight at globals[0], input at R0, output at R1 (offset=reg_size).
+  // VkBuffer handles are stable -- only memory content changes -- so pre-recorded
+  // command buffers remain valid when vm_load_weights / vm_write_register update data.
+  // Eliminates: 7 * n_layer * n_tokens VkPipeline + VkCommandBuffer creates -> 4 total.
+  //
+  // prog_qo: n_embd x n_embd  (Q projection, O projection -- share identical push constants)
+  let pc_qo = [n_embd, n_embd, 0.0, 0.0, reg_size]
+  let _s_qo = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_matvec.spv", pc_qo, wg_n_embd)
+  let prog_qo = vm_build(vm)
+
+  // prog_kv: kv_dim x n_embd  (K projection, V projection)
+  let pc_kv = [kv_dim, n_embd, 0.0, 0.0, reg_size]
+  let _s_kv = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_matvec.spv", pc_kv, wg_kv_dim)
+  let prog_kv = vm_build(vm)
+
+  // prog_ff: n_ff x n_embd  (gate projection, up projection)
+  let pc_ff = [n_ff, n_embd, 0.0, 0.0, reg_size]
+  let _s_ff = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_matvec.spv", pc_ff, wg_n_ff)
+  let prog_ff = vm_build(vm)
+
+  // prog_dn: n_embd x n_ff  (down projection)
+  let pc_dn = [n_embd, n_ff, 0.0, 0.0, reg_size]
+  let _s_dn = vm_dispatch(vm, "stdlib/loom/kernels/nn/vm_matvec.spv", pc_dn, wg_n_embd)
+  let prog_dn = vm_build(vm)
+
+  print("  Pre-built: prog_qo={prog_qo} prog_kv={prog_kv} prog_ff={prog_ff} prog_dn={prog_dn}")
+  print(" ")
+
+  // ── 6. Main inference loop ──
+  let total_steps = n_prompt + max_tokens
+  let mut current_token = prompt_ids[0]
+  let mut generated_text = " "
+  let mut seq_pos = 0.0
+  let mut gen_count = 0.0
+  let mut done = 0.0
+
+  print("--- Prefilling {n_prompt} tokens + generating {max_tokens} tokens ---")
+
+  while seq_pos < total_steps
+    if done == 1.0
+      seq_pos = total_steps
+    end
+    if seq_pos >= max_seq
+      print("  (max sequence length reached)")
+      seq_pos = total_steps
+    end
+    if seq_pos < total_steps
+
+    // 6a. Load embedding for current token
+    let tok_emb = gguf_load_tensor(model_path, model, "token_embd.weight", current_token)
+    let mut hidden = []
+    let mut ei = 0.0
+    while ei < n_embd
+      push(hidden, tok_emb[int(ei)])
+      ei = ei + 1.0
+    end
+
+    // 6b. Run transformer layers
+    let mut layer_idx = 0.0
+    while layer_idx < n_layer
+      let li = str(int(layer_idx))
+
+      // ════════════════════════════════════════════
+      // ATTENTION SUB-BLOCK
+      // ════════════════════════════════════════════
+
+      // (i) RMSNorm (CPU)
+      let norm_name = "blk." + li + ".attn_norm.weight"
+      let attn_norm_w = gguf_load_tensor(model_path, model, norm_name)
+      let normed = rmsnorm_cpu(hidden, attn_norm_w, n_embd, eps)
+
+      // (ii) Q/K/V matvecs (GPU VM)
+      let q_name = "blk." + li + ".attn_q.weight"
+      let k_name = "blk." + li + ".attn_k.weight"
+      let v_name = "blk." + li + ".attn_v.weight"
+
+      // Write normed hidden to VM R0
+      let _wr = vm_write_register(vm, 0.0, 0.0, normed)
+
+      // Q matvec: n_embd -> n_embd
+      let q_w = gguf_load_tensor(model_path, model, q_name)
+      let _lq = vm_load_weights(vm, 0.0, q_w)
+      let _eq = vm_execute(prog_qo)
+      let q_out = vm_read_register(vm, 0.0, 1.0, n_embd)
+
+      // K matvec: n_embd -> kv_dim
+      let k_w = gguf_load_tensor(model_path, model, k_name)
+      let _lk = vm_load_weights(vm, 0.0, k_w)
+      let _ek = vm_execute(prog_kv)
+      let k_out = vm_read_register(vm, 0.0, 1.0, kv_dim)
+
+      // V matvec: n_embd -> kv_dim
+      let v_w = gguf_load_tensor(model_path, model, v_name)
+      let _lv = vm_load_weights(vm, 0.0, v_w)
+      let _ev = vm_execute(prog_kv)
+      let v_out = vm_read_register(vm, 0.0, 1.0, kv_dim)
+
+      // (iii) Add biases if present, then (iv) RoPE, then (v) KV cache write
+      // OctoFlow has no mutable array alias — each branch defines q_roped/k_roped
+      // and writes KV cache directly. if/else share scope so q_roped is visible after.
+      let cache_base = layer_idx * max_seq * kv_dim + seq_pos * kv_dim
+      if has_qbias == 1.0
+        let qb_name = "blk." + li + ".attn_q.bias"
+        let kb_name = "blk." + li + ".attn_k.bias"
+        let vb_name = "blk." + li + ".attn_v.bias"
+        let q_bias = gguf_load_tensor(model_path, model, qb_name)
+        let k_bias = gguf_load_tensor(model_path, model, kb_name)
+        let v_bias = gguf_load_tensor(model_path, model, vb_name)
+        let qb = vec_add(q_out, q_bias, n_embd)
+        let kb = vec_add(k_out, k_bias, kv_dim)
+        let vb = vec_add(v_out, v_bias, kv_dim)
+        let q_roped = rope_cpu(qb, seq_pos, head_dim, n_head, rope_theta)
+        let k_roped = rope_cpu(kb, seq_pos, head_dim, n_kv_head, rope_theta)
+        let mut kci = 0.0
+        while kci < kv_dim
+          cache_k[int(cache_base + kci)] = k_roped[int(kci)]
+          cache_v[int(cache_base + kci)] = vb[int(kci)]
+          kci = kci + 1.0
+        end
+      else
+        let q_roped = rope_cpu(q_out, seq_pos, head_dim, n_head, rope_theta)
+        let k_roped = rope_cpu(k_out, seq_pos, head_dim, n_kv_head, rope_theta)
+        let mut kci = 0.0
+        while kci < kv_dim
+          cache_k[int(cache_base + kci)] = k_roped[int(kci)]
+          cache_v[int(cache_base + kci)] = v_out[int(kci)]
+          kci = kci + 1.0
+        end
+      end
+
+      // (vi) Multi-head attention with GQA (CPU)
+      let mut attn_out = []
+      let mut qh = 0.0
+      while qh < n_head
+        let kvh = floor(qh / heads_per_kv)
+        let q_base = qh * head_dim
+        let kv_base_h = kvh * head_dim
+
+        // Compute attention scores for all past positions
+        let mut scores = []
+        let mut max_score = -999999.0
+        let mut t = 0.0
+        while t <= seq_pos
+          let kv_off = layer_idx * max_seq * kv_dim + t * kv_dim + kv_base_h
+          let mut dot = 0.0
+          let mut di = 0.0
+          while di < head_dim
+            dot = dot + q_roped[int(q_base + di)] * cache_k[int(kv_off + di)]
+            di = di + 1.0
+          end
+          dot = dot * inv_sqrt_dh
+          push(scores, dot)
+          if dot > max_score
+            max_score = dot
+          end
+          t = t + 1.0
+        end
+
+        // Softmax
+        let n_scores = len(scores)
+        let mut sum_exp = 0.0
+        let mut si = 0.0
+        while si < n_scores
+          let e = exp(scores[int(si)] - max_score)
+          scores[int(si)] = e
+          sum_exp = sum_exp + e
+          si = si + 1.0
+        end
+        si = 0.0
+        while si < n_scores
+          scores[int(si)] = scores[int(si)] / sum_exp
+          si = si + 1.0
+        end
+
+        // Weighted V sum
+        let mut di = 0.0
+        while di < head_dim
+          let mut weighted = 0.0
+          let mut t2 = 0.0
+          while t2 <= seq_pos
+            let voff = layer_idx * max_seq * kv_dim + t2 * kv_dim + kv_base_h + di
+            weighted = weighted + scores[int(t2)] * cache_v[int(voff)]
+            t2 = t2 + 1.0
+          end
+          push(attn_out, weighted)
+          di = di + 1.0
+        end
+        qh = qh + 1.0
+      end
+
+      // (vii) Output projection (GPU VM): n_embd -> n_embd
+      let o_name = "blk." + li + ".attn_output.weight"
+      let _wra = vm_write_register(vm, 0.0, 0.0, attn_out)
+      let o_w = gguf_load_tensor(model_path, model, o_name)
+      let _lo = vm_load_weights(vm, 0.0, o_w)
+      let _eo = vm_execute(prog_qo)
+      let o_out = vm_read_register(vm, 0.0, 1.0, n_embd)
+
+      // (viii) Residual add
+      let mut ri = 0.0
+      while ri < n_embd
+        hidden[int(ri)] = hidden[int(ri)] + o_out[int(ri)]
+        ri = ri + 1.0
+      end
+
+      // ════════════════════════════════════════════
+      // FFN SUB-BLOCK
+      // ════════════════════════════════════════════
+
+      // (ix) RMSNorm (CPU)
+      let ffn_norm_name = "blk." + li + ".ffn_norm.weight"
+      let ffn_norm_w = gguf_load_tensor(model_path, model, ffn_norm_name)
+      let ffn_normed = rmsnorm_cpu(hidden, ffn_norm_w, n_embd, eps)
+
+      // (x) Gate matvec (GPU VM): n_embd -> n_ff
+      let gate_name = "blk." + li + ".ffn_gate.weight"
+      let _wrf = vm_write_register(vm, 0.0, 0.0, ffn_normed)
+      let gate_w = gguf_load_tensor(model_path, model, gate_name)
+      let _lg = vm_load_weights(vm, 0.0, gate_w)
+      let _eg = vm_execute(prog_ff)
+      let gate_out = vm_read_register(vm, 0.0, 1.0, n_ff)
+
+      // Up matvec (GPU VM): n_embd -> n_ff  (R0=ffn_normed still resident from gate write)
+      let up_name = "blk." + li + ".ffn_up.weight"
+      let up_w = gguf_load_tensor(model_path, model, up_name)
+      let _lu = vm_load_weights(vm, 0.0, up_w)
+      let _eu = vm_execute(prog_ff)
+      let up_out = vm_read_register(vm, 0.0, 1.0, n_ff)
+
+      // (xi) SiLU(gate) * up (CPU)
+      let gate_activated = silu_cpu(gate_out, n_ff)
+      let mut ffn_mid = []
+      let mut fi = 0.0
+      while fi < n_ff
+        push(ffn_mid, gate_activated[int(fi)] * up_out[int(fi)])
+        fi = fi + 1.0
+      end
+
+      // (xii) Down projection (GPU VM): n_ff -> n_embd
+      let down_name = "blk." + li + ".ffn_down.weight"
+      let _wrd = vm_write_register(vm, 0.0, 0.0, ffn_mid)
+      let down_w = gguf_load_tensor(model_path, model, down_name)
+      let _ld = vm_load_weights(vm, 0.0, down_w)
+      let _ed = vm_execute(prog_dn)
+      let down_out = vm_read_register(vm, 0.0, 1.0, n_embd)
+
+      // (xiii) Residual add
+      ri = 0.0
+      while ri < n_embd
+        hidden[int(ri)] = hidden[int(ri)] + down_out[int(ri)]
+        ri = ri + 1.0
+      end
+
+      // Progress (first token only)
+      if seq_pos == 0.0
+        print("  [layer {layer_idx}/{n_layer}] done")
+      end
+
+      layer_idx = layer_idx + 1.0
+    end
+
+    // 6c. Post-transformer
+    let prefill_end = n_prompt - 1.0
+    if seq_pos < prefill_end
+      let npos = seq_pos + 1.0
+      current_token = prompt_ids[int(npos)]
+      let ptext = vocab[int(current_token)]
+      print("  [prefill {npos}/{n_prompt}] token={current_token}")
+    else
+      // Compute logits: final norm + output projection
+      let normed_final = rmsnorm_cpu(hidden, out_norm_w, n_embd, eps)
+      let logits = gguf_matvec(model_path, model, "token_embd.weight", normed_final)
+
+      let sampled_idx = sample_top_p(logits, 0.9, 0.8)
+
+      if seq_pos >= prefill_end
+        let token_text = vocab[int(sampled_idx)]
+        generated_text = generated_text + token_text
+        gen_count = gen_count + 1.0
+        print("  [gen {gen_count}] token={sampled_idx} text={token_text}")
+      end
+
+      if is_stop_token(stop_tokens, sampled_idx) == 1.0
+        print("  (stop token -- stopping)")
+        done = 1.0
+      end
+      if gen_count >= max_tokens
+        done = 1.0
+      end
+      current_token = sampled_idx
+    end
+
+    end
+    seq_pos = seq_pos + 1.0
+  end
+
+  let _sv = vm_shutdown(vm)
+
+  print(" ")
+  print("Prompt: {prompt}")
+  let decoded = bpe_decode(generated_text)
+  print("=== Output ===")
+  print("{decoded}")
+  return 0.0
+end

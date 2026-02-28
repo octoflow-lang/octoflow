@@ -1,0 +1,24 @@
+// stdlib/loom/build_kernels.flow — Pre-build all transformer SPIR-V kernels
+//
+// Call once at startup before any dispatch.
+// Emits all .spv files to stdlib/loom/kernels/nn/
+//
+// Usage:
+//   use "build_kernels"
+//   let _b = build_all_kernels()
+
+use "emit_silu"
+use "emit_rmsnorm"
+use "emit_rope"
+use "emit_softmax"
+use "emit_matmul_tiled"
+
+fn build_all_kernels()
+  let _e1 = emit_silu("stdlib/loom/kernels/nn/silu.spv")
+  let _e2 = emit_rmsnorm("stdlib/loom/kernels/nn/rmsnorm.spv")
+  let _e3 = emit_rope("stdlib/loom/kernels/nn/rope.spv")
+  let _e4 = emit_softmax("stdlib/loom/kernels/nn/softmax.spv")
+  let _e5 = emit_matmul_tiled("stdlib/loom/kernels/nn/matmul_tiled.spv")
+  print("All transformer kernels built")
+  return 0.0
+end

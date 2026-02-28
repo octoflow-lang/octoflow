@@ -1,0 +1,504 @@
+// stdlib/compiler/codegen.flow
+// OctoFlow Self-Hosting Codegen (Phase 49)
+//
+// Reads a .flow source file and emits GLSL compute shader(s) for GPU pipelines.
+// Each `let result = src |> map(fn x: expr)` becomes a .comp shader.
+//
+// Usage:
+//   FLOW_INPUT=prog.flow octoflow run stdlib/compiler/codegen.flow --allow-read --allow-write
+//
+// Output:
+//   prog.comp  (GLSL compute shader, compile with glslc or glslangValidator)
+//
+// Supported patterns:
+//   let src = stream(...)             → input buffer binding 0
+//   let r   = src |> map(fn x: expr) → output buffer binding 1, kernel body = expr
+//   let r   = src |> map(fn x, y: expr)   → two-input kernel (bindings 0, 1 → 2)
+//
+// Supported expression operators in GPU lambdas:
+//   +  -  *  /  **  %
+//   abs(x)  sqrt(x)  sin(x)  cos(x)  exp(x)  log(x)
+//   floor(x)  ceil(x)  round(x)  min(a,b)  max(a,b)  clamp(x,lo,hi)
+//   pow(a,b)  negate(x)  sign(x)
+//   Literals: numeric constants, identifier references (other params or let-bound consts)
+
+// ---- INLINE LEXER ---------------------------------------------------
+let input_path = env("FLOW_INPUT")
+let src = read_file(input_path)
+let src_len = len(src)
+let mut lpos = 0.0
+let mut tok_types  = []
+let mut tok_values = []
+let mut tok_lines  = []
+let mut cur_line   = 1.0
+
+let mut kw_set = map()
+map_set(kw_set, "let", 1.0)
+map_set(kw_set, "mut", 1.0)
+map_set(kw_set, "fn", 1.0)
+map_set(kw_set, "end", 1.0)
+map_set(kw_set, "if", 1.0)
+map_set(kw_set, "elif", 1.0)
+map_set(kw_set, "else", 1.0)
+map_set(kw_set, "while", 1.0)
+map_set(kw_set, "for", 1.0)
+map_set(kw_set, "in", 1.0)
+map_set(kw_set, "return", 1.0)
+map_set(kw_set, "break", 1.0)
+map_set(kw_set, "continue", 1.0)
+map_set(kw_set, "print", 1.0)
+map_set(kw_set, "use", 1.0)
+map_set(kw_set, "push", 1.0)
+map_set(kw_set, "map_set", 1.0)
+map_set(kw_set, "stream", 1.0)
+map_set(kw_set, "emit", 1.0)
+map_set(kw_set, "struct", 1.0)
+map_set(kw_set, "extern", 1.0)
+map_set(kw_set, "then", 1.0)
+
+let LNL  = 10.0
+let LTAB = 9.0
+let LCR  = 13.0
+let LQT  = 34.0
+let LSP  = 32.0
+
+while lpos < src_len
+  let lc  = char_at(src, lpos)
+  let lco = ord(lc)
+  if lco == LSP || lco == LTAB || lco == LCR
+    lpos = lpos + 1.0
+  elif lco == LNL
+    push(tok_types, "nl")
+    push(tok_values, "NL")
+    push(tok_lines, cur_line)
+    cur_line = cur_line + 1.0
+    lpos = lpos + 1.0
+  elif lco == 47.0
+    let lnpos = lpos + 1.0
+    if lnpos < src_len
+      let lnc = char_at(src, lnpos)
+      if lnc == "/"
+        while lpos < src_len && ord(char_at(src, lpos)) != LNL
+          lpos = lpos + 1.0
+        end
+      else
+        push(tok_types, "op")
+        push(tok_values, "/")
+        push(tok_lines, cur_line)
+        lpos = lpos + 1.0
+      end
+    else
+      push(tok_types, "op")
+      push(tok_values, "/")
+      push(tok_lines, cur_line)
+      lpos = lpos + 1.0
+    end
+  elif lco >= 48.0 && lco <= 57.0
+    let mut lnum = ""
+    while lpos < src_len && contains("0123456789.", char_at(src, lpos))
+      lnum = lnum + char_at(src, lpos)
+      lpos = lpos + 1.0
+    end
+    push(tok_types, "float")
+    push(tok_values, lnum)
+    push(tok_lines, cur_line)
+  elif lco == LQT
+    lpos = lpos + 1.0
+    let mut lstr = ""
+    while lpos < src_len && ord(char_at(src, lpos)) != LQT && ord(char_at(src, lpos)) != LNL
+      lstr = lstr + char_at(src, lpos)
+      lpos = lpos + 1.0
+    end
+    if lpos < src_len
+      let lclose_ch = char_at(src, lpos)
+      let lclose_ord = ord(lclose_ch)
+      if lclose_ord == LQT
+        lpos = lpos + 1.0
+      end
+    end
+    push(tok_types, "str")
+    push(tok_values, lstr)
+    push(tok_lines, cur_line)
+  elif is_match(lc, "[a-zA-Z_]")
+    let mut lword = ""
+    while lpos < src_len && is_match(char_at(src, lpos), "[a-zA-Z_0-9]")
+      lword = lword + char_at(src, lpos)
+      lpos = lpos + 1.0
+    end
+    if map_has(kw_set, lword)
+      push(tok_types, "kw")
+    else
+      push(tok_types, "ident")
+    end
+    push(tok_values, lword)
+    push(tok_lines, cur_line)
+  elif lpos + 1.0 < src_len
+    let lc2 = char_at(src, lpos + 1.0)
+    if lc == "=" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, "==")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "!" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, "!=")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "<" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, "<=")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == ">" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, ">=")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "&" && lc2 == "&"
+      push(tok_types, "op")
+      push(tok_values, "&&")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "|" && lc2 == "|"
+      push(tok_types, "op")
+      push(tok_values, "||")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "|" && lc2 == ">"
+      push(tok_types, "op")
+      push(tok_values, "|>")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "*" && lc2 == "*"
+      push(tok_types, "op")
+      push(tok_values, "**")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "-" && lc2 == ">"
+      push(tok_types, "op")
+      push(tok_values, "->")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "<" && lc2 == "<"
+      push(tok_types, "op")
+      push(tok_values, "<<")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == ">" && lc2 == ">"
+      push(tok_types, "op")
+      push(tok_values, ">>")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    else
+      push(tok_types, "op")
+      push(tok_values, lc)
+      push(tok_lines, cur_line)
+      lpos = lpos + 1.0
+    end
+  else
+    push(tok_types, "op")
+    push(tok_values, lc)
+    push(tok_lines, cur_line)
+    lpos = lpos + 1.0
+  end
+end
+push(tok_types, "eof")
+push(tok_values, "EOF")
+push(tok_lines, cur_line)
+
+let tok_count = len(tok_types)
+
+// ---- PATTERN EXTRACTION --------------------------------------------
+// Scan tokens to find:
+//   1. `let <name> = stream(...)` — stream declarations
+//   2. `let <name> = <src_name> |> map(fn <params>: <expr>)` — map kernels
+//
+// We extract: stream_names[], kernel_outputs[], kernel_srcs[], kernel_params[], kernel_exprs[]
+
+let mut stream_names = []
+let mut stream_count = 0.0
+
+let mut kernel_names   = []   // output variable name
+let mut kernel_srcs    = []   // input stream name
+let mut kernel_params  = []   // lambda param name(s), comma-joined
+let mut kernel_exprs   = []   // raw expression text (token-reconstructed)
+let mut kernel_count   = 0.0
+
+// Also track let-bound scalar constants for GLSL const declarations
+let mut const_names  = []
+let mut const_values = []
+let mut const_count  = 0.0
+
+let mut pi = 0.0
+while pi < tok_count
+  let pt = tok_types[pi]
+  let pv = tok_values[pi]
+
+  // Pattern: let [mut] <name> = ...
+  if pt == "kw" && pv == "let"
+    pi = pi + 1.0
+    // skip optional mut
+    if pi < tok_count && tok_values[pi] == "mut"
+      pi = pi + 1.0
+    end
+    if pi < tok_count && tok_types[pi] == "ident"
+      let decl_name = tok_values[pi]
+      pi = pi + 1.0
+      if pi < tok_count && tok_values[pi] == "="
+        pi = pi + 1.0
+        // Check RHS first token
+        if pi < tok_count
+          let rhs_val = tok_values[pi]
+          let rhs_typ = tok_types[pi]
+
+          // Pattern: stream(...)
+          if rhs_val == "stream" || rhs_val == "stream"
+            if rhs_typ == "kw" || rhs_typ == "ident"
+              push(stream_names, decl_name)
+              stream_count = stream_count + 1.0
+            end
+
+          // Pattern: <ident> |> map(fn <params>: <expr>)
+          elif rhs_typ == "ident"
+            let src_name = rhs_val
+            let next_i = pi + 1.0
+            if next_i < tok_count && tok_values[next_i] == "|>"
+              let after_pipe = next_i + 1.0
+              if after_pipe < tok_count && tok_values[after_pipe] == "map"
+                let after_map = after_pipe + 1.0
+                if after_map < tok_count && tok_values[after_map] == "("
+                  let after_lparen = after_map + 1.0
+                  if after_lparen < tok_count && tok_values[after_lparen] == "fn"
+                    // parse fn params up to ":"
+                    let mut param_i = after_lparen + 1.0
+                    let mut params_str = ""
+                    while param_i < tok_count && tok_values[param_i] != ":"
+                      if tok_types[param_i] == "ident"
+                        if len(params_str) > 0.0
+                          params_str = params_str + ","
+                        end
+                        params_str = params_str + tok_values[param_i]
+                      end
+                      param_i = param_i + 1.0
+                    end
+                    if param_i < tok_count && tok_values[param_i] == ":"
+                      param_i = param_i + 1.0
+                    end
+                    // collect expression tokens until ")" that closes the map(
+                    let mut expr_str = ""
+                    let mut paren_depth = 1.0
+                    while param_i < tok_count && paren_depth > 0.0
+                      let et = tok_types[param_i]
+                      let ev = tok_values[param_i]
+                      if ev == "("
+                        paren_depth = paren_depth + 1.0
+                        expr_str = expr_str + "("
+                      elif ev == ")"
+                        paren_depth = paren_depth - 1.0
+                        if paren_depth > 0.0
+                          expr_str = expr_str + ")"
+                        end
+                      elif et == "nl"
+                        // ignore newlines inside expr
+                      elif et == "float"
+                        if len(expr_str) > 0.0
+                          let last_ch = char_at(expr_str, len(expr_str) - 1.0)
+                          if last_ch != "(" && last_ch != " "
+                            expr_str = expr_str + " "
+                          end
+                        end
+                        // Format: ensure float suffix for GLSL (x.0 → x.0)
+                        let fv_str = ev
+                        if contains(fv_str, ".")
+                          expr_str = expr_str + fv_str
+                        else
+                          expr_str = expr_str + fv_str + ".0"
+                        end
+                      elif et == "ident" || et == "op" || et == "kw"
+                        if len(expr_str) > 0.0
+                          let last_ch = char_at(expr_str, len(expr_str) - 1.0)
+                          if last_ch != "(" && last_ch != " "
+                            expr_str = expr_str + " "
+                          end
+                        end
+                        // Remap OctoFlow ops to GLSL
+                        if ev == "**"
+                          expr_str = expr_str + "pow("
+                        elif ev == "&&"
+                          expr_str = expr_str + " && "
+                        elif ev == "||"
+                          expr_str = expr_str + " || "
+                        else
+                          expr_str = expr_str + ev
+                        end
+                      end
+                      param_i = param_i + 1.0
+                    end
+                    // Remove trailing space
+                    expr_str = trim(expr_str)
+
+                    push(kernel_names,  decl_name)
+                    push(kernel_srcs,   src_name)
+                    push(kernel_params, params_str)
+                    push(kernel_exprs,  expr_str)
+                    kernel_count = kernel_count + 1.0
+                  end
+                end
+              end
+            end
+
+          // Pattern: let x = <literal> — potential constant
+          elif rhs_typ == "float"
+            // Simple scalar constant — record for GLSL const
+            let cv = rhs_val
+            push(const_names, decl_name)
+            push(const_values, cv)
+            const_count = const_count + 1.0
+          end
+        end
+      end
+    end
+
+  else
+    pi = pi + 1.0
+  end
+end
+
+// ---- GLSL CODE GENERATOR -------------------------------------------
+// OctoFlow has no escape sequences — use chr(10) for actual newline
+let NL = chr(10)
+// GLSL.std.450 builtins map from OctoFlow names
+let mut glsl_fn_map = map()
+map_set(glsl_fn_map, "abs",    "abs")
+map_set(glsl_fn_map, "sqrt",   "sqrt")
+map_set(glsl_fn_map, "sin",    "sin")
+map_set(glsl_fn_map, "cos",    "cos")
+map_set(glsl_fn_map, "exp",    "exp")
+map_set(glsl_fn_map, "log",    "log")
+map_set(glsl_fn_map, "floor",  "floor")
+map_set(glsl_fn_map, "ceil",   "ceil")
+map_set(glsl_fn_map, "round",  "round")
+map_set(glsl_fn_map, "min",    "min")
+map_set(glsl_fn_map, "max",    "max")
+map_set(glsl_fn_map, "clamp",  "clamp")
+map_set(glsl_fn_map, "pow",    "pow")
+map_set(glsl_fn_map, "negate", "-")
+map_set(glsl_fn_map, "sign",   "sign")
+map_set(glsl_fn_map, "mod",    "mod")
+
+// Compute output filename: replace .flow with .comp (or append .comp)
+let mut out_path = ""
+let dot_i = index_of(input_path, ".")
+if dot_i >= 0.0
+  out_path = substr(input_path, 0.0, dot_i) + ".comp"
+else
+  out_path = input_path + ".comp"
+end
+
+// Generate one shader file per kernel (or a multi-kernel file)
+let mut ki = 0.0
+while ki < kernel_count
+  let kname  = kernel_names[ki]
+  let ksrc   = kernel_srcs[ki]
+  let kparms = kernel_params[ki]
+  let kexpr  = kernel_exprs[ki]
+
+  // Determine input buffer count from params
+  let params_split = split(kparms, ",")
+  let param_count  = len(params_split)
+
+  // Build GLSL shader header
+  let mut glsl = ""
+  glsl = glsl + "// Generated by codegen.flow (Phase 49)" + NL
+  glsl = glsl + "// Source: " + input_path + "" + NL
+  glsl = glsl + "// Kernel: " + kname + " = " + ksrc + " |> map(fn " + kparms + ": " + kexpr + ")" + NL
+  glsl = glsl + "" + NL
+  glsl = glsl + "#version 450" + NL
+  glsl = glsl + "#extension GL_EXT_shader_16bit_storage : enable" + NL
+  glsl = glsl + "" + NL
+  glsl = glsl + "layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;" + NL
+  glsl = glsl + "" + NL
+
+  // Input buffers (one per param)
+  let mut bi = 0.0
+  while bi < param_count
+    let pbuf = "buf_" + str(bi)
+    glsl = glsl + "layout(set = 0, binding = " + str(bi) + ", std430) buffer Buf" + str(bi) + " {" + NL
+    glsl = glsl + "    float data[];" + NL
+    glsl = glsl + "} " + pbuf + ";" + NL
+    bi = bi + 1.0
+  end
+
+  // Output buffer
+  let out_bind = str(param_count)
+  glsl = glsl + "layout(set = 0, binding = " + out_bind + ", std430) buffer BufOut {" + NL
+  glsl = glsl + "    float data[];" + NL
+  glsl = glsl + "} buf_out;" + NL
+  glsl = glsl + "" + NL
+
+  // Scalar constants
+  if const_count > 0.0
+    glsl = glsl + "// Scalar constants from source" + NL
+    let mut ci = 0.0
+    while ci < const_count
+      let cname = const_names[ci]
+      let cval  = const_values[ci]
+      let cval_dot = contains(cval, ".")
+      let cval_gl = cval
+      if cval_dot == 0.0
+        let cval_gl = cval + ".0"
+        glsl = glsl + "const float " + cname + " = " + cval_gl + ";" + NL
+      else
+        glsl = glsl + "const float " + cname + " = " + cval_gl + ";" + NL
+      end
+      ci = ci + 1.0
+    end
+    glsl = glsl + "" + NL
+  end
+
+  // Main function
+  glsl = glsl + "void main() {" + NL
+  glsl = glsl + "    uint gid = gl_GlobalInvocationID.x;" + NL
+  glsl = glsl + "" + NL
+  glsl = glsl + "    // Load inputs" + NL
+
+  // Declare param variables
+  let mut pi2 = 0.0
+  while pi2 < param_count
+    let pname = trim(params_split[pi2])
+    let pbind = str(pi2)
+    glsl = glsl + "    float " + pname + " = buf_" + pbind + ".data[gid];" + NL
+    pi2 = pi2 + 1.0
+  end
+
+  glsl = glsl + "" + NL
+  glsl = glsl + "    // Compute" + NL
+  glsl = glsl + "    float result = " + kexpr + ";" + NL
+  glsl = glsl + "" + NL
+  glsl = glsl + "    // Store output" + NL
+  glsl = glsl + "    buf_out.data[gid] = result;" + NL
+  glsl = glsl + "}" + NL
+
+  // Write shader file
+  let shader_path = out_path
+  write_file(shader_path, glsl)
+  print("CODEGEN: {input_path} → {shader_path}")
+  print("  kernel: {kname} = {ksrc} |> map(fn {kparms}: {kexpr})")
+  print("  inputs: {param_count}  output: buf_out")
+  print("  compile: glslc {shader_path} -o {kname}.spv")
+  print("")
+
+  ki = ki + 1.0
+end
+
+// Report
+if kernel_count == 0.0
+  print("CODEGEN: {input_path}")
+  print("  No GPU pipeline patterns found.")
+  print("  codegen.flow supports: let result = src |> map(fn x: expr)")
+  if stream_count > 0.0
+    print("  Found {stream_count} stream declaration(s) but no pipeline stages.")
+  end
+else
+  print("CODEGEN COMPLETE: {kernel_count} kernel(s) generated → {out_path}")
+end

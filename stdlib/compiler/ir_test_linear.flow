@@ -1,0 +1,37 @@
+// stdlib/compiler/ir_test_linear.flow
+// Phase 69 Test: Use IR to emit SPIR-V for output[gid] = input[gid] * 2.0 + 1.0
+//
+// This proves the IR → SPIR-V automated pipeline works.
+// Compare with spirv_emit.flow (790 hand-crafted lines) — this is ~30 lines of IR calls.
+
+use ir
+
+let mut out_path = env("SPIRV_OUTPUT")
+if out_path == ""
+  out_path = "spirv_ir_linear.spv"
+end
+
+let _init = ir_new()
+
+// Single block: entry
+let b_entry = ir_block("entry")
+
+// Load input value (uses fixed preamble — val at gid)
+let val = ir_load_input(b_entry)
+
+// Constants
+let c2 = ir_const_f(b_entry, 2.0)
+let c1 = ir_const_f(b_entry, 1.0)
+
+// Compute: val * 2.0 + 1.0
+let mul = ir_fmul(b_entry, val, c2)
+let add = ir_fadd(b_entry, mul, c1)
+
+// Store to output
+let _st = ir_store_output(b_entry, add)
+
+// Return
+let _t = ir_term_return(b_entry)
+
+// Emit SPIR-V
+let _e = ir_emit_spirv(out_path)

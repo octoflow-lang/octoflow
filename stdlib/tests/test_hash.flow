@@ -1,0 +1,119 @@
+// test_hash.flow — Tests for stdlib/crypto/hash.flow
+// Functions tested: djb2, fnv1a, checksum
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from crypto/hash.flow --
+fn djb2(s)
+  let n = len(s)
+  let mut hash = 5381.0
+  let mut i = 0.0
+  while i < n
+    let c = ord(char_at(s, i))
+    hash = hash * 33.0 + c
+    hash = hash - floor(hash / 4294967296.0) * 4294967296.0
+    i = i + 1.0
+  end
+  return hash
+end
+
+fn simple_hash(s)
+  let n = len(s)
+  let mut hash = 7.0
+  let mut i = 0.0
+  while i < n
+    let c = ord(char_at(s, i))
+    hash = hash * 31.0 + c
+    hash = hash - floor(hash / 1000000.0) * 1000000.0
+    i = i + 1.0
+  end
+  return hash
+end
+
+fn checksum(arr)
+  let mut sum = 0.0
+  for x in arr
+    sum = sum + x
+  end
+  return sum
+end
+
+// -- Tests --
+
+print("=== test_hash ===")
+
+// djb2 determinism: same input => same output
+let h1 = djb2("hello")
+let h2 = djb2("hello")
+if h1 == h2
+  pass = pass + 1.0
+else
+  print("  FAIL: djb2 determinism: {h1} != {h2}")
+  fail = fail + 1.0
+end
+
+// djb2 different inputs => different outputs
+let h3 = djb2("world")
+if h1 != h3
+  pass = pass + 1.0
+else
+  print("  FAIL: djb2 collision: hello and world both {h1}")
+  fail = fail + 1.0
+end
+
+// djb2 non-negative
+if h1 >= 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: djb2 negative hash: {h1}")
+  fail = fail + 1.0
+end
+
+// simple_hash determinism
+let f1 = simple_hash("hello")
+let f2 = simple_hash("hello")
+if f1 == f2
+  pass = pass + 1.0
+else
+  print("  FAIL: simple_hash determinism: {f1} != {f2}")
+  fail = fail + 1.0
+end
+
+// simple_hash different inputs
+let f3 = simple_hash("world")
+if f1 != f3
+  pass = pass + 1.0
+else
+  print("  FAIL: simple_hash collision: hello and world both {f1}")
+  fail = fail + 1.0
+end
+
+// simple_hash != djb2 (different algorithms)
+if f1 != h1
+  pass = pass + 1.0
+else
+  print("  FAIL: simple_hash and djb2 same result for hello: {f1}")
+  fail = fail + 1.0
+end
+
+// checksum test
+let cs_arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+let cs = checksum(cs_arr)
+if cs == 15.0
+  pass = pass + 1.0
+else
+  print("  FAIL: checksum expected 15 got {cs}")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_hash ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

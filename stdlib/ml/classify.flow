@@ -1,4 +1,7 @@
 // stdlib/ml/classify.flow — Classification algorithms
+//
+// Functions: knn_predict, logistic_regression, logistic_predict,
+//            naive_bayes_train, naive_bayes_predict
 
 fn knn_predict(x_train, y_train, x_test, k)
   // K-nearest neighbors (1D features)

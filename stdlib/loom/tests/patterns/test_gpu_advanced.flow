@@ -1,0 +1,39 @@
+// Phase 81: GPU random, matmul, EMA tests
+
+// GPU random: 1000 elements in [0, 1]
+let r = gpu_random(1000, 0.0, 1.0)
+let rmin = gpu_min(r)
+let rmax = gpu_max(r)
+let rmean = gpu_mean(r)
+print("random min: {rmin}")
+print("random max: {rmax}")
+print("random mean: {rmean}")
+
+// GPU matmul: 2x3 * 3x2 = 2x2
+// A flat: [1,2,3,4,5,6], B flat: [7,8,9,10,11,12]
+// C = [[58,64],[139,154]]
+let af = gpu_range(1.0, 7.0, 1.0)
+let bf = gpu_range(7.0, 13.0, 1.0)
+let c = gpu_matmul(af, bf, 2, 2, 3)
+let c0 = c[0]
+let c1 = c[1]
+let c2 = c[2]
+let c3 = c[3]
+print("matmul: {c0} {c1} {c2} {c3}")
+
+// GPU EMA: simple test
+// Input: [1,0,0,0,0], alpha=0.5
+// EMA[0]=1, EMA[1]=0.5*0+0.5*1=0.5, EMA[2]=0.25, EMA[3]=0.125, EMA[4]=0.0625
+let mut e = []
+push(e, 1.0)
+push(e, 0.0)
+push(e, 0.0)
+push(e, 0.0)
+push(e, 0.0)
+let ema = gpu_ema(e, 0.5)
+let e0 = ema[0]
+let e1 = ema[1]
+let e2 = ema[2]
+let e3 = ema[3]
+let e4 = ema[4]
+print("ema: {e0} {e1} {e2} {e3} {e4}")

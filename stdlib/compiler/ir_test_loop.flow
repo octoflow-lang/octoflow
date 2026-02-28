@@ -1,0 +1,59 @@
+// stdlib/compiler/ir_test_loop.flow
+// Phase 69 Test: IR loop — output[gid] = sum(0..9) = 45.0
+//
+// Tests: OpLoopMerge, OpPhi, conditional branch, multi-block CFG.
+// Each thread computes sum(0+1+2+...+9) = 45.0 regardless of input.
+
+use ir
+
+let mut out_path = env("SPIRV_OUTPUT")
+if out_path == ""
+  out_path = "spirv_ir_loop.spv"
+end
+
+let _init = ir_new()
+
+// Constants
+let b_entry = ir_block("entry")
+let c0 = ir_const_f(b_entry, 0.0)
+let c1 = ir_const_f(b_entry, 1.0)
+let c10 = ir_const_f(b_entry, 10.0)
+
+// Blocks
+let b_header = ir_block("header")
+let b_body = ir_block("body")
+let b_cont = ir_block("continue")
+let b_merge = ir_block("merge")
+
+// --- entry: branch → header ---
+let _t0 = ir_term_branch(b_entry, b_header)
+
+// --- header: loop merge, phi nodes, condition ---
+let _lm = ir_loop_merge(b_header, b_merge, b_cont)
+
+let sum_phi = ir_phi(b_header, IR_TYPE_FLOAT)
+let i_phi = ir_phi(b_header, IR_TYPE_FLOAT)
+
+let cond = ir_folt(b_header, i_phi, c10)
+let _t1 = ir_term_cond_branch(b_header, cond, b_body, b_merge)
+
+// --- body: accumulate sum ---
+let new_sum = ir_fadd(b_body, sum_phi, i_phi)
+let _t2 = ir_term_branch(b_body, b_cont)
+
+// --- continue: increment i ---
+let i_next = ir_fadd(b_cont, i_phi, c1)
+let _t3 = ir_term_branch(b_cont, b_header)
+
+// --- merge: store result ---
+let _st = ir_store_output(b_merge, sum_phi)
+let _t4 = ir_term_return(b_merge)
+
+// Wire up phi operands (must be done after all instructions exist)
+let _p1 = ir_phi_add(sum_phi, c0, b_entry)
+let _p2 = ir_phi_add(sum_phi, new_sum, b_cont)
+let _p3 = ir_phi_add(i_phi, c0, b_entry)
+let _p4 = ir_phi_add(i_phi, i_next, b_cont)
+
+// Emit SPIR-V
+let _e = ir_emit_spirv(out_path)

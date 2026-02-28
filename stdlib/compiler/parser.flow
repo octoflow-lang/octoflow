@@ -1,0 +1,927 @@
+// stdlib/compiler/parser.flow
+// OctoFlow Self-Hosting Parser (Phase 47)
+//
+// Lexes a .flow source file and parses it into an AST represented as
+// parallel arrays (node table). The AST is dumped as structured text.
+//
+// AST Node Table:
+//   nd_kind[]   -- Let,Assign,If,Elif,Else,While,ForEach,Fn,
+//                  Return,Print,Push,MapSet,Call,ArrSet,Use,break,continue
+//   nd_lhs[]    -- primary name (var, fn, condition string)
+//   nd_op[]     -- operator or secondary key
+//   nd_rhs[]    -- rhs value or first arg
+//   nd_rhs2[]   -- third arg or elif/else chain node index
+//   nd_child[]  -- first child statement index (-1 = none)
+//   nd_next[]   -- next sibling index (-1 = end of block)
+//   nd_line[]   -- source line number
+//   nd_mut[]    -- "1" if let mut, "" otherwise
+//
+// Usage:
+//   FLOW_INPUT=prog.flow octoflow run stdlib/compiler/parser.flow --allow-read
+
+// ---- INLINE LEXER ---------------------------------------------------
+let input_path = env("FLOW_INPUT")
+let src = read_file(input_path)
+let src_len = len(src)
+let mut lpos = 0.0
+let mut tok_types = []
+let mut tok_values = []
+let mut tok_lines = []
+let mut cur_line = 1.0
+
+let mut kw_set = map()
+map_set(kw_set, "let", 1.0)
+map_set(kw_set, "mut", 1.0)
+map_set(kw_set, "fn", 1.0)
+map_set(kw_set, "end", 1.0)
+map_set(kw_set, "if", 1.0)
+map_set(kw_set, "elif", 1.0)
+map_set(kw_set, "else", 1.0)
+map_set(kw_set, "while", 1.0)
+map_set(kw_set, "for", 1.0)
+map_set(kw_set, "in", 1.0)
+map_set(kw_set, "return", 1.0)
+map_set(kw_set, "break", 1.0)
+map_set(kw_set, "continue", 1.0)
+map_set(kw_set, "print", 1.0)
+map_set(kw_set, "use", 1.0)
+map_set(kw_set, "push", 1.0)
+map_set(kw_set, "map_set", 1.0)
+map_set(kw_set, "stream", 1.0)
+map_set(kw_set, "emit", 1.0)
+
+let LNL  = 10.0
+let LTAB = 9.0
+let LCR  = 13.0
+let LQT  = 34.0
+let LSP  = 32.0
+
+while lpos < src_len
+  let lc  = char_at(src, lpos)
+  let lco = ord(lc)
+  if lco == LSP || lco == LTAB || lco == LCR
+    lpos = lpos + 1.0
+  elif lco == LNL
+    push(tok_types, "nl")
+    push(tok_values, "NL")
+    push(tok_lines, cur_line)
+    cur_line = cur_line + 1.0
+    lpos = lpos + 1.0
+  elif lco == 47.0
+    let lnpos = lpos + 1.0
+    if lnpos < src_len
+      let lnc = char_at(src, lnpos)
+      if lnc == "/"
+        while lpos < src_len && ord(char_at(src, lpos)) != LNL
+          lpos = lpos + 1.0
+        end
+      else
+        push(tok_types, "op")
+        push(tok_values, "/")
+        push(tok_lines, cur_line)
+        lpos = lpos + 1.0
+      end
+    else
+      push(tok_types, "op")
+      push(tok_values, "/")
+      push(tok_lines, cur_line)
+      lpos = lpos + 1.0
+    end
+  elif lco >= 48.0 && lco <= 57.0
+    let mut lnum = ""
+    while lpos < src_len && contains("0123456789.", char_at(src, lpos))
+      lnum = lnum + char_at(src, lpos)
+      lpos = lpos + 1.0
+    end
+    push(tok_types, "float")
+    push(tok_values, lnum)
+    push(tok_lines, cur_line)
+  elif lco == LQT
+    lpos = lpos + 1.0
+    let mut lstr = ""
+    while lpos < src_len && ord(char_at(src, lpos)) != LQT && ord(char_at(src, lpos)) != LNL
+      lstr = lstr + char_at(src, lpos)
+      lpos = lpos + 1.0
+    end
+    if lpos < src_len
+      let lclose_ch = char_at(src, lpos)
+      let lclose_ord = ord(lclose_ch)
+      if lclose_ord == LQT
+        lpos = lpos + 1.0
+      end
+    end
+    push(tok_types, "str")
+    push(tok_values, lstr)
+    push(tok_lines, cur_line)
+  elif is_match(lc, "[a-zA-Z_]")
+    let mut lword = ""
+    while lpos < src_len && is_match(char_at(src, lpos), "[a-zA-Z_0-9]")
+      lword = lword + char_at(src, lpos)
+      lpos = lpos + 1.0
+    end
+    if map_has(kw_set, lword)
+      push(tok_types, "kw")
+    else
+      push(tok_types, "ident")
+    end
+    push(tok_values, lword)
+    push(tok_lines, cur_line)
+  elif lpos + 1.0 < src_len
+    let lc2 = char_at(src, lpos + 1.0)
+    if lc == "=" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, "==")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "!" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, "!=")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "<" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, "<=")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == ">" && lc2 == "="
+      push(tok_types, "op")
+      push(tok_values, ">=")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "&" && lc2 == "&"
+      push(tok_types, "op")
+      push(tok_values, "&&")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "|" && lc2 == "|"
+      push(tok_types, "op")
+      push(tok_values, "||")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "|" && lc2 == ">"
+      push(tok_types, "op")
+      push(tok_values, "|>")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "*" && lc2 == "*"
+      push(tok_types, "op")
+      push(tok_values, "**")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "-" && lc2 == ">"
+      push(tok_types, "op")
+      push(tok_values, "->")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == "<" && lc2 == "<"
+      push(tok_types, "op")
+      push(tok_values, "<<")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    elif lc == ">" && lc2 == ">"
+      push(tok_types, "op")
+      push(tok_values, ">>")
+      push(tok_lines, cur_line)
+      lpos = lpos + 2.0
+    else
+      push(tok_types, "op")
+      push(tok_values, lc)
+      push(tok_lines, cur_line)
+      lpos = lpos + 1.0
+    end
+  else
+    push(tok_types, "op")
+    push(tok_values, lc)
+    push(tok_lines, cur_line)
+    lpos = lpos + 1.0
+  end
+end
+push(tok_types, "eof")
+push(tok_values, "EOF")
+push(tok_lines, cur_line)
+
+let tok_count = len(tok_types)
+
+// ---- AST NODE TABLE -------------------------------------------------
+let mut nd_kind  = []
+let mut nd_lhs   = []
+let mut nd_op    = []
+let mut nd_rhs   = []
+let mut nd_rhs2  = []
+let mut nd_child = []
+let mut nd_next  = []
+let mut nd_line  = []
+let mut nd_mut   = []
+let mut nd_count = 0.0
+
+// Parse cursor and block tracking
+let mut pc          = 0.0
+let mut parse_depth = 0.0
+let mut nd_new      = 0.0
+
+// Block-level tracking: parallel arrays indexed by parse_depth
+let mut cur_block_first = []
+let mut cur_block_last  = []
+let mut block_stack     = []
+let mut parent_stack    = []
+
+push(cur_block_first, -1.0)
+push(cur_block_last,  -1.0)
+
+let mut parse_done = 0.0
+
+while pc < tok_count && parse_done == 0.0
+  // skip newlines
+  while pc < tok_count && tok_types[pc] == "nl"
+    pc = pc + 1.0
+  end
+
+  if pc >= tok_count
+    parse_done = 1.0
+  else
+
+  let pt    = tok_types[pc]
+  let pv    = tok_values[pc]
+  let pline = tok_lines[pc]
+
+  if pt == "eof"
+    parse_done = 1.0
+
+  // ---- let [mut] name = expr ----------------------------------------
+  elif pt == "kw" && pv == "let"
+    pc = pc + 1.0
+    let mut p_mut = ""
+    if pc < tok_count && tok_values[pc] == "mut"
+      p_mut = "1"
+      pc = pc + 1.0
+    end
+    let p_nm = tok_values[pc]
+    pc = pc + 1.0
+    pc = pc + 1.0  // skip =
+    let mut p_rhs = ""
+    while pc < tok_count && tok_types[pc] != "nl"
+      if len(p_rhs) > 0.0
+        p_rhs = p_rhs + " "
+      end
+      p_rhs = p_rhs + tok_values[pc]
+      pc = pc + 1.0
+    end
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "Let")
+    push(nd_lhs, p_nm)
+    push(nd_op, "=")
+    push(nd_rhs, p_rhs)
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, p_mut)
+    let bid = parse_depth
+    let lst = cur_block_last[bid]
+    if lst == -1.0
+      cur_block_first[bid] = nd_new
+      cur_block_last[bid] = nd_new
+    else
+      nd_next[lst] = str(nd_new)
+      cur_block_last[bid] = nd_new
+    end
+
+  // ---- name = expr --------------------------------------------------
+  elif pt == "ident" && pc + 1.0 < tok_count && tok_values[pc + 1.0] == "="
+    let p_an = pv
+    pc = pc + 2.0
+    let mut p_arhs = ""
+    while pc < tok_count && tok_types[pc] != "nl"
+      if len(p_arhs) > 0.0
+        p_arhs = p_arhs + " "
+      end
+      p_arhs = p_arhs + tok_values[pc]
+      pc = pc + 1.0
+    end
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "Assign")
+    push(nd_lhs, p_an)
+    push(nd_op, "=")
+    push(nd_rhs, p_arhs)
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bid2 = parse_depth
+    let lst2 = cur_block_last[bid2]
+    if lst2 == -1.0
+      cur_block_first[bid2] = nd_new
+      cur_block_last[bid2] = nd_new
+    else
+      nd_next[lst2] = str(nd_new)
+      cur_block_last[bid2] = nd_new
+    end
+
+  // ---- print(...) ---------------------------------------------------
+  elif pt == "kw" && pv == "print"
+    pc = pc + 2.0  // past print and (
+    let p_msg = tok_values[pc]
+    pc = pc + 2.0  // past string and )
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "Print")
+    push(nd_lhs, p_msg)
+    push(nd_op, "")
+    push(nd_rhs, "")
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bid3 = parse_depth
+    let lst3 = cur_block_last[bid3]
+    if lst3 == -1.0
+      cur_block_first[bid3] = nd_new
+      cur_block_last[bid3] = nd_new
+    else
+      nd_next[lst3] = str(nd_new)
+      cur_block_last[bid3] = nd_new
+    end
+
+  // ---- push(arr, val) -----------------------------------------------
+  elif pt == "kw" && pv == "push"
+    pc = pc + 2.0
+    let p_pa = tok_values[pc]
+    pc = pc + 2.0
+    let p_pv = tok_values[pc]
+    pc = pc + 2.0
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "Push")
+    push(nd_lhs, p_pa)
+    push(nd_op, "")
+    push(nd_rhs, p_pv)
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bid4 = parse_depth
+    let lst4 = cur_block_last[bid4]
+    if lst4 == -1.0
+      cur_block_first[bid4] = nd_new
+      cur_block_last[bid4] = nd_new
+    else
+      nd_next[lst4] = str(nd_new)
+      cur_block_last[bid4] = nd_new
+    end
+
+  // ---- map_set(m, k, v) --------------------------------------------
+  elif pt == "kw" && pv == "map_set"
+    pc = pc + 2.0
+    let p_mm = tok_values[pc]
+    pc = pc + 2.0
+    let p_mk = tok_values[pc]
+    pc = pc + 2.0
+    let p_mv = tok_values[pc]
+    pc = pc + 2.0
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "MapSet")
+    push(nd_lhs, p_mm)
+    push(nd_op, "")
+    push(nd_rhs, p_mk)
+    push(nd_rhs2, p_mv)
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bid5 = parse_depth
+    let lst5 = cur_block_last[bid5]
+    if lst5 == -1.0
+      cur_block_first[bid5] = nd_new
+      cur_block_last[bid5] = nd_new
+    else
+      nd_next[lst5] = str(nd_new)
+      cur_block_last[bid5] = nd_new
+    end
+
+  // ---- if cond ... end ---------------------------------------------
+  elif pt == "kw" && pv == "if"
+    pc = pc + 1.0
+    let mut p_ic = ""
+    while pc < tok_count && tok_types[pc] != "nl"
+      if len(p_ic) > 0.0
+      p_ic = p_ic + " "
+      end
+      p_ic = p_ic + tok_values[pc]
+      pc = pc + 1.0
+    end
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "If")
+    push(nd_lhs, p_ic)
+    push(nd_op, "")
+    push(nd_rhs, "")
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bid6 = parse_depth
+    let lst6 = cur_block_last[bid6]
+    if lst6 == -1.0
+      cur_block_first[bid6] = nd_new
+      cur_block_last[bid6] = nd_new
+    else
+      nd_next[lst6] = str(nd_new)
+      cur_block_last[bid6] = nd_new
+    end
+    parse_depth = parse_depth + 1.0
+    push(cur_block_first, -1.0)
+    push(cur_block_last, -1.0)
+    push(block_stack, nd_new)
+    push(parent_stack, "If")
+
+  // ---- elif cond ---------------------------------------------------
+  elif pt == "kw" && pv == "elif"
+    pc = pc + 1.0
+    if parse_depth > 0.0
+      let elif_pd  = parse_depth - 1.0
+      let elif_pnd = block_stack[elif_pd]
+      nd_child[elif_pnd] = str(cur_block_first[parse_depth])
+      let _e1 = pop(cur_block_first)
+      let _e2 = pop(cur_block_last)
+      let _e3 = pop(block_stack)
+      let _e4 = pop(parent_stack)
+      parse_depth = parse_depth - 1.0
+    end
+    let mut p_elc = ""
+    while pc < tok_count && tok_types[pc] != "nl"
+      if len(p_elc) > 0.0
+      p_elc = p_elc + " "
+      end
+      p_elc = p_elc + tok_values[pc]
+      pc = pc + 1.0
+    end
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "Elif")
+    push(nd_lhs, p_elc)
+    push(nd_op, "")
+    push(nd_rhs, "")
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    nd_rhs2[elif_pnd] = str(nd_new)
+    parse_depth = parse_depth + 1.0
+    push(cur_block_first, -1.0)
+    push(cur_block_last, -1.0)
+    push(block_stack, nd_new)
+    push(parent_stack, "Elif")
+
+  // ---- else --------------------------------------------------------
+  elif pt == "kw" && pv == "else"
+    pc = pc + 1.0
+    if parse_depth > 0.0
+      let else_pd  = parse_depth - 1.0
+      let else_pnd = block_stack[else_pd]
+      nd_child[else_pnd] = str(cur_block_first[parse_depth])
+      let _l1 = pop(cur_block_first)
+      let _l2 = pop(cur_block_last)
+      let _l3 = pop(block_stack)
+      let _l4 = pop(parent_stack)
+      parse_depth = parse_depth - 1.0
+    end
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "Else")
+    push(nd_lhs, "")
+    push(nd_op, "")
+    push(nd_rhs, "")
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    nd_rhs2[else_pnd] = str(nd_new)
+    parse_depth = parse_depth + 1.0
+    push(cur_block_first, -1.0)
+    push(cur_block_last, -1.0)
+    push(block_stack, nd_new)
+    push(parent_stack, "Else")
+
+  // ---- while cond ... end -----------------------------------------
+  elif pt == "kw" && pv == "while"
+    pc = pc + 1.0
+    let mut p_wc = ""
+    while pc < tok_count && tok_types[pc] != "nl"
+      if len(p_wc) > 0.0
+      p_wc = p_wc + " "
+      end
+      p_wc = p_wc + tok_values[pc]
+      pc = pc + 1.0
+    end
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "While")
+    push(nd_lhs, p_wc)
+    push(nd_op, "")
+    push(nd_rhs, "")
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bid7 = parse_depth
+    let lst7 = cur_block_last[bid7]
+    if lst7 == -1.0
+      cur_block_first[bid7] = nd_new
+      cur_block_last[bid7] = nd_new
+    else
+      nd_next[lst7] = str(nd_new)
+      cur_block_last[bid7] = nd_new
+    end
+    parse_depth = parse_depth + 1.0
+    push(cur_block_first, -1.0)
+    push(cur_block_last, -1.0)
+    push(block_stack, nd_new)
+    push(parent_stack, "While")
+
+  // ---- for item in arr ... end ------------------------------------
+  elif pt == "kw" && pv == "for"
+    pc = pc + 1.0
+    let p_fi = tok_values[pc]
+    pc = pc + 2.0  // item, in
+    let p_fa = tok_values[pc]
+    pc = pc + 1.0  // arr
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "ForEach")
+    push(nd_lhs, p_fi)
+    push(nd_op, "in")
+    push(nd_rhs, p_fa)
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bid8 = parse_depth
+    let lst8 = cur_block_last[bid8]
+    if lst8 == -1.0
+      cur_block_first[bid8] = nd_new
+      cur_block_last[bid8] = nd_new
+    else
+      nd_next[lst8] = str(nd_new)
+      cur_block_last[bid8] = nd_new
+    end
+    parse_depth = parse_depth + 1.0
+    push(cur_block_first, -1.0)
+    push(cur_block_last, -1.0)
+    push(block_stack, nd_new)
+    push(parent_stack, "ForEach")
+
+  // ---- fn name(params) ... end ------------------------------------
+  elif pt == "kw" && pv == "fn"
+    pc = pc + 1.0
+    let p_fn = tok_values[pc]
+    pc = pc + 1.0
+    let mut p_fp = ""
+    if pc < tok_count && tok_values[pc] == "("
+      pc = pc + 1.0
+      while pc < tok_count && tok_values[pc] != ")"
+        if tok_types[pc] == "ident"
+          if len(p_fp) > 0.0
+          p_fp = p_fp + ","
+          end
+          p_fp = p_fp + tok_values[pc]
+        end
+        pc = pc + 1.0
+      end
+      pc = pc + 1.0
+    end
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "Fn")
+    push(nd_lhs, p_fn)
+    push(nd_op, "")
+    push(nd_rhs, p_fp)
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bid9 = parse_depth
+    let lst9 = cur_block_last[bid9]
+    if lst9 == -1.0
+      cur_block_first[bid9] = nd_new
+      cur_block_last[bid9] = nd_new
+    else
+      nd_next[lst9] = str(nd_new)
+      cur_block_last[bid9] = nd_new
+    end
+    parse_depth = parse_depth + 1.0
+    push(cur_block_first, -1.0)
+    push(cur_block_last, -1.0)
+    push(block_stack, nd_new)
+    push(parent_stack, "Fn")
+
+  // ---- return expr ------------------------------------------------
+  elif pt == "kw" && pv == "return"
+    pc = pc + 1.0
+    let mut p_rv = ""
+    while pc < tok_count && tok_types[pc] != "nl"
+      if len(p_rv) > 0.0
+      p_rv = p_rv + " "
+      end
+      p_rv = p_rv + tok_values[pc]
+      pc = pc + 1.0
+    end
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "Return")
+    push(nd_lhs, p_rv)
+    push(nd_op, "")
+    push(nd_rhs, "")
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bida = parse_depth
+    let lsta = cur_block_last[bida]
+    if lsta == -1.0
+      cur_block_first[bida] = nd_new
+      cur_block_last[bida] = nd_new
+    else
+      nd_next[lsta] = str(nd_new)
+      cur_block_last[bida] = nd_new
+    end
+
+  // ---- break -------------------------------------------------------
+  elif pt == "kw" && pv == "break"
+    pc = pc + 1.0
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "break")
+    push(nd_lhs, "")
+    push(nd_op, "")
+    push(nd_rhs, "")
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bidb = parse_depth
+    let lstb = cur_block_last[bidb]
+    if lstb == -1.0
+      cur_block_first[bidb] = nd_new
+      cur_block_last[bidb] = nd_new
+    else
+      nd_next[lstb] = str(nd_new)
+      cur_block_last[bidb] = nd_new
+    end
+
+  // ---- continue ----------------------------------------------------
+  elif pt == "kw" && pv == "continue"
+    pc = pc + 1.0
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "continue")
+    push(nd_lhs, "")
+    push(nd_op, "")
+    push(nd_rhs, "")
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bidc = parse_depth
+    let lstc = cur_block_last[bidc]
+    if lstc == -1.0
+      cur_block_first[bidc] = nd_new
+      cur_block_last[bidc] = nd_new
+    else
+      nd_next[lstc] = str(nd_new)
+      cur_block_last[bidc] = nd_new
+    end
+
+  // ---- use module --------------------------------------------------
+  elif pt == "kw" && pv == "use"
+    pc = pc + 1.0
+    let mut p_um = ""
+    while pc < tok_count && tok_types[pc] != "nl"
+      p_um = p_um + tok_values[pc]
+      pc = pc + 1.0
+    end
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "Use")
+    push(nd_lhs, p_um)
+    push(nd_op, "")
+    push(nd_rhs, "")
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bidd = parse_depth
+    let lstd = cur_block_last[bidd]
+    if lstd == -1.0
+      cur_block_first[bidd] = nd_new
+      cur_block_last[bidd] = nd_new
+    else
+      nd_next[lstd] = str(nd_new)
+      cur_block_last[bidd] = nd_new
+    end
+
+  // ---- end -- close block -----------------------------------------
+  elif pt == "kw" && pv == "end"
+    pc = pc + 1.0
+    if parse_depth > 0.0
+      let end_pd  = parse_depth - 1.0
+      let end_pnd = block_stack[end_pd]
+      nd_child[end_pnd] = str(cur_block_first[parse_depth])
+      let _n1 = pop(cur_block_first)
+      let _n2 = pop(cur_block_last)
+      let _n3 = pop(block_stack)
+      let _n4 = pop(parent_stack)
+      parse_depth = parse_depth - 1.0
+    end
+
+  // ---- arr[idx] = val ---------------------------------------------
+  elif pt == "ident" && pc + 1.0 < tok_count && tok_values[pc + 1.0] == "["
+    let p_aia = pv
+    pc = pc + 2.0
+    let p_aii = tok_values[pc]
+    pc = pc + 3.0  // idx, ], =
+    let p_aiv = tok_values[pc]
+    pc = pc + 1.0
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "ArrSet")
+    push(nd_lhs, p_aia)
+    push(nd_op, p_aii)
+    push(nd_rhs, p_aiv)
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bide = parse_depth
+    let lste = cur_block_last[bide]
+    if lste == -1.0
+      cur_block_first[bide] = nd_new
+      cur_block_last[bide] = nd_new
+    else
+      nd_next[lste] = str(nd_new)
+      cur_block_last[bide] = nd_new
+    end
+
+  // ---- standalone fn call: ident(...) ----------------------------
+  elif pt == "ident" && pc + 1.0 < tok_count && tok_values[pc + 1.0] == "("
+    let p_cn = pv
+    pc = pc + 2.0
+    let mut p_ca = ""
+    while pc < tok_count && tok_values[pc] != ")"
+      if tok_types[pc] != "op" || tok_values[pc] != ","
+        if len(p_ca) > 0.0
+        p_ca = p_ca + ","
+        end
+        p_ca = p_ca + tok_values[pc]
+      end
+      pc = pc + 1.0
+    end
+    pc = pc + 1.0
+    nd_new = nd_count
+    nd_count = nd_count + 1.0
+    push(nd_kind, "Call")
+    push(nd_lhs, p_cn)
+    push(nd_op, "")
+    push(nd_rhs, p_ca)
+    push(nd_rhs2, "")
+    push(nd_child, "-1")
+    push(nd_next, "-1")
+    push(nd_line, str(pline))
+    push(nd_mut, "")
+    let bidf = parse_depth
+    let lstf = cur_block_last[bidf]
+    if lstf == -1.0
+      cur_block_first[bidf] = nd_new
+      cur_block_last[bidf] = nd_new
+    else
+      nd_next[lstf] = str(nd_new)
+      cur_block_last[bidf] = nd_new
+    end
+
+  else
+    pc = pc + 1.0
+  end
+
+  end  // close else (not eof/done)
+end   // close main parse while
+
+// ---- AST DUMP -------------------------------------------------------
+print("--- OctoFlow Parser AST ---")
+print("source: {input_path}")
+print("nodes:  {nd_count}")
+print("")
+
+// Iterative DFS walk using an explicit stack (LIFO)
+// Push order: next sibling, then elif/else chain (rhs2), then child
+// (child on top = visited first = correct DFS left-to-right)
+let mut walk_stack = []
+let mut walk_ind   = []
+
+let top_first = cur_block_first[0]
+if top_first != -1.0
+  push(walk_stack, str(top_first))
+  push(walk_ind, 0.0)
+end
+
+while len(walk_stack) > 0.0
+  let wns = pop(walk_stack)
+  let wi  = pop(walk_ind)
+
+  if wns != "-1"
+    let wn    = float(wns)
+    let wkind = nd_kind[wn]
+    let wlhs  = nd_lhs[wn]
+    let wrhs  = nd_rhs[wn]
+    let wrhs2 = nd_rhs2[wn]
+    let wchld = nd_child[wn]
+    let wnxt  = nd_next[wn]
+    let wln   = nd_line[wn]
+    let wmut  = nd_mut[wn]
+    let wop   = nd_op[wn]
+
+    // build indent
+    let mut ind = ""
+    let mut ii = 0.0
+    while ii < wi
+      ind = ind + "  "
+      ii = ii + 1.0
+    end
+
+    // print node
+    if wkind == "Let"
+      let mut ms = ""
+      if wmut == "1"
+      ms = "mut "
+      end
+      print("{ind}[{wln}] Let {ms}{wlhs} = {wrhs}")
+    elif wkind == "Assign"
+      print("{ind}[{wln}] {wlhs} = {wrhs}")
+    elif wkind == "Print"
+      print("{ind}[{wln}] print({wlhs})")
+    elif wkind == "Push"
+      print("{ind}[{wln}] push({wlhs}, {wrhs})")
+    elif wkind == "MapSet"
+      print("{ind}[{wln}] map_set({wlhs}, {wrhs}, {wrhs2})")
+    elif wkind == "If"
+      print("{ind}[{wln}] if {wlhs}")
+    elif wkind == "Elif"
+      print("{ind}[{wln}] elif {wlhs}")
+    elif wkind == "Else"
+      print("{ind}[{wln}] else")
+    elif wkind == "While"
+      print("{ind}[{wln}] while {wlhs}")
+    elif wkind == "ForEach"
+      print("{ind}[{wln}] for {wlhs} in {wrhs}")
+    elif wkind == "Fn"
+      print("{ind}[{wln}] fn {wlhs}({wrhs})")
+    elif wkind == "Return"
+      print("{ind}[{wln}] return {wlhs}")
+    elif wkind == "Call"
+      print("{ind}[{wln}] {wlhs}({wrhs})")
+    elif wkind == "ArrSet"
+      print("{ind}[{wln}] {wlhs}[{wop}] = {wrhs}")
+    elif wkind == "Use"
+      print("{ind}[{wln}] use {wlhs}")
+    else
+      print("{ind}[{wln}] {wkind} {wlhs}")
+    end
+
+    // Push next sibling first (visited last due to LIFO)
+    if wnxt != "-1"
+      push(walk_stack, wnxt)
+      push(walk_ind, wi)
+    end
+
+    // Push rhs2 (elif/else chain) -- only for If/Elif nodes
+    // (MapSet/Push/etc also use nd_rhs2 for data, not chain links)
+    if (wkind == "If" || wkind == "Elif") && wrhs2 != ""
+      push(walk_stack, wrhs2)
+      push(walk_ind, wi)
+    end
+
+    // Push child (visited first = correct DFS)
+    if wchld != "-1"
+      push(walk_stack, wchld)
+      push(walk_ind, wi + 1.0)
+    end
+  end
+end
+
+print("")
+print("--- Parser Done: {nd_count} nodes ---")

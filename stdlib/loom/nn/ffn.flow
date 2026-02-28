@@ -1,0 +1,125 @@
+// stdlib/loom/ffn.flow — GPU Feed-Forward Network (SwiGLU)
+//
+// gate = hidden @ Wgate → SiLU(gate)
+// up   = hidden @ Wup
+// mid  = SiLU(gate) * up
+// out  = mid @ Wdown
+//
+// Upload weights once, download result once.
+
+use "runtime"
+
+fn gpu_ffn(hidden, w_gate, w_up, w_down, n_embd, n_ff)
+  let m = 16.0
+  let pad_h = m * n_embd
+  let pad_ff = m * n_ff
+
+  // Pad hidden
+  let mut h_padded = []
+  let mut pi = 0.0
+  while pi < pad_h
+    if pi < n_embd
+      push(h_padded, hidden[int(pi)])
+    else
+      push(h_padded, 0.0)
+    end
+    pi = pi + 1.0
+  end
+
+  // Allocate buffers
+  let buf_h = rt_create_buffer(pad_h * 4.0)
+  let gate_size = n_embd * n_ff
+  let buf_wg = rt_create_buffer(gate_size * 4.0)
+  let buf_wu = rt_create_buffer(gate_size * 4.0)
+  let down_size = n_ff * n_embd
+  let buf_wd = rt_create_buffer(down_size * 4.0)
+  let buf_gate = rt_create_buffer(pad_ff * 4.0)
+  let buf_up = rt_create_buffer(pad_ff * 4.0)
+  let buf_silu = rt_create_buffer(pad_ff * 4.0)
+  let buf_mid = rt_create_buffer(pad_ff * 4.0)
+  let buf_out = rt_create_buffer(m * n_embd * 4.0)
+
+  // Upload
+  let _u0 = rt_upload(buf_h, h_padded)
+  let _u1 = rt_upload(buf_wg, w_gate)
+  let _u2 = rt_upload(buf_wu, w_up)
+  let _u3 = rt_upload(buf_wd, w_down)
+
+  let pipe_mm = rt_load_pipeline("stdlib/loom/kernels/nn/matmul_tiled.spv", 3.0, 12.0)
+  let pipe_silu = rt_load_pipeline("stdlib/loom/kernels/nn/silu.spv", 2.0, 0.0)
+
+  // Gate projection: h (16×n_embd) @ Wgate (n_embd×n_ff)
+  let _cb1 = rt_chain_begin(1.0, 3.0)
+  let mut pc1 = []
+  push(pc1, m)
+  push(pc1, n_embd)
+  push(pc1, n_ff)
+  let _pc1 = rt_chain_push_constants(pipe_mm, pc1)
+  let mut b1 = []
+  push(b1, buf_h)
+  push(b1, buf_wg)
+  push(b1, buf_gate)
+  let _d1 = rt_chain_dispatch(pipe_mm, b1, 1.0)
+  let _ce1 = rt_chain_end()
+  let _sw1 = rt_chain_submit_wait()
+
+  // Up projection: h (16×n_embd) @ Wup (n_embd×n_ff)
+  let _cb2 = rt_chain_begin(1.0, 3.0)
+  let _pc2 = rt_chain_push_constants(pipe_mm, pc1)
+  let mut b2 = []
+  push(b2, buf_h)
+  push(b2, buf_wu)
+  push(b2, buf_up)
+  let _d2 = rt_chain_dispatch(pipe_mm, b2, 1.0)
+  let _ce2 = rt_chain_end()
+  let _sw2 = rt_chain_submit_wait()
+
+  // SiLU(gate) — element-wise on first n_ff elements
+  let _cb3 = rt_chain_begin(1.0, 2.0)
+  let mut b3 = []
+  push(b3, buf_gate)
+  push(b3, buf_silu)
+  let _d3 = rt_chain_dispatch(pipe_silu, b3, 1.0)
+  let _ce3 = rt_chain_end()
+  let _sw3 = rt_chain_submit_wait()
+
+  // mid = SiLU(gate) * up — GPU element-wise multiply (data stays on GPU)
+  let pipe_mul = rt_load_pipeline("stdlib/loom/kernels/math/mul.spv", 3.0, 0.0)
+  let mut wgs_mul = int((pad_ff + 255.0) / 256.0)
+  if wgs_mul < 1.0
+    wgs_mul = 1.0
+  end
+  let _cb_mul = rt_chain_begin(1.0, 3.0)
+  let mut bufs_mul = []
+  push(bufs_mul, buf_silu)
+  push(bufs_mul, buf_up)
+  push(bufs_mul, buf_mid)
+  let _dm = rt_chain_dispatch(pipe_mul, bufs_mul, wgs_mul)
+  let _cem = rt_chain_end()
+  let _swm = rt_chain_submit_wait()
+
+  // Down projection: mid (16×n_ff) @ Wdown (n_ff×n_embd)
+  let _cb4 = rt_chain_begin(1.0, 3.0)
+  let mut pc4 = []
+  push(pc4, m)
+  push(pc4, n_ff)
+  push(pc4, n_embd)
+  let _pc4 = rt_chain_push_constants(pipe_mm, pc4)
+  let mut b4 = []
+  push(b4, buf_mid)
+  push(b4, buf_wd)
+  push(b4, buf_out)
+  let _d4 = rt_chain_dispatch(pipe_mm, b4, 1.0)
+  let _ce4 = rt_chain_end()
+  let _sw4 = rt_chain_submit_wait()
+
+  // Download result
+  let _dl = rt_download(buf_out, n_embd)
+  let mut result = []
+  let mut ri = 0.0
+  while ri < n_embd
+    push(result, rt_result[int(ri)])
+    ri = ri + 1.0
+  end
+  return result
+end

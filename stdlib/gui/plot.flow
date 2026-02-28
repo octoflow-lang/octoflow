@@ -1,0 +1,636 @@
+// plot.flow — OctoFlow Charting Library
+//
+// Provides line, scatter, bar, heatmap, and candlestick charts
+// rendered on canvas widgets. Built for the trading community.
+//
+// Usage:
+//   use "gui"
+//   use "plot"
+//   let cvs = gui_canvas(10.0, 10.0, 800.0, 400.0)
+//   let p = plot_create(cvs, 0.0, 100.0, 0.0, 50.0)
+//   let _s = plot_series_line(p, x_data, y_data, 0.0, 200.0, 255.0)
+//   let _d = plot_draw(p)
+
+use "gui_core"
+use "canvas"
+
+// ── Chart Type Constants ────────────────────────────────────────────
+let PLOT_LINE = 1.0
+let PLOT_SCATTER = 2.0
+let PLOT_BAR = 3.0
+let PLOT_HEATMAP = 4.0
+let PLOT_CANDLE = 5.0
+
+// ── Plot Registry (parallel arrays, one per plot) ───────────────────
+let mut _plot_canvas = []
+let mut _plot_x_min = []
+let mut _plot_x_max = []
+let mut _plot_y_min = []
+let mut _plot_y_max = []
+let mut _plot_pad_left = []
+let mut _plot_pad_bottom = []
+let mut _plot_pad_top = []
+let mut _plot_pad_right = []
+
+// ── Series Registry (flat, stride-based) ────────────────────────────
+// Each series: plot_id, type, data_start, data_count, r, g, b, extra
+let mut _pseries_plot = []
+let mut _pseries_type = []
+let mut _pseries_start = []
+let mut _pseries_count = []
+let mut _pseries_r = []
+let mut _pseries_g = []
+let mut _pseries_b = []
+let mut _pseries_extra = []
+
+// ── Series XY Data (flat storage, shared across all series) ─────────
+let mut _pseries_x = []
+let mut _pseries_y = []
+
+// ── OHLC Candle Data (separate flat arrays) ─────────────────────────
+let mut _pcandle_open = []
+let mut _pcandle_high = []
+let mut _pcandle_low = []
+let mut _pcandle_close = []
+let mut _pcandle_start = []
+let mut _pcandle_count = []
+let mut _pcandle_up_r = []
+let mut _pcandle_up_g = []
+let mut _pcandle_up_b = []
+let mut _pcandle_dn_r = []
+let mut _pcandle_dn_g = []
+let mut _pcandle_dn_b = []
+
+// ── Plot Creation ───────────────────────────────────────────────────
+
+fn plot_create(canvas_id, x_min, x_max, y_min, y_max)
+  let id = len(_plot_canvas)
+  push(_plot_canvas, canvas_id)
+  push(_plot_x_min, x_min)
+  push(_plot_x_max, x_max)
+  push(_plot_y_min, y_min)
+  push(_plot_y_max, y_max)
+  push(_plot_pad_left, 0.0)
+  push(_plot_pad_bottom, 0.0)
+  push(_plot_pad_top, 0.0)
+  push(_plot_pad_right, 0.0)
+  return id
+end
+
+fn plot_set_padding(plot_id, pad_left, pad_bottom)
+  let ii = int(plot_id)
+  _plot_pad_left[ii] = pad_left
+  _plot_pad_bottom[ii] = pad_bottom
+  return 0.0
+end
+
+fn plot_set_padding_full(plot_id, pad_left, pad_bottom, pad_top, pad_right)
+  let ii = int(plot_id)
+  _plot_pad_left[ii] = pad_left
+  _plot_pad_bottom[ii] = pad_bottom
+  _plot_pad_top[ii] = pad_top
+  _plot_pad_right[ii] = pad_right
+  return 0.0
+end
+
+fn plot_set_range(plot_id, x_min, x_max, y_min, y_max)
+  let ii = int(plot_id)
+  _plot_x_min[ii] = x_min
+  _plot_x_max[ii] = x_max
+  _plot_y_min[ii] = y_min
+  _plot_y_max[ii] = y_max
+  return 0.0
+end
+
+// ── Coordinate Mapping ──────────────────────────────────────────────
+
+fn _plot_map_x(plot_id, data_x)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let cw = _gui_w[cid]
+  let pl = _plot_pad_left[ii]
+  let pr = _plot_pad_right[ii]
+  let xmin = _plot_x_min[ii]
+  let xmax = _plot_x_max[ii]
+  let xrange = xmax - xmin
+  if xrange <= 0.0
+    return pl
+  end
+  let plot_w = cw - pl - pr
+  return pl + (data_x - xmin) / xrange * plot_w
+end
+
+fn _plot_map_y(plot_id, data_y)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let ch = _gui_h[cid]
+  let pb = _plot_pad_bottom[ii]
+  let pt = _plot_pad_top[ii]
+  let ymin = _plot_y_min[ii]
+  let ymax = _plot_y_max[ii]
+  let yrange = ymax - ymin
+  if yrange <= 0.0
+    return ch - pb
+  end
+  let plot_h = ch - pb - pt
+  // Invert Y: data_y=ymax → canvas_y=pt, data_y=ymin → canvas_y=ch-pb
+  return ch - pb - (data_y - ymin) / yrange * plot_h
+end
+
+// ── Series: Line ────────────────────────────────────────────────────
+
+fn plot_series_line(plot_id, x_arr, y_arr, r, g, b)
+  let sid = len(_pseries_plot)
+  let start = len(_pseries_x)
+  let n = len(x_arr)
+  // Copy data into flat storage
+  let mut i = 0.0
+  while i < n
+    let ii = int(i)
+    push(_pseries_x, x_arr[ii])
+    push(_pseries_y, y_arr[ii])
+    i = i + 1.0
+  end
+  push(_pseries_plot, plot_id)
+  push(_pseries_type, PLOT_LINE)
+  push(_pseries_start, start)
+  push(_pseries_count, n)
+  push(_pseries_r, r)
+  push(_pseries_g, g)
+  push(_pseries_b, b)
+  push(_pseries_extra, 0.0)
+  return sid
+end
+
+// ── Series: Scatter ─────────────────────────────────────────────────
+
+fn plot_series_scatter(plot_id, x_arr, y_arr, r, g, b)
+  let sid = len(_pseries_plot)
+  let start = len(_pseries_x)
+  let n = len(x_arr)
+  let mut i = 0.0
+  while i < n
+    let ii = int(i)
+    push(_pseries_x, x_arr[ii])
+    push(_pseries_y, y_arr[ii])
+    i = i + 1.0
+  end
+  push(_pseries_plot, plot_id)
+  push(_pseries_type, PLOT_SCATTER)
+  push(_pseries_start, start)
+  push(_pseries_count, n)
+  push(_pseries_r, r)
+  push(_pseries_g, g)
+  push(_pseries_b, b)
+  push(_pseries_extra, 0.0)
+  return sid
+end
+
+// ── Series: Bar ─────────────────────────────────────────────────────
+
+fn plot_series_bar(plot_id, x_arr, y_arr, r, g, b, bar_width)
+  let sid = len(_pseries_plot)
+  let start = len(_pseries_x)
+  let n = len(x_arr)
+  let mut i = 0.0
+  while i < n
+    let ii = int(i)
+    push(_pseries_x, x_arr[ii])
+    push(_pseries_y, y_arr[ii])
+    i = i + 1.0
+  end
+  push(_pseries_plot, plot_id)
+  push(_pseries_type, PLOT_BAR)
+  push(_pseries_start, start)
+  push(_pseries_count, n)
+  push(_pseries_r, r)
+  push(_pseries_g, g)
+  push(_pseries_b, b)
+  push(_pseries_extra, bar_width)
+  return sid
+end
+
+// ── Series: Candlestick ─────────────────────────────────────────────
+
+fn plot_series_candle(plot_id, x_arr, open, high, low, close, up_r, up_g, up_b, dn_r, dn_g, dn_b)
+  let sid = len(_pseries_plot)
+  let candle_start = len(_pcandle_open)
+  let n = len(x_arr)
+  // Store x in series data
+  let data_start = len(_pseries_x)
+  let mut i = 0.0
+  while i < n
+    let ii = int(i)
+    push(_pseries_x, x_arr[ii])
+    push(_pseries_y, 0.0)
+    // OHLC data
+    push(_pcandle_open, open[ii])
+    push(_pcandle_high, high[ii])
+    push(_pcandle_low, low[ii])
+    push(_pcandle_close, close[ii])
+    i = i + 1.0
+  end
+  push(_pseries_plot, plot_id)
+  push(_pseries_type, PLOT_CANDLE)
+  push(_pseries_start, data_start)
+  push(_pseries_count, n)
+  push(_pseries_r, 0.0)
+  push(_pseries_g, 0.0)
+  push(_pseries_b, 0.0)
+  push(_pseries_extra, 0.0)
+  // Candle metadata
+  push(_pcandle_start, candle_start)
+  push(_pcandle_count, n)
+  push(_pcandle_up_r, up_r)
+  push(_pcandle_up_g, up_g)
+  push(_pcandle_up_b, up_b)
+  push(_pcandle_dn_r, dn_r)
+  push(_pcandle_dn_g, dn_g)
+  push(_pcandle_dn_b, dn_b)
+  return sid
+end
+
+// ── Autoscale ───────────────────────────────────────────────────────
+// Compute min/max from all series data and add 5% padding
+
+fn plot_autoscale(plot_id)
+  let nseries = len(_pseries_plot)
+  let mut first = 1.0
+  let mut xmin = 0.0
+  let mut xmax = 1.0
+  let mut ymin = 0.0
+  let mut ymax = 1.0
+  let mut s = 0.0
+  while s < nseries
+    let si = int(s)
+    if _pseries_plot[si] == plot_id
+      let stype = _pseries_type[si]
+      let start = int(_pseries_start[si])
+      let count = int(_pseries_count[si])
+      let mut j = 0.0
+      while j < count
+        let ji = start + int(j)
+        let xv = _pseries_x[ji]
+        if stype == PLOT_CANDLE
+          // Find candle index for OHLC
+          let candle_sid = _find_candle_idx(s)
+          if candle_sid >= 0.0
+            let ci = int(_pcandle_start[int(candle_sid)]) + int(j)
+            let o = _pcandle_open[ci]
+            let h = _pcandle_high[ci]
+            let l = _pcandle_low[ci]
+            let c = _pcandle_close[ci]
+            if first == 1.0
+              xmin = xv
+              xmax = xv
+              ymin = l
+              ymax = h
+              first = 0.0
+            else
+              if xv < xmin
+                xmin = xv
+              end
+              if xv > xmax
+                xmax = xv
+              end
+              if l < ymin
+                ymin = l
+              end
+              if h > ymax
+                ymax = h
+              end
+            end
+          end
+        else
+          let yv = _pseries_y[ji]
+          if first == 1.0
+            xmin = xv
+            xmax = xv
+            ymin = yv
+            ymax = yv
+            first = 0.0
+          else
+            if xv < xmin
+              xmin = xv
+            end
+            if xv > xmax
+              xmax = xv
+            end
+            if yv < ymin
+              ymin = yv
+            end
+            if yv > ymax
+              ymax = yv
+            end
+          end
+        end
+        j = j + 1.0
+      end
+    end
+    s = s + 1.0
+  end
+  // Add 5% padding
+  let xrange = xmax - xmin
+  let yrange = ymax - ymin
+  let xpad = xrange * 0.05
+  let ypad = yrange * 0.05
+  if xpad <= 0.0
+    xpad = 1.0
+  end
+  if ypad <= 0.0
+    ypad = 1.0
+  end
+  let ii = int(plot_id)
+  _plot_x_min[ii] = xmin - xpad
+  _plot_x_max[ii] = xmax + xpad
+  _plot_y_min[ii] = ymin - ypad
+  _plot_y_max[ii] = ymax + ypad
+  return 0.0
+end
+
+// Find candle index for a series (candle series push to _pcandle_start/count in order)
+fn _find_candle_idx(series_id)
+  let mut candle_count = 0.0
+  let mut s = 0.0
+  while s <= series_id
+    let si = int(s)
+    if _pseries_type[si] == PLOT_CANDLE
+      if s == series_id
+        return candle_count
+      end
+      candle_count = candle_count + 1.0
+    end
+    s = s + 1.0
+  end
+  return -1.0
+end
+
+// ── Grid Lines ──────────────────────────────────────────────────────
+
+fn plot_grid(plot_id, x_ticks, y_ticks)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let ch = _gui_h[cid]
+  let cw = _gui_w[cid]
+  let xmin = _plot_x_min[ii]
+  let xmax = _plot_x_max[ii]
+  let ymin = _plot_y_min[ii]
+  let ymax = _plot_y_max[ii]
+  // Grid line color (dim)
+  let gr = 60.0
+  let gg = 62.0
+  let gb = 68.0
+  // Vertical grid lines
+  if x_ticks > 0.0
+    let xrange = xmax - xmin
+    let xstep = xrange / x_ticks
+    let mut xi = 1.0
+    while xi < x_ticks
+      let xv = xmin + xi * xstep
+      let px = _plot_map_x(plot_id, xv)
+      let _l = gui_canvas_line(cid, px, 0.0, px, ch, gr, gg, gb)
+      xi = xi + 1.0
+    end
+  end
+  // Horizontal grid lines
+  if y_ticks > 0.0
+    let yrange = ymax - ymin
+    let ystep = yrange / y_ticks
+    let mut yi = 1.0
+    while yi < y_ticks
+      let yv = ymin + yi * ystep
+      let py = _plot_map_y(plot_id, yv)
+      let _l = gui_canvas_line(cid, 0.0, py, cw, py, gr, gg, gb)
+      yi = yi + 1.0
+    end
+  end
+  return 0.0
+end
+
+// ── Crosshair ───────────────────────────────────────────────────────
+// Draw crosshair at mouse position (canvas-relative coordinates)
+
+fn plot_crosshair(plot_id, mx, my)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let cw = _gui_w[cid]
+  let ch = _gui_h[cid]
+  // Crosshair color
+  let cr = 200.0
+  let cg = 200.0
+  let cb = 200.0
+  // Horizontal line
+  let _h = gui_canvas_line(cid, 0.0, my, cw, my, cr, cg, cb)
+  // Vertical line
+  let _v = gui_canvas_line(cid, mx, 0.0, mx, ch, cr, cg, cb)
+  return 0.0
+end
+
+// ── Internal Renderers ──────────────────────────────────────────────
+
+fn _plot_draw_line_series(plot_id, sid)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let si = int(sid)
+  let start = int(_pseries_start[si])
+  let count = _pseries_count[si]
+  let r = _pseries_r[si]
+  let g = _pseries_g[si]
+  let b = _pseries_b[si]
+  let mut j = 0.0
+  while j < count - 1.0
+    let j1 = start + int(j)
+    let j2 = j1 + 1
+    let x1 = _plot_map_x(plot_id, _pseries_x[j1])
+    let y1 = _plot_map_y(plot_id, _pseries_y[j1])
+    let x2 = _plot_map_x(plot_id, _pseries_x[j2])
+    let y2 = _plot_map_y(plot_id, _pseries_y[j2])
+    let _l = gui_canvas_line(cid, x1, y1, x2, y2, r, g, b)
+    j = j + 1.0
+  end
+  return 0.0
+end
+
+fn _plot_draw_scatter_series(plot_id, sid)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let si = int(sid)
+  let start = int(_pseries_start[si])
+  let count = _pseries_count[si]
+  let r = _pseries_r[si]
+  let g = _pseries_g[si]
+  let b = _pseries_b[si]
+  let mut j = 0.0
+  while j < count
+    let ji = start + int(j)
+    let px = _plot_map_x(plot_id, _pseries_x[ji])
+    let py = _plot_map_y(plot_id, _pseries_y[ji])
+    // 3x3 dot
+    let _f = gui_canvas_fill(cid, px - 1.0, py - 1.0, 3.0, 3.0, r, g, b)
+    j = j + 1.0
+  end
+  return 0.0
+end
+
+fn _plot_draw_bar_series(plot_id, sid)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let si = int(sid)
+  let start = int(_pseries_start[si])
+  let count = _pseries_count[si]
+  let r = _pseries_r[si]
+  let g = _pseries_g[si]
+  let b = _pseries_b[si]
+  let bar_w = _pseries_extra[si]
+  // Y position of zero line
+  let y_zero = _plot_map_y(plot_id, 0.0)
+  let mut j = 0.0
+  while j < count
+    let ji = start + int(j)
+    let px = _plot_map_x(plot_id, _pseries_x[ji])
+    let py = _plot_map_y(plot_id, _pseries_y[ji])
+    // Map bar_width from data units to pixels
+    let bw_px = _plot_map_x(plot_id, _pseries_x[ji] + bar_w) - px
+    let mut bw = bw_px
+    if bw < 1.0
+      bw = 1.0
+    end
+    // Draw from zero to value
+    let mut by = py
+    let mut bh = y_zero - py
+    if bh < 0.0
+      by = y_zero
+      bh = py - y_zero
+    end
+    if bh > 0.0
+      let _f = gui_canvas_fill(cid, px, by, bw, bh, r, g, b)
+    end
+    j = j + 1.0
+  end
+  return 0.0
+end
+
+fn _plot_draw_candle_series(plot_id, sid)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let si = int(sid)
+  let start = int(_pseries_start[si])
+  let count = _pseries_count[si]
+  // Find candle metadata
+  let candle_sid = int(_find_candle_idx(sid))
+  if candle_sid < 0.0
+    return 0.0
+  end
+  let c_start = int(_pcandle_start[candle_sid])
+  let up_r = _pcandle_up_r[candle_sid]
+  let up_g = _pcandle_up_g[candle_sid]
+  let up_b = _pcandle_up_b[candle_sid]
+  let dn_r = _pcandle_dn_r[candle_sid]
+  let dn_g = _pcandle_dn_g[candle_sid]
+  let dn_b = _pcandle_dn_b[candle_sid]
+  // Calculate body width from data spacing
+  let mut body_w = 6.0
+  if count > 1.0
+    let x0 = _plot_map_x(plot_id, _pseries_x[start])
+    let x1 = _plot_map_x(plot_id, _pseries_x[start + 1])
+    let spacing = x1 - x0
+    if spacing > 0.0
+      body_w = spacing * 0.7
+      if body_w < 1.0
+        body_w = 1.0
+      end
+      if body_w > 20.0
+        body_w = 20.0
+      end
+    end
+  end
+  let half_w = floor(body_w / 2.0)
+  let mut j = 0.0
+  while j < count
+    let ji = start + int(j)
+    let ci = c_start + int(j)
+    let px = _plot_map_x(plot_id, _pseries_x[ji])
+    let o = _pcandle_open[ci]
+    let h = _pcandle_high[ci]
+    let l = _pcandle_low[ci]
+    let c = _pcandle_close[ci]
+    let py_h = _plot_map_y(plot_id, h)
+    let py_l = _plot_map_y(plot_id, l)
+    let py_o = _plot_map_y(plot_id, o)
+    let py_c = _plot_map_y(plot_id, c)
+    // Determine direction
+    let mut cr = up_r
+    let mut cg = up_g
+    let mut cb = up_b
+    if c < o
+      cr = dn_r
+      cg = dn_g
+      cb = dn_b
+    end
+    // Wick: vertical line from high to low
+    let _wk = gui_canvas_line(cid, px, py_h, px, py_l, cr, cg, cb)
+    // Body: filled rect from open to close
+    let mut body_top = py_o
+    let mut body_bot = py_c
+    if py_c < py_o
+      body_top = py_c
+      body_bot = py_o
+    end
+    let body_h = body_bot - body_top
+    if body_h < 1.0
+      // Doji: horizontal line
+      let _dj = gui_canvas_line(cid, px - half_w, py_o, px + half_w, py_o, cr, cg, cb)
+    else
+      let _bd = gui_canvas_fill(cid, px - half_w, body_top, body_w, body_h, cr, cg, cb)
+    end
+    j = j + 1.0
+  end
+  return 0.0
+end
+
+// ── Main Draw ───────────────────────────────────────────────────────
+
+fn plot_draw(plot_id)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  // Clear canvas
+  let _clr = gui_canvas_clear(cid)
+  // Draw all series belonging to this plot
+  let nseries = len(_pseries_plot)
+  let mut s = 0.0
+  while s < nseries
+    let si = int(s)
+    if _pseries_plot[si] == plot_id
+      let stype = _pseries_type[si]
+      if stype == PLOT_LINE
+        let _d = _plot_draw_line_series(plot_id, s)
+      elif stype == PLOT_SCATTER
+        let _d = _plot_draw_scatter_series(plot_id, s)
+      elif stype == PLOT_BAR
+        let _d = _plot_draw_bar_series(plot_id, s)
+      elif stype == PLOT_CANDLE
+        let _d = _plot_draw_candle_series(plot_id, s)
+      end
+    end
+    s = s + 1.0
+  end
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// ── Clear All Series ────────────────────────────────────────────────
+
+fn plot_clear(plot_id)
+  // Remove all series data for this plot by marking as invalid
+  // Note: this is a soft clear — arrays stay allocated
+  let nseries = len(_pseries_plot)
+  let mut s = 0.0
+  while s < nseries
+    let si = int(s)
+    if _pseries_plot[si] == plot_id
+      _pseries_count[si] = 0.0
+    end
+    s = s + 1.0
+  end
+  return 0.0
+end

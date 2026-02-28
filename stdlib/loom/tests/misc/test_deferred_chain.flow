@@ -1,0 +1,26 @@
+// Test: GPU deferred dispatch chain (Phase 80)
+// Verifies batched command buffer execution produces correct results
+
+let a = gpu_fill(1.0, 1000000)
+let b = gpu_fill(2.0, 1000000)
+let c = gpu_add(a, b)
+let d = gpu_mul(c, c)
+let e = gpu_scale(d, 0.5)
+let s = gpu_sum(e)
+print("chain_sum: {s}")
+
+// Multi-step with different ops
+let x = gpu_fill(10.0, 100)
+let y = gpu_fill(3.0, 100)
+let z = gpu_add(x, y)
+let w = gpu_mul(z, y)
+let v = gpu_scale(w, 0.1)
+let r = gpu_sum(v)
+print("multi_sum: {r}")
+
+// Single deferred op
+let p = gpu_fill(5.0, 1000)
+let q = gpu_fill(5.0, 1000)
+let pq = gpu_add(p, q)
+let pqs = gpu_sum(pq)
+print("single_deferred: {pqs}")

@@ -1,0 +1,40 @@
+// Phase 25: Random Number Generation
+//
+// Run with: flowgpu run examples/random_demo.flow --set seed=42
+// Run twice with same seed to verify deterministic output.
+
+// Basic random value in [0.0, 1.0)
+let r = random()
+print("Random value: {r:.4}")
+
+// Dice roll: 1-6
+let die = floor(random() * 6.0) + 1.0
+print("Dice roll: {die:.0}")
+
+// Random value in custom range [10, 20)
+let lo = 10.0
+let hi = 20.0
+let scaled = lo + random() * (hi - lo)
+print("Random in [10, 20): {scaled:.2}")
+
+// Random in a loop — simulate 5 coin flips
+let mut heads = 0.0
+for i in range(0, 5)
+  let flip = random()
+  if flip >= 0.5
+    heads = heads + 1.0
+  end
+end
+print("Heads out of 5: {heads:.0}")
+
+// User-defined function using random
+fn roll_d6()
+  return floor(random() * 6.0) + 1.0
+end
+
+let mut total = 0.0
+for i in range(0, 3)
+  let d = roll_d6()
+  total = total + d
+end
+print("Sum of 3d6: {total:.0}")

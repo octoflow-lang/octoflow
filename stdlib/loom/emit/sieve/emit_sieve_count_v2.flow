@@ -1,0 +1,58 @@
+// emit_sieve_count_v2.flow — Sieve Count v2 Kernel Emitter (Popcount + Atomic)
+//
+// Each thread loads one uint32 word, counts set bits (popcount = hardware OpBitCount),
+// atomically adds to segment total at R0[count_off].
+//
+// Thread i (where i < num_words):
+//   word = R0[i]
+//   count = popcount(word)
+//   atomic_add(R0[count_off], count)
+//
+// Push constants:
+//   pc[0] = num_words  (float → uint, number of bitmap words)
+//   pc[1] = count_off  (float → uint, offset for segment count accumulator)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read bitmap, atomic-write count)
+//
+// Dispatch: wg = ceil(num_words / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_count_v2.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_count_v2(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: bounds check ──────────────────────────────────
+  let gid       = ir_load_gid(entry)
+  let pc_words  = ir_push_const(entry, 0.0)
+  let pc_coff   = ir_push_const(entry, 1.0)
+  let words_u   = ir_ftou(entry, pc_words)
+  let oob       = ir_ugte(entry, gid, words_u)
+  let _sm       = ir_selection_merge(entry, exit_block)
+  let _br       = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: popcount + atomic add ──────────────────────────
+  let coff_u    = ir_ftou(body, pc_coff)
+  let word      = ir_buf_load_u(body, 0.0, gid)
+  let cnt       = ir_bitcount(body, word)
+  let _atomic   = ir_buf_atomic_iadd(body, 0.0, coff_u, cnt)
+  let _br2      = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_count_v2.spv"
+let _r = emit_sieve_count_v2(out)
+print("Emitted: {out}")

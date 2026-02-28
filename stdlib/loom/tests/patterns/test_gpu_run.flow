@@ -1,0 +1,80 @@
+// test_gpu_run.flow — End-to-end test for gpu_run() universal dispatch
+
+// ── Test 1: Element-wise unary (double) ──
+let mut data = []
+push(data, 1.0)
+push(data, 2.0)
+push(data, 3.0)
+push(data, 4.0)
+let doubled = gpu_run("stdlib/loom/kernels/math/double.spv", data)
+let d0 = doubled[0]
+let d1 = doubled[1]
+let d2 = doubled[2]
+let d3 = doubled[3]
+print("double: {d0} {d1} {d2} {d3}")
+
+// ── Test 2: Element-wise binary (add) ──
+let mut a = []
+push(a, 1.0)
+push(a, 2.0)
+push(a, 3.0)
+push(a, 4.0)
+let mut b = []
+push(b, 10.0)
+push(b, 20.0)
+push(b, 30.0)
+push(b, 40.0)
+let added = gpu_run("stdlib/loom/kernels/math/add.spv", a, b)
+let a0 = added[0]
+let a3 = added[3]
+print("add: {a0} {a3}")
+
+// ── Test 3: Element-wise binary (sub) ──
+let subbed = gpu_run("stdlib/loom/kernels/math/sub.spv", b, a)
+let s0 = subbed[0]
+let s3 = subbed[3]
+print("sub: {s0} {s3}")
+
+// ── Test 4: Element-wise binary (mul) ──
+let mulled = gpu_run("stdlib/loom/kernels/math/mul.spv", a, b)
+let m0 = mulled[0]
+let m3 = mulled[3]
+print("mul: {m0} {m3}")
+
+// ── Test 5: Element-wise unary (abs) ──
+let mut neg = []
+push(neg, -5.0)
+push(neg, 3.0)
+push(neg, -1.0)
+push(neg, 0.0)
+let absd = gpu_run("stdlib/loom/kernels/math/abs.spv", neg)
+let ab0 = absd[0]
+let ab1 = absd[1]
+let ab2 = absd[2]
+print("abs: {ab0} {ab1} {ab2}")
+
+// ── Test 6: Element-wise unary (sqrt) ──
+let mut squares = []
+push(squares, 4.0)
+push(squares, 9.0)
+push(squares, 16.0)
+push(squares, 25.0)
+let roots = gpu_run("stdlib/loom/kernels/math/sqrt.spv", squares)
+let r0 = roots[0]
+let r1 = roots[1]
+let r2 = roots[2]
+let r3 = roots[3]
+print("sqrt: {r0} {r1} {r2} {r3}")
+
+// ── Test 7: Reuse same kernel (pipeline caching test) ──
+let mut c = []
+push(c, 100.0)
+push(c, 200.0)
+push(c, 300.0)
+push(c, 400.0)
+let doubled2 = gpu_run("stdlib/loom/kernels/math/double.spv", c)
+let dc0 = doubled2[0]
+let dc3 = doubled2[3]
+print("cache: {dc0} {dc3}")
+
+print("GPU_RUN DONE")

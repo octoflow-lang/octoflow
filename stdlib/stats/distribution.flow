@@ -1,12 +1,27 @@
 // stdlib/stats/distribution.flow — Probability distributions
+//
+// Functions: normal_pdf, normal_cdf, normal_inv, uniform_random,
+//            normal_random, exponential_random, poisson_pmf, binomial_pmf,
+//            combinations, random_sample
+//
+// All functions guard against division by zero and invalid parameters.
 
 fn normal_pdf(x, mu, sigma)
+  if sigma == 0.0
+    return 0.0
+  end
   let PI = 3.14159265358979
   let z = (x - mu) / sigma
   return exp(-0.5 * z * z) / (sigma * sqrt(2.0 * PI))
 end
 
 fn normal_cdf(x, mu, sigma)
+  if sigma == 0.0
+    if x >= mu
+      return 1.0
+    end
+    return 0.0
+  end
   // Approximation using error function (Abramowitz & Stegun)
   let z = (x - mu) / (sigma * sqrt(2.0))
   let t = 1.0 / (1.0 + 0.3275911 * abs(z))
@@ -23,6 +38,9 @@ fn normal_cdf(x, mu, sigma)
 end
 
 fn normal_inv(p, mu, sigma)
+  if sigma == 0.0
+    return mu
+  end
   // Approximation of inverse normal (Beasley-Springer-Moro)
   let a0 = -8.78103344
   let a1 = 23.08336743
@@ -64,10 +82,19 @@ fn normal_random(mu, sigma)
 end
 
 fn exponential_random(lambda)
+  if lambda <= 0.0
+    return 0.0
+  end
   return -1.0 * log(random()) / lambda
 end
 
 fn poisson_pmf(k, lambda)
+  if lambda <= 0.0
+    if k == 0.0
+      return 1.0
+    end
+    return 0.0
+  end
   // P(X=k) = lambda^k * e^(-lambda) / k!
   let mut result = exp(-1.0 * lambda)
   let mut i = 1.0
@@ -105,6 +132,9 @@ fn combinations(n, k)
 end
 
 fn random_sample(arr, n)
+  if len(arr) == 0.0 || n <= 0.0
+    return []
+  end
   // Random sample without replacement (Fisher-Yates partial shuffle)
   let total = len(arr)
   let mut indices = []

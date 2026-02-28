@@ -1,0 +1,96 @@
+// emit_vm_delta_encode.flow — VM Delta Encode (Parallel Difference)
+//
+// Reads raw values from Registers (binding 0), computes deltas, writes
+// delta-encoded output to Globals (binding 2). This is the write-back
+// (compression) kernel — the inverse of vm_delta_decode.
+//
+// Delta encoding: d[0] = v[0], d[i] = v[i] - v[i-1]
+//
+// Fully parallel — each thread computes one delta independently.
+// Thread 0 copies the first value as-is (no predecessor).
+//
+// Push constants:
+//   pc[0] = src_off   (float→uint, start of raw values in Registers)
+//   pc[1] = dst_off   (float→uint, start of delta output in Globals)
+//   pc[2] = count     (float→uint, number of elements)
+//
+// Binding layout (ir_input_count=3):
+//   Binding 0: registers (read raw values)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (write delta-encoded output)
+//   Binding 3: control   (unused)
+//
+// Dispatch: ceil(count / 256) workgroups
+//   IMPORTANT: caller must compute workgroups = floor((count + 255) / 256).
+//   Passing fewer workgroups than needed silently skips elements.
+//
+// reg_size must be >= count for vm_write_register to store all values
+// into a single register slot.
+//
+// Validated edge cases:
+//   N=1, negative/descending values, all-identical, non-integer floats,
+//   N=512 (2 workgroups crossing boundary at index 256)
+//
+// Performance: O(1) per element (fully parallel). No synchronization.
+//
+// Run: octoflow run stdlib/loom/emit_vm_delta_encode.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_delta_encode(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let first_blk  = ir_block("first")
+  let rest_blk   = ir_block("rest")
+  let merge      = ir_block("merge")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ─────────────────────
+  let gid        = ir_load_gid(entry)
+  let pc_src     = ir_push_const(entry, 0.0)
+  let pc_dst     = ir_push_const(entry, 1.0)
+  let pc_cnt     = ir_push_const(entry, 2.0)
+  let src_off_u  = ir_ftou(entry, pc_src)
+  let dst_off_u  = ir_ftou(entry, pc_dst)
+  let count_u    = ir_ftou(entry, pc_cnt)
+  let oob        = ir_ugte(entry, gid, count_u)
+  let _sm        = ir_selection_merge(entry, exit_block)
+  let _br        = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: load current value, branch on gid==0 ──────────────────
+  let src_idx    = ir_iadd(body, src_off_u, gid)
+  let val_cur    = ir_load_input_at(body, 0.0, src_idx)
+  let zero_u     = ir_const_u(body, 0.0)
+  let is_first   = ir_uequ(body, gid, zero_u)
+  let _sm2       = ir_selection_merge(body, merge)
+  let _br2       = ir_term_cond_branch(body, is_first, first_blk, rest_blk)
+
+  // ── First (gid==0): delta = val (no predecessor) ────────────────
+  let dst_idx0   = ir_iadd(first_blk, dst_off_u, gid)
+  let _s0        = ir_buf_store_f(first_blk, 2.0, dst_idx0, val_cur)
+  let _br3       = ir_term_branch(first_blk, merge)
+
+  // ── Rest (gid>0): delta = val[i] - val[i-1] ─────────────────────
+  let one_u      = ir_const_u(rest_blk, 1.0)
+  let prev_gid   = ir_isub(rest_blk, gid, one_u)
+  let prev_idx   = ir_iadd(rest_blk, src_off_u, prev_gid)
+  let val_prev   = ir_load_input_at(rest_blk, 0.0, prev_idx)
+  let delta      = ir_fsub(rest_blk, val_cur, val_prev)
+  let dst_idx1   = ir_iadd(rest_blk, dst_off_u, gid)
+  let _s1        = ir_buf_store_f(rest_blk, 2.0, dst_idx1, delta)
+  let _br4       = ir_term_branch(rest_blk, merge)
+
+  // ── Merge + Exit ─────────────────────────────────────────────────
+  let _br5       = ir_term_branch(merge, exit_block)
+  let _ret       = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/ops/vm_delta_encode.spv"
+let _r = emit_vm_delta_encode(out)
+print("Emitted: {out}")

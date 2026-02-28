@@ -1,0 +1,166 @@
+// test_linalg.flow — Tests for stdlib/ml/linalg.flow
+// Functions tested: mat_create, mat_identity, matrix_mul, mat_det_2x2, mat_transpose
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// -- Inline from ml/linalg.flow --
+fn mat_create(rows, cols, fill_val)
+  let n = rows * cols
+  let mut m = []
+  let mut i = 0.0
+  while i < n
+    push(m, fill_val)
+    i = i + 1.0
+  end
+  return m
+end
+
+fn mat_identity(n)
+  let total = n * n
+  let mut m = []
+  let mut i = 0.0
+  while i < total
+    push(m, 0.0)
+    i = i + 1.0
+  end
+  i = 0.0
+  while i < n
+    m[i * n + i] = 1.0
+    i = i + 1.0
+  end
+  return m
+end
+
+fn matrix_mul(a, b, m, n, k)
+  let mut result = []
+  let total = m * k
+  let mut i = 0.0
+  while i < total
+    push(result, 0.0)
+    i = i + 1.0
+  end
+  i = 0.0
+  while i < m
+    let mut j = 0.0
+    while j < k
+      let mut sum = 0.0
+      let mut p = 0.0
+      while p < n
+        sum = sum + a[i * n + p] * b[p * k + j]
+        p = p + 1.0
+      end
+      result[i * k + j] = sum
+      j = j + 1.0
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn mat_det_2x2(a)
+  return a[0] * a[3] - a[1] * a[2]
+end
+
+fn mat_transpose(a, rows, cols)
+  let mut result = []
+  let total = rows * cols
+  let mut i = 0.0
+  while i < total
+    push(result, 0.0)
+    i = i + 1.0
+  end
+  i = 0.0
+  while i < rows
+    let mut j = 0.0
+    while j < cols
+      result[j * rows + i] = a[i * cols + j]
+      j = j + 1.0
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+// -- Tests --
+
+print("=== test_linalg ===")
+
+// mat_create: 2x3 filled with 5
+let m1 = mat_create(2.0, 3.0, 5.0)
+let m1_len = len(m1)
+if m1_len == 6.0
+  pass = pass + 1.0
+else
+  print("  FAIL: mat_create size expected 6 got {m1_len}")
+  fail = fail + 1.0
+end
+
+if m1[0] == 5.0 && m1[5] == 5.0
+  pass = pass + 1.0
+else
+  print("  FAIL: mat_create fill value wrong")
+  fail = fail + 1.0
+end
+
+// mat_identity: 3x3
+let id = mat_identity(3.0)
+if id[0] == 1.0 && id[4] == 1.0 && id[8] == 1.0
+  pass = pass + 1.0
+else
+  print("  FAIL: mat_identity diagonal expected 1s")
+  fail = fail + 1.0
+end
+
+if id[1] == 0.0 && id[3] == 0.0 && id[5] == 0.0
+  pass = pass + 1.0
+else
+  print("  FAIL: mat_identity off-diagonal expected 0s")
+  fail = fail + 1.0
+end
+
+// matrix_mul: identity * vector = vector
+// 2x2 identity * 2x1 column [3, 7] = [3, 7]
+let id2 = mat_identity(2.0)
+let mut col = [3.0, 7.0]
+let prod = matrix_mul(id2, col, 2.0, 2.0, 1.0)
+let diff_p0 = abs(prod[0] - 3.0)
+let diff_p1 = abs(prod[1] - 7.0)
+if diff_p0 < 0.001 && diff_p1 < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: matrix_mul I*v expected [3,7] got [{prod[0]},{prod[1]}]")
+  fail = fail + 1.0
+end
+
+// mat_det_2x2: [[1,2],[3,4]] => det = 1*4 - 2*3 = -2
+let a = [1.0, 2.0, 3.0, 4.0]
+let det = mat_det_2x2(a)
+let diff_det = abs(det + 2.0)
+if diff_det < 0.001
+  pass = pass + 1.0
+else
+  print("  FAIL: mat_det_2x2 expected -2 got {det}")
+  fail = fail + 1.0
+end
+
+// mat_transpose: [[1,2,3],[4,5,6]] (2x3) => [[1,4],[2,5],[3,6]] (3x2)
+let orig = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+let tr = mat_transpose(orig, 2.0, 3.0)
+if tr[0] == 1.0 && tr[1] == 4.0 && tr[2] == 2.0 && tr[3] == 5.0
+  pass = pass + 1.0
+else
+  print("  FAIL: mat_transpose values wrong")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print("")
+print("--- test_linalg ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

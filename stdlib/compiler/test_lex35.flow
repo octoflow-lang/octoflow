@@ -1,0 +1,35 @@
+// stdlib/compiler/lexer.flow
+// OctoFlow Self-Hosting Lexer
+// Phase 50: OctoFlow tokenizing OctoFlow source.
+//
+// Reads a .flow source file and produces a parallel token stream:
+//   tok_types[i]  : "kw" | "ident" | "float" | "str" | "op" | "nl" | "eof"
+//   tok_values[i] : raw text of the token
+//
+// Note: OctoFlow strings have no escape sequences.
+// Special chars are expressed via ord():
+//   ord(c) == 10.0   newline
+//   ord(c) == 9.0    tab
+//   ord(c) == 13.0   carriage return
+//   ord(c) == 34.0   double-quote
+//
+// Usage:
+//   FLOW_INPUT=program.flow octoflow run stdlib/compiler/lexer.flow --allow-read
+
+// Input
+let input_path = env("FLOW_INPUT")
+let src = read_file(input_path)
+let n = len(src)
+let mut pos = 0.0
+
+// Token output (parallel arrays)
+let mut tok_types = []
+let mut tok_values = []
+
+// Keyword table
+let mut kw_set = map()
+map_set(kw_set, "let", 1.0)
+map_set(kw_set, "mut", 1.0)
+map_set(kw_set, "fn", 1.0)
+map_set(kw_set, "end", 1.0)
+map_set(kw_set, "if", 1.0)

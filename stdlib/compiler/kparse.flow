@@ -1,0 +1,476 @@
+// stdlib/compiler/kparse.flow
+// Phase 71: GPU Kernel Parser
+//
+// Minimal parser for the GPU compute kernel subset of OctoFlow.
+// Tokenizes source text and builds nd_* AST arrays for lower.flow.
+//
+// Supported statements:
+//   let [mut] name = expr
+//   name = expr
+//   output [ gid ] = expr
+//   if cond ... elif cond ... else ... end
+//   while cond ... end
+//   return expr
+//
+// Usage: use ir; use lower; use kparse
+//        kparse_source("let x = input[gid] * 2.0\noutput[gid] = x\n")
+//        lower_to_ir()
+//        ir_emit_spirv(path)
+
+// Tokenizer state — stored in arrays for function call propagation
+let mut kt_src = ""
+let mut kt_state = [0.0, 0.0]  // [pos, line_number]
+
+// Token output arrays
+let mut kt_types = []
+let mut kt_values = []
+let mut kt_lines = []
+
+fn kt_pos()
+  return kt_state[0]
+end
+
+fn kt_ch()
+  let p = kt_state[0]
+  if p >= len(kt_src)
+    return ""
+  end
+  return char_at(kt_src, p)
+end
+
+fn kt_advance_one()
+  kt_state[0] = kt_state[0] + 1.0
+  return 0.0
+end
+
+fn kt_emit(typ, val)
+  push(kt_types, typ)
+  push(kt_values, val)
+  push(kt_lines, kt_state[1])
+  return 0.0
+end
+
+fn kt_is_digit(c)
+  let o = ord(c)
+  if o >= 48.0 && o <= 57.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn kt_is_alpha(c)
+  let o = ord(c)
+  if (o >= 65.0 && o <= 90.0) || (o >= 97.0 && o <= 122.0) || c == "_"
+    return 1.0
+  end
+  return 0.0
+end
+
+fn kt_is_alnum(c)
+  if kt_is_alpha(c) == 1.0 || kt_is_digit(c) == 1.0
+    return 1.0
+  end
+  return 0.0
+end
+
+// Tokenize the source string into kt_types/kt_values/kt_lines
+fn kt_tokenize()
+  let n = len(kt_src)
+  while kt_state[0] < n
+    let c = kt_ch()
+    let o = ord(c)
+
+    // Skip spaces and tabs
+    if o == 32.0 || o == 9.0
+      kt_advance_one()
+
+    // Newline
+    elif o == 10.0
+      kt_emit("nl", "nl")
+      kt_state[0] = kt_state[0] + 1.0
+      kt_state[1] = kt_state[1] + 1.0
+    elif o == 13.0
+      kt_state[0] = kt_state[0] + 1.0
+      if kt_state[0] < n && ord(kt_ch()) == 10.0
+        kt_state[0] = kt_state[0] + 1.0
+      end
+      kt_emit("nl", "nl")
+      kt_state[1] = kt_state[1] + 1.0
+
+    // Comment: // until end of line
+    elif c == "/" && kt_state[0] + 1.0 < n && char_at(kt_src, kt_state[0] + 1.0) == "/"
+      while kt_state[0] < n && ord(kt_ch()) != 10.0
+        kt_state[0] = kt_state[0] + 1.0
+      end
+
+    // Two-char operators
+    elif c == "=" && kt_state[0] + 1.0 < n && char_at(kt_src, kt_state[0] + 1.0) == "="
+      kt_emit("op", "==")
+      kt_state[0] = kt_state[0] + 2.0
+    elif c == "!" && kt_state[0] + 1.0 < n && char_at(kt_src, kt_state[0] + 1.0) == "="
+      kt_emit("op", "!=")
+      kt_state[0] = kt_state[0] + 2.0
+    elif c == "<" && kt_state[0] + 1.0 < n && char_at(kt_src, kt_state[0] + 1.0) == "="
+      kt_emit("op", "<=")
+      kt_state[0] = kt_state[0] + 2.0
+    elif c == ">" && kt_state[0] + 1.0 < n && char_at(kt_src, kt_state[0] + 1.0) == "="
+      kt_emit("op", ">=")
+      kt_state[0] = kt_state[0] + 2.0
+    elif c == "&" && kt_state[0] + 1.0 < n && char_at(kt_src, kt_state[0] + 1.0) == "&"
+      kt_emit("op", "&&")
+      kt_state[0] = kt_state[0] + 2.0
+    elif c == "|" && kt_state[0] + 1.0 < n && char_at(kt_src, kt_state[0] + 1.0) == "|"
+      kt_emit("op", "||")
+      kt_state[0] = kt_state[0] + 2.0
+
+    // Single-char operators and brackets
+    elif c == "+" || c == "-" || c == "*" || c == "/" || c == "(" || c == ")" || c == "[" || c == "]" || c == "," || c == "<" || c == ">" || c == "="
+      kt_emit("op", c)
+      kt_state[0] = kt_state[0] + 1.0
+
+    // Number literal (including decimals)
+    elif kt_is_digit(c) == 1.0
+      let mut num = ""
+      while kt_state[0] < n
+        let nc = kt_ch()
+        if kt_is_digit(nc) == 1.0 || nc == "."
+          num = num + nc
+          kt_state[0] = kt_state[0] + 1.0
+        else
+          break
+        end
+      end
+      kt_emit("num", num)
+
+    // Identifier or keyword
+    elif kt_is_alpha(c) == 1.0
+      let mut id = ""
+      while kt_state[0] < n
+        let ic = kt_ch()
+        if kt_is_alnum(ic) == 1.0
+          id = id + ic
+          kt_state[0] = kt_state[0] + 1.0
+        else
+          break
+        end
+      end
+      if id == "let" || id == "mut" || id == "if" || id == "elif" || id == "else" || id == "while" || id == "end" || id == "return" || id == "for" || id == "in"
+        kt_emit("kw", id)
+      else
+        kt_emit("ident", id)
+      end
+
+    else
+      // Skip unknown characters
+      kt_state[0] = kt_state[0] + 1.0
+    end
+  end
+  kt_emit("eof", "")
+  return 0.0
+end
+
+// ===================== PARSER =====================
+// Builds nd_* AST arrays from tokens.
+// Uses kp_state[0] for cursor position (array for propagation).
+let mut kp_state = [0.0]
+
+fn kp_pos()
+  return kp_state[0]
+end
+
+fn kp_type()
+  let p = kp_state[0]
+  if p >= len(kt_types)
+    return "eof"
+  end
+  return kt_types[p]
+end
+
+fn kp_val()
+  let p = kp_state[0]
+  if p >= len(kt_values)
+    return ""
+  end
+  return kt_values[p]
+end
+
+fn kp_line()
+  let p = kp_state[0]
+  if p >= len(kt_lines)
+    return 0.0
+  end
+  return kt_lines[p]
+end
+
+fn kp_advance()
+  kp_state[0] = kp_state[0] + 1.0
+  return 0.0
+end
+
+fn kp_skip_nl()
+  while kp_type() == "nl"
+    kp_advance()
+  end
+  return 0.0
+end
+
+// Collect expression tokens until newline/eof/keyword-boundary
+// Returns space-delimited string of token values
+fn kp_collect_expr()
+  let mut expr = ""
+  while kp_type() != "nl" && kp_type() != "eof"
+    if len(expr) > 0.0
+      expr = expr + " "
+    end
+    expr = expr + kp_val()
+    kp_advance()
+  end
+  return expr
+end
+
+// Add an AST node and return its index
+fn kp_add_node(kind, lhs, op, rhs, rhs2, child, nxt, line, mut_flag)
+  let idx = len(nd_kind)
+  push(nd_kind, kind)
+  push(nd_lhs, lhs)
+  push(nd_op, op)
+  push(nd_rhs, rhs)
+  push(nd_rhs2, rhs2)
+  push(nd_child, child)
+  push(nd_next, nxt)
+  push(nd_line, str(line))
+  push(nd_mut, mut_flag)
+  return idx
+end
+
+// Link a new node as the next sibling of the current last in a block
+// block_stack_state[0] = first node index for current block (-1 if empty)
+// block_stack_state[1] = last node index for current block (-1 if empty)
+let mut block_stack_state = [-1.0, -1.0]
+// Stack for nested blocks: parallel arrays of (first, last, depth)
+let mut bs_first = []
+let mut bs_last = []
+
+fn kp_link_node(idx)
+  let last = block_stack_state[1]
+  if last >= 0.0
+    nd_next[last] = str(idx)
+  else
+    block_stack_state[0] = idx
+  end
+  block_stack_state[1] = idx
+  return 0.0
+end
+
+fn kp_push_block()
+  push(bs_first, block_stack_state[0])
+  push(bs_last, block_stack_state[1])
+  block_stack_state[0] = -1.0
+  block_stack_state[1] = -1.0
+  return 0.0
+end
+
+fn kp_pop_block()
+  let d = len(bs_first) - 1.0
+  let first = block_stack_state[0]
+  block_stack_state[0] = bs_first[d]
+  block_stack_state[1] = bs_last[d]
+  pop(bs_first)
+  pop(bs_last)
+  return first
+end
+
+// Parse a block of statements until "end" / "elif" / "else" / "eof"
+fn kp_parse_block()
+  kp_skip_nl()
+  while kp_type() != "eof"
+    let tt = kp_type()
+    let tv = kp_val()
+
+    // Stop markers for block end
+    if tt == "kw" && (tv == "end" || tv == "elif" || tv == "else")
+      return 0.0
+    end
+
+    if tt == "nl"
+      kp_advance()
+
+    // let [mut] name = expr
+    elif tt == "kw" && tv == "let"
+      kp_advance()
+      let mut m = ""
+      if kp_val() == "mut"
+        m = "1"
+        kp_advance()
+      end
+      let nm = kp_val()
+      kp_advance()
+      kp_advance()  // skip =
+      let rhs = kp_collect_expr()
+      let ni = kp_add_node("Let", nm, "=", rhs, "", "-1", "-1", kp_line(), m)
+      kp_link_node(ni)
+
+    // return expr
+    elif tt == "kw" && tv == "return"
+      kp_advance()
+      let rhs = kp_collect_expr()
+      let ni = kp_add_node("Return", rhs, "", "", "", "-1", "-1", kp_line(), "")
+      kp_link_node(ni)
+
+    // if cond ... [elif ... else ...] end
+    elif tt == "kw" && tv == "if"
+      kp_advance()
+      let cond = kp_collect_expr()
+      let if_line = kp_line()
+      // Parse body
+      kp_push_block()
+      kp_parse_block()
+      let body_first = kp_pop_block()
+      // Create If node (child=body_first, rhs2 will be elif/else chain)
+      let if_idx = kp_add_node("If", cond, "", "", "", str(body_first), "-1", if_line, "")
+      kp_link_node(if_idx)
+      // Handle elif/else chain
+      let mut prev_chain = if_idx
+      while kp_val() == "elif"
+        kp_advance()
+        let elif_cond = kp_collect_expr()
+        let elif_line = kp_line()
+        kp_push_block()
+        kp_parse_block()
+        let elif_body = kp_pop_block()
+        let elif_idx = kp_add_node("Elif", elif_cond, "", "", "", str(elif_body), "-1", elif_line, "")
+        nd_rhs2[prev_chain] = str(elif_idx)
+        prev_chain = elif_idx
+      end
+      if kp_val() == "else"
+        kp_advance()
+        kp_skip_nl()
+        kp_push_block()
+        kp_parse_block()
+        let else_body = kp_pop_block()
+        let else_idx = kp_add_node("Else", "", "", "", "", str(else_body), "-1", kp_line(), "")
+        nd_rhs2[prev_chain] = str(else_idx)
+      end
+      // Skip "end"
+      if kp_val() == "end"
+        kp_advance()
+      end
+
+    // while cond ... end
+    elif tt == "kw" && tv == "while"
+      kp_advance()
+      let cond = kp_collect_expr()
+      let while_line = kp_line()
+      kp_push_block()
+      kp_parse_block()
+      let body_first = kp_pop_block()
+      let wi = kp_add_node("While", cond, "", "", "", str(body_first), "-1", while_line, "")
+      kp_link_node(wi)
+      if kp_val() == "end"
+        kp_advance()
+      end
+
+    // ident [ ... ] = expr  (ArrSet, e.g. output[gid] = expr)
+    elif tt == "ident" && kp_state[0] + 1.0 < len(kt_types) && kt_values[kp_state[0] + 1.0] == "["
+      let arr_name = tv
+      kp_advance()  // skip ident
+      kp_advance()  // skip [
+      // Skip index tokens until ]
+      let mut idx_str = ""
+      while kp_val() != "]" && kp_type() != "eof"
+        idx_str = idx_str + kp_val()
+        kp_advance()
+      end
+      kp_advance()  // skip ]
+      kp_advance()  // skip =
+      let rhs = kp_collect_expr()
+      let ni = kp_add_node("ArrSet", arr_name, idx_str, rhs, "", "-1", "-1", kp_line(), "")
+      kp_link_node(ni)
+
+    // ident = expr  (Assign)
+    elif tt == "ident" && kp_state[0] + 1.0 < len(kt_types) && kt_values[kp_state[0] + 1.0] == "="
+      let nm = tv
+      kp_advance()  // skip ident
+      kp_advance()  // skip =
+      let rhs = kp_collect_expr()
+      let ni = kp_add_node("Assign", nm, "=", rhs, "", "-1", "-1", kp_line(), "")
+      kp_link_node(ni)
+
+    else
+      // Skip unknown tokens
+      kp_advance()
+    end
+  end
+  return 0.0
+end
+
+// ===================== MAIN ENTRY POINT =====================
+
+// kparse_source(src_text): Parse GPU kernel source into AST
+// Populates nd_* arrays in lower.flow, ready for lower_to_ir()
+fn kparse_source(src_text)
+  // Clear all state
+  kt_src = src_text
+  kt_state[0] = 0.0
+  kt_state[1] = 1.0
+
+  while len(kt_types) > 0.0
+    pop(kt_types)
+  end
+  while len(kt_values) > 0.0
+    pop(kt_values)
+  end
+  while len(kt_lines) > 0.0
+    pop(kt_lines)
+  end
+
+  // Clear AST arrays
+  while len(nd_kind) > 0.0
+    pop(nd_kind)
+  end
+  while len(nd_lhs) > 0.0
+    pop(nd_lhs)
+  end
+  while len(nd_op) > 0.0
+    pop(nd_op)
+  end
+  while len(nd_rhs) > 0.0
+    pop(nd_rhs)
+  end
+  while len(nd_rhs2) > 0.0
+    pop(nd_rhs2)
+  end
+  while len(nd_child) > 0.0
+    pop(nd_child)
+  end
+  while len(nd_next) > 0.0
+    pop(nd_next)
+  end
+  while len(nd_line) > 0.0
+    pop(nd_line)
+  end
+  while len(nd_mut) > 0.0
+    pop(nd_mut)
+  end
+  while len(cur_block_first) > 0.0
+    pop(cur_block_first)
+  end
+  while len(cur_block_last) > 0.0
+    pop(cur_block_last)
+  end
+
+  // Tokenize
+  kt_tokenize()
+
+  // Parse
+  kp_state[0] = 0.0
+  block_stack_state[0] = -1.0
+  block_stack_state[1] = -1.0
+  kp_parse_block()
+
+  // Set up cur_block_first for lower_to_ir
+  push(cur_block_first, block_stack_state[0])
+  push(cur_block_last, block_stack_state[1])
+
+  return len(nd_kind)
+end

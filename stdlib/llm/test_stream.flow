@@ -1,0 +1,160 @@
+// test_stream.flow — Async Staging Buffer Tests
+//
+// Tests the double-buffered streaming infrastructure:
+//   rt_staging_alloc, rt_staging_load (async), rt_staging_ready,
+//   rt_staging_wait, rt_staging_upload, rt_staging_free
+//
+// Creates a temporary binary file with known f32 values (LE encoding),
+// then verifies async load + GPU upload produce correct data.
+//
+// Usage:
+//   octoflow run stdlib/llm/test_stream.flow --allow-read --allow-write --allow-ffi
+
+use "stream"
+
+let mut _tc = [0.0, 0.0]
+
+fn check(name, got, expected)
+  if got == expected
+    _tc[0] = _tc[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected {expected}")
+  _tc[1] = _tc[1] + 1.0
+  return 0.0
+end
+
+// ── Create test data file ──
+// Write 16 known f32 values as raw binary little-endian (64 bytes)
+let mut test_values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]
+let mut bytes = []
+let mut vi = 0.0
+while vi < len(test_values)
+  let val = test_values[int(vi)]
+  push(bytes, float_byte(val, 0.0))
+  push(bytes, float_byte(val, 1.0))
+  push(bytes, float_byte(val, 2.0))
+  push(bytes, float_byte(val, 3.0))
+  vi = vi + 1.0
+end
+let test_path = "_test_stream_data.bin"
+write_bytes(test_path, bytes)
+
+print("=== Staging Buffer Tests ===")
+
+// ── Test 1: Alloc + Free ──
+print("  Test 1: alloc + free")
+let h1 = rt_staging_alloc(64.0)
+let _c1 = check("alloc returns handle > 0", h1 > 0.0, 1.0)
+let _f1 = rt_staging_free(h1)
+let _c2 = check("free returns 1.0", _f1, 1.0)
+
+// ── Test 2: Async load + wait ──
+print("  Test 2: async load + wait")
+let h2 = rt_staging_alloc(64.0)
+let load_ret = rt_staging_load(h2, test_path, 0.0, 16.0)
+let _c3 = check("load returns 0.0 (async)", load_ret, 0.0)
+// Wait for I/O to complete
+let waited = rt_staging_wait(h2)
+let _c4 = check("wait returns float count 16", waited, 16.0)
+let _f2 = rt_staging_free(h2)
+
+// ── Test 3: Async load + ready polling ──
+print("  Test 3: async load + ready polling")
+let h3 = rt_staging_alloc(64.0)
+let _l3 = rt_staging_load(h3, test_path, 0.0, 16.0)
+// Poll until ready (should complete quickly for a tiny file)
+let mut polls = 0.0
+let mut is_ready = rt_staging_ready(h3)
+while is_ready < 1.0
+  polls = polls + 1.0
+  is_ready = rt_staging_ready(h3)
+  if polls > 100000.0
+    print("  WARN: exceeded 100K polls, breaking")
+    is_ready = 1.0
+  end
+end
+let _c5 = check("ready returns 1.0 eventually", is_ready, 1.0)
+let _w3 = rt_staging_wait(h3)
+let _c6 = check("wait returns 16 floats after ready", _w3, 16.0)
+let _f3 = rt_staging_free(h3)
+
+// ── Test 4: Upload to GPU cache ──
+print("  Test 4: upload to GPU cache")
+let h4 = rt_staging_alloc(64.0)
+let _l4 = rt_staging_load(h4, test_path, 0.0, 16.0)
+let _w4 = rt_staging_wait(h4)
+let _u4 = rt_staging_upload(h4, "_test_stream_key")
+let _c7 = check("upload returns 1.0", _u4, 1.0)
+let _f4 = rt_staging_free(h4)
+
+// ── Test 5: Offset read (partial file) ──
+print("  Test 5: offset read (partial file)")
+let h5 = rt_staging_alloc(32.0)
+// Read 4 floats starting at byte offset 16 (skipping first 4 floats → values 5,6,7,8)
+let _l5 = rt_staging_load(h5, test_path, 16.0, 4.0)
+let _w5 = rt_staging_wait(h5)
+let _c8 = check("offset read returns 4 floats", _w5, 4.0)
+let _f5 = rt_staging_free(h5)
+
+// ── Test 6: Double-buffered pattern (stream.flow API) ──
+print("  Test 6: double-buffered stream API")
+let bufs = stream_init(64.0)
+let ha = bufs[0]
+let hb = bufs[1]
+let _c9 = check("stream_init returns 2 handles", len(bufs), 2.0)
+
+// Sync load into buffer A (first 8 floats)
+let _sl = stream_load_sync(ha, test_path, 0.0, 8.0, "_test_a")
+let _c10 = check("sync load returns 1.0", _sl, 1.0)
+
+// Prefetch into buffer B (last 8 floats, async)
+let _pf = stream_prefetch(hb, test_path, 32.0, 8.0)
+let _c11 = check("prefetch returns 1.0", _pf, 1.0)
+
+// Finish upload from B
+let _fu = stream_finish_upload(hb, "_test_b")
+let _c12 = check("finish_upload returns 1.0", _fu, 1.0)
+
+// Cleanup
+let _sf = stream_free_all()
+let _c13 = check("free_all returns 1.0", _sf, 1.0)
+
+// ── Test 7: Multiple concurrent prefetches ──
+print("  Test 7: concurrent prefetches")
+let h7a = rt_staging_alloc(64.0)
+let h7b = rt_staging_alloc(64.0)
+// Launch two async loads simultaneously
+let _l7a = rt_staging_load(h7a, test_path, 0.0, 8.0)
+let _l7b = rt_staging_load(h7b, test_path, 32.0, 8.0)
+// Wait for both
+let _w7a = rt_staging_wait(h7a)
+let _w7b = rt_staging_wait(h7b)
+let _c14 = check("concurrent A: 8 floats", _w7a, 8.0)
+let _c15 = check("concurrent B: 8 floats", _w7b, 8.0)
+let _f7a = rt_staging_free(h7a)
+let _f7b = rt_staging_free(h7b)
+
+// ── Test 8: Wait with no pending I/O (idempotent) ──
+print("  Test 8: wait with no pending I/O")
+let h8 = rt_staging_alloc(64.0)
+let _l8 = rt_staging_load(h8, test_path, 0.0, 4.0)
+let _w8a = rt_staging_wait(h8)
+let _c16 = check("first wait: 4 floats", _w8a, 4.0)
+// Second wait should return same count (no I/O pending, data still in buffer)
+let _w8b = rt_staging_wait(h8)
+let _c17 = check("second wait: 4 floats (data persists)", _w8b, 4.0)
+let _f8 = rt_staging_free(h8)
+
+// ── Cleanup test file ──
+// write_file overwrites, so just leave tiny file — not critical
+
+// ── Summary ──
+let pass = _tc[0]
+let fail = _tc[1]
+let total = pass + fail
+print("")
+print("Stream tests: {pass:.0}/{total:.0} passed")
+if fail > 0.0
+  print("FAILURES: {fail:.0}")
+end

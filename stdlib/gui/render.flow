@@ -1,0 +1,127 @@
+// render.flow — GPU-Accelerated Rendering Helpers
+//
+// Provides GPU-accelerated alternatives for expensive rendering
+// operations. Uses gpu_fill for bulk pixel operations.
+//
+// Usage:
+//   use "gui"
+//   use "render"
+//   let _c = render_clear(128.0, 128.0, 128.0)
+
+use "gui_core"
+
+// ── GPU-Accelerated Screen Clear ────────────────────────────────────
+// Fills all pixel buffers with a solid color using gpu_fill.
+// Much faster than the per-pixel CPU loop for large windows.
+
+fn render_clear(r, g, b)
+  let total = _gs[1] * _gs[2]
+  if total <= 0.0
+    return 0.0
+  end
+  let mut fr = gpu_fill(r, total)
+  let mut fg = gpu_fill(g, total)
+  let mut fb = gpu_fill(b, total)
+  let mut i = 0.0
+  while i < total
+    let ii = int(i)
+    _gui_px_r[ii] = fr[ii]
+    _gui_px_g[ii] = fg[ii]
+    _gui_px_b[ii] = fb[ii]
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// ── GPU Fill Rectangle ──────────────────────────────────────────────
+// Fill a rectangular region of the pixel buffer.
+// For large rects, faster than the nested-loop CPU version.
+
+fn render_fill_rect(x0, y0, rw, rh, cr, cg, cb)
+  let win_w = _gs[1]
+  let win_h = _gs[2]
+  // Clamp to window bounds
+  let mut sx = x0
+  let mut sy = y0
+  let mut ex = x0 + rw
+  let mut ey = y0 + rh
+  if sx < 0.0
+    sx = 0.0
+  end
+  if sy < 0.0
+    sy = 0.0
+  end
+  if ex > win_w
+    ex = win_w
+  end
+  if ey > win_h
+    ey = win_h
+  end
+  let mut py = sy
+  while py < ey
+    let row_start = int(py * win_w)
+    let mut px = sx
+    while px < ex
+      let idx = row_start + int(px)
+      _gui_px_r[idx] = cr
+      _gui_px_g[idx] = cg
+      _gui_px_b[idx] = cb
+      px = px + 1.0
+    end
+    py = py + 1.0
+  end
+  return 0.0
+end
+
+// ── Blit RGB Arrays to Pixel Buffer ─────────────────────────────────
+// Copy RGB float arrays directly into the pixel buffer at (dst_x, dst_y).
+// Source arrays are row-major, src_w x src_h.
+
+fn render_blit(src_r, src_g, src_b, src_w, src_h, dst_x, dst_y)
+  let win_w = _gs[1]
+  let win_h = _gs[2]
+  let mut sy = 0.0
+  while sy < src_h
+    let dy = dst_y + sy
+    if dy >= 0.0
+      if dy < win_h
+        let src_row = int(sy * src_w)
+        let dst_row = int(dy * win_w)
+        let mut sx = 0.0
+        while sx < src_w
+          let dx = dst_x + sx
+          if dx >= 0.0
+            if dx < win_w
+              let si = src_row + int(sx)
+              let di = dst_row + int(dx)
+              _gui_px_r[di] = src_r[si]
+              _gui_px_g[di] = src_g[si]
+              _gui_px_b[di] = src_b[si]
+            end
+          end
+          sx = sx + 1.0
+        end
+      end
+    end
+    sy = sy + 1.0
+  end
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// ── Alpha Blend (CPU) ───────────────────────────────────────────────
+// Blend src onto dst: dst = dst*(1-alpha) + src*alpha
+// Operates on flat arrays of same length.
+
+fn render_blend(dst_r, dst_g, dst_b, src_r, src_g, src_b, alpha, count)
+  let inv_alpha = 1.0 - alpha
+  let mut i = 0.0
+  while i < count
+    let ii = int(i)
+    dst_r[ii] = dst_r[ii] * inv_alpha + src_r[ii] * alpha
+    dst_g[ii] = dst_g[ii] * inv_alpha + src_g[ii] * alpha
+    dst_b[ii] = dst_b[ii] * inv_alpha + src_b[ii] * alpha
+    i = i + 1.0
+  end
+  return 0.0
+end

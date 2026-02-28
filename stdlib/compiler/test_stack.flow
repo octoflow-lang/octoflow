@@ -1,0 +1,11 @@
+// test_stack.flow — tests pop(), stack operations
+let mut stack = []
+push(stack, "a")
+push(stack, "b")
+push(stack, "c")
+let top = pop(stack)
+print("pop={top}")
+let n = len(stack)
+print("len={n}")
+let next = pop(stack)
+print("pop2={next}")

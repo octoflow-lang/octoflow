@@ -1,0 +1,87 @@
+// test_lexer_ops.flow — key lexer patterns: comment skip, string scan, 2-char ops
+// All patterns used in lexer.flow / preflight.flow
+let NL_STR = chr(10)
+let src = "// skip me" + NL_STR + "42 + hello"
+let n = len(src)
+let mut pos = 0.0
+let NL = 10.0
+let SP = 32.0
+let QT = 34.0
+let mut out = ""
+
+while pos < n
+  let c = char_at(src, pos)
+  let co = ord(c)
+
+  // space — skip
+  if co == SP
+    pos = pos + 1.0
+
+  // newline
+  elif co == NL
+    if len(out) > 0.0
+      out = out + "|"
+    end
+    out = out + "nl"
+    pos = pos + 1.0
+
+  // comment: look-ahead for //
+  elif co == 47.0
+    let npos = pos + 1.0
+    if npos < n
+      let nc = char_at(src, npos)
+      if nc == "/"
+        // skip to end of line
+        while pos < n && ord(char_at(src, pos)) != NL
+          pos = pos + 1.0
+        end
+      else
+        if len(out) > 0.0
+          out = out + "|"
+        end
+        out = out + "op:/"
+        pos = pos + 1.0
+      end
+    else
+      if len(out) > 0.0
+        out = out + "|"
+      end
+      out = out + "op:/"
+      pos = pos + 1.0
+    end
+
+  // digit
+  elif co >= 48.0 && co <= 57.0
+    let mut num = ""
+    while pos < n && contains("0123456789.", char_at(src, pos))
+      num = num + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    if len(out) > 0.0
+      out = out + "|"
+    end
+    out = out + "num:" + num
+
+  // identifier
+  elif is_match(c, "[a-zA-Z_]")
+    let mut word = ""
+    while pos < n && is_match(char_at(src, pos), "[a-zA-Z_0-9]")
+      word = word + char_at(src, pos)
+      pos = pos + 1.0
+    end
+    if len(out) > 0.0
+      out = out + "|"
+    end
+    out = out + "id:" + word
+
+  // operator
+  else
+    if len(out) > 0.0
+      out = out + "|"
+    end
+    out = out + "op:" + c
+    pos = pos + 1.0
+  end
+end
+
+print("out={out}")

@@ -1,0 +1,483 @@
+// stdlib/loom/test_vk_dispatch.flow — Phase 72b: Vulkan FFI dispatch test
+//
+// Dispatches the 01_double.spv compute shader entirely through Vulkan FFI
+// calls from .flow — no Rust in the GPU call path (except the thin call_fn_ptr
+// trampoline). Verifies output[i] == input[i] * 2.0 for 256 elements.
+//
+// Run: flowgpu-cli run stdlib/loom/test_vk_dispatch.flow --allow-ffi --allow-read
+//
+// Struct offsets verified against vk_sys.rs #[repr(C)] definitions (x64).
+
+use "../../ops/vk"
+
+let N = 256.0
+let BUF_BYTES = N * 4.0
+
+// ── 1. Load SPIR-V ─────────────────────────────────────────────────
+let spv = read_bytes("tests/gpu_shaders/01_double.spv")
+let spv_len = len(spv)
+print("Loaded SPIR-V: {spv_len} bytes")
+
+// Copy SPV byte array into a mem block (for shader module creation)
+let spv_mem = mem_alloc(spv_len)
+let mut si = 0.0
+while si < spv_len
+    mem_set_u8(spv_mem, si, spv[si])
+    si = si + 1.0
+end
+
+// ── 2. Create VkInstance ────────────────────────────────────────────
+// VkApplicationInfo (48 bytes)
+let app_name = mem_from_str("VkFFITest")
+let app_info = mem_alloc(48)
+mem_set_u32(app_info, 0.0, VK_STRUCTURE_TYPE_APPLICATION_INFO)
+// pNext at 8 = 0 (null), already zeroed
+mem_set_ptr(app_info, 16.0, app_name)
+mem_set_u32(app_info, 24.0, 1.0)
+// pEngineName at 32 = null, already zeroed
+mem_set_u32(app_info, 44.0, VK_API_VERSION_1_0)
+
+// VkInstanceCreateInfo (64 bytes)
+let inst_ci = mem_alloc(64)
+mem_set_u32(inst_ci, 0.0, VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO)
+mem_set_ptr(inst_ci, 24.0, app_info)
+
+let p_inst = mem_alloc(8)
+let r = vkCreateInstance(inst_ci, 0, p_inst)
+let _c = vk_check(r, "vkCreateInstance")
+let instance = mem_get_ptr(p_inst, 0.0)
+mem_free(p_inst)
+mem_free(inst_ci)
+mem_free(app_info)
+mem_free(app_name)
+print("VkInstance created")
+
+// ── 3. Enumerate physical devices ───────────────────────────────────
+let p_count = mem_alloc(4)
+mem_set_u32(p_count, 0.0, 1.0)
+let p_devs = mem_alloc(8)
+let r = vkEnumeratePhysicalDevices(instance, p_count, p_devs)
+let _c = vk_check(r, "vkEnumeratePhysicalDevices")
+let phys_dev = mem_get_ptr(p_devs, 0.0)
+mem_free(p_devs)
+mem_free(p_count)
+print("Physical device found")
+
+// ── 4. Find compute queue family ────────────────────────────────────
+let p_qfc = mem_alloc(4)
+let _r = vkGetPhysicalDeviceQueueFamilyProperties(phys_dev, p_qfc, 0)
+let qf_count = mem_get_u32(p_qfc, 0.0)
+// VkQueueFamilyProperties = 24 bytes each
+let qf_props = mem_alloc(qf_count * 24.0)
+let _r = vkGetPhysicalDeviceQueueFamilyProperties(phys_dev, p_qfc, qf_props)
+mem_free(p_qfc)
+
+let mut comp_qfi = 0.0 - 1.0
+let mut qi = 0.0
+while qi < qf_count && comp_qfi < 0.0
+    let flags = mem_get_u32(qf_props, qi * 24.0)
+    let has_compute = bit_test(flags, 1.0)
+    if has_compute == 1.0
+        comp_qfi = qi
+    end
+    qi = qi + 1.0
+end
+mem_free(qf_props)
+
+if comp_qfi < 0.0
+    print("VK FFI DISPATCH: SKIP (no compute queue)")
+else
+    print("Compute queue family: {comp_qfi}")
+end
+
+// ── 5. Create logical device ────────────────────────────────────────
+// Queue priority
+let p_prio = mem_alloc(4)
+mem_set_f32(p_prio, 0.0, 1.0)
+
+// VkDeviceQueueCreateInfo (40 bytes)
+let dqci = mem_alloc(40)
+mem_set_u32(dqci, 0.0, VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
+mem_set_u32(dqci, 20.0, comp_qfi)
+mem_set_u32(dqci, 24.0, 1.0)
+mem_set_ptr(dqci, 32.0, p_prio)
+
+// VkDeviceCreateInfo (72 bytes)
+let dev_ci = mem_alloc(72)
+mem_set_u32(dev_ci, 0.0, VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
+mem_set_u32(dev_ci, 20.0, 1.0)
+mem_set_ptr(dev_ci, 24.0, dqci)
+
+let p_dev = mem_alloc(8)
+let r = vkCreateDevice(phys_dev, dev_ci, 0, p_dev)
+let _c = vk_check(r, "vkCreateDevice")
+let device = mem_get_ptr(p_dev, 0.0)
+mem_free(p_dev)
+mem_free(dev_ci)
+mem_free(dqci)
+mem_free(p_prio)
+
+// Get queue
+let p_queue = mem_alloc(8)
+let _r = vkGetDeviceQueue(device, comp_qfi, 0, p_queue)
+let queue = mem_get_ptr(p_queue, 0.0)
+mem_free(p_queue)
+print("Device + queue created")
+
+// ── 6. Create shader module ─────────────────────────────────────────
+// VkShaderModuleCreateInfo (40 bytes)
+let smci = mem_alloc(40)
+mem_set_u32(smci, 0.0, VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO)
+mem_set_u64(smci, 24.0, spv_len)
+mem_set_ptr(smci, 32.0, spv_mem)
+
+let p_smod = mem_alloc(8)
+let r = vkCreateShaderModule(device, smci, 0, p_smod)
+let _c = vk_check(r, "vkCreateShaderModule")
+let shader_mod = mem_get_ptr(p_smod, 0.0)
+mem_free(p_smod)
+mem_free(smci)
+print("Shader module created")
+
+// ── 7. Descriptor set layout (2 storage buffers) ────────────────────
+// VkDescriptorSetLayoutBinding = 24 bytes each, need 2
+let bindings = mem_alloc(48)
+// Binding 0: input SSBO
+mem_set_u32(bindings, 0.0, 0.0)
+mem_set_u32(bindings, 4.0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+mem_set_u32(bindings, 8.0, 1.0)
+mem_set_u32(bindings, 12.0, VK_SHADER_STAGE_COMPUTE_BIT)
+// Binding 1: output SSBO
+mem_set_u32(bindings, 24.0, 1.0)
+mem_set_u32(bindings, 28.0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+mem_set_u32(bindings, 32.0, 1.0)
+mem_set_u32(bindings, 36.0, VK_SHADER_STAGE_COMPUTE_BIT)
+
+// VkDescriptorSetLayoutCreateInfo (32 bytes)
+let dslci = mem_alloc(32)
+mem_set_u32(dslci, 0.0, VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
+mem_set_u32(dslci, 20.0, 2.0)
+mem_set_ptr(dslci, 24.0, bindings)
+
+let p_dsl = mem_alloc(8)
+let r = vkCreateDescriptorSetLayout(device, dslci, 0, p_dsl)
+let _c = vk_check(r, "vkCreateDescriptorSetLayout")
+let desc_layout = mem_get_ptr(p_dsl, 0.0)
+mem_free(p_dsl)
+mem_free(dslci)
+mem_free(bindings)
+
+// ── 8. Pipeline layout ──────────────────────────────────────────────
+// Need pointer to the desc_layout handle (u64)
+let p_layouts = mem_alloc(8)
+mem_set_ptr(p_layouts, 0.0, desc_layout)
+
+// VkPipelineLayoutCreateInfo (48 bytes)
+let plci = mem_alloc(48)
+mem_set_u32(plci, 0.0, VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
+mem_set_u32(plci, 20.0, 1.0)
+mem_set_ptr(plci, 24.0, p_layouts)
+
+let p_pl = mem_alloc(8)
+let r = vkCreatePipelineLayout(device, plci, 0, p_pl)
+let _c = vk_check(r, "vkCreatePipelineLayout")
+let pipe_layout = mem_get_ptr(p_pl, 0.0)
+mem_free(p_pl)
+mem_free(plci)
+mem_free(p_layouts)
+
+// ── 9. Compute pipeline ─────────────────────────────────────────────
+let entry_name = mem_from_str("main")
+
+// VkComputePipelineCreateInfo (96 bytes) with inline stage at offset 24
+let cpci = mem_alloc(96)
+mem_set_u32(cpci, 0.0, VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO)
+// Inline VkPipelineShaderStageCreateInfo at offset 24
+mem_set_u32(cpci, 24.0, VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
+mem_set_u32(cpci, 44.0, VK_SHADER_STAGE_COMPUTE_BIT)
+mem_set_ptr(cpci, 48.0, shader_mod)
+mem_set_ptr(cpci, 56.0, entry_name)
+// layout at offset 72
+mem_set_ptr(cpci, 72.0, pipe_layout)
+// basePipelineIndex at offset 88 = -1 (0xFFFFFFFF as u32)
+// Actually for i32 -1, set as u32 max. We can leave as 0 since we don't use base pipelines.
+
+let p_pipe = mem_alloc(8)
+let r = vkCreateComputePipelines(device, 0, 1, cpci, 0, p_pipe)
+let _c = vk_check(r, "vkCreateComputePipelines")
+let pipeline = mem_get_ptr(p_pipe, 0.0)
+mem_free(p_pipe)
+mem_free(cpci)
+mem_free(entry_name)
+print("Compute pipeline created")
+
+// ── 10. Create buffers ──────────────────────────────────────────────
+// VkBufferCreateInfo (56 bytes) — input buffer
+let bci = mem_alloc(56)
+mem_set_u32(bci, 0.0, VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+mem_set_u64(bci, 24.0, BUF_BYTES)
+mem_set_u32(bci, 32.0, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+
+let p_buf = mem_alloc(8)
+let r = vkCreateBuffer(device, bci, 0, p_buf)
+let _c = vk_check(r, "vkCreateBuffer input")
+let in_buf = mem_get_ptr(p_buf, 0.0)
+
+// Output buffer — reuse bci
+let r = vkCreateBuffer(device, bci, 0, p_buf)
+let _c = vk_check(r, "vkCreateBuffer output")
+let out_buf = mem_get_ptr(p_buf, 0.0)
+mem_free(p_buf)
+mem_free(bci)
+
+// ── 11. Allocate + bind memory ──────────────────────────────────────
+// VkMemoryRequirements (24 bytes): size(u64):0, alignment(u64):8, memTypeBits(u32):16
+let mem_reqs = mem_alloc(24)
+let _r = vkGetBufferMemoryRequirements(device, in_buf, mem_reqs)
+let req_size = mem_get_u64(mem_reqs, 0.0)
+let type_bits = mem_get_u32(mem_reqs, 16.0)
+mem_free(mem_reqs)
+
+let mem_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT + VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+let mem_type = vk_find_memory_type(phys_dev, type_bits, mem_flags)
+if mem_type < 0.0
+    print("VK FFI DISPATCH: SKIP (no host-visible memory type)")
+end
+
+// VkMemoryAllocateInfo (32 bytes)
+let mai = mem_alloc(32)
+mem_set_u32(mai, 0.0, VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+mem_set_u64(mai, 16.0, req_size)
+mem_set_u32(mai, 24.0, mem_type)
+
+// Allocate memory for input buffer
+let p_mem = mem_alloc(8)
+let r = vkAllocateMemory(device, mai, 0, p_mem)
+let _c = vk_check(r, "vkAllocateMemory input")
+let in_mem = mem_get_ptr(p_mem, 0.0)
+
+// Allocate memory for output buffer
+let r = vkAllocateMemory(device, mai, 0, p_mem)
+let _c = vk_check(r, "vkAllocateMemory output")
+let out_mem = mem_get_ptr(p_mem, 0.0)
+mem_free(p_mem)
+mem_free(mai)
+
+// Bind buffer memory
+let r = vkBindBufferMemory(device, in_buf, in_mem, 0)
+let _c = vk_check(r, "vkBindBufferMemory input")
+let r = vkBindBufferMemory(device, out_buf, out_mem, 0)
+let _c = vk_check(r, "vkBindBufferMemory output")
+
+// ── 12. Upload input data ───────────────────────────────────────────
+let pp_data = mem_alloc(8)
+let r = vkMapMemory(device, in_mem, 0, BUF_BYTES, 0, pp_data)
+let _c = vk_check(r, "vkMapMemory input")
+let mapped = mem_get_ptr(pp_data, 0.0)
+mem_free(pp_data)
+
+// Write input: input[i] = i + 1.0 (so 1..256)
+let mut wi = 0.0
+while wi < N
+    mem_set_f32(mapped, wi * 4.0, wi + 1.0)
+    wi = wi + 1.0
+end
+let _r = vkUnmapMemory(device, in_mem)
+print("Input uploaded ({N} floats)")
+
+// ── 13. Descriptor pool + set ───────────────────────────────────────
+// VkDescriptorPoolSize (8 bytes)
+let pool_size = mem_alloc(8)
+mem_set_u32(pool_size, 0.0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+mem_set_u32(pool_size, 4.0, 2.0)
+
+// VkDescriptorPoolCreateInfo (40 bytes)
+let dpci = mem_alloc(40)
+mem_set_u32(dpci, 0.0, VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO)
+mem_set_u32(dpci, 20.0, 1.0)
+mem_set_u32(dpci, 24.0, 1.0)
+mem_set_ptr(dpci, 32.0, pool_size)
+
+let p_pool = mem_alloc(8)
+let r = vkCreateDescriptorPool(device, dpci, 0, p_pool)
+let _c = vk_check(r, "vkCreateDescriptorPool")
+let desc_pool = mem_get_ptr(p_pool, 0.0)
+mem_free(p_pool)
+mem_free(dpci)
+mem_free(pool_size)
+
+// VkDescriptorSetAllocateInfo (40 bytes)
+let p_lay = mem_alloc(8)
+mem_set_ptr(p_lay, 0.0, desc_layout)
+let dsai = mem_alloc(40)
+mem_set_u32(dsai, 0.0, VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
+mem_set_ptr(dsai, 16.0, desc_pool)
+mem_set_u32(dsai, 24.0, 1.0)
+mem_set_ptr(dsai, 32.0, p_lay)
+
+let p_ds = mem_alloc(8)
+let r = vkAllocateDescriptorSets(device, dsai, p_ds)
+let _c = vk_check(r, "vkAllocateDescriptorSets")
+let desc_set = mem_get_ptr(p_ds, 0.0)
+mem_free(p_ds)
+mem_free(dsai)
+mem_free(p_lay)
+
+// ── 14. Update descriptors ──────────────────────────────────────────
+// VkDescriptorBufferInfo (24 bytes) for input
+let dbi_in = mem_alloc(24)
+mem_set_ptr(dbi_in, 0.0, in_buf)
+mem_set_u64(dbi_in, 8.0, 0.0)
+mem_set_u64(dbi_in, 16.0, BUF_BYTES)
+
+// VkDescriptorBufferInfo (24 bytes) for output
+let dbi_out = mem_alloc(24)
+mem_set_ptr(dbi_out, 0.0, out_buf)
+mem_set_u64(dbi_out, 8.0, 0.0)
+mem_set_u64(dbi_out, 16.0, BUF_BYTES)
+
+// VkWriteDescriptorSet (64 bytes each) — 2 writes packed contiguously
+let writes = mem_alloc(128)
+// Write 0: input buffer at binding 0
+mem_set_u32(writes, 0.0, VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+mem_set_ptr(writes, 16.0, desc_set)
+mem_set_u32(writes, 24.0, 0.0)
+mem_set_u32(writes, 32.0, 1.0)
+mem_set_u32(writes, 36.0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+mem_set_ptr(writes, 48.0, dbi_in)
+
+// Write 1: output buffer at binding 1
+mem_set_u32(writes, 64.0, VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+mem_set_ptr(writes, 80.0, desc_set)
+mem_set_u32(writes, 88.0, 1.0)
+mem_set_u32(writes, 96.0, 1.0)
+mem_set_u32(writes, 100.0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+mem_set_ptr(writes, 112.0, dbi_out)
+
+let _r = vkUpdateDescriptorSets(device, 2, writes, 0, 0)
+mem_free(writes)
+mem_free(dbi_in)
+mem_free(dbi_out)
+
+// ── 15. Command pool + buffer ───────────────────────────────────────
+// VkCommandPoolCreateInfo (24 bytes)
+let cpoci = mem_alloc(24)
+mem_set_u32(cpoci, 0.0, VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO)
+mem_set_u32(cpoci, 20.0, comp_qfi)
+
+let p_cpool = mem_alloc(8)
+let r = vkCreateCommandPool(device, cpoci, 0, p_cpool)
+let _c = vk_check(r, "vkCreateCommandPool")
+let cmd_pool = mem_get_ptr(p_cpool, 0.0)
+mem_free(p_cpool)
+mem_free(cpoci)
+
+// VkCommandBufferAllocateInfo (32 bytes)
+let cbai = mem_alloc(32)
+mem_set_u32(cbai, 0.0, VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
+mem_set_ptr(cbai, 16.0, cmd_pool)
+mem_set_u32(cbai, 24.0, VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+mem_set_u32(cbai, 28.0, 1.0)
+
+let p_cmd = mem_alloc(8)
+let r = vkAllocateCommandBuffers(device, cbai, p_cmd)
+let _c = vk_check(r, "vkAllocateCommandBuffers")
+let cmd_buf = mem_get_ptr(p_cmd, 0.0)
+mem_free(p_cmd)
+mem_free(cbai)
+
+// ── 16. Record commands ─────────────────────────────────────────────
+// VkCommandBufferBeginInfo (32 bytes)
+let cbbi = mem_alloc(32)
+mem_set_u32(cbbi, 0.0, VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
+let r = vkBeginCommandBuffer(cmd_buf, cbbi)
+let _c = vk_check(r, "vkBeginCommandBuffer")
+mem_free(cbbi)
+
+let _r = vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline)
+
+// For vkCmdBindDescriptorSets: need pointer to desc_set handle
+let p_sets = mem_alloc(8)
+mem_set_ptr(p_sets, 0.0, desc_set)
+let _r = vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_layout, 0, 1, p_sets, 0, 0)
+mem_free(p_sets)
+
+// Dispatch: 1 workgroup of 256 threads (matches local_size_x=256 in shader)
+let _r = vkCmdDispatch(cmd_buf, 1, 1, 1)
+
+let r = vkEndCommandBuffer(cmd_buf)
+let _c = vk_check(r, "vkEndCommandBuffer")
+print("Commands recorded")
+
+// ── 17. Submit + wait ───────────────────────────────────────────────
+// VkFenceCreateInfo (24 bytes)
+let fci = mem_alloc(24)
+mem_set_u32(fci, 0.0, VK_STRUCTURE_TYPE_FENCE_CREATE_INFO)
+let p_fence = mem_alloc(8)
+let r = vkCreateFence(device, fci, 0, p_fence)
+let _c = vk_check(r, "vkCreateFence")
+let fence = mem_get_ptr(p_fence, 0.0)
+mem_free(fci)
+
+// VkSubmitInfo (72 bytes)
+let p_cmds = mem_alloc(8)
+mem_set_ptr(p_cmds, 0.0, cmd_buf)
+let sub_info = mem_alloc(72)
+mem_set_u32(sub_info, 0.0, VK_STRUCTURE_TYPE_SUBMIT_INFO)
+mem_set_u32(sub_info, 40.0, 1.0)
+mem_set_ptr(sub_info, 48.0, p_cmds)
+
+let r = vkQueueSubmit(queue, 1, sub_info, fence)
+let _c = vk_check(r, "vkQueueSubmit")
+mem_free(sub_info)
+mem_free(p_cmds)
+
+// Wait — timeout ~1 second in nanoseconds
+let r = vkWaitForFences(device, 1, p_fence, 1, 999999999)
+let _c = vk_check(r, "vkWaitForFences")
+mem_free(p_fence)
+print("GPU dispatch complete")
+
+// ── 18. Read back output ────────────────────────────────────────────
+let pp_out = mem_alloc(8)
+let r = vkMapMemory(device, out_mem, 0, BUF_BYTES, 0, pp_out)
+let _c = vk_check(r, "vkMapMemory output")
+let out_mapped = mem_get_ptr(pp_out, 0.0)
+mem_free(pp_out)
+
+let mut pass = 1.0
+let mut checked = 0.0
+let mut ri = 0.0
+while ri < N
+    let got = mem_get_f32(out_mapped, ri * 4.0)
+    let expected = (ri + 1.0) * 2.0
+    if got != expected
+        print("FAIL at [{ri}]: got {got} expected {expected}")
+        pass = 0.0
+    end
+    checked = checked + 1.0
+    ri = ri + 1.0
+end
+let _r = vkUnmapMemory(device, out_mem)
+
+// ── 19. Cleanup ─────────────────────────────────────────────────────
+let _r = vkDestroyFence(device, fence, 0)
+let _r = vkDestroyCommandPool(device, cmd_pool, 0)
+let _r = vkDestroyDescriptorPool(device, desc_pool, 0)
+let _r = vkDestroyPipeline(device, pipeline, 0)
+let _r = vkDestroyPipelineLayout(device, pipe_layout, 0)
+let _r = vkDestroyDescriptorSetLayout(device, desc_layout, 0)
+let _r = vkDestroyShaderModule(device, shader_mod, 0)
+let _r = vkFreeMemory(device, out_mem, 0)
+let _r = vkFreeMemory(device, in_mem, 0)
+let _r = vkDestroyBuffer(device, out_buf, 0)
+let _r = vkDestroyBuffer(device, in_buf, 0)
+let _r = vkDestroyDevice(device, 0)
+let _r = vkDestroyInstance(instance, 0)
+
+// ── 20. Result ──────────────────────────────────────────────────────
+if pass == 1.0
+    print("VK FFI DISPATCH: ALL PASS ({checked} elements verified)")
+else
+    print("VK FFI DISPATCH: FAILED")
+end

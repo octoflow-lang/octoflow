@@ -1,0 +1,26 @@
+// Phase 8 demo: conditionals, comparisons, and boolean logic
+stream data = tap("test_data/input_10.csv")
+
+// Reduce to scalars
+let mn = min(data)
+let mx = max(data)
+let range = mx - mn
+
+// Conditional: safe normalize only if range > 0
+let safe = if range > 0.0 then 1.0 else 0.0
+let divisor = if range > 0.0 then range else 1.0
+
+// Boolean logic
+let in_bounds = mn >= 0.0 && mx <= 100.0
+let needs_clamp = mn < 0.0 || mx > 255.0
+
+// Nested conditional
+let category = if mx > 50.0 then 3.0 else if mx > 25.0 then 2.0 else 1.0
+
+// Parenthesized expressions
+let adjusted = (mx + mn) / 2.0
+
+// Use conditionals in pipeline args
+stream normalized = data |> subtract(mn) |> divide(divisor)
+emit(normalized, "test_data/output_conditionals.csv")
+print("Conditionals demo complete!")

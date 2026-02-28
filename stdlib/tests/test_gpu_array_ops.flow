@@ -1,0 +1,271 @@
+// stdlib/tests/test_gpu_array_ops.flow — Tests for GPU Array Operations
+//
+// Phase 92 Batch 2: Test array transformation, filtering, and mapping operations.
+
+use "../gpu/runtime"
+use "../gpu/array_ops"
+
+fn test_gpu_filter()
+  print("test_gpu_filter...")
+
+  // Test gt filter
+  let mut data = [1.0, 5.0, 2.0, 8.0, 3.0, 9.0, 4.0]
+  let result_gt = gpu_filter(data, 5.0, "gt")
+
+  // Should keep 8.0, 9.0
+  let rlen = len(result_gt)
+  if rlen != 2.0
+    print("FAIL: expected 2 elements, got {rlen}")
+    return 1.0
+  end
+
+  let r0 = result_gt[0]
+  let r1 = result_gt[1]
+  if r0 != 8.0 || r1 != 9.0
+    print("FAIL: expected [8.0, 9.0], got [{r0}, {r1}]")
+    return 1.0
+  end
+
+  // Test lt filter
+  let result_lt = gpu_filter(data, 3.0, "lt")
+
+  // Should keep 1.0, 2.0
+  let r2len = len(result_lt)
+  if r2len != 2.0
+    print("FAIL: lt filter expected 2 elements, got {r2len}")
+    return 1.0
+  end
+
+  print("PASS")
+  return 0.0
+end
+
+fn test_gpu_compact()
+  print("test_gpu_compact...")
+
+  let mut data = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+  let mut mask = [1.0, 0.0, 1.0, 0.0, 1.0, 0.0]
+
+  let result_compact = gpu_compact(data, mask)
+
+  let rlen = len(result_compact)
+  if rlen != 3.0
+    print("FAIL: expected 3 elements, got {rlen}")
+    return 1.0
+  end
+
+  let r0 = result_compact[0]
+  let r1 = result_compact[1]
+  let r2 = result_compact[2]
+  if r0 != 10.0 || r1 != 30.0 || r2 != 50.0
+    print("FAIL: expected [10, 30, 50], got [{r0}, {r1}, {r2}]")
+    return 1.0
+  end
+
+  print("PASS")
+  return 0.0
+end
+
+fn test_gpu_reverse()
+  print("test_gpu_reverse...")
+
+  let mut data = [1.0, 2.0, 3.0, 4.0, 5.0]
+  let result_reverse = gpu_reverse(data)
+
+  let rlen = len(result_reverse)
+  if rlen != 5.0
+    print("FAIL: expected 5 elements, got {rlen}")
+    return 1.0
+  end
+
+  let r0 = result_reverse[0]
+  let r4 = result_reverse[4]
+  if r0 != 5.0 || r4 != 1.0
+    print("FAIL: expected [5, 4, 3, 2, 1], got [{r0}, ..., {r4}]")
+    return 1.0
+  end
+
+  print("PASS")
+  return 0.0
+end
+
+fn test_gpu_clamp()
+  print("test_gpu_clamp...")
+
+  let mut data = [1.0, 5.0, 10.0, 15.0, 20.0, 25.0]
+  let result_clamp = gpu_clamp(data, 5.0, 20.0)
+
+  let rlen = len(result_clamp)
+  if rlen != 6.0
+    print("FAIL: expected 6 elements, got {rlen}")
+    return 1.0
+  end
+
+  // Check clamped values
+  let r0 = result_clamp[0]
+  let r1 = result_clamp[1]
+  let r5 = result_clamp[5]
+  if r0 != 5.0 || r1 != 5.0 || r5 != 20.0
+    print("FAIL: clamp bounds incorrect")
+    return 1.0
+  end
+
+  print("PASS")
+  return 0.0
+end
+
+fn test_gpu_map()
+  print("test_gpu_map...")
+
+  // Test sqrt
+  let mut data = [4.0, 9.0, 16.0, 25.0]
+  let result_sqrt = gpu_map(data, "sqrt")
+
+  let rlen = len(result_sqrt)
+  if rlen != 4.0
+    print("FAIL: expected 4 elements, got {rlen}")
+    return 1.0
+  end
+
+  let r0 = result_sqrt[0]
+  let r3 = result_sqrt[3]
+  let diff0 = abs(r0 - 2.0)
+  let diff3 = abs(r3 - 5.0)
+  if diff0 > 0.001 || diff3 > 0.001
+    print("FAIL: sqrt incorrect")
+    return 1.0
+  end
+
+  // Test square
+  let mut data2 = [2.0, 3.0, 4.0]
+  let result_square = gpu_map(data2, "square")
+
+  let s0 = result_square[0]
+  let s1 = result_square[1]
+  let s2 = result_square[2]
+  if s0 != 4.0 || s1 != 9.0 || s2 != 16.0
+    print("FAIL: square incorrect")
+    return 1.0
+  end
+
+  // Test abs
+  let mut data3 = [-5.0, 3.0, -2.0]
+  let result_abs = gpu_map(data3, "abs")
+
+  let a0 = result_abs[0]
+  let a1 = result_abs[1]
+  let a2 = result_abs[2]
+  if a0 != 5.0 || a1 != 3.0 || a2 != 2.0
+    print("FAIL: abs incorrect")
+    return 1.0
+  end
+
+  print("PASS")
+  return 0.0
+end
+
+fn test_gpu_unique()
+  print("test_gpu_unique...")
+
+  let mut data = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0, 5.0]
+  let result_unique = gpu_unique(data)
+
+  // Should have 7 unique values: 1, 2, 3, 4, 5, 6, 9
+  let rlen = len(result_unique)
+  if rlen != 7.0
+    print("FAIL: expected 7 unique elements, got {rlen}")
+    return 1.0
+  end
+
+  // Result should be sorted
+  let r0 = result_unique[0]
+  let r6 = result_unique[6]
+  if r0 != 1.0 || r6 != 9.0
+    print("FAIL: unique not sorted correctly")
+    return 1.0
+  end
+
+  print("PASS")
+  return 0.0
+end
+
+fn test_gpu_top_k()
+  print("test_gpu_top_k...")
+
+  let mut data = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0]
+  let result_topk = gpu_top_k(data, 3.0)
+
+  let rlen = len(result_topk)
+  if rlen != 3.0
+    print("FAIL: expected 3 elements, got {rlen}")
+    return 1.0
+  end
+
+  // Top 3 should be 9, 6, 5 (descending)
+  let r0 = result_topk[0]
+  let r1 = result_topk[1]
+  let r2 = result_topk[2]
+  if r0 != 9.0 || r1 != 6.0 || r2 != 5.0
+    print("FAIL: top_k incorrect: [{r0}, {r1}, {r2}]")
+    return 1.0
+  end
+
+  print("PASS")
+  return 0.0
+end
+
+fn test_gpu_normalize()
+  print("test_gpu_normalize...")
+
+  let mut data = [10.0, 20.0, 30.0, 40.0, 50.0]
+  let result_norm = gpu_normalize(data, 0.0, 1.0)
+
+  let rlen = len(result_norm)
+  if rlen != 5.0
+    print("FAIL: expected 5 elements, got {rlen}")
+    return 1.0
+  end
+
+  // Check normalization bounds
+  let r0 = result_norm[0]
+  let r4 = result_norm[4]
+  let diff0 = abs(r0 - 0.0)
+  let diff4 = abs(r4 - 1.0)
+  if diff0 > 0.001 || diff4 > 0.001
+    print("FAIL: normalize bounds incorrect: [{r0}, {r4}]")
+    return 1.0
+  end
+
+  // Check middle value
+  let r2 = result_norm[2]
+  let diff2 = abs(r2 - 0.5)
+  if diff2 > 0.001
+    print("FAIL: normalize middle incorrect: {r2}")
+    return 1.0
+  end
+
+  print("PASS")
+  return 0.0
+end
+
+// Run all tests
+rt_init()
+
+let mut total_failed = 0.0
+
+total_failed = total_failed + test_gpu_filter()
+total_failed = total_failed + test_gpu_compact()
+total_failed = total_failed + test_gpu_reverse()
+total_failed = total_failed + test_gpu_clamp()
+total_failed = total_failed + test_gpu_map()
+total_failed = total_failed + test_gpu_unique()
+total_failed = total_failed + test_gpu_top_k()
+total_failed = total_failed + test_gpu_normalize()
+
+if total_failed == 0.0
+  print("")
+  print("=== ALL GPU ARRAY OPS TESTS PASSED ===")
+else
+  print("")
+  print("=== {total_failed} TESTS FAILED ===")
+end

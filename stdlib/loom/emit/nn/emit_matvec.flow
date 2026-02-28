@@ -1,0 +1,92 @@
+// emit_matvec.flow — Matrix-Vector Multiply Kernel Emitter
+//
+// Emits matvec.spv: C[i] = dot(A[i*K..i*K+K], B[0..K])
+//
+// Bindings: 0=A (M*K matrix, row-major), 1=B (K vector), 2=C (M result)
+// Push constants: pc[0]=M (float→uint rows), pc[1]=K (float→uint cols)
+// Dispatch: ceil(M / 256) workgroups × 256 threads
+//
+// Each thread computes one output element via dot product of a matrix row
+// with the input vector. Optimized for transformer inference (single token).
+//
+// Usage:
+//   use "emit_matvec"
+//   let _r = emit_matvec("stdlib/loom/kernels/nn/matvec.spv")
+
+use "../compiler/ir"
+
+fn emit_matvec(out_path)
+  let _n = ir_new()
+
+  // 2 float input bindings: binding 0=A (matrix), binding 1=B (vector)
+  // Output binding 2=C is implicit (always last)
+  ir_input_count = 2.0
+
+  // Block structure: entry → bounds_ok → loop_header → loop_body → loop_continue → loop_merge → exit
+  let entry = ir_block("entry")
+  let bounds_ok = ir_block("bounds_ok")
+  let loop_header = ir_block("loop_header")
+  let loop_body = ir_block("loop_body")
+  let loop_cont = ir_block("loop_continue")
+  let loop_merge = ir_block("loop_merge")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: load gid, push constants, bounds check ──
+  let gid = ir_load_gid(entry)
+  let pc_m = ir_push_const(entry, 0.0)
+  let pc_k = ir_push_const(entry, 1.0)
+  let M = ir_ftou(entry, pc_m)
+  let K = ir_ftou(entry, pc_k)
+
+  // Bounds check: if gid >= M, skip to exit
+  let oob = ir_ugte(entry, gid, M)
+  let _sm = ir_selection_merge(entry, exit_block)
+  let _br = ir_term_cond_branch(entry, oob, exit_block, bounds_ok)
+
+  // ── bounds_ok: set up loop initial values ──
+  let zero_u = ir_const_u(bounds_ok, 0.0)
+  let zero_f = ir_const_f(bounds_ok, 0.0)
+  let row_base = ir_imul(bounds_ok, gid, K)
+  let _br2 = ir_term_branch(bounds_ok, loop_header)
+
+  // ── Loop header: phi nodes for j (uint) and sum (float) ──
+  let phi_j = ir_phi(loop_header, 2.0)
+  let phi_sum = ir_phi(loop_header, 1.0)
+  // Initial values from bounds_ok
+  let _pj0 = ir_phi_add(phi_j, zero_u, bounds_ok)
+  let _ps0 = ir_phi_add(phi_sum, zero_f, bounds_ok)
+
+  // Loop condition: j < K — use ugte(j,K) and swap branch targets
+  let j_done = ir_ugte(loop_header, phi_j, K)
+  let _lm = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc = ir_term_cond_branch(loop_header, j_done, loop_merge, loop_body)
+
+  // ── Loop body: load A[row_base + j] and B[j], multiply-add ──
+  let a_idx = ir_iadd(loop_body, row_base, phi_j)
+  let a_val = ir_load_input_at(loop_body, 0.0, a_idx)
+  let b_val = ir_load_input_at(loop_body, 1.0, phi_j)
+  let prod = ir_fmul(loop_body, a_val, b_val)
+  let new_sum = ir_fadd(loop_body, phi_sum, prod)
+  let _br3 = ir_term_branch(loop_body, loop_cont)
+
+  // ── Loop continue: increment j ──
+  let one_u = ir_const_u(loop_cont, 1.0)
+  let new_j = ir_iadd(loop_cont, phi_j, one_u)
+  let _br4 = ir_term_branch(loop_cont, loop_header)
+
+  // Add back-edge values to phi nodes
+  let _pj1 = ir_phi_add(phi_j, new_j, loop_cont)
+  let _ps1 = ir_phi_add(phi_sum, new_sum, loop_cont)
+
+  // ── Loop merge: store result ──
+  let _store = ir_store_output_at(loop_merge, gid, phi_sum)
+  let _br5 = ir_term_branch(loop_merge, exit_block)
+
+  // ── Exit: return ──
+  let _ret = ir_term_return(exit_block)
+
+  // Emit SPIR-V
+  let _emit = ir_emit_spirv(out_path)
+  print("  Emitted matvec kernel: {out_path}")
+  return 0.0
+end

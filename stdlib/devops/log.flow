@@ -1,0 +1,53 @@
+// stdlib/devops/log.flow — Logging utilities
+//
+// Functions: log_set_level, log_debug, log_info, log_warn, log_error, log_timed
+
+let mut __log_level = 0.0
+// 0=DEBUG, 1=INFO, 2=WARN, 3=ERROR
+
+fn log_set_level(level)
+  if level == "DEBUG"
+    __log_level = 0.0
+  elif level == "INFO"
+    __log_level = 1.0
+  elif level == "WARN"
+    __log_level = 2.0
+  elif level == "ERROR"
+    __log_level = 3.0
+  end
+  return 0.0
+end
+
+fn log_debug(msg)
+  if __log_level <= 0.0
+    print("[DEBUG] {msg}")
+  end
+  return 0.0
+end
+
+fn log_info(msg)
+  if __log_level <= 1.0
+    print("[INFO] {msg}")
+  end
+  return 0.0
+end
+
+fn log_warn(msg)
+  if __log_level <= 2.0
+    print("[WARN] {msg}")
+  end
+  return 0.0
+end
+
+fn log_error(msg)
+  if __log_level <= 3.0
+    print("[ERROR] {msg}")
+  end
+  return 0.0
+end
+
+fn log_timed(msg)
+  let t = now_ms()
+  print("[{t}ms] {msg}")
+  return 0.0
+end

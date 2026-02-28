@@ -1,4 +1,7 @@
 // stdlib/ml/ensemble.flow — Ensemble learning utilities
+//
+// Functions: bagging_predict, weighted_vote, bootstrap_sample,
+//            bagging_predict_array, bootstrap_indices
 
 fn bagging_predict(predictions)
   // Majority vote across multiple predictor outputs

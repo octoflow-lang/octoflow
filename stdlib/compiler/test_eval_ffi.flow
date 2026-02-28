@@ -1,0 +1,62 @@
+// test_eval_ffi.flow — Test program to be interpreted by eval.flow
+// This program uses FFI I/O (mem_from_str, fopen, fwrite, fclose, etc.)
+// to write and read a file, proving eval.flow can dispatch FFI calls.
+//
+// Run via: EVAL_PROG_PATH=stdlib/compiler/test_eval_ffi.flow octoflow run stdlib/compiler/eval.flow --allow-read --allow-ffi
+
+extern "msvcrt" {
+    fn fopen(path: ptr, mode: ptr) -> ptr
+    fn fclose(fp: ptr) -> u32
+    fn fread(buf: ptr, sz: u32, cnt: u32, fp: ptr) -> u32
+    fn fwrite(buf: ptr, sz: u32, cnt: u32, fp: ptr) -> u32
+    fn fseek(fp: ptr, off: u32, orig: u32) -> u32
+    fn ftell(fp: ptr) -> u32
+    fn remove(p: ptr) -> u32
+}
+
+let test_file = "_eval_ffi_test.txt"
+
+// Write file via FFI
+let p = mem_from_str(test_file)
+let m = mem_from_str("wb")
+let fp = fopen(p, m)
+mem_free(p)
+mem_free(m)
+let content = mem_from_str("Hello from eval.flow FFI!")
+let written = fwrite(content, 1.0, 25.0, fp)
+let _c = fclose(fp)
+mem_free(content)
+
+if written == 25.0
+    print("WRITE: PASS")
+else
+    print("WRITE: FAIL written={written}")
+end
+
+// Read file via FFI
+let p2 = mem_from_str(test_file)
+let m2 = mem_from_str("rb")
+let fp2 = fopen(p2, m2)
+mem_free(p2)
+mem_free(m2)
+let _s1 = fseek(fp2, 0.0, 2.0)
+let sz = ftell(fp2)
+let _s2 = fseek(fp2, 0.0, 0.0)
+let buf = mem_alloc(sz + 1.0)
+let _r = fread(buf, 1.0, sz, fp2)
+let _c2 = fclose(fp2)
+let result = mem_to_str(buf, sz)
+mem_free(buf)
+
+if result == "Hello from eval.flow FFI!"
+    print("READ: PASS")
+else
+    print("READ: FAIL")
+end
+
+// Cleanup
+let p3 = mem_from_str(test_file)
+let _rm = remove(p3)
+mem_free(p3)
+
+print("EVAL FFI: ALL PASS")

@@ -1,0 +1,170 @@
+// test_gguf_file.flow — Test file-based GGUF loading (no OOM)
+// Tests gguf_load_from_file + load_tensor_from_file with real model.
+// Run: octoflow run stdlib/ai/test_gguf_file.flow --allow-read --allow-exec
+//
+// Requires: Real GGUF model at the path below.
+
+use "gguf"
+use "weight_loader"
+
+let model_path = "G:/ollama_models/blobs/sha256-29d8c98fa6b098e200069bfb88b9508dc3e85586d20cba59f8dda9a808165104"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, cond)
+  if cond == 1.0
+    counters[0] = counters[0] + 1.0
+  else
+    counters[1] = counters[1] + 1.0
+    print("  FAIL: {label}")
+  end
+  return 0.0
+end
+
+print("=== FILE-BASED GGUF LOADING TEST ===")
+print("Model: qwen2.5-coder 1.5B")
+print(" ")
+
+// ── Test 1: gguf_load_from_file (no OOM!) ──────────────────────
+print("--- Test 1: Load model from file ---")
+let model = gguf_load_from_file(model_path)
+
+let arch = map_get(model, "arch")
+print("  arch = {arch}")
+let _c1 = check(counters, "arch=qwen2", arch == "qwen2")
+
+let n_embd = gguf_meta(model, "embedding_length")
+print("  n_embd = {n_embd}")
+let _c2 = check(counters, "n_embd=1536", n_embd == 1536.0)
+
+let n_head = gguf_meta(model, "attention.head_count")
+print("  n_head = {n_head}")
+let _c3 = check(counters, "n_head=12", n_head == 12.0)
+
+let n_kv_head = gguf_meta(model, "attention.head_count_kv")
+print("  n_kv_head = {n_kv_head}")
+let _c4 = check(counters, "n_kv_head=2", n_kv_head == 2.0)
+
+let n_ff = gguf_meta(model, "feed_forward_length")
+print("  n_ff = {n_ff}")
+let _c5 = check(counters, "n_ff=8960", n_ff == 8960.0)
+
+let n_layer = gguf_meta(model, "block_count")
+print("  n_layer = {n_layer}")
+let _c6 = check(counters, "n_layer=28", n_layer == 28.0)
+
+let vocab_size = map_get(model, "vocab_size")
+print("  vocab_size = {vocab_size}")
+let _c7 = check(counters, "vocab_size>1000", vocab_size > 1000.0)
+
+let ds = map_get(model, "data_start")
+print("  data_start = {ds}")
+let _c8 = check(counters, "data_start>0", ds > 0.0)
+
+let tc = map_get(model, "tensor_count")
+print("  tensor_count = {tc}")
+let _c9 = check(counters, "tensor_count>100", tc > 100.0)
+
+// ── Test 2: Tensor discovery ────────────────────────────────────
+print(" ")
+print("--- Test 2: Tensor info ---")
+
+let has_emb = gguf_has_tensor(model, "token_embd.weight")
+let _c10 = check(counters, "has token_embd", has_emb == 1.0)
+
+let has_q0 = gguf_has_tensor(model, "blk.0.attn_q.weight")
+let _c11 = check(counters, "has blk.0.attn_q", has_q0 == 1.0)
+
+let has_out = gguf_has_tensor(model, "output_norm.weight")
+let _c12 = check(counters, "has output_norm", has_out == 1.0)
+
+let q_type = gguf_tensor_type(model, "blk.0.attn_q.weight")
+let q_count = gguf_tensor_count(model, "blk.0.attn_q.weight")
+print("  blk.0.attn_q.weight: type={q_type} count={q_count}")
+let _c13 = check(counters, "attn_q type=Q4_K(12)", q_type == 12.0)
+
+let norm_type = gguf_tensor_type(model, "blk.0.attn_norm.weight")
+print("  blk.0.attn_norm.weight: type={norm_type}")
+let _c14 = check(counters, "attn_norm type=F32(0)", norm_type == 0.0)
+
+// ── Test 3: Load norm weight from file ──────────────────────────
+print(" ")
+print("--- Test 3: Load attn_norm (F32) from file ---")
+
+let norm_w = load_tensor_from_file(model_path, model, "blk.0.attn_norm.weight")
+let norm_len = len(norm_w)
+print("  Length: {norm_len}")
+let _c15 = check(counters, "norm len=1536", norm_len == 1536.0)
+
+// Norm weights should be positive (typically near 1.0)
+let nv0 = norm_w[0]
+let nv1 = norm_w[1]
+print("  First 2 values: {nv0} {nv1}")
+let _c16 = check(counters, "norm[0]>0", nv0 > 0.0)
+let _c17 = check(counters, "norm[0]<10", nv0 < 10.0)
+
+// ── Test 4: Load Q4_K weight from file ──────────────────────────
+// Use attn_k (smaller due to GQA: n_kv_head * head_dim * n_embd)
+print(" ")
+print("--- Test 4: Load attn_k (Q4_K) from file ---")
+
+let k_tname = "blk.0.attn_k.weight"
+let k_count = gguf_tensor_count(model, k_tname)
+print("  Expected count: {k_count}")
+let q_w = load_tensor_from_file(model_path, model, k_tname)
+let q_len = len(q_w)
+print("  Actual length: {q_len}")
+let _c18 = check(counters, "k_w len=count", q_len == k_count)
+
+// Q4_K dequant should produce reasonable values (not all zeros)
+let qv0 = q_w[0]
+let qv1 = q_w[1]
+print("  First 2 values: {qv0} {qv1}")
+// Check not all zeros (at least one non-zero in first 10)
+let mut nonzero = 0.0
+let mut ni = 0.0
+while ni < 10.0
+  if q_w[int(ni)] != 0.0
+    nonzero = nonzero + 1.0
+  end
+  ni = ni + 1.0
+end
+let _c19 = check(counters, "q_w has nonzero", nonzero > 0.0)
+
+// ── Test 5: Load embedding row from file ────────────────────────
+print(" ")
+print("--- Test 5: Load BOS embedding from file ---")
+
+let mut bos_id = 1.0
+if map_has(model, "kv.tokenizer.ggml.bos_token_id")
+  bos_id = map_get(model, "kv.tokenizer.ggml.bos_token_id")
+end
+print("  BOS token ID: {bos_id}")
+
+// Use Rust gguf_load_tensor (4-arg row extraction) for u64 precision
+let emb = gguf_load_tensor(model_path, model, "token_embd.weight", bos_id)
+let emb_len = len(emb)
+print("  Embedding length: {emb_len}")
+let _c20 = check(counters, "emb len=n_embd", emb_len == n_embd)
+
+let ev0 = emb[0]
+let ev1 = emb[1]
+print("  First 2 values: {ev0} {ev1}")
+
+// Embedding should have non-zero values (small for Q6_K, typically -1 to +1)
+let mut emb_nz = 0.0
+let mut ei = 0.0
+while ei < 10.0
+  if emb[int(ei)] != 0.0
+    emb_nz = emb_nz + 1.0
+  end
+  ei = ei + 1.0
+end
+let _c21 = check(counters, "emb has nonzero", emb_nz > 0.0)
+
+// ── Summary ─────────────────────────────────────────────────────
+print(" ")
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print("=== RESULTS: {pass}/{total} passed ===")

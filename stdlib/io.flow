@@ -1,5 +1,5 @@
 // stdlib/io.flow — File I/O and console output via FFI
-// Phase 73: Pure .flow I/O layer for self-hosting path
+// Pure .flow I/O layer for self-hosting path
 // Requires: --allow-ffi
 //
 // Uses msvcrt.dll (C runtime) for portable file operations.

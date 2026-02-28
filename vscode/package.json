@@ -1,0 +1,48 @@
+{
+  "name": "octoflow",
+  "displayName": "OctoFlow",
+  "description": "Syntax highlighting and language support for the OctoFlow GPU-native programming language",
+  "version": "0.1.0",
+  "publisher": "octoflow",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "octoflow",
+    "flow",
+    "gpu",
+    "llm",
+    "programming language"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/octoflow/octoflow"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "flow",
+        "aliases": [
+          "OctoFlow",
+          "flow",
+          "octoflow"
+        ],
+        "extensions": [
+          ".flow"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "flow",
+        "scopeName": "source.flow",
+        "path": "./octoflow.tmLanguage.json"
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+// Simple test for the self-hosting lexer
+let x = 42.0
+let name = "OctoFlow"
+let sum = x + 1.0
+if sum > 40.0
+  print("hello {name}")
+end

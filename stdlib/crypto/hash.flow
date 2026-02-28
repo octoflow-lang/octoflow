@@ -1,0 +1,55 @@
+// stdlib/crypto/hash.flow — Hashing utilities (pure .flow)
+//
+// Functions: djb2, fnv1a, checksum, crc_simple
+
+fn djb2(s)
+  // DJB2 hash — fast non-cryptographic string hash
+  let n = len(s)
+  let mut hash = 5381.0
+  let mut i = 0.0
+  while i < n
+    let c = ord(char_at(s, i))
+    hash = hash * 33.0 + c
+    hash = hash - floor(hash / 4294967296.0) * 4294967296.0
+    i = i + 1.0
+  end
+  return hash
+end
+
+fn fnv1a(s)
+  // FNV-1a hash — good distribution for hash tables
+  let n = len(s)
+  let mut hash = 2166136261.0
+  let mut i = 0.0
+  while i < n
+    let c = ord(char_at(s, i))
+    hash = hash * 16777619.0
+    hash = hash + c
+    hash = hash - floor(hash / 4294967296.0) * 4294967296.0
+    i = i + 1.0
+  end
+  return hash
+end
+
+fn checksum(arr)
+  // Simple numeric checksum (sum of all elements)
+  let mut sum = 0.0
+  for x in arr
+    sum = sum + x
+  end
+  return sum
+end
+
+fn crc_simple(s)
+  // Simple CRC-like hash for data integrity
+  let n = len(s)
+  let mut crc = 0.0
+  let mut i = 0.0
+  while i < n
+    let c = ord(char_at(s, i))
+    crc = crc * 31.0 + c
+    crc = crc - floor(crc / 2147483647.0) * 2147483647.0
+    i = i + 1.0
+  end
+  return crc
+end

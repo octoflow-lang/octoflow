@@ -1,0 +1,417 @@
+// test_inference_e2e.flow — End-to-end inference pipeline test
+//
+// Builds a synthetic GGUF with ALL tensors needed for 1-layer inference:
+//   - token_embd.weight (F32, 32x32)
+//   - blk.0.attn_norm.weight, blk.0.ffn_norm.weight (F32, [32])
+//   - blk.0.attn_q/k/v/output.weight (F32, 32x32)
+//   - blk.0.ffn_gate/up.weight (F32, 32x64)
+//   - blk.0.ffn_down.weight (F32, 64x32)
+//   - output_norm.weight (F32, [32])
+//
+// Model: 1 layer, 4 heads, 4 kv_heads, 32 dim, 64 ff, 32 vocab
+// Tests: metadata parsing, weight loading, rmsnorm, full layer, logits
+//
+// Run: octoflow run test_inference_e2e.flow --allow-read --allow-write --allow-exec
+
+use "../formats/gguf"
+use "weight_loader"
+use "transformer"
+use "sampling"
+
+let mut counters = [0.0, 0.0]
+
+fn check_near(counters, label, got, expected, tol)
+  let d = abs(got - expected)
+  if d < tol
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}, diff={d}")
+  return 0.0
+end
+
+fn check_eq(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+// ── Binary write helpers ─────────────────────────────────────────
+fn write_u32(arr, val)
+  let b0 = val - floor(val / 256.0) * 256.0
+  let r1 = floor(val / 256.0)
+  let b1 = r1 - floor(r1 / 256.0) * 256.0
+  let r2 = floor(r1 / 256.0)
+  let b2 = r2 - floor(r2 / 256.0) * 256.0
+  let b3 = floor(r2 / 256.0)
+  push(arr, b0)
+  push(arr, b1)
+  push(arr, b2)
+  push(arr, b3)
+  return 0.0
+end
+
+fn write_u64(arr, val)
+  let low = val - floor(val / 4294967296.0) * 4294967296.0
+  let high = floor(val / 4294967296.0)
+  let _w1 = write_u32(arr, low)
+  let _w2 = write_u32(arr, high)
+  return 0.0
+end
+
+fn write_f32(arr, val)
+  let bits = float_to_bits(val)
+  let _w = write_u32(arr, bits)
+  return 0.0
+end
+
+fn write_gguf_string(arr, s)
+  let slen = len(s)
+  let _wl = write_u64(arr, slen)
+  let mut i = 0.0
+  while i < slen
+    let c = char_at(s, i)
+    push(arr, ord(c))
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn write_tensor_info(arr, name, n_dims, dim0, dim1, ttype, offset)
+  let _tn = write_gguf_string(arr, name)
+  let _nd = write_u32(arr, n_dims)
+  let _d0 = write_u64(arr, dim0)
+  if n_dims > 1.0
+    let _d1 = write_u64(arr, dim1)
+  end
+  let _tt = write_u32(arr, ttype)
+  let _to = write_u64(arr, offset)
+  return 0.0
+end
+
+// Write N floats of same value
+fn write_fill(arr, val, count)
+  let mut i = 0.0
+  while i < count
+    let _w = write_f32(arr, val)
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Write identity matrix
+fn write_identity(arr, size)
+  let mut r = 0.0
+  while r < size
+    let mut c = 0.0
+    while c < size
+      if r == c
+        let _w = write_f32(arr, 1.0)
+      else
+        let _w = write_f32(arr, 0.0)
+      end
+      c = c + 1.0
+    end
+    r = r + 1.0
+  end
+  return 0.0
+end
+
+// Write scaled matrix (val * I)
+fn write_scaled_identity(arr, size, val)
+  let mut r = 0.0
+  while r < size
+    let mut c = 0.0
+    while c < size
+      if r == c
+        let _w = write_f32(arr, val)
+      else
+        let _w = write_f32(arr, 0.0)
+      end
+      c = c + 1.0
+    end
+    r = r + 1.0
+  end
+  return 0.0
+end
+
+print("=== END-TO-END INFERENCE TEST ===")
+print(" ")
+
+// ── Model parameters ────────────────────────────────────────────
+let N_EMBD = 32.0
+let N_HEAD = 4.0
+let N_KV_HEAD = 4.0
+let N_FF = 64.0
+let N_LAYER = 1.0
+let VOCAB = 32.0
+let EPS = 0.00001
+
+// ── Build synthetic GGUF file ────────────────────────────────────
+print("--- Building synthetic GGUF (1-layer, 32-dim) ---")
+
+let mut gguf = []
+
+// Header: magic + version + tensor_count + kv_count
+let _m = write_u32(gguf, 1179993927.0)
+let _v = write_u32(gguf, 3.0)
+let _tc = write_u64(gguf, 12.0)     // 12 tensors total
+let _kc = write_u64(gguf, 8.0)      // 8 KV pairs
+
+// KV pairs
+let _k1 = write_gguf_string(gguf, "general.architecture")
+let _t1 = write_u32(gguf, 8.0)
+let _v1 = write_gguf_string(gguf, "llama")
+
+let _k2 = write_gguf_string(gguf, "llama.block_count")
+let _t2 = write_u32(gguf, 4.0)
+let _v2 = write_u32(gguf, 1.0)
+
+let _k3 = write_gguf_string(gguf, "llama.attention.head_count")
+let _t3 = write_u32(gguf, 4.0)
+let _v3 = write_u32(gguf, 4.0)
+
+let _k4 = write_gguf_string(gguf, "llama.embedding_length")
+let _t4 = write_u32(gguf, 4.0)
+let _v4 = write_u32(gguf, 32.0)
+
+let _k5 = write_gguf_string(gguf, "llama.feed_forward_length")
+let _t5 = write_u32(gguf, 4.0)
+let _v5 = write_u32(gguf, 64.0)
+
+let _k6 = write_gguf_string(gguf, "llama.vocab_size")
+let _t6 = write_u32(gguf, 4.0)
+let _v6 = write_u32(gguf, 32.0)
+
+let _k7 = write_gguf_string(gguf, "llama.attention.head_count_kv")
+let _t7 = write_u32(gguf, 4.0)
+let _v7 = write_u32(gguf, 4.0)
+
+// Float KV: epsilon
+let _k8 = write_gguf_string(gguf, "llama.attention.layer_norm_rms_epsilon")
+let _t8 = write_u32(gguf, 6.0)      // GGUF_TYPE_FLOAT32
+let _v8 = write_f32(gguf, 0.00001)
+
+// ── Tensor layout (all F32) ─────────────────────────────────────
+// Calculate offsets (relative to data section start)
+// Tensor 1: token_embd.weight [32, 32] = 1024 floats = 4096 bytes  → offset 0
+// Tensor 2: blk.0.attn_norm.weight [32] = 32 floats = 128 bytes    → offset 4096
+// Tensor 3: blk.0.attn_q.weight [32, 32] = 1024 floats             → offset 4224
+// Tensor 4: blk.0.attn_k.weight [32, 32] = 1024 floats             → offset 8320
+// Tensor 5: blk.0.attn_v.weight [32, 32] = 1024 floats             → offset 12416
+// Tensor 6: blk.0.attn_output.weight [32, 32] = 1024 floats        → offset 16512
+// Tensor 7: blk.0.ffn_norm.weight [32] = 32 floats                 → offset 20608
+// Tensor 8: blk.0.ffn_gate.weight [64, 32] = 2048 floats           → offset 20736
+// Tensor 9: blk.0.ffn_up.weight [64, 32] = 2048 floats             → offset 28928
+// Tensor 10: blk.0.ffn_down.weight [32, 64] = 2048 floats          → offset 37120
+// Tensor 11: output_norm.weight [32] = 32 floats                    → offset 45312
+// Tensor 12: output.weight [32, 32] = 1024 floats                  → offset 45440
+
+let _ti1 = write_tensor_info(gguf, "token_embd.weight", 2.0, 32.0, 32.0, 0.0, 0.0)
+let _ti2 = write_tensor_info(gguf, "blk.0.attn_norm.weight", 1.0, 32.0, 0.0, 0.0, 4096.0)
+let _ti3 = write_tensor_info(gguf, "blk.0.attn_q.weight", 2.0, 32.0, 32.0, 0.0, 4224.0)
+let _ti4 = write_tensor_info(gguf, "blk.0.attn_k.weight", 2.0, 32.0, 32.0, 0.0, 8320.0)
+let _ti5 = write_tensor_info(gguf, "blk.0.attn_v.weight", 2.0, 32.0, 32.0, 0.0, 12416.0)
+let _ti6 = write_tensor_info(gguf, "blk.0.attn_output.weight", 2.0, 32.0, 32.0, 0.0, 16512.0)
+let _ti7 = write_tensor_info(gguf, "blk.0.ffn_norm.weight", 1.0, 32.0, 0.0, 0.0, 20608.0)
+let _ti8 = write_tensor_info(gguf, "blk.0.ffn_gate.weight", 2.0, 64.0, 32.0, 0.0, 20736.0)
+let _ti9 = write_tensor_info(gguf, "blk.0.ffn_up.weight", 2.0, 64.0, 32.0, 0.0, 28928.0)
+let _ti10 = write_tensor_info(gguf, "blk.0.ffn_down.weight", 2.0, 32.0, 64.0, 0.0, 37120.0)
+let _ti11 = write_tensor_info(gguf, "output_norm.weight", 1.0, 32.0, 0.0, 0.0, 45312.0)
+let _ti12 = write_tensor_info(gguf, "output.weight", 2.0, 32.0, 32.0, 0.0, 45440.0)
+
+// Pad to 32-byte alignment
+let current_pos = len(gguf)
+let rem = current_pos - floor(current_pos / 32.0) * 32.0
+let mut pad_needed = 32.0 - rem
+if rem == 0.0
+  pad_needed = 0.0
+end
+let mut pi = 0.0
+while pi < pad_needed
+  push(gguf, 0.0)
+  pi = pi + 1.0
+end
+
+let ds = len(gguf)
+print("  Data section at byte {ds}")
+
+// ── Tensor data ──────────────────────────────────────────────────
+// 1. token_embd: 32x32 — row i has value 0.1*(i+1) in all positions
+let mut emb_row = 0.0
+while emb_row < 32.0
+  let emb_val = 0.1 * (emb_row + 1.0)
+  let _we = write_fill(gguf, emb_val, 32.0)
+  emb_row = emb_row + 1.0
+end
+
+// 2. attn_norm: all 1.0 (identity norm)
+let _wn1 = write_fill(gguf, 1.0, 32.0)
+
+// 3. attn_q: identity matrix
+let _wq = write_identity(gguf, 32.0)
+
+// 4. attn_k: identity matrix
+let _wk = write_identity(gguf, 32.0)
+
+// 5. attn_v: identity matrix
+let _wv = write_identity(gguf, 32.0)
+
+// 6. attn_output: identity matrix
+let _wo = write_identity(gguf, 32.0)
+
+// 7. ffn_norm: all 1.0
+let _wn2 = write_fill(gguf, 1.0, 32.0)
+
+// 8. ffn_gate: 64x32 — 0.1 * identity-like (small values to avoid blowup)
+let _wg = write_fill(gguf, 0.01, 2048.0)
+
+// 9. ffn_up: 64x32 — 0.1 * identity-like
+let _wu = write_fill(gguf, 0.01, 2048.0)
+
+// 10. ffn_down: 32x64 — 0.1 * identity-like
+let _wd = write_fill(gguf, 0.01, 2048.0)
+
+// 11. output_norm: all 1.0
+let _wn3 = write_fill(gguf, 1.0, 32.0)
+
+// 12. output.weight: identity matrix (so logits = normed hidden)
+let _wout = write_identity(gguf, 32.0)
+
+let fsize = len(gguf)
+print("  Total file: {fsize} bytes")
+
+write_bytes("_test_e2e.gguf", gguf)
+print("  Written _test_e2e.gguf")
+print(" ")
+
+// ── Test 1: Load model metadata ──────────────────────────────────
+print("--- Test 1: Load model ---")
+let model = gguf_load("_test_e2e.gguf")
+
+let n_embd = gguf_meta(model, "embedding_length")
+let n_head = gguf_meta(model, "attention.head_count")
+let n_kv_head = gguf_meta(model, "attention.head_count_kv")
+let n_ff = gguf_meta(model, "feed_forward_length")
+let n_layer = gguf_meta(model, "block_count")
+let vocab_size = gguf_meta(model, "vocab_size")
+let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+
+let _c1 = check_eq(counters, "n_embd=32", n_embd, 32.0)
+let _c2 = check_eq(counters, "n_head=4", n_head, 4.0)
+let _c3 = check_eq(counters, "n_kv_head=4", n_kv_head, 4.0)
+let _c4 = check_eq(counters, "n_ff=64", n_ff, 64.0)
+let _c5 = check_eq(counters, "n_layer=1", n_layer, 1.0)
+let _c6 = check_eq(counters, "vocab=32", vocab_size, 32.0)
+let _c7 = check_near(counters, "eps", eps, 0.00001, 0.000001)
+
+print("  n_embd={n_embd} n_head={n_head} n_kv_head={n_kv_head} n_ff={n_ff}")
+
+// ── Test 2: All tensors present ──────────────────────────────────
+print("--- Test 2: Tensor discovery ---")
+let file_bytes = read_bytes("_test_e2e.gguf")
+
+let _c8 = check_eq(counters, "has token_embd", gguf_has_tensor(model, "token_embd.weight"), 1.0)
+let _c9 = check_eq(counters, "has blk.0.attn_norm", gguf_has_tensor(model, "blk.0.attn_norm.weight"), 1.0)
+let _c10 = check_eq(counters, "has blk.0.attn_q", gguf_has_tensor(model, "blk.0.attn_q.weight"), 1.0)
+let _c11 = check_eq(counters, "has blk.0.attn_k", gguf_has_tensor(model, "blk.0.attn_k.weight"), 1.0)
+let _c12 = check_eq(counters, "has blk.0.attn_v", gguf_has_tensor(model, "blk.0.attn_v.weight"), 1.0)
+let _c13 = check_eq(counters, "has blk.0.attn_output", gguf_has_tensor(model, "blk.0.attn_output.weight"), 1.0)
+let _c14 = check_eq(counters, "has blk.0.ffn_norm", gguf_has_tensor(model, "blk.0.ffn_norm.weight"), 1.0)
+let _c15 = check_eq(counters, "has blk.0.ffn_gate", gguf_has_tensor(model, "blk.0.ffn_gate.weight"), 1.0)
+let _c16 = check_eq(counters, "has blk.0.ffn_up", gguf_has_tensor(model, "blk.0.ffn_up.weight"), 1.0)
+let _c17 = check_eq(counters, "has blk.0.ffn_down", gguf_has_tensor(model, "blk.0.ffn_down.weight"), 1.0)
+let _c18 = check_eq(counters, "has output_norm", gguf_has_tensor(model, "output_norm.weight"), 1.0)
+let _c19 = check_eq(counters, "has output.weight", gguf_has_tensor(model, "output.weight"), 1.0)
+
+// ── Test 3: Load embedding ───────────────────────────────────────
+print("--- Test 3: Load embedding ---")
+let bos_emb = load_embedding_row(file_bytes, model, 1.0, n_embd)
+let _c20 = check_eq(counters, "emb len=32", len(bos_emb), 32.0)
+// Row 1 should be 0.1*(1+1) = 0.2 in all positions
+let _c21 = check_near(counters, "emb[0]=0.2", bos_emb[0], 0.2, 0.01)
+let _c22 = check_near(counters, "emb[31]=0.2", bos_emb[31], 0.2, 0.01)
+
+// ── Test 4: RMSNorm CPU with adaptive eps ────────────────────────
+print("--- Test 4: RMSNorm CPU ---")
+let norm_w = read_tensor_by_name(file_bytes, model, "blk.0.attn_norm.weight")
+let normed = rmsnorm_cpu(bos_emb, norm_w, eps)
+let _c23 = check_eq(counters, "normed len=32", len(normed), 32.0)
+// All-same input with weight=1 → output should be all 1.0 (or close)
+// RMS of [0.2, 0.2, ..., 0.2] = 0.2, so 0.2/0.2 * 1.0 = 1.0
+let _c24 = check_near(counters, "normed[0]~1.0", normed[0], 1.0, 0.01)
+
+// ── Test 5: Weight loading for all layer tensors ─────────────────
+print("--- Test 5: Weight loading ---")
+let prefix = "blk.0."
+let an = read_tensor_by_name(file_bytes, model, prefix + "attn_norm.weight")
+let wq = read_tensor_by_name(file_bytes, model, prefix + "attn_q.weight")
+let wk = read_tensor_by_name(file_bytes, model, prefix + "attn_k.weight")
+let wv = read_tensor_by_name(file_bytes, model, prefix + "attn_v.weight")
+let wo = read_tensor_by_name(file_bytes, model, prefix + "attn_output.weight")
+let fn_w = read_tensor_by_name(file_bytes, model, prefix + "ffn_norm.weight")
+let wg = read_tensor_by_name(file_bytes, model, prefix + "ffn_gate.weight")
+let wu = read_tensor_by_name(file_bytes, model, prefix + "ffn_up.weight")
+let wd = read_tensor_by_name(file_bytes, model, prefix + "ffn_down.weight")
+
+let _c25 = check_eq(counters, "norm len=32", len(an), 32.0)
+let _c26 = check_eq(counters, "wq len=1024", len(wq), 1024.0)
+let _c27 = check_eq(counters, "wk len=1024", len(wk), 1024.0)
+let _c28 = check_eq(counters, "gate len=2048", len(wg), 2048.0)
+let _c29 = check_eq(counters, "down len=2048", len(wd), 2048.0)
+
+// ── Test 6: Output logits (CPU) ──────────────────────────────────
+print("--- Test 6: Output logits ---")
+// With output.weight = identity matrix and normed hidden = all-same,
+// logits = normed_hidden dot each row of output.weight
+let out_norm = read_tensor_by_name(file_bytes, model, "output_norm.weight")
+let normed_out = rmsnorm_cpu(bos_emb, out_norm, eps)
+
+// Output projection: dot product of normed_out with each output row
+let mut logits = []
+let mut vi = 0.0
+while vi < vocab_size
+  let row = load_embedding_row(file_bytes, model, vi, n_embd)
+  let mut dot = 0.0
+  let mut di = 0.0
+  while di < n_embd
+    dot = dot + row[int(di)] * normed_out[int(di)]
+    di = di + 1.0
+  end
+  push(logits, dot)
+  vi = vi + 1.0
+end
+
+let logits_len = len(logits)
+let _c30 = check_eq(counters, "logits len=32", logits_len, 32.0)
+
+// With output.weight = identity, logit[i] = sum of normed[j] * I[i,j] = normed[i]
+// But we're using token_embd.weight for output projection (no output.weight in tie mode)
+// Actually we DO have output.weight = identity. So logit[i] = normed[i].
+// Token 0 embedding is 0.1*1=0.1 everywhere, so dot(normed, emb_row_0) = 32 * 1.0 * 0.1 = 3.2
+// Token 31 embedding is 0.1*32=3.2 everywhere, so dot(normed, emb_row_31) = 32 * 1.0 * 3.2 = 102.4
+// Greedy should select token 31 (highest logit)
+let next_token = sample_greedy(logits)
+let first_logit = logits[0]
+let last_logit = logits[31]
+print("  Predicted token: {next_token}")
+print("  Logit[0]={first_logit}")
+print("  Logit[31]={last_logit}")
+
+// Token with highest logit should be 31 (highest embedding values)
+let _c31 = check_eq(counters, "greedy token=31", next_token, 31.0)
+
+// ── Cleanup ──────────────────────────────────────────────────────
+let _rm = exec("rm", "_test_e2e.gguf")
+
+// ── Summary ──────────────────────────────────────────────────────
+print(" ")
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print("=== RESULTS: {pass}/{total} passed ===")

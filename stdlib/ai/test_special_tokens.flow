@@ -1,0 +1,52 @@
+// Quick check of special token IDs for Qwen2.5
+let model_path = "G:/ollama_models/blobs/sha256-29d8c98fa6b098e200069bfb88b9508dc3e85586d20cba59f8dda9a808165104"
+let vocab = gguf_load_vocab(model_path)
+
+// Check known special token IDs
+let t151643 = vocab[151643]
+let t151644 = vocab[151644]
+let t151645 = vocab[151645]
+let t151646 = vocab[151646]
+let t151647 = vocab[151647]
+print("151643: {t151643}")
+print("151644: {t151644}")
+print("151645: {t151645}")
+print("151646: {t151646}")
+print("151647: {t151647}")
+
+// Check newline token
+let nl = chr(10)
+let nl_toks = gguf_tokenize(model_path, nl)
+let nl_n = len(nl_toks)
+print(" ")
+print("Newline tokenizes to {nl_n} tokens:")
+let mut i = 0.0
+while i < nl_n
+  let tid = nl_toks[int(i)]
+  let tt = vocab[int(tid)]
+  print("  id={tid} text={tt}")
+  i = i + 1.0
+end
+
+// Check "user" and "assistant" tokenization
+let u_toks = gguf_tokenize(model_path, "user")
+let a_toks = gguf_tokenize(model_path, "assistant")
+let un = len(u_toks)
+let an = len(a_toks)
+print(" ")
+print("user = {un} tokens:")
+let mut j = 0.0
+while j < un
+  let uid = u_toks[int(j)]
+  let ut = vocab[int(uid)]
+  print("  id={uid} text={ut}")
+  j = j + 1.0
+end
+print("assistant = {an} tokens:")
+let mut k = 0.0
+while k < an
+  let aid = a_toks[int(k)]
+  let at = vocab[int(aid)]
+  print("  id={aid} text={at}")
+  k = k + 1.0
+end

@@ -1,0 +1,64 @@
+// test_builtins.flow — Test new builtins added for self-hosting compiler
+
+// substr
+let s1 = substr("hello world", 6.0, 5.0)
+print("substr: {s1}")
+
+// index_of
+let i1 = index_of("hello world", "world")
+print("index_of: {i1}")
+
+let i2 = index_of("hello world", "xyz")
+print("index_of_miss: {i2}")
+
+// repeat
+let r1 = repeat("ab", 3.0)
+print("repeat: {r1}")
+
+// int
+let n1 = int("42")
+print("int: {n1}")
+
+let n2 = int("3.7")
+print("int_trunc: {n2}")
+
+// clamp
+let c1 = clamp(5.0, 1.0, 10.0)
+print("clamp_mid: {c1}")
+
+let neg3 = 0.0 - 3.0
+let c2 = clamp(neg3, 0.0, 10.0)
+print("clamp_low: {c2}")
+
+let c3 = clamp(15.0, 0.0, 10.0)
+print("clamp_high: {c3}")
+
+// exp/log
+let e1 = exp(0.0)
+print("exp0: {e1}")
+
+let l1 = log(1.0)
+print("log1: {l1}")
+
+// sin/cos
+let s2 = sin(0.0)
+print("sin0: {s2}")
+
+let c4 = cos(0.0)
+print("cos0: {c4}")
+
+// nested: substr inside expression
+let s3 = "hello_world_test"
+let s4 = substr(s3, 0.0, 5.0)
+print("nested_substr: {s4}")
+
+// index_of used in expression
+let pos = index_of("abc.def", ".")
+let before = substr("abc.def", 0.0, pos)
+print("before_dot: {before}")
+
+// regex_match
+let rm1 = regex_match("hello123", "^[a-z]+[0-9]+$")
+print("regex_match: {rm1}")
+
+print("BUILTINS DONE")

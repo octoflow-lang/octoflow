@@ -1,0 +1,78 @@
+// Phase 33: Advanced Array Operations Demo
+// Run with: flowgpu-cli run examples/array_ops_advanced.flow
+
+// ── Array Creation ─────────────────────────────────────────────
+let nums = range_array(1, 11)
+let n = len(nums)
+print("range_array(1, 11) → {n} elements")
+
+// ── Aggregation ────────────────────────────────────────────────
+let total = sum(nums)
+print("sum: {total}")
+
+let lo = min(nums)
+let hi = max(nums)
+print("min: {lo}, max: {hi}")
+
+let c = count(nums)
+print("count: {c}")
+
+// ── Element Access ─────────────────────────────────────────────
+let f = first(nums)
+let l = last(nums)
+print("first: {f}, last: {l}")
+
+// ── Search ─────────────────────────────────────────────────────
+let idx = find(nums, 5.0)
+print("find(5.0) at index: {idx}")
+
+let missing = find(nums, 99.0)
+print("find(99.0): {missing}")
+
+// ── Transform ──────────────────────────────────────────────────
+let rev = reverse(nums)
+let rev_str = join(rev, ", ")
+print("reversed: [{rev_str}]")
+
+let mid = slice(nums, 3, 7)
+let mid_str = join(mid, ", ")
+print("slice(3, 7): [{mid_str}]")
+
+// ── Sort ───────────────────────────────────────────────────────
+let unsorted = [30.0, 10.0, 50.0, 20.0, 40.0]
+let sorted = sort_array(unsorted)
+let sorted_str = join(sorted, ", ")
+print("sorted: [{sorted_str}]")
+
+// ── Unique ─────────────────────────────────────────────────────
+let dupes = [1.0, 2.0, 1.0, 3.0, 2.0, 4.0, 3.0]
+let u = unique(dupes)
+let u_str = join(u, ", ")
+print("unique: [{u_str}]")
+
+// ── String Arrays ──────────────────────────────────────────────
+let symbols = split("XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD", ",")
+let sorted_sym = sort_array(symbols)
+print("sorted symbols: {join(sorted_sym, \", \")}")
+
+let found = find(symbols, "GBPUSD")
+print("GBPUSD at index: {found}")
+
+// ── Type Introspection ─────────────────────────────────────────
+let t1 = type_of(42.0)
+let t2 = type_of("hello")
+print("type_of(42.0) = {t1}")
+print("type_of(\"hello\") = {t2}")
+
+// ── Split/Join Roundtrip ───────────────────────────────────────
+let csv = "XAUUSD,2651.30,BUY,0.01"
+let fields = split(csv, ",")
+let rejoined = join(fields, ",")
+let ok = csv == rejoined
+print("roundtrip ok: {ok}")
+
+// ── Chained Operations ─────────────────────────────────────────
+let data = range_array(1, 21)
+let top5 = slice(sort_array(reverse(data)), 0, 5)
+let result = join(top5, " > ")
+print("top 5: {result}")

@@ -1,0 +1,9 @@
+// Cinematic photo filter — warm color grading on any photo
+use filters
+
+stream photo = tap("input.jpg")
+stream graded = photo |> filters.brightness(20.0) |> filters.contrast(1.2)
+stream warm = graded |> filters.warm_tone(25.0) |> filters.gamma(0.9)
+stream final = warm |> clamp(0.0, 255.0)
+emit(final, "cinematic_output.png")
+print("Cinematic filter applied!")

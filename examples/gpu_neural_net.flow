@@ -1,0 +1,228 @@
+// gpu_neural_net.flow — GPU Neural Network Inference
+//
+// "Forward pass as dispatch chain."
+//
+// Architecture: 256 → 64 (ReLU) → 16
+// 16,384 weights layer 1 + 1,024 weights layer 2 = 17,408 parameters
+// 2 dispatches, 1 submission, 0 CPU neuron iterations.
+//
+// Each workgroup computes one output neuron via shared-memory GEMV:
+//   256 threads cooperatively reduce the dot product of a weight row × input vector.
+//   Layer 1: 64 workgroups. Layer 2: 16 workgroups.
+//
+// Run: octoflow run examples/gpu_neural_net.flow --allow-ffi --allow-read
+
+use "../stdlib/loom/ops/runtime"
+
+let N1 = 256.0
+let M1 = 64.0
+let M2 = 16.0
+
+// Boot GPU
+rt_init()
+
+// Load kernels
+let pipe_hidden = rt_load_pipeline("tests/gpu_shaders/22_gemv_relu.spv", 4.0, 4.0)
+let pipe_output = rt_load_pipeline("tests/gpu_shaders/23_gemv.spv", 4.0, 4.0)
+
+// ── Generate weights (deterministic pattern) ───────────────────────
+// W1 (64×256): cycling small values for variety
+let mut w1 = []
+let mut i = 0.0
+while i < M1 * N1
+  let v = i - floor(i / 7.0) * 7.0
+  push(w1, (v - 3.0) * 0.001)
+  i = i + 1.0
+end
+
+let mut b1 = []
+let mut i = 0.0
+while i < M1
+  push(b1, 0.0)
+  i = i + 1.0
+end
+
+// W2 (16×64): different cycling pattern
+let mut w2 = []
+let mut i = 0.0
+while i < M2 * M1
+  let v = i - floor(i / 5.0) * 5.0
+  push(w2, (v - 2.0) * 0.01)
+  i = i + 1.0
+end
+
+let mut b2 = []
+let mut i = 0.0
+while i < M2
+  push(b2, 0.0)
+  i = i + 1.0
+end
+
+// Input: [1, 2, 3, ..., 256]
+let mut x = []
+let mut i = 0.0
+while i < N1
+  push(x, i + 1.0)
+  i = i + 1.0
+end
+
+// ── Upload to GPU ──────────────────────────────────────────────────
+let buf_w1 = rt_create_buffer(M1 * N1 * 4.0)
+let buf_x = rt_create_buffer(N1 * 4.0)
+let buf_b1 = rt_create_buffer(M1 * 4.0)
+let buf_h = rt_create_buffer(M1 * 4.0)
+
+let buf_w2 = rt_create_buffer(M2 * M1 * 4.0)
+let buf_b2 = rt_create_buffer(M2 * 4.0)
+let buf_y = rt_create_buffer(M2 * 4.0)
+
+rt_upload(buf_w1, w1)
+rt_upload(buf_x, x)
+rt_upload(buf_b1, b1)
+
+rt_upload(buf_w2, w2)
+rt_upload(buf_b2, b2)
+
+// Zero output buffers
+let mut hz = []
+let mut i = 0.0
+while i < M1
+  push(hz, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_h, hz)
+
+let mut yz = []
+let mut i = 0.0
+while i < M2
+  push(yz, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_y, yz)
+
+// ── Forward pass: 2 dispatches, 1 submit ───────────────────────────
+let t0 = time()
+
+rt_chain_begin(2.0, 4.0)
+
+// Layer 1: h = relu(W1 * x + b1) — 64 workgroups × 256 threads
+let mut pc1 = [N1]
+rt_chain_push_constants(pipe_hidden, pc1)
+let mut bufs1 = [buf_w1, buf_x, buf_b1, buf_h]
+rt_chain_dispatch(pipe_hidden, bufs1, M1)
+
+// Layer 2: y = W2 * h + b2 — 16 workgroups × 256 threads
+let mut pc2 = [M1]
+rt_chain_push_constants(pipe_output, pc2)
+let mut bufs2 = [buf_w2, buf_h, buf_b2, buf_y]
+rt_chain_dispatch(pipe_output, bufs2, M2)
+
+rt_chain_end()
+let t1 = time()
+let record_ms = (t1 - t0) * 1000.0
+
+let t2 = time()
+rt_chain_submit_wait()
+let t3 = time()
+let gpu_ms = (t3 - t2) * 1000.0
+
+// ── Download output ────────────────────────────────────────────────
+rt_download(buf_y, M2)
+let mut gpu_y = []
+let mut i = 0.0
+while i < M2
+  push(gpu_y, rt_result[int(i)])
+  i = i + 1.0
+end
+
+// ── CPU verification (same computation) ────────────────────────────
+// Layer 1: h_cpu = relu(W1 * x + b1)
+let mut h_cpu = []
+let mut j = 0.0
+while j < M1
+  let mut dot = 0.0
+  let mut i = 0.0
+  while i < N1
+    dot = dot + w1[int(j * N1 + i)] * x[int(i)]
+    i = i + 1.0
+  end
+  dot = dot + b1[int(j)]
+  if dot < 0.0
+    dot = 0.0
+  end
+  push(h_cpu, dot)
+  j = j + 1.0
+end
+
+// Layer 2: y_cpu = W2 * h_cpu + b2
+let mut y_cpu = []
+let mut j = 0.0
+while j < M2
+  let mut dot = 0.0
+  let mut i = 0.0
+  while i < M1
+    dot = dot + w2[int(j * M1 + i)] * h_cpu[int(i)]
+    i = i + 1.0
+  end
+  dot = dot + b2[int(j)]
+  push(y_cpu, dot)
+  j = j + 1.0
+end
+
+// ── Compare GPU vs CPU ─────────────────────────────────────────────
+let mut max_err = 0.0
+let mut i = 0.0
+while i < M2
+  let err = abs(gpu_y[int(i)] - y_cpu[int(i)])
+  if err > max_err
+    max_err = err
+  end
+  i = i + 1.0
+end
+
+// Find argmax (predicted class)
+let mut best_idx = 0.0
+let mut best_val = gpu_y[0]
+let mut i = 1.0
+while i < M2
+  if gpu_y[int(i)] > best_val
+    best_val = gpu_y[int(i)]
+    best_idx = i
+  end
+  i = i + 1.0
+end
+
+// ── Report ─────────────────────────────────────────────────────────
+print("")
+print("OctoFlow GPU Neural Network Inference")
+print("  Architecture: {N1} -> {M1} (ReLU) -> {M2}")
+print("  Parameters: 17408 (16384 + 1024 weights)")
+print("  Dispatches: 2 (hidden layer + output layer)")
+print("  Submissions: 1")
+print("  CPU neuron iterations: 0")
+print("  Record time: {record_ms} ms")
+print("  GPU time:    {gpu_ms} ms")
+print("")
+
+// Print all 16 output logits
+print("  Output logits (GPU):")
+let mut i = 0.0
+while i < M2
+  let gy = gpu_y[int(i)]
+  let cy = y_cpu[int(i)]
+  print("    [{i}] gpu={gy}  cpu={cy}")
+  i = i + 1.0
+end
+
+print("")
+print("  Predicted class: {best_idx} (logit={best_val})")
+print("  Max GPU-CPU error: {max_err}")
+
+if max_err < 0.01
+  print("  MATCH (GPU matches CPU within 0.01)")
+else
+  print("  MISMATCH (error too large)")
+end
+
+print("")
+rt_cleanup()

@@ -1,0 +1,9 @@
+// run_generate_vm.flow — Runner for GPU VM-hosted GGUF inference
+//
+// Usage: octoflow run stdlib/loom/run_generate_vm.flow --allow-read --allow-ffi
+
+use "generate_vm"
+
+let model_path = "models/qwen2.5-1.5b.gguf"
+let prompt = "What is the capital of France?"
+let _r = run_generate_vm(model_path, prompt)

@@ -1,0 +1,14 @@
+// Phase 18: .octo binary format demo
+// GPU-friendly columnar storage — 10-50x faster than CSV for large datasets
+
+stream data = tap("test_data/sample_prices.csv")
+let mn = min(data)
+let mx = max(data)
+let n = count(data)
+let range = mx - mn
+print("Loaded {n} values: {mn:.2} to {mx:.2} (range {range:.2})")
+
+// Normalize and write as .octo binary (zero-parse GPU format)
+stream normalized = data |> subtract(mn) |> divide(range)
+emit(normalized, "test_data/normalized.octo")
+print("Written normalized.octo — binary, GPU-ready")

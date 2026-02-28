@@ -1,4 +1,11 @@
 // stdlib/collections/collections.flow — Data structure utilities
+//
+// Functions: stack_new, stack_push, stack_pop, stack_peek, stack_is_empty,
+//            queue_new, queue_enqueue, queue_dequeue, queue_size, queue_is_empty,
+//            counter_new, counter_add, counter_get, counter_from_array,
+//            set_new, set_add, set_has, set_remove, set_size,
+//            set_union, set_intersection, set_difference,
+//            dmap_new, dmap_get, dmap_set, pair, pair_first, pair_second
 
 // ── Stack (LIFO) ──────────────────────────────────────────────
 fn stack_new()
@@ -123,6 +130,45 @@ end
 fn set_size(s)
   let keys = map_keys(s)
   return len(keys)
+end
+
+fn set_union(s1, s2)
+  let mut result = map()
+  let k1 = split(map_keys(s1), ",")
+  for k in k1
+    if k != ""
+      map_set(result, k, "1")
+    end
+  end
+  let k2 = split(map_keys(s2), ",")
+  for k in k2
+    if k != ""
+      map_set(result, k, "1")
+    end
+  end
+  return result
+end
+
+fn set_intersection(s1, s2)
+  let mut result = map()
+  let k1 = split(map_keys(s1), ",")
+  for k in k1
+    if k != "" && map_has(s2, k)
+      map_set(result, k, "1")
+    end
+  end
+  return result
+end
+
+fn set_difference(s1, s2)
+  let mut result = map()
+  let k1 = split(map_keys(s1), ",")
+  for k in k1
+    if k != "" && map_has(s2, k) == 0.0
+      map_set(result, k, "1")
+    end
+  end
+  return result
 end
 
 // ── DefaultMap (map with default value) ───────────────────────

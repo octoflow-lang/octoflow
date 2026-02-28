@@ -1,4 +1,7 @@
 // stdlib/ml/regression.flow — Regression models
+//
+// Functions: linear_regression, ridge_regression, predict_linear,
+//            r_squared, gradient_descent_linear
 
 fn linear_regression(x, y)
   // Simple linear regression using normal equation

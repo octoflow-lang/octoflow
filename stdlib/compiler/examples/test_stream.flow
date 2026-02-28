@@ -1,0 +1,142 @@
+// test_stream.flow — Test stream/pipeline support in eval.flow
+// Tests: stream declaration, tap, pipe ops, reduce, emit
+// Requires: test_data/stream_input.csv with values 1.0 through 5.0
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// Test 1: tap() reads CSV data
+stream data = tap("test_data/stream_input.csv")
+let n = count(data)
+if n == 5.0
+  pass = pass + 1.0
+else
+  print("  FAIL T1: count expected 5 got {n}")
+  fail = fail + 1.0
+end
+
+// Test 2: single pipe stage multiply
+stream doubled = data |> multiply(2.0)
+let d_sum = sum(doubled)
+if d_sum == 30.0
+  pass = pass + 1.0
+else
+  print("  FAIL T2: sum(doubled) expected 30 got {d_sum}")
+  fail = fail + 1.0
+end
+
+// Test 3: chained pipe stages
+stream chain = data |> multiply(2.0) |> add(10.0)
+let c_sum = sum(chain)
+// (1*2+10)+(2*2+10)+(3*2+10)+(4*2+10)+(5*2+10) = 12+14+16+18+20 = 80
+if c_sum == 80.0
+  pass = pass + 1.0
+else
+  print("  FAIL T3: sum(chain) expected 80 got {c_sum}")
+  fail = fail + 1.0
+end
+
+// Test 4: min/max reduce on stream
+let mn = min(data)
+let mx = max(data)
+if mn == 1.0
+  if mx == 5.0
+    pass = pass + 1.0
+  else
+    print("  FAIL T4: max expected 5 got {mx}")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL T4: min expected 1 got {mn}")
+  fail = fail + 1.0
+end
+
+// Test 5: mean reduce
+let avg = mean(data)
+if avg == 3.0
+  pass = pass + 1.0
+else
+  print("  FAIL T5: mean expected 3 got {avg}")
+  fail = fail + 1.0
+end
+
+// Test 6: abs on negative pipeline
+stream neg = data |> subtract(3.0) |> abs()
+// abs(1-3)=2, abs(2-3)=1, abs(3-3)=0, abs(4-3)=1, abs(5-3)=2
+let abs_sum = sum(neg)
+if abs_sum == 6.0
+  pass = pass + 1.0
+else
+  print("  FAIL T6: sum(abs) expected 6 got {abs_sum}")
+  fail = fail + 1.0
+end
+
+// Test 7: clamp
+stream clamped = data |> clamp(2.0, 4.0)
+// clamp: 1->2, 2->2, 3->3, 4->4, 5->4  sum=15
+let cl_sum = sum(clamped)
+if cl_sum == 15.0
+  pass = pass + 1.0
+else
+  print("  FAIL T7: sum(clamped) expected 15 got {cl_sum}")
+  fail = fail + 1.0
+end
+
+// Test 8: stream reference (copy existing stream)
+stream copy = data
+let cp_sum = sum(copy)
+if cp_sum == 15.0
+  pass = pass + 1.0
+else
+  print("  FAIL T8: sum(copy) expected 15 got {cp_sum}")
+  fail = fail + 1.0
+end
+
+// Test 9: pow then add (avoid negative result for simpler comparison)
+stream powered = data |> pow(2.0) |> add(0.0)
+// 1^2+2^2+3^2+4^2+5^2 = 1+4+9+16+25 = 55
+let pw_sum = sum(powered)
+if pw_sum == 55.0
+  pass = pass + 1.0
+else
+  print("  FAIL T9: sum(pow) expected 55 got {pw_sum}")
+  fail = fail + 1.0
+end
+
+// Test 10: scan (prefix sum)
+stream prefix = data |> scan()
+// 1, 1+2=3, 3+3=6, 6+4=10, 10+5=15
+let pf_sum = sum(prefix)
+// sum of prefix sums: 1+3+6+10+15 = 35
+if pf_sum == 35.0
+  pass = pass + 1.0
+else
+  print("  FAIL T10: sum(prefix) expected 35 got {pf_sum}")
+  fail = fail + 1.0
+end
+
+// Test 11: ema (exponential moving average)
+stream smoothed = data |> ema(0.5)
+// ema: e[0]=1, e[1]=0.5*2+0.5*1=1.5, e[2]=0.5*3+0.5*1.5=2.25, e[3]=0.5*4+0.5*2.25=3.125, e[4]=0.5*5+0.5*3.125=4.0625
+let ema_sum = sum(smoothed)
+// 1 + 1.5 + 2.25 + 3.125 + 4.0625 = 11.9375
+if ema_sum > 11.9
+  if ema_sum < 12.0
+    pass = pass + 1.0
+  else
+    print("  FAIL T11: ema_sum expected ~11.9375 got {ema_sum}")
+    fail = fail + 1.0
+  end
+else
+  print("  FAIL T11: ema_sum expected ~11.9375 got {ema_sum}")
+  fail = fail + 1.0
+end
+
+print("=== test_stream ===")
+let total = pass + fail
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

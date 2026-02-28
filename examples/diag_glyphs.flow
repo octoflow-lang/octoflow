@@ -1,0 +1,75 @@
+use "stdlib/media/ttf"
+
+print("Parsing Inter.ttf...")
+let _r = ttf_parse_all_ascii("octoui/fonts/Inter.ttf")
+
+let segs3 = ttf_seg_counts[19]
+let segs6 = ttf_seg_counts[22]
+let off3 = ttf_seg_offsets[19]
+let off6 = ttf_seg_offsets[22]
+print("Digit 3: {segs3} segments, offset {off3}")
+print("Digit 6: {segs6} segments, offset {off6}")
+
+let adv3 = ttf_metrics[114]
+let bx3 = ttf_metrics[115]
+let by3 = ttf_metrics[116]
+let gw3 = ttf_metrics[117]
+let gh3 = ttf_metrics[118]
+print("Digit 3 metrics: adv={adv3} bx={bx3} by={by3} gw={gw3} gh={gh3}")
+
+let adv6 = ttf_metrics[132]
+let bx6 = ttf_metrics[133]
+let by6 = ttf_metrics[134]
+let gw6 = ttf_metrics[135]
+let gh6 = ttf_metrics[136]
+print("Digit 6 metrics: adv={adv6} bx={bx6} by={by6} gw={gw6} gh={gh6}")
+
+let segs1 = ttf_seg_counts[17]
+let segs0 = ttf_seg_counts[16]
+let segsA = ttf_seg_counts[33]
+print("Digit 0: {segs0} segs, Digit 1: {segs1} segs, Letter A: {segsA} segs")
+
+let seg_data_len = len(ttf_seg_data)
+print("Total seg_data: {seg_data_len} floats")
+
+// Dump first 4 segments of digit 3
+let mut si = 0.0
+while si < segs3
+  if si < 4.0
+    let base = (off3 + si) * 6.0
+    let p0x = ttf_seg_data[base]
+    let p0y = ttf_seg_data[base + 1.0]
+    let p1x = ttf_seg_data[base + 2.0]
+    let p1y = ttf_seg_data[base + 3.0]
+    let p2x = ttf_seg_data[base + 4.0]
+    let p2y = ttf_seg_data[base + 5.0]
+    print("  3.seg{si}: ({p0x},{p0y})->({p1x},{p1y})->({p2x},{p2y})")
+  end
+  si = si + 1.0
+end
+
+// Count coords outside [0,1]
+let mut bad = 0.0
+let mut gi = 0.0
+while gi < 95.0
+  let gc = ttf_seg_counts[gi]
+  let go = ttf_seg_offsets[gi]
+  let mut sj = 0.0
+  while sj < gc
+    let b = (go + sj) * 6.0
+    let mut k = 0.0
+    while k < 6.0
+      let v = ttf_seg_data[b + k]
+      if v < -0.05
+        bad = bad + 1.0
+      end
+      if v > 1.05
+        bad = bad + 1.0
+      end
+      k = k + 1.0
+    end
+    sj = sj + 1.0
+  end
+  gi = gi + 1.0
+end
+print("Coords outside [-0.05, 1.05]: {bad}")

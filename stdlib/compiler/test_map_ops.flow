@@ -1,0 +1,12 @@
+// test_map_ops.flow — tests map operations in eval.flow
+let mut freq = map()
+map_set(freq, "hello", 1.0)
+map_set(freq, "world", 2.0)
+let v1 = map_get(freq, "hello")
+let v2 = map_get(freq, "world")
+print("hello={v1}")
+print("world={v2}")
+let has_hello = map_has(freq, "hello")
+let has_foo = map_has(freq, "foo")
+print("has_hello={has_hello}")
+print("has_foo={has_foo}")

@@ -1,4 +1,8 @@
 // stdlib/ml/nn.flow — Simple neural network primitives
+//
+// Functions: dense_forward, relu_forward, sigmoid_forward, tanh_forward,
+//            softmax, cross_entropy_loss, mse_loss, init_weights, init_bias,
+//            sgd_update, dropout, batch_norm
 
 fn dense_forward(input, weights, bias, n_in, n_out)
   // Dense layer: output = input * weights + bias

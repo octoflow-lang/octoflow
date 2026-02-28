@@ -1,4 +1,8 @@
 // stdlib/stats/risk.flow — Risk metrics for trading and portfolio analysis
+//
+// Functions: covariance_xy, sharpe_ratio, sortino_ratio, max_drawdown,
+//            calmar_ratio, value_at_risk, expected_shortfall, volatility,
+//            beta, alpha, information_ratio, win_rate, profit_factor, expectancy
 
 fn covariance_xy(x, y)
   let n = len(x)

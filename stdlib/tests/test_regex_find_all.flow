@@ -1,0 +1,79 @@
+// test_regex_find_all.flow — Tests for regex_find_all(text, pattern) builtin
+// Returns an array of all non-overlapping regex matches
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// Test 1: Find all digit sequences
+let nums = regex_find_all("abc 123 def 456", "[0-9]+")
+if len(nums) == 2.0
+  pass = pass + 1.0
+else
+  fail = fail + 1.0
+  print("FAIL: expected 2 matches for digits")
+end
+if nums[0.0] == "123"
+  pass = pass + 1.0
+else
+  fail = fail + 1.0
+  print("FAIL: expected first match '123'")
+end
+if nums[1.0] == "456"
+  pass = pass + 1.0
+else
+  fail = fail + 1.0
+  print("FAIL: expected second match '456'")
+end
+
+// Test 2: No matches returns empty array
+let empty = regex_find_all("hello", "[0-9]+")
+if len(empty) == 0.0
+  pass = pass + 1.0
+else
+  fail = fail + 1.0
+  print("FAIL: expected 0 matches for no digits")
+end
+
+// Test 3: Find all lowercase words
+let words = regex_find_all("aaa bbb ccc", "[a-z]+")
+if len(words) == 3.0
+  pass = pass + 1.0
+else
+  fail = fail + 1.0
+  print("FAIL: expected 3 word matches")
+end
+if words[0.0] == "aaa"
+  pass = pass + 1.0
+else
+  fail = fail + 1.0
+  print("FAIL: expected first word 'aaa'")
+end
+if words[1.0] == "bbb"
+  pass = pass + 1.0
+else
+  fail = fail + 1.0
+  print("FAIL: expected second word 'bbb'")
+end
+if words[2.0] == "ccc"
+  pass = pass + 1.0
+else
+  fail = fail + 1.0
+  print("FAIL: expected third word 'ccc'")
+end
+
+// Test 4: Single match
+let single = regex_find_all("hello42world", "[0-9]+")
+if len(single) == 1.0
+  pass = pass + 1.0
+else
+  fail = fail + 1.0
+  print("FAIL: expected 1 match for single number")
+end
+if single[0.0] == "42"
+  pass = pass + 1.0
+else
+  fail = fail + 1.0
+  print("FAIL: expected match '42'")
+end
+
+print("regex_find_all: {pass} passed, {fail} failed")

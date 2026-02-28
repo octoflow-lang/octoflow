@@ -1,0 +1,56 @@
+// stdlib/devops/process.flow — Process and shell utilities
+//
+// Functions: run, run_shell, run_status, run_ok, pipe, env_get, which
+
+fn run(cmd)
+  let r = exec(cmd)
+  return r.output
+end
+
+fn run_shell(cmd)
+  if os_name() == "windows"
+    let r = exec("cmd", "/c", cmd)
+    return r.output
+  end
+  let r = exec("sh", "-c", cmd)
+  return r.output
+end
+
+fn run_status(cmd)
+  let r = exec(cmd)
+  return r.status
+end
+
+fn run_ok(cmd)
+  let r = exec(cmd)
+  return r.ok
+end
+
+fn pipe(cmd1, cmd2)
+  // Run cmd1, check success, then run cmd2
+  let r1 = exec("sh", "-c", cmd1)
+  if r1.ok == 1.0
+    let r2 = exec("sh", "-c", cmd2)
+    return r2.output
+  end
+  return r1.error
+end
+
+fn env_get(name)
+  return env(name)
+end
+
+fn which(program)
+  if os_name() == "windows"
+    let r = exec("where", program)
+    if r.ok == 1.0
+      return trim(r.output)
+    end
+  else
+    let r = exec("which", program)
+    if r.ok == 1.0
+      return trim(r.output)
+    end
+  end
+  return ""
+end

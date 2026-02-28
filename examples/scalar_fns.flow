@@ -1,0 +1,31 @@
+// scalar_fns.flow — Demonstrate scalar functions and count reduce
+stream data = tap("input.csv")
+
+// Reduce operations (including new count)
+let mn = min(data)
+let mx = max(data)
+let total = sum(data)
+let n = count(data)
+
+// Scalar functions: abs, sqrt, pow, floor, ceil, round
+let range = mx - mn
+let avg = total / n
+let rms = sqrt(pow(avg, 2.0))
+let safe_range = abs(range)
+let rounded_avg = round(avg)
+let clamped = clamp(avg, 0.0, 100.0)
+
+// Nested scalar functions
+let dist = sqrt(abs(mn - mx))
+
+print("Elements: {n}")
+print("Range: {mn:.2} to {mx:.2}")
+print("Average: {avg:.4}")
+print("RMS: {rms:.4}")
+print("Rounded avg: {rounded_avg}")
+print("Clamped avg: {clamped:.2}")
+print("Distance: {dist:.4}")
+print("Safe range: {safe_range:.2}")
+
+stream result = data |> subtract(mn) |> divide(safe_range)
+emit(result, "normalized.csv")

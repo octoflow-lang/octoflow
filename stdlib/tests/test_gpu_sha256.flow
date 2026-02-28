@@ -1,0 +1,158 @@
+// test_gpu_sha256.flow — GPU SHA-256 unit test
+// One message "abc" hashed on GPU, verified against known SHA-256 digest.
+//
+// SHA-256("abc") = ba7816bf 8f01cfea 414140de 5dae2223
+//                  b00361a3 96177a9c b410ff61 f20015ad
+//
+// Input: 64 floats (pre-padded "abc" message, byte-per-float)
+// Output: 32 floats (digest bytes, byte-per-float)
+// 1 dispatch, 1 workgroup, 1 submit.
+//
+// Run: octoflow run stdlib/tests/test_gpu_sha256.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+rt_init()
+
+let pipe_sha = rt_load_pipeline("tests/gpu_shaders/24_sha256.spv", 2.0, 4.0)
+
+// Pre-padded "abc" message (64 bytes):
+// bytes 0-2: 'a'=97, 'b'=98, 'c'=99
+// byte 3: 0x80 = 128 (padding start)
+// bytes 4-61: 0
+// bytes 62-63: length in bits = 24 = 0x0018 (big-endian)
+let mut msg = []
+push(msg, 97.0)
+push(msg, 98.0)
+push(msg, 99.0)
+push(msg, 128.0)
+// bytes 4-61: zeros
+let mut i = 4.0
+while i < 62.0
+  push(msg, 0.0)
+  i = i + 1.0
+end
+// bytes 62-63: length = 24 bits = 0x0018
+push(msg, 0.0)
+push(msg, 24.0)
+
+// Expected SHA-256 digest bytes
+let mut expected = []
+// ba7816bf
+push(expected, 186.0)
+push(expected, 120.0)
+push(expected, 22.0)
+push(expected, 191.0)
+// 8f01cfea
+push(expected, 143.0)
+push(expected, 1.0)
+push(expected, 207.0)
+push(expected, 234.0)
+// 414140de
+push(expected, 65.0)
+push(expected, 65.0)
+push(expected, 64.0)
+push(expected, 222.0)
+// 5dae2223
+push(expected, 93.0)
+push(expected, 174.0)
+push(expected, 34.0)
+push(expected, 35.0)
+// b00361a3
+push(expected, 176.0)
+push(expected, 3.0)
+push(expected, 97.0)
+push(expected, 163.0)
+// 96177a9c
+push(expected, 150.0)
+push(expected, 23.0)
+push(expected, 122.0)
+push(expected, 156.0)
+// b410ff61
+push(expected, 180.0)
+push(expected, 16.0)
+push(expected, 255.0)
+push(expected, 97.0)
+// f20015ad
+push(expected, 242.0)
+push(expected, 0.0)
+push(expected, 21.0)
+push(expected, 173.0)
+
+// Upload input (64 floats)
+let buf_in = rt_create_buffer(64.0 * 4.0)
+let buf_out = rt_create_buffer(32.0 * 4.0)
+rt_upload(buf_in, msg)
+
+// Zero output
+let mut zeros = []
+let mut i = 0.0
+while i < 32.0
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_out, zeros)
+
+// Dispatch: 1 message, 1 workgroup
+rt_chain_begin(1.0, 2.0)
+let mut pc = [1.0]
+rt_chain_push_constants(pipe_sha, pc)
+let mut bufs = [buf_in, buf_out]
+rt_chain_dispatch(pipe_sha, bufs, 1.0)
+rt_chain_end()
+rt_chain_submit_wait()
+
+// Download result (32 bytes)
+rt_download(buf_out, 32.0)
+let mut result = []
+let mut i = 0.0
+while i < 32.0
+  push(result, rt_result[int(i)])
+  i = i + 1.0
+end
+
+// Verify byte-by-byte
+let mut pass = 1.0
+let mut i = 0.0
+while i < 32.0
+  let got = result[int(i)]
+  let exp = expected[int(i)]
+  if got != exp
+    print("FAIL: byte {i} got={got} expected={exp}")
+    pass = 0.0
+  end
+  i = i + 1.0
+end
+
+// Print hex digest
+print("SHA-256(abc):")
+let mut hex = ""
+let mut i = 0.0
+while i < 32.0
+  let b = result[int(i)]
+  let hi = floor(b / 16.0)
+  let lo = b - hi * 16.0
+  // Convert nibble to hex char
+  let mut hc = ""
+  if hi < 10.0
+    hc = chr(48.0 + hi)
+  else
+    hc = chr(87.0 + hi)
+  end
+  let mut lc = ""
+  if lo < 10.0
+    lc = chr(48.0 + lo)
+  else
+    lc = chr(87.0 + lo)
+  end
+  hex = hex + hc + lc
+  i = i + 1.0
+end
+print("  {hex}")
+print("  ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad (expected)")
+
+if pass == 1.0
+  print("PASS: gpu_sha256 BIT EXACT")
+end
+
+rt_cleanup()

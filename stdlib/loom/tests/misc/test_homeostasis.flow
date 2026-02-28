@@ -1,0 +1,82 @@
+// test_homeostasis.flow — Homeostasis Tests
+// Run from C:\FlowGPU: octoflow run stdlib/loom/test_homeostasis.flow --allow-exec
+
+use "../homeostasis"
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+fn check_range(counters, label, val, min_val, max_val)
+  if val >= min_val
+    if val <= max_val
+      counters[0] = counters[0] + 1.0
+      return 1.0
+    end
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — {val} not in [{min_val}, {max_val}]")
+  return 0.0
+end
+
+print("=== HOMEOSTASIS TESTS ===")
+print(" ")
+
+print("--- GPU sensors ---")
+
+let temp = query_gpu_temp()
+print("  Temperature: {temp}C")
+let _c = check_range(counters, "temp", temp, 20.0, 90.0)
+
+let power = query_gpu_power()
+print("  Power: {power}W")
+let _c = check_range(counters, "power", power, 10.0, 400.0)
+
+print("--- Init ---")
+
+homeo_init(75.0, 150.0)
+print("  Initialized: target 75C, 150W")
+
+print("--- Pacing logic ---")
+
+// Test with actual GPU state (should be well below targets)
+let delay_actual = homeo_check_and_pace()
+print("  Actual GPU state: {delay_actual}ms")
+let _c = check(counters, "cool GPU pacing", delay_actual, 1.0)
+
+// Manual pacing calculation test (without query)
+// If temp=73, target=75, margin=5: headroom=2, factor=3/5=0.6
+// delay = 1 + 0.6*(50-1) = 1 + 29.4 = 30.4
+let headroom_test = 75.0 - 73.0
+let factor_test = (5.0 - headroom_test) / 5.0
+let delay_calc = 1.0 + (factor_test * (50.0 - 1.0))
+print("  Calculated delay for 73C: {delay_calc}ms")
+let _c = check_range(counters, "calc delay", delay_calc, 20.0, 35.0)
+
+print("--- Report ---")
+
+homeo_report()
+
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print(" ")
+print("=== HOMEOSTASIS TEST SUMMARY ===")
+print("  pass: {pass}/{total}")
+print("  fail: {fail}")
+if fail == 0.0
+  print("  ALL PASS")
+else
+  print("  FAILURES DETECTED")
+end
+
+print(" ")
+print("Homeostasis ready for integration.")

@@ -1,0 +1,213 @@
+// stdlib/llm/inference.flow — Model-Adaptive GGUF Inference (Fast Rust Backend)
+//
+// Loads ANY GGUF model, runs transformer layers, predicts next token.
+// All parameters read from GGUF metadata — nothing hardcoded.
+//
+// ARCHITECTURE: Rust OS-boundary builtins for heavy lifting:
+//   - gguf_load_tensor(path, model, name): compiled file I/O + dequant
+//   - gpu_matmul(W, x, M, N, K): compiled CPU matmul
+// Both return GpuFloats — stored in GPU_ARRAYS, never cloned on fn calls.
+// Small ops (RMSNorm, SiLU, residual add) run in .flow interpreter.
+//
+// Usage:
+//   use "inference"
+//   let _r = run_inference("path/to/model.gguf")
+//
+// Or standalone:
+//   octoflow run stdlib/llm/run_inference.flow --allow-read --allow-ffi
+
+use "gguf"
+use "ops"
+
+fn run_inference(model_path)
+  // Configuration — set to 0 for full inference, or limit for quick testing
+  let test_max_layers = 0.0
+  let test_max_vocab = 0.0
+
+  print("=== OctoFlow GGUF Inference (Rust Backend) ===")
+  print("Loading model metadata...")
+
+  let model = gguf_load_from_file(model_path)
+
+  let n_embd = map_get(model, "n_embd")
+  let n_head = map_get(model, "n_head")
+  let mut n_kv_head = map_get(model, "n_kv_head")
+  let n_ff = map_get(model, "n_ff")
+  let mut n_layer = map_get(model, "n_layer")
+  let mut vocab_size = map_get(model, "vocab_size")
+  let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+
+  if n_kv_head == 0.0
+    n_kv_head = n_head
+  end
+
+  if test_max_layers > 0.0
+    if n_layer > test_max_layers
+      n_layer = test_max_layers
+    end
+  end
+  if test_max_vocab > 0.0
+    if vocab_size > test_max_vocab
+      vocab_size = test_max_vocab
+    end
+  end
+
+  let arch = map_get(model, "arch")
+  let head_dim = n_embd / n_head
+  let kv_dim = n_kv_head * head_dim
+
+  print("Architecture: {arch}")
+  print("  n_embd={n_embd} n_head={n_head} n_kv_head={n_kv_head} head_dim={head_dim}")
+  print("  n_ff={n_ff} n_layer={n_layer} vocab_size={vocab_size}")
+  print("  eps={eps} kv_dim={kv_dim}")
+
+  // Get BOS token
+  let mut bos_id = 1.0
+  if map_has(model, "kv.tokenizer.ggml.bos_token_id")
+    bos_id = map_get(model, "kv.tokenizer.ggml.bos_token_id")
+  end
+  print("BOS token ID: {bos_id}")
+  print(" ")
+
+  // Load BOS embedding via Rust builtin (row extraction)
+  print("Loading BOS embedding (row {bos_id})...")
+  let t0 = time()
+  let bos_row = gguf_load_tensor(model_path, model, "token_embd.weight", bos_id)
+  let mut hidden = []
+  let mut ei = 0.0
+  while ei < n_embd
+    push(hidden, bos_row[int(ei)])
+    ei = ei + 1.0
+  end
+  let t1 = time()
+  let emb_ms = (t1 - t0) * 1000.0
+  let h0 = hidden[0]
+  let h1 = hidden[1]
+  let hlen = len(hidden)
+  print("  len={hlen} hidden[0:2] = {h0} {h1} ({emb_ms}ms)")
+
+  // Run transformer layers
+  print(" ")
+  print("--- Transformer layers (Rust backend) ---")
+  let mut layer_idx = 0.0
+  while layer_idx < n_layer
+    let li = str(layer_idx)
+    let lt0 = time()
+
+    // -- ATTENTION --
+    let an_name = "blk." + li + ".attn_norm.weight"
+    let an_w = gguf_load_tensor(model_path, model, an_name)
+    let normed = rmsnorm_cpu(hidden, an_w, n_embd, eps)
+
+    // Single-token attention (seq_len=1): softmax([single]) = 1.0
+    // So attention output = V. Skip Q and K projections.
+    let wv_name = "blk." + li + ".attn_v.weight"
+    let wv = gguf_load_tensor(model_path, model, wv_name)
+    let v_raw = gpu_matmul(wv, normed, kv_dim, 1.0, n_embd)
+
+    // GQA: expand V from kv_dim to n_embd
+    let v_exp = gqa_expand(v_raw, n_head, n_kv_head, head_dim)
+
+    // Output projection
+    let wo_name = "blk." + li + ".attn_output.weight"
+    let wo = gguf_load_tensor(model_path, model, wo_name)
+    let attn_out = gpu_matmul(wo, v_exp, n_embd, 1.0, n_embd)
+
+    // Residual add
+    let mut ci = 0.0
+    while ci < n_embd
+      hidden[int(ci)] = hidden[int(ci)] + attn_out[int(ci)]
+      ci = ci + 1.0
+    end
+
+    let lt1 = time()
+    let attn_ms = (lt1 - lt0) * 1000.0
+
+    // -- FFN --
+    let fn_name = "blk." + li + ".ffn_norm.weight"
+    let fn_w = gguf_load_tensor(model_path, model, fn_name)
+    let fn_normed = rmsnorm_cpu(hidden, fn_w, n_embd, eps)
+
+    let wg_name = "blk." + li + ".ffn_gate.weight"
+    let wg = gguf_load_tensor(model_path, model, wg_name)
+    let gate = gpu_matmul(wg, fn_normed, n_ff, 1.0, n_embd)
+
+    let wu_name = "blk." + li + ".ffn_up.weight"
+    let wu = gguf_load_tensor(model_path, model, wu_name)
+    let up = gpu_matmul(wu, fn_normed, n_ff, 1.0, n_embd)
+
+    // SiLU(gate) * up
+    let silu_gate = silu_cpu(gate, n_ff)
+    let mut _mid = []
+    let mut mi = 0.0
+    while mi < n_ff
+      push(_mid, silu_gate[int(mi)] * up[int(mi)])
+      mi = mi + 1.0
+    end
+
+    let wd_name = "blk." + li + ".ffn_down.weight"
+    let wd = gguf_load_tensor(model_path, model, wd_name)
+    let ffn_out = gpu_matmul(wd, _mid, n_embd, 1.0, n_ff)
+
+    // Residual add
+    let mut ri = 0.0
+    while ri < n_embd
+      hidden[int(ri)] = hidden[int(ri)] + ffn_out[int(ri)]
+      ri = ri + 1.0
+    end
+
+    let lt2 = time()
+    let ffn_ms = (lt2 - lt1) * 1000.0
+    let layer_ms = (lt2 - lt0) * 1000.0
+    let hv = hidden[0]
+    print("Layer {li}: hidden[0]={hv} (attn={attn_ms}ms ffn={ffn_ms}ms total={layer_ms}ms)")
+
+    layer_idx = layer_idx + 1.0
+  end
+
+  // Output norm
+  print(" ")
+  print("--- Output projection ---")
+  let out_norm_w = gguf_load_tensor(model_path, model, "output_norm.weight")
+  let normed_out = rmsnorm_cpu(hidden, out_norm_w, n_embd, eps)
+  let nv = normed_out[0]
+  print("  normed[0] = {nv}")
+
+  // Load vocabulary
+  print("Loading vocabulary...")
+  let vocab = gguf_load_vocab(model_path)
+  let vocab_len = len(vocab)
+  print("  Loaded {vocab_len} tokens")
+
+  // Output logits
+  let actual_vocab = map_get(model, "t.token_embd.weight.dim1")
+  print("Computing logits over {vocab_size} vocab entries (actual={actual_vocab})...")
+  let proj_t0 = time()
+
+  let emb_full = gguf_load_tensor(model_path, model, "token_embd.weight")
+  let logits = gpu_matmul(emb_full, normed_out, actual_vocab, 1.0, n_embd)
+
+  // Find argmax
+  let mut best_idx = 0.0
+  let mut best_val = -999999.0
+  let mut v = 0.0
+  while v < vocab_size
+    let lv = logits[int(v)]
+    if lv > best_val
+      best_val = lv
+      best_idx = v
+    end
+    v = v + 1.0
+  end
+  let proj_t1 = time()
+  let proj_ms = (proj_t1 - proj_t0) * 1000.0
+
+  let token_text = vocab[int(best_idx)]
+  print(" ")
+  print("=== RESULT ===")
+  print("Predicted next token ID: {best_idx}")
+  print("Token text: {token_text}")
+  print("Top logit value: {best_val}")
+  print("Logits time: {proj_ms}ms")
+  return 0.0
+end

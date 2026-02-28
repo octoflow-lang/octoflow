@@ -1,0 +1,80 @@
+// emit_sieve_init.flow — Sieve Init Kernel Emitter
+//
+// Initializes segment bitmap R0: 1.0 = prime candidate, 0.0 = not candidate.
+// Thread i: value = seg_idx * seg_size + i
+//   if 2 <= value < N  →  R0[i] = 1.0
+//   else               →  R0[i] = 0.0
+//
+// Push constants:
+//   pc[0] = seg_idx    (float → uint, segment index)
+//   pc[1] = seg_size   (float → uint, elements per segment)
+//   pc[2] = N          (float → uint, sieve limit)
+//   pc[3] = pad        (unused)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (write R0)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (unused)
+//   Binding 3: control   (unused)
+//
+// Dispatch: wg = ceil(seg_size / 256)
+//
+// Run: octoflow run stdlib/loom/emit_sieve_init.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_init(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────
+  let gid     = ir_load_gid(entry)
+  let pc_seg  = ir_push_const(entry, 0.0)   // seg_idx
+  let pc_sz   = ir_push_const(entry, 1.0)   // seg_size
+  let pc_n    = ir_push_const(entry, 2.0)   // N
+  let seg_u   = ir_ftou(entry, pc_seg)
+  let sz_u    = ir_ftou(entry, pc_sz)
+  let n_u     = ir_ftou(entry, pc_n)
+  let oob     = ir_ugte(entry, gid, sz_u)   // gid >= seg_size → out of bounds
+  let _sm     = ir_selection_merge(entry, exit_block)
+  let _br     = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: compute value, check range [2, N), write bitmap ─
+  // value = seg_idx * seg_size + gid
+  let base    = ir_imul(body, seg_u, sz_u)
+  let value   = ir_iadd(body, base, gid)
+
+  // value >= 2
+  let two_u   = ir_const_u(body, 2.0)
+  let ge_2    = ir_ugte(body, value, two_u)
+
+  // value < N  →  value <= N-1
+  let one_u   = ir_const_u(body, 1.0)
+  let n_m1    = ir_isub(body, n_u, one_u)
+  let lt_n    = ir_ulte(body, value, n_m1)
+
+  let valid   = ir_land(body, ge_2, lt_n)
+
+  // Select 1.0 or 0.0
+  let one_f   = ir_const_f(body, 1.0)
+  let zero_f  = ir_const_f(body, 0.0)
+  let result  = ir_select(body, IR_TYPE_FLOAT, valid, one_f, zero_f)
+
+  // Store to R0[gid] (binding 0, offset = gid since R0 starts at 0)
+  let _store  = ir_buf_store_f(body, 0.0, gid, result)
+  let _br2    = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_init.spv"
+let _r = emit_sieve_init(out)
+print("Emitted: {out}")

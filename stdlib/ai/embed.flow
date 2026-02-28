@@ -1,0 +1,94 @@
+// embed.flow — Token Embedding Lookup
+//
+// GPU-friendly embedding extraction from GGUF model weight tables.
+// Single-token lookup for decode, batch lookup for prefill.
+//
+// Functions:
+//   embed_token(model_path, model, token_id) -> hidden[]
+//     Load one embedding row (uses gguf_load_tensor row extraction)
+//
+//   embed_batch(model_path, model, token_ids, n_embd) -> flat_hidden[]
+//     Load multiple embeddings, concatenated: [tok0_dim0..tok0_dimN, tok1_dim0..]
+//
+//   embed_from_table(table, token_id, n_embd) -> hidden[]
+//     Extract one row from a pre-loaded embedding table (CPU array)
+//
+// Usage:
+//   use "embed"
+//   let hidden = embed_token(path, model, 151644.0)
+
+// ── Single token embedding ────────────────────────────────────────
+// Returns array of n_embd floats for the given token ID.
+// Uses gguf_load_tensor with row extraction — handles F32/F16/Q4_K dequant.
+
+fn embed_token(model_path, model, token_id)
+  let row = gguf_load_tensor(model_path, model, "token_embd.weight", token_id)
+  let n = len(row)
+  let mut _emb_out = []
+  let mut i = 0.0
+  while i < n
+    push(_emb_out, row[int(i)])
+    i = i + 1.0
+  end
+  return _emb_out
+end
+
+// ── Batch embedding (prefill) ─────────────────────────────────────
+// Returns flat array of batch_size * n_embd floats.
+// token_ids[i] is the token ID for position i.
+// Output layout: [emb(tok0)[0..n_embd], emb(tok1)[0..n_embd], ...]
+
+fn embed_batch(model_path, model, token_ids, n_embd)
+  let batch_size = len(token_ids)
+  let mut _batch_out = []
+  let mut bi = 0.0
+  while bi < batch_size
+    let tid = token_ids[int(bi)]
+    let row = gguf_load_tensor(model_path, model, "token_embd.weight", tid)
+    let mut di = 0.0
+    while di < n_embd
+      push(_batch_out, row[int(di)])
+      di = di + 1.0
+    end
+    bi = bi + 1.0
+  end
+  return _batch_out
+end
+
+// ── Table lookup (pre-loaded) ─────────────────────────────────────
+// For when the full embedding table is already loaded as a flat array.
+// table: flat array of vocab_size * n_embd floats (row-major)
+// Returns array of n_embd floats for the given token ID.
+
+fn embed_from_table(table, token_id, n_embd)
+  let offset = token_id * n_embd
+  let mut _tbl_out = []
+  let mut i = 0.0
+  while i < n_embd
+    let idx = int(offset + i)
+    push(_tbl_out, table[idx])
+    i = i + 1.0
+  end
+  return _tbl_out
+end
+
+// ── Batch table lookup ────────────────────────────────────────────
+// Same as embed_from_table but for multiple tokens at once.
+
+fn embed_batch_from_table(table, token_ids, n_embd)
+  let batch_size = len(token_ids)
+  let mut _btbl_out = []
+  let mut bi = 0.0
+  while bi < batch_size
+    let tid = token_ids[int(bi)]
+    let offset = tid * n_embd
+    let mut di = 0.0
+    while di < n_embd
+      let idx = int(offset + di)
+      push(_btbl_out, table[idx])
+      di = di + 1.0
+    end
+    bi = bi + 1.0
+  end
+  return _btbl_out
+end

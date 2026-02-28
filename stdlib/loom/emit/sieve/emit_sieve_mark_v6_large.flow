@@ -1,0 +1,146 @@
+// emit_sieve_mark_v6_large.flow — Prime-Centric Mark Kernel (uint64 seg_start)
+//
+// Breaks the uint32 wall for mark_large. Uses uint64 for initial
+// first-multiple computation, then runs the inner loop in uint32
+// using segment-relative offsets (half_off space).
+//
+// Key optimization: the inner loop variable is uint32 (half_off),
+// stepped by +prime per iteration. Only the initial offset computation
+// uses uint64 (one-time cost per thread).
+//
+// Push constants:
+//   pc[0] = seg_idx      (segment index, small)
+//   pc[1] = num_words    (bitmap words)
+//   pc[2] = prime_start  (index in globals array)
+//   pc[3] = prime_end    (index in globals array)
+//
+// Binding layout:
+//   Binding 0: registers (uint32 bitmap, atomic AND)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (float prime values)
+//
+// Dispatch: wg = ceil((prime_end - prime_start) / 256)
+
+use "../compiler/ir"
+
+fn emit_sieve_mark_v6_large(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  ir_uses_uint64[0] = 0.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry       = ir_block("entry")
+  let pre_loop    = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body   = ir_block("loop_body")
+  let loop_cont   = ir_block("loop_cont")
+  let loop_merge  = ir_block("loop_merge")
+  let exit_block  = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──────────────
+  let gid      = ir_load_gid(entry)
+  let pc_seg   = ir_push_const(entry, 0.0)
+  let pc_words = ir_push_const(entry, 1.0)
+  let pc_pst   = ir_push_const(entry, 2.0)
+  let pc_pen   = ir_push_const(entry, 3.0)
+
+  let pstart_u = ir_ftou(entry, pc_pst)
+  let pend_u   = ir_ftou(entry, pc_pen)
+  let prime_idx = ir_iadd(entry, gid, pstart_u)
+
+  let oob      = ir_ugte(entry, prime_idx, pend_u)
+  let _sm      = ir_selection_merge(entry, exit_block)
+  let _br      = ir_term_cond_branch(entry, oob, exit_block, pre_loop)
+
+  // ── pre_loop: load prime, compute first multiple offset ──
+  let seg_u    = ir_ftou(pre_loop, pc_seg)
+  let words_u  = ir_ftou(pre_loop, pc_words)
+
+  let c0       = ir_const_u(pre_loop, 0.0)
+  let c1       = ir_const_u(pre_loop, 1.0)
+  let c2       = ir_const_u(pre_loop, 2.0)
+  let c32      = ir_const_u(pre_loop, 32.0)
+  let c64      = ir_const_u(pre_loop, 64.0)
+
+  // SEG_RANGE = num_words * 64
+  let seg_range = ir_imul(pre_loop, words_u, c64)
+
+  // ── seg_start in uint64 (THE OVERFLOW FIX) ──
+  let seg_u64     = ir_u32_to_u64(pre_loop, seg_u)
+  let seg_range64 = ir_u32_to_u64(pre_loop, seg_range)
+  let seg_base64  = ir_imul64(pre_loop, seg_u64, seg_range64)
+  let c1_64       = ir_u32_to_u64(pre_loop, c1)
+  let seg_start64 = ir_iadd64(pre_loop, seg_base64, c1_64)
+
+  // max_bits = num_words * 32 (uint32 — segment size in odd candidates)
+  let max_bits = ir_imul(pre_loop, words_u, c32)
+
+  // Load prime from globals
+  let prime_f  = ir_load_input_at(pre_loop, 2.0, prime_idx)
+  let prime_u  = ir_ftou(pre_loop, prime_f)
+
+  // ── Compute first odd multiple >= max(p², seg_start) in uint64 ──
+  let prime64  = ir_u32_to_u64(pre_loop, prime_u)
+  let p_sq64   = ir_imul64(pre_loop, prime64, prime64)
+
+  let use_psq  = ir_ugte64(pre_loop, p_sq64, seg_start64)
+  let start_pt64 = ir_select(pre_loop, IR_TYPE_UINT64, use_psq, p_sq64, seg_start64)
+
+  // rem = start_pt % prime, gap = (prime - rem) % prime
+  let rem64    = ir_umod64(pre_loop, start_pt64, prime64)
+  let gap_raw64 = ir_isub64(pre_loop, prime64, rem64)
+  let gap64    = ir_umod64(pre_loop, gap_raw64, prime64)
+  let first_m64 = ir_iadd64(pre_loop, start_pt64, gap64)
+
+  // If first_m is even, add prime to get odd multiple
+  // Check low bit via uint32 (bit 0 is same in both widths)
+  let first_m_low = ir_u64_to_u32(pre_loop, first_m64)
+  let is_even  = ir_uequ(pre_loop, ir_bit_and(pre_loop, first_m_low, c1), c0)
+  let first_m_adj64 = ir_iadd64(pre_loop, first_m64, prime64)
+  let mult_init64 = ir_select(pre_loop, IR_TYPE_UINT64, is_even, first_m_adj64, first_m64)
+
+  // ── Convert to segment-relative half_off (uint64 → uint32) ──
+  // half_off = (mult - seg_start) / 2 — always within segment, fits uint32
+  let c2_64    = ir_u32_to_u64(pre_loop, c2)
+  let offset64 = ir_isub64(pre_loop, mult_init64, seg_start64)
+  let half_off_init64 = ir_udiv64(pre_loop, offset64, c2_64)
+  let half_off_init = ir_u64_to_u32(pre_loop, half_off_init64)
+
+  let _bpl     = ir_term_branch(pre_loop, loop_header)
+
+  // ── Loop: iterate in uint32 half_off space ──
+  let phi_h    = ir_phi(loop_header, IR_TYPE_UINT)   // half_off
+  let _ph0     = ir_phi_add(phi_h, half_off_init, pre_loop)
+
+  // Check: half_off >= max_bits → done
+  let h_past   = ir_ugte(loop_header, phi_h, max_bits)
+  let _lm      = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc      = ir_term_cond_branch(loop_header, h_past, loop_merge, loop_body)
+
+  // ── loop_body: word index and bit, atomic AND ──
+  let word_idx = ir_udiv(loop_body, phi_h, c32)
+  let bit_pos  = ir_umod(loop_body, phi_h, c32)
+  let one_shl  = ir_shl(loop_body, c1, bit_pos)
+  let mask     = ir_not(loop_body, one_shl)
+  let _atomic  = ir_buf_atomic_and(loop_body, 0.0, word_idx, mask)
+  let _br_lb   = ir_term_branch(loop_body, loop_cont)
+
+  // ── loop_cont: advance half_off by prime ──
+  // In half_off space, each odd multiple step = prime (not 2*prime)
+  let next_h   = ir_iadd(loop_cont, phi_h, prime_u)
+  let _br_lc   = ir_term_branch(loop_cont, loop_header)
+  let _ph1     = ir_phi_add(phi_h, next_h, loop_cont)
+
+  // ── loop_merge → exit ──
+  let _br_lm   = ir_term_branch(loop_merge, exit_block)
+
+  // ── exit ──
+  let _ret     = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_mark_v6_large.spv"
+let _r = emit_sieve_mark_v6_large(out)
+print("Emitted: {out}")

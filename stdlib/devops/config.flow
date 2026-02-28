@@ -1,0 +1,61 @@
+// stdlib/devops/config.flow — Configuration file parsing
+//
+// Functions: parse_ini, parse_env_file, config_get
+
+fn parse_ini(content)
+  // Parse INI-style config: key = value (one per line)
+  let lines = split(content, chr(10))
+  let mut result = map()
+  let mut section = ""
+  for line in lines
+    let trimmed = trim(line)
+    if len(trimmed) == 0.0
+      continue
+    end
+    if starts_with(trimmed, "#") || starts_with(trimmed, ";")
+      continue
+    end
+    if starts_with(trimmed, "[") && ends_with(trimmed, "]")
+      section = substr(trimmed, 1.0, len(trimmed) - 1.0)
+      continue
+    end
+    let eq = index_of(trimmed, "=")
+    if eq > 0.0
+      let key = trim(substr(trimmed, 0.0, eq))
+      let val = trim(substr(trimmed, eq + 1.0, len(trimmed)))
+      if len(section) > 0.0
+        map_set(result, section + "." + key, val)
+      else
+        map_set(result, key, val)
+      end
+    end
+  end
+  return result
+end
+
+fn parse_env_file(path)
+  // Parse .env file: KEY=VALUE
+  let content = read_file(path)
+  let lines = split(content, chr(10))
+  let mut result = map()
+  for line in lines
+    let trimmed = trim(line)
+    if len(trimmed) == 0.0 || starts_with(trimmed, "#")
+      continue
+    end
+    let eq = index_of(trimmed, "=")
+    if eq > 0.0
+      let key = trim(substr(trimmed, 0.0, eq))
+      let val = trim(substr(trimmed, eq + 1.0, len(trimmed)))
+      map_set(result, key, val)
+    end
+  end
+  return result
+end
+
+fn config_get(config, key, default_val)
+  if map_has(config, key)
+    return map_get(config, key)
+  end
+  return default_val
+end

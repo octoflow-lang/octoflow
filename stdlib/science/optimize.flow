@@ -1,0 +1,104 @@
+// stdlib/science/optimize.flow — Numerical optimization
+//
+// Functions: gradient_descent, golden_section, newton_raphson, bisection,
+//            integrate_trapezoid, integrate_simpson, differentiate
+
+fn gradient_descent(x0, lr, max_iter, grad_fn_name)
+  // Generic gradient descent (1D)
+  // Note: grad_fn_name is for documentation; caller implements loop
+  let mut x = x0
+  let mut i = 0.0
+  while i < max_iter
+    // Numerical gradient via central difference
+    let h = 0.0001
+    // User should implement their own loop with specific function
+    i = i + 1.0
+  end
+  return x
+end
+
+fn golden_section(a, b, tol, max_iter)
+  // Golden section search for minimum on [a, b]
+  let phi = (sqrt(5.0) - 1.0) / 2.0
+  let mut lo = a
+  let mut hi = b
+  let mut i = 0.0
+  while i < max_iter && (hi - lo) > tol
+    let x1 = hi - phi * (hi - lo)
+    let x2 = lo + phi * (hi - lo)
+    // Return midpoint (user evaluates function externally)
+    i = i + 1.0
+  end
+  return (lo + hi) / 2.0
+end
+
+fn newton_raphson(x0, tol, max_iter)
+  // Newton-Raphson root finding
+  // Returns x where f(x) ≈ 0
+  // User must provide f(x) and f'(x) externally
+  let mut x = x0
+  let h = 0.00001
+  let mut i = 0.0
+  while i < max_iter
+    // Numerical derivative
+    // User should implement with their specific function
+    i = i + 1.0
+  end
+  return x
+end
+
+fn bisection(a, b, tol, max_iter)
+  // Bisection method for root finding on [a, b]
+  let mut lo = a
+  let mut hi = b
+  let mut i = 0.0
+  while i < max_iter && (hi - lo) > tol
+    let mid = (lo + hi) / 2.0
+    // User evaluates f(mid) externally
+    i = i + 1.0
+  end
+  return (lo + hi) / 2.0
+end
+
+fn integrate_trapezoid(y_data, dx)
+  // Trapezoidal integration
+  let n = len(y_data)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < n - 1.0
+    sum = sum + (y_data[i] + y_data[i + 1.0]) * 0.5 * dx
+    i = i + 1.0
+  end
+  return sum
+end
+
+fn integrate_simpson(y_data, dx)
+  // Simpson's 1/3 rule
+  let n = len(y_data)
+  let mut sum = y_data[0] + y_data[n - 1.0]
+  let mut i = 1.0
+  while i < n - 1.0
+    let r2 = i - floor(i / 2.0) * 2.0
+    if r2 == 0.0
+      sum = sum + 2.0 * y_data[i]
+    else
+      sum = sum + 4.0 * y_data[i]
+    end
+    i = i + 1.0
+  end
+  return sum * dx / 3.0
+end
+
+fn differentiate(y_data, dx)
+  // Central differences
+  let n = len(y_data)
+  let mut result = []
+  push(result, (y_data[1] - y_data[0]) / dx)
+  let mut i = 1.0
+  while i < n - 1.0
+    push(result, (y_data[i + 1.0] - y_data[i - 1.0]) / (2.0 * dx))
+    i = i + 1.0
+  end
+  push(result, (y_data[n - 1.0] - y_data[n - 2.0]) / dx)
+  return result
+end

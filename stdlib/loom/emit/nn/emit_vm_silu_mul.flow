@@ -1,0 +1,81 @@
+// emit_vm_silu_mul.flow — VM SiLU-Gated Multiply Kernel Emitter
+//
+// Computes the FFN gated activation: out[i] = SiLU(gate[i]) * up[i]
+// where SiLU(x) = x / (1 + exp(-x))   (SiLU == Swish with beta=1)
+//
+// This is the key non-linearity in LLaMA/Qwen2/Mistral FFN blocks:
+//   FFN_out = (SiLU(W_gate * x)) ⊙ (W_up * x)
+//
+// Push constants:
+//   pc[0] = gate_off (flat float index into registers SSBO, gate input)
+//   pc[1] = up_off   (flat float index into registers SSBO, up input)
+//   pc[2] = dst_off  (flat float index into registers SSBO, output)
+//   pc[3] = count    (number of elements — bounds guard)
+//
+// Each thread:
+//   if gid < count:
+//     gate = registers[gate_off + gid]
+//     silu = gate / (1 + exp(-gate))
+//     registers[dst_off + gid] = silu * registers[up_off + gid]
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read gate, read up, write dst)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (unused)
+//   Binding 3: control   (unused)
+//
+// Dispatch: workgroups = ceil(count / 256)
+//
+// Run: octoflow run stdlib/loom/emit_vm_silu_mul.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_silu_mul(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: load gid, push constants, bounds check ───────────────────
+  let gid        = ir_load_gid(entry)
+  let gate_off_f = ir_push_const(entry, 0.0)
+  let up_off_f   = ir_push_const(entry, 1.0)
+  let dst_off_f  = ir_push_const(entry, 2.0)
+  let cnt_f      = ir_push_const(entry, 3.0)
+  let cnt_u      = ir_ftou(entry, cnt_f)
+  // Skip thread if gid >= count
+  let oob        = ir_ugte(entry, gid, cnt_u)
+  let _sm        = ir_selection_merge(entry, exit_block)
+  let _br        = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: SiLU(gate) * up ────────────────────────────────────────────
+  let gate_off_u = ir_ftou(body, gate_off_f)
+  let up_off_u   = ir_ftou(body, up_off_f)
+  let dst_off_u  = ir_ftou(body, dst_off_f)
+  let gate_idx   = ir_iadd(body, gate_off_u, gid)
+  let up_idx     = ir_iadd(body, up_off_u, gid)
+  let dst_idx    = ir_iadd(body, dst_off_u, gid)
+  let gate       = ir_load_input_at(body, 0.0, gate_idx)
+  let up         = ir_load_input_at(body, 0.0, up_idx)
+  // SiLU(gate) = gate / (1 + exp(-gate))
+  let neg_gate   = ir_fneg(body, gate)
+  let ex         = ir_exp(body, neg_gate)          // exp(-gate)
+  let f_one      = ir_const_f(body, 1.0)
+  let denom      = ir_fadd(body, f_one, ex)         // 1 + exp(-gate)
+  let silu       = ir_fdiv(body, gate, denom)        // SiLU(gate)
+  let result     = ir_fmul(body, silu, up)           // SiLU(gate) * up
+  let _s         = ir_buf_store_f(body, 0.0, dst_idx, result)
+  let _br2       = ir_term_branch(body, exit_block)
+
+  // ── Exit ─────────────────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/nn/vm_silu_mul.spv"
+let _r = emit_vm_silu_mul(out)
+print("Emitted: {out}")

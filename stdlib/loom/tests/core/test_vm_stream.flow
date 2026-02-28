@@ -1,0 +1,176 @@
+// test_vm_stream.flow — I/O Streaming: CPU feeds data, GPU processes
+//
+// Demonstrates the GPU→CPU feedback loop:
+//   1. GPU processes a batch, writes status=4 (NEED_IO) to Metrics
+//   2. CPU polls Metrics, detects NEED_IO
+//   3. CPU streams next data chunk to Globals via vm_write_globals
+//   4. CPU clears status, GPU processes next batch
+//
+// This is the data-streaming pattern: GPU never stops, CPU provisions.
+//
+// Run: octoflow run stdlib/loom/test_vm_stream.flow --allow-read --allow-write
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEST 1: Multi-batch processing with CPU-fed data
+// ═══════════════════════════════════════════════════════════════════════════
+print("TEST 1: I/O streaming — CPU feeds batches, GPU processes")
+
+let vm = vm_boot(2.0, 8.0, 16.0)
+
+// Batch 1: Load salary column to Globals, run WHERE > 5, SUM
+let batch1 = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
+let _wg1 = vm_write_globals(vm, 0.0, batch1)
+
+// WHERE col > 5.0: masked values → Registers[0:8], mask → Registers[8:16]
+// pc: col_off=0, threshold=5.0, dst_val_off=0, dst_mask_off=8, count=8
+let pc_where = [0.0, 5.0, 0.0, 8.0, 8.0]
+let _dw1 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_where_gt.spv", pc_where, 1.0)
+
+// SUM of masked values → Metrics[0]
+// pc: in_off=0, scratch_off=0, count=8
+let pc_sum = [0.0, 0.0, 8.0]
+let _ds1 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc_sum, 1.0)
+
+// COUNT (sum of mask at offset 8) → Metrics[1]
+// pc: in_off=8, scratch_off=1, count=8
+let pc_cnt = [8.0, 1.0, 8.0]
+let _dc1 = vm_dispatch(vm, "stdlib/loom/kernels/ops/vm_reduce_sum.spv", pc_cnt, 1.0)
+
+let prog1 = vm_build(vm)
+let _e1 = vm_execute(prog1)
+
+// Read batch 1 results
+let m1 = vm_read_metrics(vm, 0.0, 2.0)
+let m1_sum = m1[0]
+let m1_cnt = m1[1]
+// Values > 5: 6, 8, 10, 12, 14, 16 → SUM=66, COUNT=6
+let mut t1_pass = 0.0
+if m1_sum == 66.0
+  if m1_cnt == 6.0
+    t1_pass = 1.0
+    print("  Batch 1: SUM={m1_sum}, COUNT={m1_cnt} (correct)")
+  end
+end
+if t1_pass == 0.0
+  print("  Batch 1: FAIL -- SUM={m1_sum}, COUNT={m1_cnt}, expected 66/6")
+end
+
+// ── CPU streams batch 2 to Globals (simulating NEED_IO response) ──
+let batch2 = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0]
+let _wg2 = vm_write_globals(vm, 0.0, batch2)
+
+// Re-execute SAME program (reusable command buffer!)
+let _e2 = vm_execute(prog1)
+
+// Read batch 2 results
+let m2 = vm_read_metrics(vm, 0.0, 2.0)
+let m2_sum = m2[0]
+let m2_cnt = m2[1]
+// All values > 5: SUM=3600, COUNT=8
+let mut t1b_pass = 0.0
+if m2_sum == 3600.0
+  if m2_cnt == 8.0
+    t1b_pass = 1.0
+    print("  Batch 2: SUM={m2_sum}, COUNT={m2_cnt} (correct)")
+  end
+end
+if t1b_pass == 0.0
+  print("  Batch 2: FAIL -- SUM={m2_sum}, COUNT={m2_cnt}, expected 3600/8")
+end
+
+// ── CPU streams batch 3 ──
+let batch3 = [1.0, 2.0, 3.0, 4.0, 5.0, 0.0, 0.0, 0.0]
+let _wg3 = vm_write_globals(vm, 0.0, batch3)
+
+let _e3 = vm_execute(prog1)
+
+let m3 = vm_read_metrics(vm, 0.0, 2.0)
+let m3_sum = m3[0]
+let m3_cnt = m3[1]
+// Values > 5: none → SUM=0, COUNT=0
+let mut t1c_pass = 0.0
+if m3_sum == 0.0
+  if m3_cnt == 0.0
+    t1c_pass = 1.0
+    print("  Batch 3: SUM={m3_sum}, COUNT={m3_cnt} (correct — zero matches)")
+  end
+end
+if t1c_pass == 0.0
+  print("  Batch 3: FAIL -- SUM={m3_sum}, COUNT={m3_cnt}, expected 0/0")
+end
+
+let mut test1_ok = 0.0
+if t1_pass == 1.0
+  if t1b_pass == 1.0
+    if t1c_pass == 1.0
+      test1_ok = 1.0
+    end
+  end
+end
+if test1_ok == 1.0
+  print("TEST 1: PASS -- 3 batches streamed, same command buffer, all results correct")
+else
+  print("TEST 1: FAIL -- some batches incorrect")
+end
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEST 2: Async streaming with poll loop
+// ═══════════════════════════════════════════════════════════════════════════
+print("TEST 2: Async streaming with CPU poll loop")
+
+let _s1 = vm_shutdown(vm)
+let vm2 = vm_boot(1.0, 8.0, 16.0)
+
+// Build a scale pipeline: R0 *= 3
+let data2 = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+let _w2 = vm_write_register(vm2, 0.0, 0.0, data2)
+let pc_scale = [0.0, 3.0, 8.0]
+let _ds2 = vm_dispatch(vm2, "stdlib/loom/kernels/ops/vm_scale.spv", pc_scale, 1.0)
+let prog2 = vm_build(vm2)
+
+// Stream 3 batches asynchronously with poll between each
+let mut total_sum = 0.0
+let mut batch_num = 0.0
+
+while batch_num < 3.0
+  // Write new data for this batch
+  let batch_val = (batch_num + 1.0) * 10.0
+  let batch_data = [batch_val, batch_val, batch_val, batch_val, batch_val, batch_val, batch_val, batch_val]
+  let _wb = vm_write_register(vm2, 0.0, 0.0, batch_data)
+
+  // Execute async
+  let _ea = vm_execute_async(prog2)
+
+  // Poll until done
+  let mut bdone = vm_poll(prog2)
+  while bdone == 0.0
+    bdone = vm_poll(prog2)
+  end
+
+  // Read result: each element = batch_val * 3
+  let rb = vm_read_register(vm2, 0.0, 0.0, 1.0)
+  let rb_0 = rb[0]
+  let expected = batch_val * 3.0
+  if rb_0 == expected
+    print("  Batch {batch_num}: scaled[0]={rb_0} (correct)")
+  else
+    print("  Batch {batch_num}: FAIL -- expected {expected}, got {rb_0}")
+  end
+  total_sum = total_sum + rb_0
+
+  batch_num = batch_num + 1.0
+end
+
+// total_sum = 10*3 + 20*3 + 30*3 = 30 + 60 + 90 = 180
+let mut t2_pass = 0.0
+if total_sum == 180.0
+  t2_pass = 1.0
+  print("TEST 2: PASS -- 3 async batches, total_sum={total_sum}")
+else
+  print("TEST 2: FAIL -- total_sum={total_sum}, expected 180")
+end
+
+let _s2 = vm_shutdown(vm2)
+
+let total = test1_ok + t2_pass
+print("=== {total}/2 TESTS PASS ===")

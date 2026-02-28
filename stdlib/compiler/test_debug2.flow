@@ -1,0 +1,14 @@
+// Read file and trace first 5 chars
+let input_path = env("FLOW_INPUT")
+let src = read_file(input_path)
+let n = len(src)
+let NL  = 10.0
+let SP  = 32.0
+let mut pos = 0.0
+let mut lim = 5.0
+while pos < n && pos < lim
+  let c = char_at(src, pos)
+  let co = ord(c)
+  print("pos={pos} co={co}")
+  pos = pos + 1.0
+end

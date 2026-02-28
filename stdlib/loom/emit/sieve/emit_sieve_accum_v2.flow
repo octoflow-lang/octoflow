@@ -1,0 +1,58 @@
+// emit_sieve_accum_v2.flow — Sieve Accumulate v2 Kernel Emitter
+//
+// Thread 0 only: adds segment count to running total, then resets segment count.
+//   total += seg_count
+//   seg_count = 0
+//
+// Push constants:
+//   pc[0] = count_off  (float → uint, offset of segment count in R0)
+//   pc[1] = accum_off  (float → uint, offset of running total in R0)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read+write count and accumulator as uint32)
+//
+// Dispatch: wg = 1
+//
+// Run: octoflow run stdlib/loom/emit_sieve_accum_v2.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_accum_v2(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: thread 0 guard ────────────────────────────────
+  let gid     = ir_load_gid(entry)
+  let pc_cnt  = ir_push_const(entry, 0.0)   // count_off
+  let pc_acc  = ir_push_const(entry, 1.0)   // accum_off
+  let one_u   = ir_const_u(entry, 1.0)
+  let not_t0  = ir_ugte(entry, gid, one_u)
+  let _sm     = ir_selection_merge(entry, exit_block)
+  let _br     = ir_term_cond_branch(entry, not_t0, exit_block, body)
+
+  // ── Body: accum += count, count = 0 ──────────────────────
+  let cnt_u   = ir_ftou(body, pc_cnt)
+  let acc_u   = ir_ftou(body, pc_acc)
+  let cnt_val = ir_buf_load_u(body, 0.0, cnt_u)
+  let acc_val = ir_buf_load_u(body, 0.0, acc_u)
+  let new_acc = ir_iadd(body, acc_val, cnt_val)
+  let zero_u  = ir_const_u(body, 0.0)
+  let _s1     = ir_buf_store_u(body, 0.0, acc_u, new_acc)
+  let _s2     = ir_buf_store_u(body, 0.0, cnt_u, zero_u)
+  let _br2    = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_accum_v2.spv"
+let _r = emit_sieve_accum_v2(out)
+print("Emitted: {out}")

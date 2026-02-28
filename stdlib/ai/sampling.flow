@@ -1,0 +1,322 @@
+// sampling.flow — Token Sampling for LLM Inference
+//
+// Strategies for next-token prediction from logits (unnormalized scores).
+//
+// Functions:
+//   sample_greedy(logits) -> token_id
+//   sample_top_k(logits, k, temp) -> token_id
+//   sample_top_p(logits, p, temp) -> token_id
+//   sample_temperature(logits, temp) -> token_id
+//   sample_min_p(logits, min_p, temp) -> token_id
+//
+// Usage:
+//   use "sampling"
+//   let next = sample_top_k(logits, 40.0, 0.8)
+
+// ── Internal state (module-level arrays for top-k results) ────────
+let mut _samp_vals = []
+let mut _samp_ids = []
+
+// ── Internal: find top-k logits ───────────────────────────────────
+// Fills _samp_vals[] and _samp_ids[] with top k entries sorted descending.
+// Algorithm: maintain sorted array of size k, linear scan over logits.
+// Effective cost: O(n) when most logits don't beat the running minimum.
+
+fn _samp_find_top_k(logits, k)
+  let n = len(logits)
+  let mut kk = k
+  if kk > n
+    kk = n
+  end
+  if kk < 1.0
+    kk = 1.0
+  end
+  // Reset output arrays
+  let mut ci = len(_samp_vals)
+  while ci > 0.0
+    ci = ci - 1.0
+    let _r1 = pop(_samp_vals)
+    let _r2 = pop(_samp_ids)
+  end
+  // Initialize with sentinel values
+  let mut ti = 0.0
+  while ti < kk
+    push(_samp_vals, -999999.0)
+    push(_samp_ids, 0.0)
+    ti = ti + 1.0
+  end
+  // Scan all logits
+  let last = int(kk - 1.0)
+  let mut v = 0.0
+  while v < n
+    let lv = logits[int(v)]
+    if lv > _samp_vals[last]
+      // Find insertion position (scan from top)
+      let mut ins = kk - 1.0
+      let mut sc = kk - 2.0
+      while sc >= 0.0
+        if lv > _samp_vals[int(sc)]
+          ins = sc
+        end
+        sc = sc - 1.0
+      end
+      // Shift elements down
+      let mut sh = kk - 1.0
+      while sh > ins
+        let prev = int(sh - 1.0)
+        _samp_vals[int(sh)] = _samp_vals[prev]
+        _samp_ids[int(sh)] = _samp_ids[prev]
+        sh = sh - 1.0
+      end
+      _samp_vals[int(ins)] = lv
+      _samp_ids[int(ins)] = v
+    end
+    v = v + 1.0
+  end
+  return kk
+end
+
+// ── Internal: softmax over _samp_vals with temperature ────────────
+// Returns sum of exponentials (for sampling without normalize).
+
+fn _samp_softmax_topk(kk, temp)
+  let mut t = temp
+  if t <= 0.0
+    t = 1.0
+  end
+  let max_logit = _samp_vals[0]
+  let mut exp_sum = 0.0
+  let mut i = 0.0
+  while i < kk
+    let e = exp((_samp_vals[int(i)] - max_logit) / t)
+    _samp_vals[int(i)] = e
+    exp_sum = exp_sum + e
+    i = i + 1.0
+  end
+  return exp_sum
+end
+
+// ── Internal: random sample from categorical ──────────────────────
+// _samp_vals[] contains unnormalized probs, exp_sum is their total.
+// Returns token ID from _samp_ids[].
+
+fn _samp_categorical(kk, exp_sum)
+  let r = random() * exp_sum
+  let mut cumsum = 0.0
+  let mut i = 0.0
+  while i < kk
+    cumsum = cumsum + _samp_vals[int(i)]
+    if cumsum >= r
+      return _samp_ids[int(i)]
+    end
+    i = i + 1.0
+  end
+  return _samp_ids[0]
+end
+
+// ══════════════════════════════════════════════════════════════════
+// PUBLIC API
+// ══════════════════════════════════════════════════════════════════
+
+// ── Greedy Sampling (Argmax) ──────────────────────────────────────
+// Returns the token index with the highest logit value.
+
+fn sample_greedy(logits)
+  let n = len(logits)
+  if n == 0.0
+    return 0.0
+  end
+  let mut max_idx = 0.0
+  let mut max_val = logits[0]
+  let mut i = 1.0
+  while i < n
+    let val = logits[int(i)]
+    if val > max_val
+      max_val = val
+      max_idx = i
+    end
+    i = i + 1.0
+  end
+  return max_idx
+end
+
+// ── Top-K Sampling ────────────────────────────────────────────────
+// 1. Find top k logits
+// 2. Apply temperature scaling + softmax over the k candidates
+// 3. Sample from categorical distribution
+//
+// temp=1.0 is neutral, <1.0 is sharper, >1.0 is flatter.
+// k=1 is equivalent to greedy.
+
+fn sample_top_k(logits, k, temp)
+  let n = len(logits)
+  if n == 0.0
+    return 0.0
+  end
+  if k <= 1.0
+    return sample_greedy(logits)
+  end
+  let kk = _samp_find_top_k(logits, k)
+  let exp_sum = _samp_softmax_topk(kk, temp)
+  let result = _samp_categorical(kk, exp_sum)
+  return result
+end
+
+// ── Top-P (Nucleus) Sampling ──────────────────────────────────────
+// 1. Pre-filter: extract top 100 logits (covers p=0.99 in practice)
+// 2. Apply temperature + softmax
+// 3. Accumulate probabilities until sum >= p
+// 4. Sample only from the nucleus set
+//
+// p=0.9 means: sample from the smallest set of tokens whose
+// cumulative probability is at least 90%.
+
+fn sample_top_p(logits, p, temp)
+  let n = len(logits)
+  if n == 0.0
+    return 0.0
+  end
+  // Pre-filter: top 100 candidates (already sorted descending)
+  let mut pre_k = 100.0
+  if n < pre_k
+    pre_k = n
+  end
+  let kk = _samp_find_top_k(logits, pre_k)
+  let exp_sum = _samp_softmax_topk(kk, temp)
+  // Find nucleus: accumulate normalized probs until >= p
+  let mut cum = 0.0
+  let mut nucleus_size = 0.0
+  let mut i = 0.0
+  while i < kk
+    cum = cum + _samp_vals[int(i)] / exp_sum
+    nucleus_size = nucleus_size + 1.0
+    if cum >= p
+      i = kk
+    end
+    if i < kk
+      i = i + 1.0
+    end
+  end
+  if nucleus_size < 1.0
+    nucleus_size = 1.0
+  end
+  // Compute sum of nucleus probabilities (for sampling)
+  let mut nuc_sum = 0.0
+  i = 0.0
+  while i < nucleus_size
+    nuc_sum = nuc_sum + _samp_vals[int(i)]
+    i = i + 1.0
+  end
+  // Sample from nucleus
+  let result = _samp_categorical(nucleus_size, nuc_sum)
+  return result
+end
+
+// ── Temperature Sampling ──────────────────────────────────────────
+// Full-vocab softmax with temperature, then random sample.
+// For large vocabularies (128K+), this scans the entire vocab twice.
+// Use sample_top_k or sample_top_p for better efficiency.
+
+fn sample_temperature(logits, temp)
+  let n = len(logits)
+  if n == 0.0
+    return 0.0
+  end
+  let mut t = temp
+  if t <= 0.0
+    t = 1.0
+  end
+  // Find max for numerical stability
+  let mut max_val = logits[0]
+  let mut i = 1.0
+  while i < n
+    let val = logits[int(i)]
+    if val > max_val
+      max_val = val
+    end
+    i = i + 1.0
+  end
+  // Softmax with temperature + cumulative sample in one pass
+  // First pass: compute exp sum
+  let mut exp_sum = 0.0
+  i = 0.0
+  while i < n
+    exp_sum = exp_sum + exp((logits[int(i)] - max_val) / t)
+    i = i + 1.0
+  end
+  // Second pass: cumulative random sample
+  let r = random() * exp_sum
+  let mut cumsum = 0.0
+  i = 0.0
+  while i < n
+    cumsum = cumsum + exp((logits[int(i)] - max_val) / t)
+    if cumsum >= r
+      return i
+    end
+    i = i + 1.0
+  end
+  return n - 1.0
+end
+
+// ── Min-P Sampling ────────────────────────────────────────────────
+// Keep only tokens where probability >= min_p * max_probability.
+// Then sample from the filtered set with temperature.
+//
+// min_p=0.05 keeps tokens with at least 5% of the top token's prob.
+// Adaptive: adjusts candidate set size based on confidence.
+
+fn sample_min_p(logits, min_p, temp)
+  let n = len(logits)
+  if n == 0.0
+    return 0.0
+  end
+  let mut t = temp
+  if t <= 0.0
+    t = 1.0
+  end
+  // Find max logit
+  let mut max_val = logits[0]
+  let mut i = 1.0
+  while i < n
+    let val = logits[int(i)]
+    if val > max_val
+      max_val = val
+    end
+    i = i + 1.0
+  end
+  // Compute exp values and find max prob
+  // max_prob = exp(0) / sum = 1/sum (since max is subtracted)
+  // threshold = min_p * max_prob = min_p / sum
+  // Keep token i if exp((logits[i]-max)/t) / sum >= min_p / sum
+  // Simplifies to: exp((logits[i]-max)/t) >= min_p
+  // So we don't even need the full softmax denominator!
+  let log_threshold = log(min_p) * t + max_val
+  // Filter and collect
+  let mut filt_sum = 0.0
+  let mut filt_count = 0.0
+  // Reset output arrays
+  let mut ci = len(_samp_vals)
+  while ci > 0.0
+    ci = ci - 1.0
+    let _r1 = pop(_samp_vals)
+    let _r2 = pop(_samp_ids)
+  end
+  i = 0.0
+  while i < n
+    let lv = logits[int(i)]
+    if lv >= log_threshold
+      let e = exp((lv - max_val) / t)
+      push(_samp_vals, e)
+      push(_samp_ids, i)
+      filt_sum = filt_sum + e
+      filt_count = filt_count + 1.0
+    end
+    i = i + 1.0
+  end
+  if filt_count == 0.0
+    // Fallback to greedy if nothing passes
+    return sample_greedy(logits)
+  end
+  let result = _samp_categorical(filt_count, filt_sum)
+  return result
+end

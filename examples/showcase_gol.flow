@@ -1,0 +1,296 @@
+// ====================================================================
+//  GAME OF LIFE  —  GPU vs GPU+CPU vs CPU
+//  Same simulation, three execution modes, side by side.
+// ====================================================================
+
+print("")
+print("====================================================================")
+print("  GAME OF LIFE  --  GPU vs GPU+CPU vs CPU")
+print("====================================================================")
+print("")
+print("  Pattern:  R-pentomino (5 cells)  |  32x32 toroidal  |  30 gens")
+print("")
+print("  Initial:  .##")
+print("            ##.")
+print("            .#.")
+print("")
+
+// ── Build initial grid ──────────────────────────────────────────────
+let mut init_grid = []
+let mut ii = 0.0
+while ii < 1024.0
+  push(init_grid, 0.0)
+  ii = ii + 1.0
+end
+init_grid[496] = 1.0
+init_grid[497] = 1.0
+init_grid[527] = 1.0
+init_grid[528] = 1.0
+init_grid[560] = 1.0
+
+// =====================================================================
+//  COLUMN 1: GPU (batch chain) — 30 dispatches, 1 submit
+// =====================================================================
+print("  [1/3] GPU batch chain...")
+
+let mut gpu_grid = []
+let mut c1 = 0.0
+while c1 < 1024.0
+  push(gpu_grid, init_grid[c1])
+  c1 = c1 + 1.0
+end
+
+let t0_gpu = now_ms()
+
+let vm1 = vm_boot(1.0, 2048.0, 1.0)
+let _w1 = vm_write_register(vm1, 0.0, 0.0, gpu_grid)
+
+let pc_fwd = [0.0, 1024.0, 32.0, 1024.0]
+let pc_rev = [1024.0, 0.0, 32.0, 1024.0]
+let kernel = "stdlib/loom/kernels/ops/gol_step.spv"
+
+let mut g1 = 0.0
+while g1 < 30.0
+  let ev1 = g1 - floor(g1 / 2.0) * 2.0
+  if ev1 < 0.5
+    let _d1 = vm_dispatch(vm1, kernel, pc_fwd, 4.0)
+  else
+    let _d1 = vm_dispatch(vm1, kernel, pc_rev, 4.0)
+  end
+  g1 = g1 + 1.0
+end
+
+let prog1 = vm_build(vm1)
+let _ex1 = vm_execute(prog1)
+let gpu_result = vm_read_register(vm1, 0.0, 0.0, 1024.0)
+let _s1 = vm_shutdown(vm1)
+
+let t1_gpu = now_ms()
+let t_gpu = t1_gpu - t0_gpu
+print("        30 dispatches, 1 submit: {t_gpu:.1}ms")
+
+// =====================================================================
+//  COLUMN 2: GPU+CPU (per-gen) — 30 boots, 30 submits, 30 shutdowns
+// =====================================================================
+print("  [2/3] GPU+CPU per-generation...")
+
+let mut mid_grid = []
+let mut mid_buf = []
+let mut c2 = 0.0
+while c2 < 1024.0
+  push(mid_grid, init_grid[c2])
+  push(mid_buf, 0.0)
+  c2 = c2 + 1.0
+end
+
+let t0_mid = now_ms()
+
+let mut g2 = 0.0
+while g2 < 30.0
+  // Boot VM for this generation
+  let vm2 = vm_boot(1.0, 1024.0, 1.0)
+  let _w2 = vm_write_register(vm2, 0.0, 0.0, mid_grid)
+  // Dispatch R0 -> R1, then read register 1
+  let _d2 = vm_dispatch(vm2, kernel, pc_fwd, 4.0)
+  let prog2 = vm_build(vm2)
+  let _ex2 = vm_execute(prog2)
+  let step_result = vm_read_register(vm2, 0.0, 1.0, 1024.0)
+  let _s2 = vm_shutdown(vm2)
+  // Copy result back to mid_grid for next generation
+  let mut mk = 0.0
+  while mk < 1024.0
+    mid_grid[mk] = step_result[mk]
+    mk = mk + 1.0
+  end
+  g2 = g2 + 1.0
+end
+
+let t1_mid = now_ms()
+let t_mid = t1_mid - t0_mid
+print("        30 boots + 30 submits + 30 shutdowns: {t_mid:.1}ms")
+
+// =====================================================================
+//  COLUMN 3: CPU (interpreted loops)
+// =====================================================================
+print("  [3/3] CPU interpreted loops...")
+
+let mut cpu_grid = []
+let mut cpu_next = []
+let mut c3 = 0.0
+while c3 < 1024.0
+  push(cpu_grid, init_grid[c3])
+  push(cpu_next, 0.0)
+  c3 = c3 + 1.0
+end
+
+let t0_cpu = now_ms()
+
+let mut g3 = 0.0
+while g3 < 30.0
+  let mut idx = 0.0
+  while idx < 1024.0
+    let row = floor(idx / 32.0)
+    let col = idx - row * 32.0
+    let mut rm = row - 1.0
+    if rm < 0.0
+      rm = rm + 32.0
+    end
+    let mut rp = row + 1.0
+    if rp >= 32.0
+      rp = rp - 32.0
+    end
+    let mut cm = col - 1.0
+    if cm < 0.0
+      cm = cm + 32.0
+    end
+    let mut cp = col + 1.0
+    if cp >= 32.0
+      cp = cp - 32.0
+    end
+    let mut cnt = 0.0
+    cnt = cnt + cpu_grid[rm * 32.0 + cm]
+    cnt = cnt + cpu_grid[rm * 32.0 + col]
+    cnt = cnt + cpu_grid[rm * 32.0 + cp]
+    cnt = cnt + cpu_grid[row * 32.0 + cm]
+    cnt = cnt + cpu_grid[row * 32.0 + cp]
+    cnt = cnt + cpu_grid[rp * 32.0 + cm]
+    cnt = cnt + cpu_grid[rp * 32.0 + col]
+    cnt = cnt + cpu_grid[rp * 32.0 + cp]
+    let cell = cpu_grid[idx]
+    if cell > 0.5
+      if cnt == 2.0 || cnt == 3.0
+        cpu_next[idx] = 1.0
+      else
+        cpu_next[idx] = 0.0
+      end
+    else
+      if cnt == 3.0
+        cpu_next[idx] = 1.0
+      else
+        cpu_next[idx] = 0.0
+      end
+    end
+    idx = idx + 1.0
+  end
+  let mut ck = 0.0
+  while ck < 1024.0
+    cpu_grid[ck] = cpu_next[ck]
+    ck = ck + 1.0
+  end
+  g3 = g3 + 1.0
+end
+
+let t1_cpu = now_ms()
+let t_cpu = t1_cpu - t0_cpu
+print("        30 gens x 1,024 cells: {t_cpu:.1}ms")
+print("")
+
+// =====================================================================
+//  SIDE-BY-SIDE DISPLAY (3 columns)
+// =====================================================================
+print("  GPU (batch)                      GPU+CPU (per-gen)                  CPU (loops)")
+print("  -------------------------------- -------------------------------- --------------------------------")
+
+let mut y = 0.0
+while y < 32.0
+  // Build GPU row
+  let mut gl = ""
+  let mut gx = 0.0
+  while gx < 32.0
+    if gpu_result[y * 32.0 + gx] > 0.5
+      gl = gl + "#"
+    else
+      gl = gl + "."
+    end
+    gx = gx + 1.0
+  end
+  // Build MID row
+  let mut ml = ""
+  let mut mx = 0.0
+  while mx < 32.0
+    if mid_grid[y * 32.0 + mx] > 0.5
+      ml = ml + "#"
+    else
+      ml = ml + "."
+    end
+    mx = mx + 1.0
+  end
+  // Build CPU row
+  let mut cl = ""
+  let mut cx = 0.0
+  while cx < 32.0
+    if cpu_grid[y * 32.0 + cx] > 0.5
+      cl = cl + "#"
+    else
+      cl = cl + "."
+    end
+    cx = cx + 1.0
+  end
+  let row_line = "  " + gl + " " + ml + " " + cl
+  print("{row_line}")
+  y = y + 1.0
+end
+
+print("  -------------------------------- -------------------------------- --------------------------------")
+
+// =====================================================================
+//  VERIFICATION
+// =====================================================================
+let mut gpu_alive = 0.0
+let mut mid_alive = 0.0
+let mut cpu_alive = 0.0
+let mut mismatch_gm = 0.0
+let mut mismatch_gc = 0.0
+let mut vi = 0.0
+while vi < 1024.0
+  if gpu_result[vi] > 0.5
+    gpu_alive = gpu_alive + 1.0
+  end
+  if mid_grid[vi] > 0.5
+    mid_alive = mid_alive + 1.0
+  end
+  if cpu_grid[vi] > 0.5
+    cpu_alive = cpu_alive + 1.0
+  end
+  // GPU vs MID
+  if gpu_result[vi] > 0.5 && mid_grid[vi] < 0.5
+    mismatch_gm = mismatch_gm + 1.0
+  end
+  if gpu_result[vi] < 0.5 && mid_grid[vi] > 0.5
+    mismatch_gm = mismatch_gm + 1.0
+  end
+  // GPU vs CPU
+  if gpu_result[vi] > 0.5 && cpu_grid[vi] < 0.5
+    mismatch_gc = mismatch_gc + 1.0
+  end
+  if gpu_result[vi] < 0.5 && cpu_grid[vi] > 0.5
+    mismatch_gc = mismatch_gc + 1.0
+  end
+  vi = vi + 1.0
+end
+
+print("")
+print("  Alive cells:  GPU={gpu_alive}  GPU+CPU={mid_alive}  CPU={cpu_alive}")
+
+if mismatch_gm < 0.5 && mismatch_gc < 0.5
+  print("  ALL THREE MATCH")
+else
+  print("  GPU vs GPU+CPU: {mismatch_gm} differ  |  GPU vs CPU: {mismatch_gc} differ")
+end
+
+print("")
+print("  Timing:")
+print("    GPU batch:   {t_gpu:.1}ms  (30 dispatches, 1 build, 1 execute)")
+print("    GPU+CPU:     {t_mid:.1}ms  (30 boots + 30 submits + 30 shutdowns)")
+print("    CPU loops:   {t_cpu:.1}ms  (30 x 1,024 interpreted iterations)")
+
+if t_gpu > 0.5
+  let sp_mid = t_mid / t_gpu
+  let sp_cpu = t_cpu / t_gpu
+  print("    Speedup:     GPU batch is {sp_cpu:.0}x faster than CPU")
+  print("                 GPU batch is {sp_mid:.0}x faster than GPU+CPU")
+end
+
+print("")
+print("====================================================================")
+print("")

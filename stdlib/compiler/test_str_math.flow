@@ -1,0 +1,49 @@
+// test_str_math.flow — upper/lower/abs/pow/round + char iteration
+let s = "Hello World"
+let up = to_upper(s)
+let lo = to_lower(s)
+print("upper={up}")
+print("lower={lo}")
+
+// abs
+let neg = -5.0
+let pos = abs(neg)
+print("abs={pos}")
+
+// pow
+let p = pow(2.0, 8.0)
+print("pow2_8={p}")
+
+// round
+let r1 = round(3.7)
+let r2 = round(3.2)
+print("round3.7={r1}")
+print("round3.2={r2}")
+
+// char iteration with ord/char_at + && in while
+let word = "abc"
+let wlen = len(word)
+let mut wi = 0.0
+let mut codes = ""
+while wi < wlen
+  let ch = char_at(word, wi)
+  let co = ord(ch)
+  if len(codes) > 0.0
+    codes = codes + ","
+  end
+  codes = codes + str(co)
+  wi = wi + 1.0
+end
+print("codes={codes}")
+
+// && in if condition
+let x = 5.0
+let y = 10.0
+if x > 0.0 && y > 0.0
+  print("both_positive=yes")
+end
+if x > 0.0 && y < 0.0
+  print("should_not_print=yes")
+else
+  print("y_not_negative=yes")
+end

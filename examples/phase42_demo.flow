@@ -1,0 +1,50 @@
+// OctoFlow Phase 42: Date/Time Operations Demo
+// Timestamps as floats (unix seconds) - self-hosting friendly
+
+print("=== Timestamp Parsing ===")
+let trade_time = timestamp("2024-01-15T13:30:00Z")
+print("Trade timestamp: {trade_time}")
+
+let current = now()
+print("Current time (unix): {current}")
+
+print("")
+print("=== Date Arithmetic ===")
+let start = timestamp("2024-01-01T00:00:00Z")
+print("Start timestamp: {start}")
+
+let one_week = add_days(start, 7)
+print("One week later: {one_week}")
+
+let one_month = add_days(start, 30)
+print("~One month later: {one_month}")
+
+let one_hour = add_hours(start, 1)
+let one_minute = add_minutes(start, 60)
+let one_second = add_seconds(start, 3600)
+print("All equal to 1 hour: {one_hour} == {one_minute} == {one_second}")
+
+print("")
+print("=== Time Differences ===")
+let end_of_year = timestamp("2024-12-31T23:59:59Z")
+let days_diff = diff_days(end_of_year, start)
+let seconds_diff = diff_seconds(end_of_year, start)
+let hours_diff = diff_hours(end_of_year, start)
+
+print("Days in 2024: {days_diff:.1}")
+print("Hours in 2024: {hours_diff:.1}")
+print("Seconds in 2024: {seconds_diff:.0}")
+
+print("")
+print("=== Backtesting Workflow ===")
+let signal_time = timestamp("2024-06-15T14:30:00Z")
+let entry_time = add_minutes(signal_time, 5)
+let exit_time = add_hours(entry_time, 24)
+
+print("Signal time: {signal_time}")
+print("Entry (5 min later): {entry_time}")
+print("Exit (24h later): {exit_time}")
+
+let hold_duration_hours = diff_hours(exit_time, entry_time)
+let hold_duration_days = diff_days(exit_time, entry_time)
+print("Hold duration: {hold_duration_hours:.1} hours ({hold_duration_days:.2} days)")

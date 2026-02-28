@@ -1,0 +1,139 @@
+// test_gpu_lz4.flow — GPU LZ4 block decompression unit test
+//
+// Hand-constructed LZ4 block encoding known data.
+// Verifies GPU decompressor produces exact original bytes.
+//
+// Test data: "Hello, World! Hello, World! Hello, World!"
+//   = 41 bytes, with repetition that LZ4 can match
+//
+// LZ4 block format per sequence:
+//   [token] [optional extra lit len] [literals] [offset_lo] [offset_hi] [optional extra match len]
+//   token high nibble = literal length (15 = extended)
+//   token low nibble = match length - 4 (15 = extended)
+//
+// Manual encoding:
+//   Sequence 1: 14 literals "Hello, World! " + match offset=14, match_len=14+4=18
+//     but match_len 18-4=14 fits in nibble
+//     token = 0xEE (lit=14, match=14) ... wait, max nibble is 15
+//     Actually lit=14 fits (0xE). match_len=14 also fits (0xE since 14=0xE)
+//     But the data is 41 bytes: "Hello, World! " (14) repeated ~3 times
+//     Let me use exact: "Hello, World! Hello, World! Hello, World!"
+//     = "Hello, World! " (14 bytes) × 2 + "Hello, World!" (13 bytes) = 41 bytes
+//
+//   Seq 1: 14 literal bytes "Hello, World! ", match offset=14, match_len=27-4=23
+//     token high=14(0xE), low=15(0xF, extended)
+//     extra match = 23-15 = 8
+//     Total compressed: 1 + 14 + 2 + 1 = 18 bytes
+//
+// Actually let me use a simpler test: repeated byte pattern
+//
+// Test: 64 bytes of pattern [1,2,3,4, 1,2,3,4, ...] (16 repeats)
+//   LZ4 encoding:
+//     Seq 1: 4 literals [1,2,3,4], match offset=4, match_len=60
+//       token: high=4, low=15 (extended)  → token = 0x4F
+//       match_len = 60-4 = 56, extended = 56-15 = 41
+//       bytes: [0x4F, 1, 2, 3, 4, 4, 0, 41]
+//       That's 8 bytes → 64 bytes = 8:1 compression
+//
+// Run: octoflow run stdlib/tests/test_gpu_lz4.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+rt_init()
+
+// 2 push constants: n_blocks (4B), out_block_size (4B) = 8 bytes
+let pipe_lz4 = rt_load_pipeline("tests/gpu_shaders/28_lz4_decompress.spv", 2.0, 8.0)
+
+// ── Build compressed input ───────────────────────────────────────────
+// 1 block, decompresses to 64 bytes of [1,2,3,4] repeated
+
+// LZ4 encoding of [1,2,3,4] × 16:
+//   Token: 0x4F = 79 (lit_len=4, match_len nibble=15 → extended)
+//   Literals: 1, 2, 3, 4
+//   Offset: 4, 0 (little-endian uint16 = 4)
+//   Extra match len: 41 (total match = 4 + 15 + 41 = 60, + 4 literals = 64)
+let mut compressed = [79.0, 1.0, 2.0, 3.0, 4.0, 4.0, 0.0, 41.0]
+let comp_size = 8.0
+
+// Input layout: [block_offset_0, block_offset_1, compressed_data...]
+// 1 block: offsets are [0, comp_size]
+let mut input = []
+push(input, 0.0)
+push(input, comp_size)
+// Append compressed data
+let mut i = 0.0
+while i < comp_size
+  push(input, compressed[int(i)])
+  i = i + 1.0
+end
+
+let OUT_BLOCK = 64.0
+
+// Upload
+let buf_in = rt_create_buffer(len(input) * 4.0)
+let buf_out = rt_create_buffer(OUT_BLOCK * 4.0)
+rt_upload(buf_in, input)
+
+// Zero output
+let mut zeros = []
+let mut i = 0.0
+while i < OUT_BLOCK
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+rt_upload(buf_out, zeros)
+
+// Dispatch: 1 block, 1 workgroup
+rt_chain_begin(1.0, 2.0)
+let mut pc = [1.0, OUT_BLOCK]
+rt_chain_push_constants(pipe_lz4, pc)
+let mut bufs = [buf_in, buf_out]
+rt_chain_dispatch(pipe_lz4, bufs, 1.0)
+rt_chain_end()
+rt_chain_submit_wait()
+
+// Download
+rt_download(buf_out, OUT_BLOCK)
+
+// Build expected: [1,2,3,4] repeated 16 times
+let mut expected = []
+let mut i = 0.0
+while i < 16.0
+  push(expected, 1.0)
+  push(expected, 2.0)
+  push(expected, 3.0)
+  push(expected, 4.0)
+  i = i + 1.0
+end
+
+// Verify
+let mut pass = 1.0
+let mut i = 0.0
+while i < OUT_BLOCK
+  let got = rt_result[int(i)]
+  let exp = expected[int(i)]
+  if got != exp
+    print("FAIL: byte {i} got={got} expected={exp}")
+    pass = 0.0
+  end
+  i = i + 1.0
+end
+
+let b0 = rt_result[0]
+let b1 = rt_result[1]
+let b2 = rt_result[2]
+let b3 = rt_result[3]
+let b4 = rt_result[4]
+let b5 = rt_result[5]
+let b6 = rt_result[6]
+let b7 = rt_result[7]
+
+print("GPU LZ4 decompress (1 block, 8 bytes → 64 bytes):")
+print("  Compression ratio: 8:1")
+print("  First 8 output bytes: {b0} {b1} {b2} {b3} {b4} {b5} {b6} {b7}")
+
+if pass == 1.0
+  print("PASS: gpu_lz4 BIT EXACT")
+end
+
+rt_cleanup()

@@ -1,4 +1,7 @@
 // stdlib/stats/correlation.flow — Correlation and regression
+//
+// Functions: pearson, spearman, rank_array, covariance, linear_fit,
+//            residuals, polynomial_fit
 
 fn pearson(x, y)
   let n = len(x)

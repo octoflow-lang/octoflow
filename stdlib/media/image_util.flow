@@ -2,6 +2,10 @@
 // Images stored as 3 flat arrays (r, g, b) of width*height floats (0-255)
 // Pixel at (x, y) is at index y * width + x
 //
+// Functions: img_get_pixel, img_set_pixel, img_fill, img_copy, img_crop,
+//            img_paste, img_flip_h, img_flip_v, img_grayscale, img_brightness,
+//            img_contrast, img_mse, img_psnr
+//
 // Usage:
 //   use image_util
 //   let mut r = []
@@ -12,7 +16,14 @@
 // ─── Pixel Access ─────────────────────────────────────────────
 
 fn img_get_pixel(r, g, b, w, x, y, result)
+  let count = len(r)
+  if x < 0.0 || y < 0.0 || x >= w
+    return 0.0
+  end
   let idx = int(y * w + x)
+  if idx >= count
+    return 0.0
+  end
   result[0] = r[idx]
   result[1] = g[idx]
   result[2] = b[idx]
@@ -20,7 +31,14 @@ fn img_get_pixel(r, g, b, w, x, y, result)
 end
 
 fn img_set_pixel(r, g, b, w, x, y, pr, pg, pb)
+  let count = len(r)
+  if x < 0.0 || y < 0.0 || x >= w
+    return 0.0
+  end
   let idx = int(y * w + x)
+  if idx >= count
+    return 0.0
+  end
   r[idx] = pr
   g[idx] = pg
   b[idx] = pb
@@ -77,6 +95,15 @@ end
 // ─── Crop / Paste ─────────────────────────────────────────────
 
 fn img_crop(r, g, b, w, cx, cy, cw, ch, out_r, out_g, out_b)
+  let count = len(r)
+  let h = count / w
+  // Bounds check: crop region must fit within image
+  if cx < 0.0 || cy < 0.0 || cw <= 0.0 || ch <= 0.0
+    return 0.0
+  end
+  if cx + cw > w || cy + ch > h
+    return 0.0
+  end
   // Clear output arrays
   while len(out_r) > 0.0
     pop(out_r)
@@ -104,6 +131,15 @@ fn img_crop(r, g, b, w, cx, cy, cw, ch, out_r, out_g, out_b)
 end
 
 fn img_paste(dst_r, dst_g, dst_b, dst_w, src_r, src_g, src_b, src_w, src_h, px, py)
+  let dst_count = len(dst_r)
+  let dst_h = dst_count / dst_w
+  // Bounds check: paste region must fit within destination
+  if px < 0.0 || py < 0.0
+    return 0.0
+  end
+  if px + src_w > dst_w || py + src_h > dst_h
+    return 0.0
+  end
   let mut row = 0.0
   while row < src_h
     let mut col = 0.0
@@ -225,6 +261,9 @@ end
 // ─── Quality Metrics ──────────────────────────────────────────
 
 fn img_mse(r1, g1, b1, r2, g2, b2, count)
+  if count <= 0.0
+    return 0.0
+  end
   let mut sum = 0.0
   let mut i = 0.0
   while i < count

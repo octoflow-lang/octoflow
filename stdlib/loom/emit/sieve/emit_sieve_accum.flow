@@ -1,0 +1,57 @@
+// emit_sieve_accum.flow — Sieve Accumulate Kernel Emitter
+//
+// Thread 0 only: adds segment count to running total.
+//   accum[0] = accum[0] + count[0]
+//
+// Push constants:
+//   pc[0] = count_off  (float → uint, offset of count result in registers SSBO)
+//   pc[1] = accum_off  (float → uint, offset of accumulator in registers SSBO)
+//
+// Binding layout (VM 4-SSBO):
+//   Binding 0: registers (read count, read+write accumulator)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (unused)
+//   Binding 3: control   (unused)
+//
+// Dispatch: wg = 1
+//
+// Run: octoflow run stdlib/loom/emit_sieve_accum.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_sieve_accum(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid guard (thread 0 only) ──────────────────────
+  let gid     = ir_load_gid(entry)
+  let pc_cnt  = ir_push_const(entry, 0.0)   // count_off
+  let pc_acc  = ir_push_const(entry, 1.0)   // accum_off
+  let one_u   = ir_const_u(entry, 1.0)
+  let not_t0  = ir_ugte(entry, gid, one_u)  // gid >= 1 → not thread 0
+  let _sm     = ir_selection_merge(entry, exit_block)
+  let _br     = ir_term_cond_branch(entry, not_t0, exit_block, body)
+
+  // ── Body: accum[0] += count[0] ────────────────────────────
+  let cnt_u   = ir_ftou(body, pc_cnt)
+  let acc_u   = ir_ftou(body, pc_acc)
+  let cnt_val = ir_load_input_at(body, 0.0, cnt_u)   // registers[count_off]
+  let acc_val = ir_load_input_at(body, 0.0, acc_u)   // registers[accum_off]
+  let new_acc = ir_fadd(body, acc_val, cnt_val)
+  let _store  = ir_buf_store_f(body, 0.0, acc_u, new_acc)
+  let _br2    = ir_term_branch(body, exit_block)
+
+  // ── Exit ──────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/sieve/sieve_accum.spv"
+let _r = emit_sieve_accum(out)
+print("Emitted: {out}")

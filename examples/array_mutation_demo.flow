@@ -1,0 +1,61 @@
+// Phase 29: Array Mutation Demo
+// arr[i] = val, push(arr, val), pop(arr)
+
+// Mutable array — use `let mut` to allow modification
+let mut scores = [85.0, 92.0, 78.0, 95.0, 88.0]
+
+// Element assignment: arr[index] = value
+scores[2] = 80.0
+let s2 = scores[2]
+print("After fixing score[2]: {s2}")
+
+// Push: append elements
+let mut log = []
+push(log, 100.0)
+push(log, 200.0)
+push(log, 300.0)
+let log_len = len(log)
+print("Log has {log_len} entries")
+
+// Pop: remove and return last element
+let last = pop(log)
+let log_len2 = len(log)
+print("Popped: {last}, remaining: {log_len2}")
+
+// Build array dynamically in a loop
+let mut squares = []
+for i in range(1, 6)
+  push(squares, i * i)
+end
+let sq0 = squares[0]
+let sq1 = squares[1]
+let sq2 = squares[2]
+let sq3 = squares[3]
+let sq4 = squares[4]
+print("Squares: {sq0}, {sq1}, {sq2}, {sq3}, {sq4}")
+
+// Reverse an array using push/pop
+let mut original = [10.0, 20.0, 30.0, 40.0, 50.0]
+let mut reversed = []
+for i in range(0, 5)
+  let val = pop(original)
+  push(reversed, val)
+end
+let r0 = reversed[0]
+let r1 = reversed[1]
+let r2 = reversed[2]
+let r3 = reversed[3]
+let r4 = reversed[4]
+print("Reversed: {r0}, {r1}, {r2}, {r3}, {r4}")
+
+// Modify during for-each (array is cloned for iteration)
+let mut data = [1.0, 2.0, 3.0]
+let mut idx = 0.0
+for x in data
+  data[idx] = x * 10.0
+  idx = idx + 1.0
+end
+let d0 = data[0]
+let d1 = data[1]
+let d2 = data[2]
+print("Scaled: {d0}, {d1}, {d2}")

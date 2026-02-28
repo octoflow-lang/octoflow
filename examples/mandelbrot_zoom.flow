@@ -1,0 +1,119 @@
+// mandelbrot_zoom.flow — Animated Mandelbrot Zoom (GIF export)
+//
+// "30 frames zooming into Seahorse Valley. 1.7M total pixels. GPU-computed."
+//
+// Each frame: 320×180 Mandelbrot set, 100 iterations max.
+// Output: mandelbrot_zoom.gif with GPU-accelerated palette quantization.
+//
+// Run: octoflow run examples/mandelbrot_zoom.flow --allow-ffi --allow-read --allow-write
+
+use "../stdlib/media/gif_encode"
+
+let W = 320.0
+let H = 180.0
+let N_FRAMES = 30.0
+let MAX_ITER = 100.0
+
+let total_pixels = W * H * N_FRAMES
+print("Generating {N_FRAMES}-frame Mandelbrot zoom...")
+print("  Resolution: {W}×{H}")
+print("  Total pixels: {total_pixels}")
+
+// Zoom into Seahorse Valley
+let cx = -0.7453
+let cy = 0.1127
+let zoom_start = 0.5
+let zoom_end = 0.0001
+let zoom_ratio = zoom_end / zoom_start
+let zoom_step = pow(zoom_ratio, 1.0 / N_FRAMES)
+
+let mut all_pixels = []
+let mut delays = []
+let t0 = time()
+
+let mut frame_num = 0.0
+while frame_num < N_FRAMES
+  let zoom = zoom_start * pow(zoom_step, frame_num)
+
+  // Viewport
+  let aspect = H / W
+  let x_min = cx - zoom * 0.5
+  let y_min = cy - zoom * aspect * 0.5
+  let dx = zoom / W
+  let dy = zoom * aspect / H
+
+  // Compute Mandelbrot for this frame (CPU for now, GPU version needs kernels)
+  let mut y = 0.0
+  while y < H
+    let mut x = 0.0
+    while x < W
+      let px = x_min + x * dx
+      let py = y_min + y * dy
+
+      let mut zx = 0.0
+      let mut zy = 0.0
+      let mut iter = 0.0
+
+      while iter < MAX_ITER
+        let zx2 = zx * zx
+        let zy2 = zy * zy
+        if zx2 + zy2 > 4.0
+          iter = MAX_ITER
+        else
+          let new_zx = zx2 - zy2 + px
+          let new_zy = 2.0 * zx * zy + py
+          zx = new_zx
+          zy = new_zy
+          iter = iter + 1.0
+        end
+      end
+
+      // Color mapping: iter → RGB gradient
+      let t = iter / MAX_ITER
+      let mut r = 0.0
+      let mut g = 0.0
+      let mut b = 0.0
+
+      if t < 0.5
+        r = t * 2.0 * 255.0
+        g = t * 2.0 * 255.0
+        b = 255.0
+      else
+        r = 255.0
+        g = (1.0 - (t - 0.5) * 2.0) * 255.0
+        b = (1.0 - t) * 2.0 * 255.0
+      end
+
+      push(all_pixels, r)
+      push(all_pixels, g)
+      push(all_pixels, b)
+
+      x = x + 1.0
+    end
+    y = y + 1.0
+  end
+
+  push(delays, 100.0)
+
+  frame_num = frame_num + 1.0
+  let check_interval = frame_num / 5.0
+  if floor(check_interval) == check_interval
+    print("  Frames {frame_num}/{N_FRAMES} complete")
+  end
+end
+
+let t1 = time()
+let gen_time = t1 - t0
+print("Frame generation: {gen_time}s")
+print("Encoding GIF (GPU palette quantization)...")
+
+let t_enc = time()
+gif_encode_frames(all_pixels, delays, N_FRAMES, W, H, "mandelbrot_zoom.gif")
+let t_enc_end = time()
+let enc_time = t_enc_end - t_enc
+let total_time = t_enc_end - t0
+
+print("Encoding: {enc_time}s")
+print("Total: {total_time}s")
+print(" ")
+print("Saved: mandelbrot_zoom.gif")

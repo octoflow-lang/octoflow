@@ -1,4 +1,8 @@
 // stdlib/science/signal.flow — Signal processing
+//
+// Functions: convolve, moving_avg_filter, gaussian_kernel, hamming_window,
+//            hanning_window, blackman_window, cross_correlate, bandpass,
+//            envelope, zero_crossings, peak_detect
 
 fn convolve(signal, kernel)
   let sn = len(signal)

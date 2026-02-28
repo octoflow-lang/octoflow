@@ -1,0 +1,498 @@
+// stdlib/loom/stats.flow — GPU-Native Statistical Functions
+//
+// Phase 92: High-level statistical operations composed from GPU kernels.
+// Architecture: Multi-pass reduction, scan-based operations, kernel composition.
+//
+// Available Functions:
+//   gpu_mean(arr)              — Arithmetic mean via reduce_sum
+//   gpu_variance(arr)          — Sample variance (N-1 denominator)
+//   gpu_std(arr)               — Standard deviation (sqrt of variance)
+//   gpu_min(arr)               — Minimum value via argmin kernel
+//   gpu_max(arr)               — Maximum value via argmax kernel
+//   gpu_sum(arr)               — Multi-pass summation
+//   gpu_correlation(arr1,arr2) — Pearson correlation coefficient
+//   gpu_zscore(arr)            — Standardized values (z-scores)
+//   gpu_percentile(arr, p)     — Percentile via sort + index
+//   gpu_median(arr)            — 50th percentile
+//   gpu_histogram_counts(arr, nbins) — Histogram bin counts
+//
+// Requirements: --allow-ffi --allow-read
+// Usage:
+//   use "stdlib/loom/stats"
+//   rt_init()
+//   let m = gpu_mean(data)
+//   rt_cleanup()
+
+use "runtime"
+
+// ── Internal: Multi-pass reduction sum (returns sum of array) ────────
+fn _gpu_reduce_sum_internal(buf_in, n, buf_temp1, buf_temp2)
+  let pipe_reduce = rt_load_pipeline("stdlib/loom/kernels/reduce/reduce_sum.spv", 2.0, 4.0)
+
+  let mut current_size = n
+  let mut input_buf = buf_in
+  let mut output_buf = buf_temp1
+
+  // Always perform reduction, even for small arrays
+  let wgs1 = int((current_size + 255.0) / 256.0)
+  if wgs1 < 1.0
+    wgs1 = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut pc = [current_size]
+  rt_chain_push_constants(pipe_reduce, pc)
+  let mut bufs = [input_buf, output_buf]
+  rt_chain_dispatch(pipe_reduce, bufs, wgs1)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  current_size = wgs1
+  input_buf = output_buf
+
+  // Pass 2: reduce to 1 element (if we have multiple workgroups)
+  if current_size > 1.0
+    if output_buf == buf_temp1
+      output_buf = buf_temp2
+    else
+      output_buf = buf_temp1
+    end
+
+    rt_chain_begin(1.0, 2.0)
+    let mut pc2 = [current_size]
+    rt_chain_push_constants(pipe_reduce, pc2)
+    let mut bufs2 = [input_buf, output_buf]
+    rt_chain_dispatch(pipe_reduce, bufs2, 1.0)
+    rt_chain_end()
+    rt_chain_submit_wait()
+
+    input_buf = output_buf
+  end
+
+  // Download final result
+  rt_download(input_buf, 1.0)
+  return rt_result[0]
+end
+
+// ── gpu_sum: Multi-pass summation ────────────────────────────────────
+fn gpu_sum(arr)
+  let n = len(arr)
+
+  let buf_in = rt_create_buffer(n * 4.0)
+  rt_upload(buf_in, arr)
+
+  let buf_temp1 = rt_create_buffer(1024.0 * 4.0)
+  let buf_temp2 = rt_create_buffer(1024.0 * 4.0)
+
+  let result = _gpu_reduce_sum_internal(buf_in, n, buf_temp1, buf_temp2)
+
+  return result
+end
+
+// ── gpu_mean: Arithmetic mean ─────────────────────────────────────────
+fn gpu_mean(arr)
+  let n = len(arr)
+  let total = gpu_sum(arr)
+  return total / n
+end
+
+// ── gpu_min: Minimum value via argmin kernel ─────────────────────────
+fn gpu_min(arr)
+  let n = len(arr)
+  let pipe_argmin = rt_load_pipeline("tests/gpu_shaders/37_argmin.spv", 3.0, 4.0)
+
+  let buf_in = rt_create_buffer(n * 4.0)
+  rt_upload(buf_in, arr)
+
+  let wgs1 = int((n + 255.0) / 256.0)
+
+  // Intermediate buffers
+  let buf_min_val1 = rt_create_buffer(wgs1 * 4.0)
+  let buf_min_idx1 = rt_create_buffer(wgs1 * 4.0)
+  let buf_min_val2 = rt_create_buffer(4.0)
+  let buf_min_idx2 = rt_create_buffer(4.0)
+
+  // Pass 1: reduce to partial results
+  rt_chain_begin(1.0, 3.0)
+  let mut pc1 = [n]
+  rt_chain_push_constants(pipe_argmin, pc1)
+  let mut bufs1 = [buf_in, buf_min_val1, buf_min_idx1]
+  rt_chain_dispatch(pipe_argmin, bufs1, wgs1)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // Pass 2: reduce to final result (if needed)
+  if wgs1 > 1.0
+    rt_chain_begin(1.0, 3.0)
+    let mut pc2 = [wgs1]
+    rt_chain_push_constants(pipe_argmin, pc2)
+    let mut bufs2 = [buf_min_val1, buf_min_val2, buf_min_idx2]
+    rt_chain_dispatch(pipe_argmin, bufs2, 1.0)
+    rt_chain_end()
+    rt_chain_submit_wait()
+
+    rt_download(buf_min_val2, 1.0)
+  else
+    rt_download(buf_min_val1, 1.0)
+  end
+
+  return rt_result[0]
+end
+
+// ── gpu_max: Maximum value via argmax kernel ─────────────────────────
+fn gpu_max(arr)
+  let n = len(arr)
+  let pipe_argmax = rt_load_pipeline("tests/gpu_shaders/38_argmax.spv", 3.0, 4.0)
+
+  let buf_in = rt_create_buffer(n * 4.0)
+  rt_upload(buf_in, arr)
+
+  let wgs1 = int((n + 255.0) / 256.0)
+
+  // Intermediate buffers
+  let buf_max_val1 = rt_create_buffer(wgs1 * 4.0)
+  let buf_max_idx1 = rt_create_buffer(wgs1 * 4.0)
+  let buf_max_val2 = rt_create_buffer(4.0)
+  let buf_max_idx2 = rt_create_buffer(4.0)
+
+  // Pass 1: reduce to partial results
+  rt_chain_begin(1.0, 3.0)
+  let mut pc1 = [n]
+  rt_chain_push_constants(pipe_argmax, pc1)
+  let mut bufs1 = [buf_in, buf_max_val1, buf_max_idx1]
+  rt_chain_dispatch(pipe_argmax, bufs1, wgs1)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // Pass 2: reduce to final result (if needed)
+  if wgs1 > 1.0
+    rt_chain_begin(1.0, 3.0)
+    let mut pc2 = [wgs1]
+    rt_chain_push_constants(pipe_argmax, pc2)
+    let mut bufs2 = [buf_max_val1, buf_max_val2, buf_max_idx2]
+    rt_chain_dispatch(pipe_argmax, bufs2, 1.0)
+    rt_chain_end()
+    rt_chain_submit_wait()
+
+    rt_download(buf_max_val2, 1.0)
+  else
+    rt_download(buf_max_val1, 1.0)
+  end
+
+  return rt_result[0]
+end
+
+// ── gpu_variance: Sample variance (N-1 denominator) ──────────────────
+fn gpu_variance(arr)
+  let n = len(arr)
+
+  // Step 1: Compute mean (FULLY INLINED to avoid function call return bug)
+  let buf_in = rt_create_buffer(n * 4.0)
+  rt_upload(buf_in, arr)
+
+  let buf_temp1 = rt_create_buffer(1024.0 * 4.0)
+  let buf_temp2 = rt_create_buffer(1024.0 * 4.0)
+
+  // Inline reduce_sum for mean
+  let pipe_reduce = rt_load_pipeline("stdlib/loom/kernels/reduce/reduce_sum.spv", 2.0, 4.0)
+  let mut current_size = n
+  let mut input_buf = buf_in
+  let mut output_buf = buf_temp1
+  let mut wgs1 = int((current_size + 255.0) / 256.0)
+  if wgs1 < 1.0
+    wgs1 = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut pc = [current_size]
+  rt_chain_push_constants(pipe_reduce, pc)
+  let mut bufs = [input_buf, output_buf]
+  rt_chain_dispatch(pipe_reduce, bufs, wgs1)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  current_size = wgs1
+  input_buf = output_buf
+
+  if current_size > 1.0
+    if output_buf == buf_temp1
+      output_buf = buf_temp2
+    else
+      output_buf = buf_temp1
+    end
+
+    rt_chain_begin(1.0, 2.0)
+    let mut pc2 = [current_size]
+    rt_chain_push_constants(pipe_reduce, pc2)
+    let mut bufs2 = [input_buf, output_buf]
+    rt_chain_dispatch(pipe_reduce, bufs2, 1.0)
+    rt_chain_end()
+    rt_chain_submit_wait()
+
+    input_buf = output_buf
+  end
+
+  rt_download(input_buf, 1.0)
+  let sum_val = rt_result[0]
+  let mean_val = sum_val / n
+
+  // Step 2: Compute (x - mean)^2 for each element
+  rt_download(buf_in, n)
+  let mut sq_diffs = []
+  let mut i = 0.0
+  while i < n
+    let diff = rt_result[int(i)] - mean_val
+    push(sq_diffs, diff * diff)
+    i = i + 1.0
+  end
+
+  let buf_sq_diff = rt_create_buffer(n * 4.0)
+  rt_upload(buf_sq_diff, sq_diffs)
+
+  // Step 3: Sum the squared differences (FULLY INLINED)
+  let buf_temp3 = rt_create_buffer(1024.0 * 4.0)
+  let buf_temp4 = rt_create_buffer(1024.0 * 4.0)
+
+  let mut current_size2 = n
+  let mut input_buf2 = buf_sq_diff
+  let mut output_buf2 = buf_temp3
+  let mut wgs2 = int((current_size2 + 255.0) / 256.0)
+  if wgs2 < 1.0
+    wgs2 = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut pc3 = [current_size2]
+  rt_chain_push_constants(pipe_reduce, pc3)
+  let mut bufs3 = [input_buf2, output_buf2]
+  rt_chain_dispatch(pipe_reduce, bufs3, wgs2)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  current_size2 = wgs2
+  input_buf2 = output_buf2
+
+  if current_size2 > 1.0
+    if output_buf2 == buf_temp3
+      output_buf2 = buf_temp4
+    else
+      output_buf2 = buf_temp3
+    end
+
+    rt_chain_begin(1.0, 2.0)
+    let mut pc4 = [current_size2]
+    rt_chain_push_constants(pipe_reduce, pc4)
+    let mut bufs4 = [input_buf2, output_buf2]
+    rt_chain_dispatch(pipe_reduce, bufs4, 1.0)
+    rt_chain_end()
+    rt_chain_submit_wait()
+
+    input_buf2 = output_buf2
+  end
+
+  rt_download(input_buf2, 1.0)
+  let sum_sq_diff = rt_result[0]
+
+  // Step 4: Divide by (N-1) for sample variance
+  let n_minus_1 = n - 1.0
+  let variance = sum_sq_diff / n_minus_1
+  return variance
+end
+
+// ── gpu_std: Standard deviation ───────────────────────────────────────
+fn gpu_std(arr)
+  let var = gpu_variance(arr)
+  return sqrt(var)
+end
+
+// ── gpu_correlation: Pearson correlation coefficient ─────────────────
+fn gpu_correlation(arr1, arr2)
+  let n = len(arr1)
+
+  // Compute means
+  let mean1 = gpu_mean(arr1)
+  let mean2 = gpu_mean(arr2)
+
+  // Download arrays and compute covariance components
+  // (In production, would use custom kernels)
+  let buf1 = rt_create_buffer(n * 4.0)
+  let buf2 = rt_create_buffer(n * 4.0)
+  rt_upload(buf1, arr1)
+  rt_upload(buf2, arr2)
+
+  rt_download(buf1, n)
+  let mut data1 = []
+  let mut i = 0.0
+  while i < n
+    push(data1, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  rt_download(buf2, n)
+  let mut data2 = []
+  let mut i = 0.0
+  while i < n
+    push(data2, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  // Compute sum of products of deviations
+  let mut sum_prod = 0.0
+  let mut sum_sq1 = 0.0
+  let mut sum_sq2 = 0.0
+  let mut i = 0.0
+  while i < n
+    let d1 = data1[int(i)] - mean1
+    let d2 = data2[int(i)] - mean2
+    sum_prod = sum_prod + d1 * d2
+    sum_sq1 = sum_sq1 + d1 * d1
+    sum_sq2 = sum_sq2 + d2 * d2
+    i = i + 1.0
+  end
+
+  let denom = sqrt(sum_sq1 * sum_sq2)
+  if denom < 0.0000001
+    return 0.0
+  end
+
+  return sum_prod / denom
+end
+
+// ── gpu_zscore: Standardized values ───────────────────────────────────
+fn gpu_zscore(arr)
+  let n = len(arr)
+  let mean_val = gpu_mean(arr)
+  let std_val = gpu_std(arr)
+
+  // Download, compute z-scores on CPU, return
+  // (In production, would use GPU element-wise kernel)
+  let buf = rt_create_buffer(n * 4.0)
+  rt_upload(buf, arr)
+  rt_download(buf, n)
+
+  let mut zscores = []
+  let mut i = 0.0
+  while i < n
+    let z = (rt_result[int(i)] - mean_val) / std_val
+    push(zscores, z)
+    i = i + 1.0
+  end
+
+  return zscores
+end
+
+// ── gpu_percentile: Percentile via sort + indexing ───────────────────
+fn gpu_percentile(arr, p)
+  let n = len(arr)
+
+  // Use bitonic sort kernel
+  // Bitonic sort requires power-of-2 size, so pad if needed
+  let mut padded_size = 1.0
+  while padded_size < n
+    padded_size = padded_size * 2.0
+  end
+
+  // Pad array with max float value
+  let mut padded = []
+  let mut i = 0.0
+  while i < n
+    push(padded, arr[int(i)])
+    i = i + 1.0
+  end
+  while i < padded_size
+    push(padded, 999999999.0)
+    i = i + 1.0
+  end
+
+  let buf = rt_create_buffer(padded_size * 4.0)
+  rt_upload(buf, padded)
+
+  // Sort on GPU using bitonic sort
+  let pipe_sort = rt_load_pipeline("tests/gpu_shaders/36_bitonic_sort.spv", 1.0, 12.0)
+
+  // Bitonic sort in log2(N) passes
+  let num_stages = int(log(padded_size) / log(2.0))
+
+  rt_chain_begin(num_stages * (num_stages + 1.0) / 2.0, 1.0)
+
+  let mut stage = 0.0
+  while stage < num_stages
+    let mut substage = 0.0
+    while substage <= stage
+      let mut pc = [padded_size, stage, substage]
+      rt_chain_push_constants(pipe_sort, pc)
+      let mut bufs = [buf]
+      // FIX: Need at least 1 workgroup for small arrays
+      let mut wgs = padded_size / 512.0
+      if wgs < 1.0
+        wgs = 1.0
+      end
+      rt_chain_dispatch(pipe_sort, bufs, wgs)
+      substage = substage + 1.0
+    end
+    stage = stage + 1.0
+  end
+
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // Download and extract percentile
+  rt_download(buf, n)
+
+  let idx = (p / 100.0) * (n - 1.0)
+  let lower = int(floor(idx))
+  let upper = int(ceil(idx))
+
+  if lower == upper
+    return rt_result[lower]
+  else
+    let frac = idx - floor(idx)
+    return rt_result[lower] * (1.0 - frac) + rt_result[upper] * frac
+  end
+end
+
+// ── gpu_median: 50th percentile ───────────────────────────────────────
+fn gpu_median(arr)
+  return gpu_percentile(arr, 50.0)
+end
+
+// ── gpu_histogram_counts: Histogram bin counts (CPU fallback) ───────
+//
+// Note: GPU atomic histogram (55_histogram_atomic.spv) has memory semantics
+// issue. Using CPU scatter+count approach until ir.flow-emitted atomic
+// kernel is implemented.
+fn gpu_histogram_counts(arr, nbins)
+  let n = len(arr)
+
+  // Find min/max for binning range
+  let min_val = gpu_min(arr)
+  let max_val = gpu_max(arr)
+  let range_val = max_val - min_val
+  let bin_width = range_val / nbins
+
+  // CPU histogram (atomic kernel has memory semantics issue)
+  let mut counts = []
+  let mut i = 0.0
+  while i < nbins
+    push(counts, 0.0)
+    i = i + 1.0
+  end
+
+  // Bin each element
+  let mut i = 0.0
+  while i < n
+    let val = arr[int(i)]
+    let bin_idx = floor((val - min_val) / bin_width)
+    let mut clamped = bin_idx
+    if clamped < 0.0
+      clamped = 0.0
+    end
+    if clamped >= nbins
+      clamped = nbins - 1.0
+    end
+    counts[int(clamped)] = counts[int(clamped)] + 1.0
+    i = i + 1.0
+  end
+
+  return counts
+end

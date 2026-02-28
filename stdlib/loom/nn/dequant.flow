@@ -1,0 +1,70 @@
+// stdlib/loom/dequant.flow — Quantization Format Dequantization
+//
+// Converts quantized weights (Q4_K, Q8_0, etc.) to fp32 for GPU compute.
+// Used in LLM inference to expand compressed model weights.
+//
+// Functions:
+//   gpu_dequant_q4k(packed_bytes, out_size) → fp32_array
+//     Dequantize Q4_K format to float32
+//
+// Requirements: --allow-ffi --allow-read --allow-write --allow-exec
+// Usage:
+//   use "stdlib/loom/dequant"
+//   rt_init()
+//   let weights_fp32 = gpu_dequant_q4k(packed, 256)
+
+use "runtime"
+use "emit_dequant_q4k"
+
+fn gpu_dequant_q4k(packed, out_size)
+  // Generate kernel
+  emit_dequant_q4k("stdlib/loom/kernels/nn/dequant_q4k.spv")
+
+  // Validate with spirv-val
+  let vr = exec("spirv-val", "stdlib/loom/kernels/nn/dequant_q4k.spv")
+  if vr.ok == 0.0
+    print("ERROR: dequant_q4k.spv validation failed")
+    print("{vr.error}")
+    return []
+  end
+
+  // Calculate packed size (6 bits per weight effective)
+  // 256 weights = 192 bytes per block
+  let n_blocks = ceil(out_size / 256.0)
+  let packed_size = n_blocks * 192.0
+
+  // Create buffers
+  let buf_in = rt_create_buffer(packed_size)
+  let buf_out = rt_create_buffer(out_size * 4.0)
+
+  // Upload packed data
+  rt_upload(buf_in, packed)
+
+  // Load pipeline
+  let pipe = rt_load_pipeline("stdlib/loom/kernels/nn/dequant_q4k.spv", 2.0, 0.0)
+
+  // Dispatch (one thread per output weight)
+  let wgs = int((out_size + 255.0) / 256.0)
+  if wgs < 1.0
+    wgs = 1.0
+  end
+
+  rt_chain_begin(1.0, 2.0)
+  let mut bufs = []
+  push(bufs, buf_in)
+  push(bufs, buf_out)
+  rt_chain_dispatch(pipe, bufs, wgs)
+  rt_chain_end()
+  rt_chain_submit_wait()
+
+  // Download result
+  rt_download(buf_out, out_size)
+  let mut result = []
+  let mut i = 0.0
+  while i < out_size
+    push(result, rt_result[int(i)])
+    i = i + 1.0
+  end
+
+  return result
+end

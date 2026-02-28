@@ -1,0 +1,100 @@
+// emit_dequant_q4k.flow — Q4_K GPU Dequantization Kernel Emitter
+//
+// HYBRID APPROACH: CPU pre-decodes d, dmin, scales into float params buffer.
+// GPU handles nibble extraction + final multiply only.
+//
+// ALL-FLOAT DESIGN (avoids f32 precision loss with uint32 packing):
+//   Binding 0 (float): qs bytes — 1 byte per float, 128 floats/block
+//   Binding 1 (float): Pre-decoded params — 16 floats/block
+//     [d*sc0, dmin*mn0, d*sc1, dmin*mn1, ..., d*sc7, dmin*mn7]
+//   Binding 2 (float): Output — 256 dequantized weights/block
+//
+// Q4_K block (144 bytes, 256 weights):
+//   d(f16,2B) + dmin(f16,2B) + scales(12B) + qs(128B)
+//   CPU decodes d/dmin/scales → 16 params; GPU gets the 128 qs bytes as floats.
+//
+// Per-thread: gid = output weight index
+//   block = gid / 256
+//   j = (gid%256) / 64         — which 64-weight group (0-3)
+//   is_hi = ((gid%256)%64) / 32 — low or high nibble
+//   local_in_32 = gid % 32
+//   sub_block = j*2 + is_hi     — which sub-block (0-7)
+//   nibble = extract from qs byte (float arithmetic)
+//   output = d*scale * nibble - dmin*min
+
+use "../../compiler/ir"
+
+fn emit_dequant_q4k(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+
+  // ── Float constants ──
+  let f0 = ir_const_f(entry, 0.0)
+  let f16c = ir_const_f(entry, 16.0)
+  let f32c = ir_const_f(entry, 32.0)
+  let f64c = ir_const_f(entry, 64.0)
+  let f128c = ir_const_f(entry, 128.0)
+  let f256c = ir_const_f(entry, 256.0)
+  let f2c = ir_const_f(entry, 2.0)
+  let f1c = ir_const_f(entry, 1.0)
+
+  // ── Compute indices (float arithmetic) ──
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+
+  // block_idx = floor(gid / 256)
+  let div256 = ir_fdiv(entry, gid_f, f256c)
+  let block_f = ir_floor(entry, div256)
+  // local_idx = gid - block * 256
+  let local_f = ir_fsub(entry, gid_f, ir_fmul(entry, block_f, f256c))
+
+  // j = floor(local / 64)
+  let j_f = ir_floor(entry, ir_fdiv(entry, local_f, f64c))
+  // in_64 = local - j * 64
+  let in_64 = ir_fsub(entry, local_f, ir_fmul(entry, j_f, f64c))
+  // is_hi = floor(in_64 / 32)
+  let is_hi_f = ir_floor(entry, ir_fdiv(entry, in_64, f32c))
+  // in_32 = local - floor(local/32)*32
+  let in_32 = ir_fsub(entry, in_64, ir_fmul(entry, is_hi_f, f32c))
+
+  // sub_block = j * 2 + is_hi
+  let sub_block = ir_fadd(entry, ir_fmul(entry, j_f, f2c), is_hi_f)
+
+  // ── Load pre-decoded params (binding 1) ──
+  // param_base = block * 16 + sub_block * 2
+  let p_base = ir_fadd(entry, ir_fmul(entry, block_f, f16c), ir_fmul(entry, sub_block, f2c))
+  let p_base_u = ir_ftou(entry, p_base)
+  let c1u = ir_const_u(entry, 1.0)
+  let p_base1_u = ir_iadd(entry, p_base_u, c1u)
+  let d_scale = ir_load_input_at(entry, 1.0, p_base_u)
+  let dmin_mn = ir_load_input_at(entry, 1.0, p_base1_u)
+
+  // ── Load qs byte from binding 0 ──
+  // qs_idx = block * 128 + j * 32 + in_32
+  let qs_idx_f = ir_fadd(entry, ir_fmul(entry, block_f, f128c), ir_fadd(entry, ir_fmul(entry, j_f, f32c), in_32))
+  let qs_idx_u = ir_ftou(entry, qs_idx_f)
+  let byte_val = ir_load_input_at(entry, 0.0, qs_idx_u)
+
+  // ── Extract nibble (float arithmetic) ──
+  // lo_nib = byte_val - floor(byte_val / 16) * 16
+  let div16 = ir_fdiv(entry, byte_val, f16c)
+  let hi_nib = ir_floor(entry, div16)
+  let lo_nib = ir_fsub(entry, byte_val, ir_fmul(entry, hi_nib, f16c))
+
+  // nibble = is_hi == 0 ? lo_nib : hi_nib
+  let is_lo = ir_foeq(entry, is_hi_f, f0)
+  let nibble = ir_select(entry, 1.0, is_lo, lo_nib, hi_nib)
+
+  // ── Dequantize: output = d_scale * nibble - dmin_mn ──
+  let scaled = ir_fmul(entry, d_scale, nibble)
+  let dequant = ir_fsub(entry, scaled, dmin_mn)
+
+  // Store result
+  let _s = ir_store_output_at(entry, gid, dequant)
+  let _t = ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

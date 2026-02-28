@@ -1,0 +1,68 @@
+// OctoFlow Phase 41: Core Utilities Extension Demo
+// Run: flowgpu-cli run --allow-read examples/phase41_demo.flow
+
+print("=== Statistics Demo ===")
+let prices = [100.5, 102.3, 99.8, 101.2, 103.5, 100.1, 102.8]
+
+print("Sample data: 7 price points")
+let avg = mean(prices)
+let med = median(prices)
+let sd = stddev(prices)
+let v = variance(prices)
+let q25 = quantile(prices, 0.25)
+let q75 = quantile(prices, 0.75)
+let q95 = quantile(prices, 0.95)
+
+print("Mean: {avg:.2}")
+print("Median: {med:.2}")
+print("StdDev: {sd:.2}")
+print("Variance: {v:.2}")
+print("25th percentile: {q25:.2}")
+print("75th percentile: {q75:.2}")
+print("95th percentile: {q95:.2}")
+
+let volume = [1000.0, 1500.0, 800.0, 1200.0, 1800.0, 900.0, 1600.0]
+let corr = correlation(prices, volume)
+print("Price-Volume correlation: {corr:.3}")
+
+print("")
+print("=== Path Operations Demo ===")
+let base = "/var/log"
+let app = "myapp"
+let file = "errors.log"
+let full_path = join_path(base, app, file)
+
+print("Full path: {full_path}")
+let dir = dirname(full_path)
+let fname = basename(full_path)
+print("Directory: {dir}")
+print("Filename: {fname}")
+
+print("")
+print("=== File System Checks (requires --allow-read) ===")
+let cargo_exists = file_exists("Cargo.toml")
+let cargo_is_file = is_file("Cargo.toml")
+let src_is_dir = is_dir("src")
+
+print("Cargo.toml exists: {cargo_exists}")
+print("Cargo.toml is file: {cargo_is_file}")
+print("src/ is directory: {src_is_dir}")
+
+let canonical = canonicalize_path("./Cargo.toml")
+print("Canonical path: {canonical}")
+
+print("")
+print("=== Base64/Hex Encoding Demo ===")
+let credentials = "admin:secret123"
+
+let b64 = base64_encode(credentials)
+print("Credentials (Base64): {b64}")
+print("For HTTP header: Authorization: Basic {b64}")
+
+let data = "OctoFlow"
+let hex = hex_encode(data)
+let decoded_hex = hex_decode(hex)
+print("")
+print("Text: {data}")
+print("Hex: {hex}")
+print("Decoded: {decoded_hex}")

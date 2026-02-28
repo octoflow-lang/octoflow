@@ -1,0 +1,111 @@
+// test_matvec.flow — Test matvec kernel emission and execution
+// Run from stdlib/loom/:  octoflow run test_matvec.flow --allow-read --allow-write --allow-exec --allow-ffi
+
+use "../emit_matvec"
+use "../runtime"
+
+let mut counters = [0.0, 0.0]
+
+fn check_near(counters, label, got, expected, tol)
+  let d = abs(got - expected)
+  if d < tol
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}, diff={d}")
+  return 0.0
+end
+
+print("=== Matvec Kernel Test ===")
+print(" ")
+
+// Step 1: Emit kernel
+print("--- Emitting matvec kernel ---")
+let _e = emit_matvec("test_matvec.spv")
+
+// Step 2: Validate SPIR-V
+print("--- Validating SPIR-V ---")
+let vr = exec("spirv-val", "test_matvec.spv")
+let vs = vr.status
+print("  spirv-val exit code: {vs}")
+let _v = check_near(counters, "spirv-val passes", vs, 0.0, 0.01)
+
+// Step 3: GPU dispatch test — 2×3 matrix @ 3-vector
+// A = [1 2 3; 4 5 6]  (2 rows × 3 cols, row-major)
+// B = [1; 2; 3]
+// Expected: C = [1*1+2*2+3*3; 4*1+5*2+6*3] = [14; 32]
+print(" ")
+print("--- Test: 2x3 @ 3 = 2 ---")
+let _ri = rt_init()
+
+let M = 2.0
+let K = 3.0
+let mut a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+let mut b = [1.0, 2.0, 3.0]
+
+let buf_a = rt_create_buffer(M * K * 4.0)
+let buf_b = rt_create_buffer(K * 4.0)
+let buf_c = rt_create_buffer(M * 4.0)
+let _u1 = rt_upload(buf_a, a)
+let _u2 = rt_upload(buf_b, b)
+
+let pipe = rt_load_pipeline("test_matvec.spv", 3.0, 8.0)
+let _cb = rt_chain_begin(1.0, 3.0)
+let mut pc = [M, K]
+let _pc = rt_chain_push_constants(pipe, pc)
+let mut bufs = []
+push(bufs, buf_a)
+push(bufs, buf_b)
+push(bufs, buf_c)
+let wgs = ceil(M / 256.0)
+let _d = rt_chain_dispatch(pipe, bufs, wgs)
+let _ce = rt_chain_end()
+let _sw = rt_chain_submit_wait()
+
+let _dl = rt_download(buf_c, M)
+let c0 = rt_result[0]
+let c1 = rt_result[1]
+print("  C[0]={c0} (expected 14)")
+print("  C[1]={c1} (expected 32)")
+let _r1 = check_near(counters, "C[0] = 14", c0, 14.0, 0.01)
+let _r2 = check_near(counters, "C[1] = 32", c1, 32.0, 0.01)
+
+// Step 4: Larger test — 4×4 identity matmul
+print(" ")
+print("--- Test: 4x4 identity @ [1,2,3,4] ---")
+let M2 = 4.0
+let K2 = 4.0
+let mut a2 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+let mut b2 = [1.0, 2.0, 3.0, 4.0]
+
+let buf_a2 = rt_create_buffer(M2 * K2 * 4.0)
+let buf_b2 = rt_create_buffer(K2 * 4.0)
+let buf_c2 = rt_create_buffer(M2 * 4.0)
+let _u3 = rt_upload(buf_a2, a2)
+let _u4 = rt_upload(buf_b2, b2)
+
+let _cb2 = rt_chain_begin(1.0, 3.0)
+let mut pc2 = [M2, K2]
+let _pc2 = rt_chain_push_constants(pipe, pc2)
+let mut bufs2 = []
+push(bufs2, buf_a2)
+push(bufs2, buf_b2)
+push(bufs2, buf_c2)
+let wgs2 = ceil(M2 / 256.0)
+let _d2 = rt_chain_dispatch(pipe, bufs2, wgs2)
+let _ce2 = rt_chain_end()
+let _sw2 = rt_chain_submit_wait()
+
+let _dl2 = rt_download(buf_c2, M2)
+let _r3 = check_near(counters, "I@v[0] = 1", rt_result[0], 1.0, 0.01)
+let _r4 = check_near(counters, "I@v[1] = 2", rt_result[1], 2.0, 0.01)
+let _r5 = check_near(counters, "I@v[2] = 3", rt_result[2], 3.0, 0.01)
+let _r6 = check_near(counters, "I@v[3] = 4", rt_result[3], 4.0, 0.01)
+
+// Summary
+print(" ")
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print("=== RESULTS: {pass}/{total} passed ===")

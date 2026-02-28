@@ -1,0 +1,97 @@
+// emit_vm_rmsnorm_apply.flow — VM RMSNorm Apply Kernel Emitter (Pass 2)
+//
+// Reads the precomputed sum-of-squares from a scratch register slot,
+// then normalizes and weight-scales each element in parallel:
+//   scale = 1 / sqrt(sum_sq / count + eps)
+//   out[i] = x[i] * scale * w[i]
+//
+// This is pass 2 of the split RMSNorm two-kernel design.
+//
+// DESIGN NOTE — why gid-parallel, not sequential loop:
+//   NVIDIA NVVM miscompiles sequential loops (gid==0 + explicit loop) when
+//   the loop body both READS and WRITES to the same SSBO binding. Even though
+//   addresses don't alias, NVVM treats them as potentially aliased and only
+//   executes the first iteration. Parallel dispatch (one thread per element)
+//   avoids this issue entirely: each invocation runs once, NVVM sees no loop
+//   aliasing, and all elements are processed correctly.
+//
+// Each thread (gid < count):
+//   sum_sq = registers[scratch_off]         (fixed index, same for all threads)
+//   scale  = 1 / sqrt(sum_sq / count + eps)
+//   out[out_off + gid] = registers[in_off + gid] * scale * globals[wgt_off + gid]
+//
+// Push constants:
+//   pc[0] = in_off      (float -> uint, start index in registers SSBO, input)
+//   pc[1] = out_off     (float -> uint, start index in registers SSBO, output)
+//   pc[2] = wgt_off     (float -> uint, start index in globals SSBO, weights)
+//   pc[3] = scratch_off (float -> uint, index in registers SSBO for sum_sq)
+//   pc[4] = count       (float, bounds guard)
+//   pc[5] = eps         (float, epsilon for numerical stability)
+//
+// Binding layout (ir_input_count=3):
+//   Binding 0: registers (read input at in_off+gid, read scratch, write output)
+//   Binding 1: metrics   (unused -- declared for VM descriptor layout)
+//   Binding 2: globals   (read weight vector at wgt_off+gid)
+//   Binding 3: control   (unused)
+//
+// Dispatch: workgroups = ceil(count / 256)
+//
+// Run: octoflow run stdlib/loom/emit_vm_rmsnorm_apply.flow --allow-read --allow-write
+
+use "../compiler/ir"
+
+fn emit_vm_rmsnorm_apply(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: load gid, push constants, bounds check ───────────────────────
+  let gid        = ir_load_gid(entry)
+  let pc_in      = ir_push_const(entry, 0.0)
+  let pc_out     = ir_push_const(entry, 1.0)
+  let pc_wgt     = ir_push_const(entry, 2.0)
+  let pc_scratch = ir_push_const(entry, 3.0)
+  let pc_cnt     = ir_push_const(entry, 4.0)
+  let pc_eps     = ir_push_const(entry, 5.0)
+  let cnt_u      = ir_ftou(entry, pc_cnt)
+  // Skip thread if gid >= count
+  let oob        = ir_ugte(entry, gid, cnt_u)
+  let _sm        = ir_selection_merge(entry, exit_block)
+  let _br        = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: load sum_sq, compute scale, normalize × weight, store ─────────
+  // All arithmetic is done in a single flat block — no loop, no aliasing.
+  // sum_sq is loaded from a fixed scratch index; x and output use gid as offset.
+  let scratch_u  = ir_ftou(body, pc_scratch)
+  let sum_sq     = ir_load_input_at(body, 0.0, scratch_u)   // registers[scratch_off]
+  let mean_sq    = ir_fdiv(body, sum_sq, pc_cnt)
+  let var_eps    = ir_fadd(body, mean_sq, pc_eps)
+  let var_sqrt   = ir_sqrt(body, var_eps)
+  let f_one      = ir_const_f(body, 1.0)
+  let rms_scale  = ir_fdiv(body, f_one, var_sqrt)
+  let in_off_u   = ir_ftou(body, pc_in)
+  let out_off_u  = ir_ftou(body, pc_out)
+  let wgt_off_u  = ir_ftou(body, pc_wgt)
+  let in_idx     = ir_iadd(body, in_off_u, gid)
+  let out_idx    = ir_iadd(body, out_off_u, gid)
+  let wgt_idx    = ir_iadd(body, wgt_off_u, gid)
+  let x_val      = ir_load_input_at(body, 0.0, in_idx)     // registers[in_off + gid]
+  let w_val      = ir_load_input_at(body, 2.0, wgt_idx)    // globals[wgt_off + gid]
+  let normed     = ir_fmul(body, x_val, rms_scale)
+  let out_val    = ir_fmul(body, normed, w_val)
+  let _s         = ir_buf_store_f(body, 0.0, out_idx, out_val)
+  let _br2       = ir_term_branch(body, exit_block)
+
+  // ── Exit ─────────────────────────────────────────────────────────────────
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/nn/vm_rmsnorm_apply.spv"
+let _r = emit_vm_rmsnorm_apply(out)
+print("Emitted: {out}")

@@ -1,0 +1,84 @@
+// stdlib/web/server.flow — HTTP server utilities
+//
+// Functions: http_serve, text_response, json_response, html_response,
+//            redirect_response, error_response, ok_json, ok_html,
+//            not_found, method_not_allowed
+//
+// High-level API wrapping the built-in http_listen, http_accept,
+// http_respond, http_respond_json, and http_respond_html builtins.
+//
+// Built-in server functions (always available):
+//   http_listen(port)                   → fd (server socket)
+//   http_accept(fd)                     → map {client, method, path, body, headers}
+//   http_respond(fd, status, body)      → 0.0 (plain text response)
+//   http_respond_json(fd, status, body) → 0.0 (JSON response with Content-Type)
+//   http_respond_html(fd, status, body) → 0.0 (HTML response with Content-Type)
+//
+// Example:
+//   use "web/server"
+//   let server = http_serve(8080)
+//   while 1.0
+//     let req = http_accept(server)
+//     if req.method == "GET" && req.path == "/"
+//       html_response(req.client, 200.0, "<h1>Hello!</h1>")
+//     elif req.path == "/api/data"
+//       json_response(req.client, 200.0, "{\"status\":\"ok\"}")
+//     else
+//       text_response(req.client, 404.0, "Not Found")
+//     end
+//   end
+
+fn http_serve(port)
+  // Start an HTTP server on the given port.
+  // Prints a status message and returns the server fd.
+  print("Listening on http://localhost:" + str(port))
+  return http_listen(port)
+end
+
+fn text_response(client_fd, status, body)
+  // Send a plain text HTTP response.
+  return http_respond(client_fd, status, body)
+end
+
+fn json_response(client_fd, status, data)
+  // Send a JSON HTTP response with Content-Type: application/json.
+  return http_respond_json(client_fd, status, data)
+end
+
+fn html_response(client_fd, status, body)
+  // Send an HTML HTTP response with Content-Type: text/html.
+  return http_respond_html(client_fd, status, body)
+end
+
+fn redirect_response(client_fd, url)
+  // Send a 302 redirect response.
+  // Note: uses plain respond with Location in body as a simple approach.
+  // For full header control, use http_respond directly.
+  return http_respond(client_fd, 302.0, "Redirecting to " + url)
+end
+
+fn error_response(client_fd, status, message)
+  // Send an error response as JSON: {"error": "message"}
+  let body = "{\"error\":\"" + message + "\"}"
+  return http_respond_json(client_fd, status, body)
+end
+
+fn ok_json(client_fd, data)
+  // Shorthand: send 200 OK with JSON body.
+  return json_response(client_fd, 200.0, data)
+end
+
+fn ok_html(client_fd, body)
+  // Shorthand: send 200 OK with HTML body.
+  return html_response(client_fd, 200.0, body)
+end
+
+fn not_found(client_fd)
+  // Send a 404 Not Found response.
+  return error_response(client_fd, 404.0, "Not Found")
+end
+
+fn method_not_allowed(client_fd)
+  // Send a 405 Method Not Allowed response.
+  return error_response(client_fd, 405.0, "Method Not Allowed")
+end

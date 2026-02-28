@@ -1,0 +1,63 @@
+// stdlib/loom/test_vm_registers.flow -- GPU VM register I/O test
+
+print("=== GPU VM Register I/O Test ===")
+
+// Boot a VM with 1 instance, 16 floats per register, 1 global
+let vm = vm_boot(1.0, 16.0, 1.0)
+print("  vm_boot OK, handle={vm}")
+
+// Create test data
+let input = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+
+// Write to instance 0, register 0
+let _w = vm_write_register(vm, 0.0, 0.0, input)
+print("  vm_write_register OK (8 floats to R0)")
+
+// Read back from instance 0, register 0, 8 floats
+let output = vm_read_register(vm, 0.0, 0.0, 8.0)
+print("  vm_read_register OK (8 floats from R0)")
+
+// Verify
+let mut pass = 1.0
+let mut i = 0.0
+while i < 8.0
+  let expected = i + 1.0
+  let actual = output[int(i)]
+  if actual != expected
+    print("  FAIL: output[{i}] = {actual}, expected {expected}")
+    pass = 0.0
+  end
+  i = i + 1.0
+end
+
+if pass == 1.0
+  print("  PASS: all 8 values match")
+end
+
+// Write to register 5, read back (test isolation between registers)
+let data2 = [100.0, 200.0, 300.0]
+let _w2 = vm_write_register(vm, 0.0, 5.0, data2)
+let out2 = vm_read_register(vm, 0.0, 5.0, 3.0)
+if out2[0] == 100.0
+  print("  PASS: register 5 isolation OK (100.0)")
+else
+  print("  FAIL: register 5 got {out2[0]}, expected 100")
+end
+
+// Verify R0 still intact after writing R5
+let out_r0 = vm_read_register(vm, 0.0, 0.0, 4.0)
+if out_r0[0] == 1.0
+  print("  PASS: R0 preserved after R5 write (1.0)")
+else
+  print("  FAIL: R0 corrupted, got {out_r0[0]}")
+end
+
+// Test globals write/read
+let globals_data = [42.0, 99.0, 7.5]
+let _wg = vm_write_globals(vm, 0.0, globals_data)
+print("  vm_write_globals OK (3 floats)")
+
+// Shutdown
+let _s = vm_shutdown(vm)
+print("  vm_shutdown OK")
+print("=== DONE ===")

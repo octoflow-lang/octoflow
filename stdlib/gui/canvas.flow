@@ -1,0 +1,110 @@
+// canvas.flow — GUI Canvas Drawing API
+//
+// Provides canvas widget creation and drawing commands (line, rect,
+// fill, circle, pixel) that are rendered during the GUI update cycle.
+//
+// Usage:
+//   use "gui"
+//   let cvs = gui_canvas(10.0, 10.0, 400.0, 300.0)
+//   let _l = gui_canvas_line(cvs, 0.0, 0.0, 100.0, 100.0, 255.0, 0.0, 0.0)
+
+use "gui_core"
+
+fn gui_canvas(x, y, w, h)
+  let id = _gui_add_widget(GUI_CANVAS, x, y, w, h, " ")
+  _gui_list_start[int(id)] = len(_gui_canvas_cmds)
+  _gui_list_count[int(id)] = 0.0
+  return id
+end
+
+fn gui_canvas_clear(id)
+  let ii = int(id)
+  _gui_list_count[ii] = 0.0
+  _gui_list_start[ii] = len(_gui_canvas_cmds)
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_canvas_line(id, x1, y1, x2, y2, cr, cg, cb)
+  push(_gui_canvas_cmds, 1.0)
+  push(_gui_canvas_cmds, x1)
+  push(_gui_canvas_cmds, y1)
+  push(_gui_canvas_cmds, x2)
+  push(_gui_canvas_cmds, y2)
+  push(_gui_canvas_cmds, cr)
+  push(_gui_canvas_cmds, cg)
+  push(_gui_canvas_cmds, cb)
+  _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_canvas_rect(id, rx, ry, rw, rh, cr, cg, cb)
+  push(_gui_canvas_cmds, 2.0)
+  push(_gui_canvas_cmds, rx)
+  push(_gui_canvas_cmds, ry)
+  push(_gui_canvas_cmds, rw)
+  push(_gui_canvas_cmds, rh)
+  push(_gui_canvas_cmds, cr)
+  push(_gui_canvas_cmds, cg)
+  push(_gui_canvas_cmds, cb)
+  _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_canvas_fill(id, rx, ry, rw, rh, cr, cg, cb)
+  push(_gui_canvas_cmds, 3.0)
+  push(_gui_canvas_cmds, rx)
+  push(_gui_canvas_cmds, ry)
+  push(_gui_canvas_cmds, rw)
+  push(_gui_canvas_cmds, rh)
+  push(_gui_canvas_cmds, cr)
+  push(_gui_canvas_cmds, cg)
+  push(_gui_canvas_cmds, cb)
+  _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_canvas_circle(id, ccx, ccy, radius, cr, cg, cb)
+  push(_gui_canvas_cmds, 4.0)
+  push(_gui_canvas_cmds, ccx)
+  push(_gui_canvas_cmds, ccy)
+  push(_gui_canvas_cmds, radius)
+  push(_gui_canvas_cmds, 0.0)
+  push(_gui_canvas_cmds, cr)
+  push(_gui_canvas_cmds, cg)
+  push(_gui_canvas_cmds, cb)
+  _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_canvas_fill_circle(id, ccx, ccy, radius, cr, cg, cb)
+  push(_gui_canvas_cmds, 5.0)
+  push(_gui_canvas_cmds, ccx)
+  push(_gui_canvas_cmds, ccy)
+  push(_gui_canvas_cmds, radius)
+  push(_gui_canvas_cmds, 0.0)
+  push(_gui_canvas_cmds, cr)
+  push(_gui_canvas_cmds, cg)
+  push(_gui_canvas_cmds, cb)
+  _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_canvas_pixel(id, px, py, cr, cg, cb)
+  push(_gui_canvas_cmds, 6.0)
+  push(_gui_canvas_cmds, px)
+  push(_gui_canvas_cmds, py)
+  push(_gui_canvas_cmds, 0.0)
+  push(_gui_canvas_cmds, 0.0)
+  push(_gui_canvas_cmds, cr)
+  push(_gui_canvas_cmds, cg)
+  push(_gui_canvas_cmds, cb)
+  _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
+  _gs[9] = 1.0
+  return 0.0
+end

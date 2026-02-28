@@ -1,0 +1,38 @@
+// test_nested_fn.flow — user functions calling other user functions
+fn double(x)
+  let result = x * 2.0
+  return result
+end
+
+fn quad(x)
+  let d = double(x)
+  let result = double(d)
+  return result
+end
+
+fn sum_doubles(a, b)
+  let da = double(a)
+  let db = double(b)
+  let result = da + db
+  return result
+end
+
+let q = quad(3.0)
+print("quad(3)={q}")
+
+let s = sum_doubles(4.0, 5.0)
+print("sum_doubles(4,5)={s}")
+
+// recursive with helper
+fn fact(n)
+  let mut result = 1.0
+  let mut i = 1.0
+  while i <= n
+    result = result * i
+    i = i + 1.0
+  end
+  return result
+end
+
+let f5 = fact(5.0)
+print("fact(5)={f5}")

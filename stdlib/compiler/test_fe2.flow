@@ -1,0 +1,11 @@
+// Debug for-each
+let mut items = []
+push(items, "a")
+push(items, "b")
+push(items, "c")
+let cnt = len(items)
+print("len={cnt}")
+for x in items
+  print("item={x}")
+end
+print("done")

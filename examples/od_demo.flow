@@ -1,0 +1,42 @@
+// Phase 37: Environment & OctoData Demo
+// Run with: flowgpu-cli run examples/od_demo.flow --allow-read --allow-write
+
+// System utilities
+let t = time()
+print("Current time: {t}")
+
+let os = os_name()
+print("OS: {os}")
+
+let home = env("HOME")
+let path = env("PATH")
+print("HOME: {home}")
+
+// Build a config map and save as .od
+let mut config = map()
+map_set(config, "version", 1.0)
+map_set(config, "name", "OctoFlow")
+map_set(config, "debug", 0.0)
+save_data("examples/demo_config.od", config)
+print("Saved config to demo_config.od")
+
+// Load it back
+let mut loaded = load_data("examples/demo_config.od")
+let ver = map_get(loaded, "version")
+let nm = map_get(loaded, "name")
+print("Loaded: name={nm}, version={ver}")
+
+// Roundtrip: save and load with expressions
+let mut data = map()
+map_set(data, "x", 10.0)
+map_set(data, "y", 20.0)
+map_set(data, "label", "result")
+save_data("examples/demo_data.od", data)
+
+let mut restored = load_data("examples/demo_data.od")
+let rx = map_get(restored, "x")
+let ry = map_get(restored, "y")
+let rl = map_get(restored, "label")
+print("Roundtrip: x={rx}, y={ry}, label={rl}")
+
+print("OctoData demo complete")

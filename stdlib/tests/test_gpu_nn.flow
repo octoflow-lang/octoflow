@@ -1,0 +1,104 @@
+// test_gpu_nn.flow — GPU Neural Network Inference unit test
+// Forward pass as dispatch chain. 2 dispatches, 1 submit, 0 CPU iteration.
+//
+// Architecture: 4 → 3 (ReLU) → 2
+//
+// Weights chosen as powers of 2 for BIT-EXACT f32 verification:
+//   x  = [1, 2, 4, 8]
+//   W1 = [[0.5, 0.25, 0.125, 0.0625],   → dot=2.0, +1.0=3.0, relu=3.0
+//          [1.0, 0.5,  0.25,  0.125 ],   → dot=4.0, -5.0=-1.0, relu=0.0
+//          [0.25, 0.5, 0.25,  0.0   ]]   → dot=2.25, +0.0=2.25, relu=2.25
+//   b1 = [1.0, -5.0, 0.0]
+//   h  = [3.0, 0.0, 2.25]
+//
+//   W2 = [[1.0, 0.5, 2.0],   → dot=7.5, +0.5=8.0
+//          [0.5, 1.0, 0.5]]   → dot=2.625, -0.25=2.375
+//   b2 = [0.5, -0.25]
+//   y  = [8.0, 2.375]
+//
+// Run: octoflow run stdlib/tests/test_gpu_nn.flow --allow-ffi --allow-read
+
+use "../gpu/runtime"
+
+rt_init()
+
+// Load kernels — 4 bindings (W, x, b, y), push constant = input_dim
+let pipe_hidden = rt_load_pipeline("tests/gpu_shaders/22_gemv_relu.spv", 4.0, 4.0)
+let pipe_output = rt_load_pipeline("tests/gpu_shaders/23_gemv.spv", 4.0, 4.0)
+
+// Layer 1: 4 → 3 (ReLU)
+let N1 = 4.0
+let M1 = 3.0
+
+let mut w1 = [0.5, 0.25, 0.125, 0.0625, 1.0, 0.5, 0.25, 0.125, 0.25, 0.5, 0.25, 0.0]
+let mut b1 = [1.0, -5.0, 0.0]
+let mut x = [1.0, 2.0, 4.0, 8.0]
+
+let buf_w1 = rt_create_buffer(M1 * N1 * 4.0)
+let buf_x = rt_create_buffer(N1 * 4.0)
+let buf_b1 = rt_create_buffer(M1 * 4.0)
+let buf_h = rt_create_buffer(M1 * 4.0)
+
+rt_upload(buf_w1, w1)
+rt_upload(buf_x, x)
+rt_upload(buf_b1, b1)
+
+// Layer 2: 3 → 2 (no activation)
+let N2 = 3.0
+let M2 = 2.0
+
+let mut w2 = [1.0, 0.5, 2.0, 0.5, 1.0, 0.5]
+let mut b2 = [0.5, -0.25]
+
+let buf_w2 = rt_create_buffer(M2 * N2 * 4.0)
+let buf_b2 = rt_create_buffer(M2 * 4.0)
+let buf_y = rt_create_buffer(M2 * 4.0)
+
+rt_upload(buf_w2, w2)
+rt_upload(buf_b2, b2)
+
+// ── Forward pass: 2 dispatches, 1 submit ───────────────────────────
+rt_chain_begin(2.0, 4.0)
+
+// Layer 1: h = relu(W1 * x + b1) — 3 workgroups (3 output neurons)
+let mut pc1 = [N1]
+rt_chain_push_constants(pipe_hidden, pc1)
+let mut bufs1 = [buf_w1, buf_x, buf_b1, buf_h]
+rt_chain_dispatch(pipe_hidden, bufs1, M1)
+
+// Layer 2: y = W2 * h + b2 — 2 workgroups (2 output neurons)
+let mut pc2 = [N2]
+rt_chain_push_constants(pipe_output, pc2)
+let mut bufs2 = [buf_w2, buf_h, buf_b2, buf_y]
+rt_chain_dispatch(pipe_output, bufs2, M2)
+
+rt_chain_end()
+rt_chain_submit_wait()
+
+// ── Download and verify ────────────────────────────────────────────
+rt_download(buf_y, M2)
+let y0 = rt_result[0]
+let y1 = rt_result[1]
+
+let exp_y0 = 8.0
+let exp_y1 = 2.375
+
+print("Neural net 4->3->2 forward pass:")
+print("  Output: [{y0}, {y1}]")
+print("  Expected: [{exp_y0}, {exp_y1}]")
+
+let mut pass = 1.0
+if y0 != exp_y0
+  print("FAIL: y[0]={y0} expected {exp_y0}")
+  pass = 0.0
+end
+if y1 != exp_y1
+  print("FAIL: y[1]={y1} expected {exp_y1}")
+  pass = 0.0
+end
+
+if pass == 1.0
+  print("PASS: gpu_nn 2 dispatches, 1 submit, forward pass BIT EXACT")
+end
+
+rt_cleanup()

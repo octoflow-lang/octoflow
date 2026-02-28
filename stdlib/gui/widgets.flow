@@ -1,0 +1,363 @@
+// widgets.flow — GUI Widget Creation + Queries
+//
+// All 16 widget types: creation functions, helpers, and state queries.
+//
+// Usage:
+//   use "gui"
+//   let btn = gui_button(10.0, 10.0, 120.0, 36.0, "CLICK")
+
+use "gui_core"
+
+// ── Basic Widgets ───────────────────────────────────────────────────
+
+fn gui_panel(x, y, w, h)
+  let id = _gui_add_widget(GUI_PANEL, x, y, w, h, " ")
+  return id
+end
+
+fn gui_label(x, y, text)
+  let tw = len(text) * 10.0 + 4.0
+  let id = _gui_add_widget(GUI_LABEL, x, y, tw, 20.0, text)
+  return id
+end
+
+fn gui_button(x, y, w, h, text)
+  let id = _gui_add_widget(GUI_BUTTON, x, y, w, h, text)
+  return id
+end
+
+fn gui_checkbox(x, y, text)
+  let tw = len(text) * 10.0 + 28.0
+  let id = _gui_add_widget(GUI_CHECKBOX, x, y, tw, 22.0, text)
+  return id
+end
+
+fn gui_slider(x, y, w, min_val, max_val, initial)
+  let id = _gui_add_widget(GUI_SLIDER, x, y, w, 24.0, " ")
+  _gui_slider_min[int(id)] = min_val
+  _gui_slider_max[int(id)] = max_val
+  _gui_slider_val[int(id)] = initial
+  return id
+end
+
+fn gui_textinput(x, y, w)
+  let id = _gui_add_widget(GUI_TEXTINPUT, x, y, w, 30.0, " ")
+  return id
+end
+
+fn gui_progress(x, y, w)
+  let id = _gui_add_widget(GUI_PROGRESS, x, y, w, 22.0, " ")
+  _gui_slider_val[int(id)] = 0.0
+  _gui_slider_min[int(id)] = 0.0
+  _gui_slider_max[int(id)] = 100.0
+  return id
+end
+
+fn gui_radio(x, y, text, group)
+  let tw = len(text) * 10.0 + 28.0
+  let id = _gui_add_widget(GUI_RADIO, x, y, tw, 22.0, text)
+  _gui_parent[int(id)] = group
+  return id
+end
+
+fn gui_separator(x, y, w)
+  let id = _gui_add_widget(GUI_SEPARATOR, x, y, w, 2.0, " ")
+  return id
+end
+
+// ── Listbox ─────────────────────────────────────────────────────────
+
+fn gui_listbox(x, y, w, h)
+  let id = _gui_add_widget(GUI_LISTBOX, x, y, w, h, " ")
+  _gui_list_start[int(id)] = len(_gui_list_items)
+  _gui_list_count[int(id)] = 0.0
+  _gui_list_selected[int(id)] = -1.0
+  _gui_list_scroll[int(id)] = 0.0
+  return id
+end
+
+fn gui_listbox_add(id, text)
+  push(_gui_list_items, text)
+  let ii = int(id)
+  _gui_list_count[ii] = _gui_list_count[ii] + 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_listbox_selected(id)
+  return _gui_list_selected[int(id)]
+end
+
+fn gui_listbox_text(id, idx)
+  let start = _gui_list_start[int(id)]
+  let actual = int(start + idx)
+  return _gui_list_items[actual]
+end
+
+// ── Spinbox ─────────────────────────────────────────────────────────
+
+fn gui_spinbox(x, y, w, min_val, max_val, initial, step)
+  let id = _gui_add_widget(GUI_SPINBOX, x, y, w, 30.0, " ")
+  _gui_slider_min[int(id)] = min_val
+  _gui_slider_max[int(id)] = max_val
+  _gui_slider_val[int(id)] = initial
+  _gui_parent[int(id)] = step
+  return id
+end
+
+fn gui_spinbox_value(id)
+  return _gui_slider_val[int(id)]
+end
+
+fn gui_set_spinbox(id, val)
+  let ii = int(id)
+  let mut v = val
+  let smin = _gui_slider_min[ii]
+  let smax = _gui_slider_max[ii]
+  if v < smin
+    v = smin
+  end
+  if v > smax
+    v = smax
+  end
+  _gui_slider_val[ii] = v
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// ── Dropdown ────────────────────────────────────────────────────────
+
+fn gui_dropdown(x, y, w)
+  let id = _gui_add_widget(GUI_DROPDOWN, x, y, w, 30.0, " ")
+  return id
+end
+
+fn gui_dropdown_add(id, text)
+  let ii = int(id)
+  let count = _gui_list_count[ii]
+  if count == 0.0
+    _gui_list_start[ii] = len(_gui_list_items)
+  end
+  push(_gui_list_items, text)
+  _gui_list_count[ii] = count + 1.0
+  if count == 0.0
+    _gui_list_selected[ii] = 0.0
+  end
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_dropdown_selected(id)
+  return _gui_list_selected[int(id)]
+end
+
+fn gui_dropdown_text(id, idx)
+  let start = _gui_list_start[int(id)]
+  return _gui_list_items[int(start + idx)]
+end
+
+fn gui_set_dropdown(id, idx)
+  let ii = int(id)
+  let count = _gui_list_count[ii]
+  if idx >= 0.0
+    if idx < count
+      _gui_list_selected[ii] = idx
+    end
+  end
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// ── Tabs ────────────────────────────────────────────────────────────
+
+fn gui_tabs(x, y, w, h)
+  let id = _gui_add_widget(GUI_TABS, x, y, w, h, " ")
+  _gui_slider_val[int(id)] = 0.0
+  return id
+end
+
+fn gui_tab_add(id, label)
+  let ii = int(id)
+  let count = _gui_list_count[ii]
+  if count == 0.0
+    _gui_list_start[ii] = len(_gui_list_items)
+  end
+  push(_gui_list_items, label)
+  _gui_list_count[ii] = count + 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_tab_active(id)
+  return _gui_slider_val[int(id)]
+end
+
+fn gui_set_tab(id, idx)
+  _gui_slider_val[int(id)] = idx
+  _gui_clicked[int(id)] = 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// ── Treeview ────────────────────────────────────────────────────────
+
+fn gui_treeview(x, y, w, h)
+  let id = _gui_add_widget(GUI_TREEVIEW, x, y, w, h, " ")
+  _gui_list_start[int(id)] = len(_gui_tree_labels)
+  _gui_list_count[int(id)] = 0.0
+  _gui_list_selected[int(id)] = -1.0
+  _gui_list_scroll[int(id)] = 0.0
+  return id
+end
+
+fn gui_tree_add(id, label, parent_node)
+  let ii = int(id)
+  let tree_start = _gui_list_start[ii]
+  let mut depth = 0.0
+  if parent_node >= 0.0
+    depth = _gui_tree_depth[int(tree_start + parent_node)] + 1.0
+  end
+  push(_gui_tree_labels, label)
+  push(_gui_tree_parents, parent_node)
+  push(_gui_tree_depth, depth)
+  push(_gui_tree_expanded, 1.0)
+  let node_idx = _gui_list_count[ii]
+  _gui_list_count[ii] = node_idx + 1.0
+  _gs[9] = 1.0
+  return node_idx
+end
+
+fn gui_tree_selected(id)
+  return _gui_list_selected[int(id)]
+end
+
+fn gui_tree_text(id, node_idx)
+  let start = _gui_list_start[int(id)]
+  return _gui_tree_labels[int(start + node_idx)]
+end
+
+fn gui_tree_toggle(id, node_idx)
+  let ii = int(id)
+  let abs_idx = int(_gui_list_start[ii] + node_idx)
+  if _gui_tree_expanded[abs_idx] == 1.0
+    _gui_tree_expanded[abs_idx] = 0.0
+  else
+    _gui_tree_expanded[abs_idx] = 1.0
+  end
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_tree_is_expanded(id, node_idx)
+  let abs_idx = int(_gui_list_start[int(id)] + node_idx)
+  return _gui_tree_expanded[abs_idx]
+end
+
+fn _gui_tree_node_visible(id, node_idx)
+  let ii = int(id)
+  let tree_start = _gui_list_start[ii]
+  let mut p = _gui_tree_parents[int(tree_start + node_idx)]
+  while p >= 0.0
+    if _gui_tree_expanded[int(tree_start + p)] == 0.0
+      return 0.0
+    end
+    p = _gui_tree_parents[int(tree_start + p)]
+  end
+  return 1.0
+end
+
+// ── Tooltip ─────────────────────────────────────────────────────────
+
+fn gui_tooltip(target_id, text)
+  let tw = len(text) * 10.0 + 8.0
+  let id = _gui_add_widget(GUI_TOOLTIP, 0.0, 0.0, tw, 22.0, text)
+  _gui_parent[int(id)] = target_id
+  _gui_visible[int(id)] = 0.0
+  return id
+end
+
+// ── Widget Queries ──────────────────────────────────────────────────
+
+fn gui_running()
+  return _gs[0]
+end
+
+fn gui_clicked(id)
+  let v = _gui_clicked[int(id)]
+  return v
+end
+
+fn gui_checked(id)
+  let v = _gui_checked[int(id)]
+  return v
+end
+
+fn gui_slider_value(id)
+  let v = _gui_slider_val[int(id)]
+  return v
+end
+
+fn gui_get_text(id)
+  let v = _gui_input_text[int(id)]
+  return v
+end
+
+fn gui_set_text(id, text)
+  _gui_texts[int(id)] = text
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_set_checked(id, val)
+  _gui_checked[int(id)] = val
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_set_slider(id, val)
+  _gui_slider_val[int(id)] = val
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_set_visible(id, val)
+  _gui_visible[int(id)] = val
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_set_enabled(id, val)
+  _gui_enabled[int(id)] = val
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_set_progress(id, val)
+  let mut v = val
+  if v < 0.0
+    v = 0.0
+  end
+  if v > 100.0
+    v = 100.0
+  end
+  _gui_slider_val[int(id)] = v
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_radio_value(group)
+  let wcount = len(_gui_types)
+  let mut j = 0.0
+  while j < wcount
+    let jj = int(j)
+    if _gui_types[jj] == GUI_RADIO
+      if _gui_parent[jj] == group
+        if _gui_checked[jj] == 1.0
+          return j
+        end
+      end
+    end
+    j = j + 1.0
+  end
+  return -1.0
+end
