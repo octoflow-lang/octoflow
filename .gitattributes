@@ -1,0 +1,8 @@
+# OctoFlow language detection
+*.flow linguist-language=OctoFlow
+
+# Documentation
+*.md linguist-documentation
+
+# SPIR-V binary kernels
+*.spv binary linguist-generated
