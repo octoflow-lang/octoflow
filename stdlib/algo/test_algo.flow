@@ -1,0 +1,162 @@
+// test_algo.flow — Tests for stdlib/algo modules
+// Tests: pathfind.flow (manhattan, astar)
+
+use "algo/pathfind"
+
+// ── Manhattan Distance Tests ────────────────────────────
+
+fn test_manhattan_same_point()
+  assert(manhattan(0.0, 0.0, 0.0, 0.0) == 0.0, "same point = distance 0")
+  print("PASS: test_manhattan_same_point")
+  return 0.0
+end
+
+fn test_manhattan_horizontal()
+  assert(manhattan(0.0, 0.0, 5.0, 0.0) == 5.0, "horizontal distance")
+  print("PASS: test_manhattan_horizontal")
+  return 0.0
+end
+
+fn test_manhattan_vertical()
+  assert(manhattan(0.0, 0.0, 0.0, 3.0) == 3.0, "vertical distance")
+  print("PASS: test_manhattan_vertical")
+  return 0.0
+end
+
+fn test_manhattan_diagonal()
+  assert(manhattan(0.0, 0.0, 3.0, 4.0) == 7.0, "diagonal = 3+4=7")
+  print("PASS: test_manhattan_diagonal")
+  return 0.0
+end
+
+fn test_manhattan_negative()
+  assert(manhattan(5.0, 5.0, 2.0, 1.0) == 7.0, "negative direction = abs")
+  print("PASS: test_manhattan_negative")
+  return 0.0
+end
+
+fn test_manhattan_symmetric()
+  let d1 = manhattan(1.0, 2.0, 4.0, 6.0)
+  let d2 = manhattan(4.0, 6.0, 1.0, 2.0)
+  assert(d1 == d2, "manhattan should be symmetric")
+  print("PASS: test_manhattan_symmetric")
+  return 0.0
+end
+
+// ── A* Pathfinding Tests ────────────────────────────────
+
+fn test_astar_trivial()
+  // 1x1 grid, start == goal
+  let grid = [0.0]
+  let path = astar(grid, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0)
+  assert(len(path) == 2.0, "trivial path should have 1 point (x,y)")
+  assert(path[0] == 0.0, "x should be 0")
+  assert(path[1] == 0.0, "y should be 0")
+  print("PASS: test_astar_trivial")
+  return 0.0
+end
+
+fn test_astar_straight_line()
+  // 5x1 corridor: all passable
+  let grid = [0.0, 0.0, 0.0, 0.0, 0.0]
+  let path = astar(grid, 5.0, 1.0, 0.0, 0.0, 4.0, 0.0)
+  assert(len(path) > 0.0, "should find a path")
+  // Path should be 5 points = 10 values (x,y pairs)
+  assert(len(path) == 10.0, "path should have 5 points")
+  // First point should be start
+  assert(path[0] == 0.0, "start x")
+  assert(path[1] == 0.0, "start y")
+  // Last point should be goal
+  assert(path[8] == 4.0, "goal x")
+  assert(path[9] == 0.0, "goal y")
+  print("PASS: test_astar_straight_line")
+  return 0.0
+end
+
+fn test_astar_blocked()
+  // 3x1 with wall in middle: [0, 1, 0]
+  let grid = [0.0, 1.0, 0.0]
+  let path = astar(grid, 3.0, 1.0, 0.0, 0.0, 2.0, 0.0)
+  assert(len(path) == 0.0, "should return empty for blocked path")
+  print("PASS: test_astar_blocked")
+  return 0.0
+end
+
+fn test_astar_start_on_wall()
+  let grid = [1.0, 0.0, 0.0, 0.0]
+  let path = astar(grid, 2.0, 2.0, 0.0, 0.0, 1.0, 1.0)
+  assert(len(path) == 0.0, "start on wall = no path")
+  print("PASS: test_astar_start_on_wall")
+  return 0.0
+end
+
+fn test_astar_goal_on_wall()
+  let grid = [0.0, 0.0, 0.0, 1.0]
+  let path = astar(grid, 2.0, 2.0, 0.0, 0.0, 1.0, 1.0)
+  assert(len(path) == 0.0, "goal on wall = no path")
+  print("PASS: test_astar_goal_on_wall")
+  return 0.0
+end
+
+fn test_astar_around_wall()
+  // 3x3 grid with wall in center:
+  // 0 0 0
+  // 0 1 0
+  // 0 0 0
+  let grid = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+  let path = astar(grid, 3.0, 3.0, 0.0, 0.0, 2.0, 2.0)
+  assert(len(path) > 0.0, "should find path around wall")
+  // Path length should be >= 5 points (must go around center)
+  assert(len(path) >= 10.0, "path around wall needs at least 5 steps")
+  // Verify start and end
+  assert(path[0] == 0.0, "start x")
+  assert(path[1] == 0.0, "start y")
+  let last = len(path)
+  assert(path[last - 2.0] == 2.0, "goal x")
+  assert(path[last - 1.0] == 2.0, "goal y")
+  print("PASS: test_astar_around_wall")
+  return 0.0
+end
+
+fn test_astar_open_grid()
+  // 4x4 fully open grid
+  let mut grid = []
+  let mut i = 0.0
+  while i < 16.0
+    push(grid, 0.0)
+    i = i + 1.0
+  end
+  let path = astar(grid, 4.0, 4.0, 0.0, 0.0, 3.0, 3.0)
+  assert(len(path) > 0.0, "should find path in open grid")
+  // Optimal manhattan distance is 6, so path should be 7 points = 14 values
+  assert(len(path) == 14.0, "optimal path in 4x4 grid should be 7 points")
+  print("PASS: test_astar_open_grid")
+  return 0.0
+end
+
+fn test_astar_path_validity()
+  // Verify each step moves only 1 cell (no diagonals)
+  let mut grid = []
+  let mut i = 0.0
+  while i < 9.0
+    push(grid, 0.0)
+    i = i + 1.0
+  end
+  let path = astar(grid, 3.0, 3.0, 0.0, 0.0, 2.0, 2.0)
+  assert(len(path) >= 4.0, "path should have at least 2 points")
+  let mut j = 2.0
+  while j < len(path)
+    let dx = path[j] - path[j - 2.0]
+    let dy = path[j + 1.0] - path[j - 1.0]
+    if dx < 0.0
+      dx = 0.0 - dx
+    end
+    if dy < 0.0
+      dy = 0.0 - dy
+    end
+    assert(dx + dy == 1.0, "each step should move exactly 1 cell")
+    j = j + 2.0
+  end
+  print("PASS: test_astar_path_validity")
+  return 0.0
+end

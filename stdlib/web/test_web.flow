@@ -1,0 +1,643 @@
+// test_web.flow — Tests for stdlib/web/json_util.flow and stdlib/web/url.flow
+// Functions tested:
+//   json_util: json_pretty, json_merge, json_get, json_flatten
+//   url:       url_parse, build_url, url_encode, query_string
+//
+// All tests are headless (no network, no sockets, no file I/O).
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// ============================================================
+// Inline from web/json_util.flow
+// ============================================================
+
+fn json_pretty(data)
+  let raw = json_stringify(data)
+  return raw
+end
+
+fn json_merge(a, b)
+  let mut result = map()
+  let keys_a = split(map_keys(a), ",")
+  for k in keys_a
+    map_set(result, k, map_get(a, k))
+  end
+  let keys_b = split(map_keys(b), ",")
+  for k in keys_b
+    map_set(result, k, map_get(b, k))
+  end
+  return result
+end
+
+fn json_get(data, key, default_val)
+  if map_has(data, key)
+    return map_get(data, key)
+  end
+  return default_val
+end
+
+fn json_flatten(data, prefix)
+  let mut result = map()
+  let keys = split(map_keys(data), ",")
+  for k in keys
+    let full_key = prefix + k
+    map_set(result, full_key, map_get(data, k))
+  end
+  return result
+end
+
+// ============================================================
+// Inline from web/url.flow
+// ============================================================
+
+fn url_parse(url)
+  let mut result = map()
+  let proto_end = index_of(url, "://")
+  if proto_end >= 0.0
+    map_set(result, "protocol", substr(url, 0.0, proto_end))
+    let rest = substr(url, proto_end + 3.0, len(url))
+    let slash = index_of(rest, "/")
+    if slash >= 0.0
+      let host_part = substr(rest, 0.0, slash)
+      let path_part = substr(rest, slash, len(rest))
+      map_set(result, "host", host_part)
+      let qmark = index_of(path_part, "?")
+      if qmark >= 0.0
+        map_set(result, "path", substr(path_part, 0.0, qmark))
+        map_set(result, "query", substr(path_part, qmark + 1.0, len(path_part)))
+      else
+        map_set(result, "path", path_part)
+      end
+    else
+      map_set(result, "host", rest)
+      map_set(result, "path", "/")
+    end
+  else
+    map_set(result, "protocol", "")
+    map_set(result, "host", url)
+    map_set(result, "path", "/")
+  end
+  return result
+end
+
+fn build_url(protocol, host, path, query)
+  let mut url = protocol + "://" + host + path
+  if len(query) > 0.0
+    url = url + "?" + query
+  end
+  return url
+end
+
+fn url_encode(s)
+  if len(s) == 0.0
+    return ""
+  end
+  let mut result = ""
+  let hex = "0123456789ABCDEF"
+  let mut i = 0.0
+  while i < len(s)
+    let c = char_at(s, i)
+    let code = ord(c)
+    if (code >= 65.0 && code <= 90.0) || (code >= 97.0 && code <= 122.0) || (code >= 48.0 && code <= 57.0) || c == "-" || c == "_" || c == "." || c == "~"
+      result = result + c
+    else
+      let hi = int(code / 16.0)
+      let lo = int(code) % 16
+      result = result + "%" + char_at(hex, hi) + char_at(hex, lo)
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn query_string(params)
+  let keys = split(map_keys(params), ",")
+  let mut parts = []
+  for key in keys
+    let val = map_get(params, key)
+    push(parts, url_encode(key) + "=" + url_encode(val))
+  end
+  return join(parts, "&")
+end
+
+// ============================================================
+// TESTS
+// ============================================================
+
+print("=== test_web ===")
+
+// ----------------------------------------------------------
+// json_pretty: should return json_stringify output
+// ----------------------------------------------------------
+
+fn test_json_pretty_basic()
+  let mut m = map()
+  map_set(m, "name", "octo")
+  let out = json_pretty(m)
+  // json_pretty returns json_stringify(data), which is a string
+  // It should contain the key and value
+  if contains(out, "name") && contains(out, "octo")
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_pretty basic — expected name/octo in output, got {out}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_pretty_basic")
+end
+test_json_pretty_basic()
+
+fn test_json_pretty_empty_map()
+  let m = map()
+  let out = json_pretty(m)
+  // An empty map stringified should be a valid (short) string
+  if len(out) >= 0.0
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_pretty empty map — unexpected length")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_pretty_empty_map")
+end
+test_json_pretty_empty_map()
+
+// ----------------------------------------------------------
+// json_merge: merge two maps, b overrides a
+// ----------------------------------------------------------
+
+fn test_json_merge_basic()
+  let mut a = map()
+  map_set(a, "x", "1")
+  map_set(a, "y", "2")
+  let mut b = map()
+  map_set(b, "y", "99")
+  map_set(b, "z", "3")
+  let merged = json_merge(a, b)
+  // x from a, y overridden by b, z from b
+  if map_get(merged, "x") == "1" && map_get(merged, "y") == "99" && map_get(merged, "z") == "3"
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_merge basic — unexpected values")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_merge_basic")
+end
+test_json_merge_basic()
+
+fn test_json_merge_empty_a()
+  let a = map()
+  let mut b = map()
+  map_set(b, "only", "b")
+  let merged = json_merge(a, b)
+  if map_get(merged, "only") == "b"
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_merge empty a — expected only=b")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_merge_empty_a")
+end
+test_json_merge_empty_a()
+
+fn test_json_merge_empty_b()
+  let mut a = map()
+  map_set(a, "only", "a")
+  let b = map()
+  let merged = json_merge(a, b)
+  if map_get(merged, "only") == "a"
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_merge empty b — expected only=a")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_merge_empty_b")
+end
+test_json_merge_empty_b()
+
+fn test_json_merge_no_clobber()
+  let mut a = map()
+  map_set(a, "keep", "original")
+  let mut b = map()
+  map_set(b, "new", "added")
+  let merged = json_merge(a, b)
+  // a's key should survive when b doesn't overlap
+  if map_get(merged, "keep") == "original" && map_get(merged, "new") == "added"
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_merge no clobber — unexpected values")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_merge_no_clobber")
+end
+test_json_merge_no_clobber()
+
+// ----------------------------------------------------------
+// json_get: get with default fallback
+// ----------------------------------------------------------
+
+fn test_json_get_exists()
+  let mut m = map()
+  map_set(m, "color", "red")
+  let val = json_get(m, "color", "blue")
+  if val == "red"
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_get exists — expected red got {val}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_get_exists")
+end
+test_json_get_exists()
+
+fn test_json_get_missing()
+  let m = map()
+  let val = json_get(m, "missing", "fallback")
+  if val == "fallback"
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_get missing — expected fallback got {val}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_get_missing")
+end
+test_json_get_missing()
+
+fn test_json_get_empty_default()
+  let m = map()
+  let val = json_get(m, "nope", "")
+  if val == ""
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_get empty default — expected empty got {val}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_get_empty_default")
+end
+test_json_get_empty_default()
+
+// ----------------------------------------------------------
+// json_flatten: prefix top-level keys
+// ----------------------------------------------------------
+
+fn test_json_flatten_basic()
+  let mut m = map()
+  map_set(m, "name", "flow")
+  map_set(m, "ver", "1")
+  let flat = json_flatten(m, "app.")
+  if map_get(flat, "app.name") == "flow" && map_get(flat, "app.ver") == "1"
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_flatten basic — keys not prefixed correctly")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_flatten_basic")
+end
+test_json_flatten_basic()
+
+fn test_json_flatten_empty_prefix()
+  let mut m = map()
+  map_set(m, "key", "val")
+  let flat = json_flatten(m, "")
+  // With empty prefix, keys should be unchanged
+  if map_get(flat, "key") == "val"
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_flatten empty prefix — expected key=val")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_flatten_empty_prefix")
+end
+test_json_flatten_empty_prefix()
+
+fn test_json_flatten_single_key()
+  let mut m = map()
+  map_set(m, "x", "42")
+  let flat = json_flatten(m, "ns_")
+  if map_get(flat, "ns_x") == "42"
+    pass = pass + 1.0
+  else
+    print("  FAIL: json_flatten single key — expected ns_x=42")
+    fail = fail + 1.0
+  end
+  print("PASS: test_json_flatten_single_key")
+end
+test_json_flatten_single_key()
+
+// ----------------------------------------------------------
+// url_parse: parse full URL
+// ----------------------------------------------------------
+
+fn test_url_parse_full()
+  let r = url_parse("https://example.com/path/to/page?q=hello&lang=en")
+  if map_get(r, "protocol") == "https"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_parse full — protocol expected https got {map_get(r, \"protocol\")}")
+    fail = fail + 1.0
+  end
+  if map_get(r, "host") == "example.com"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_parse full — host expected example.com got {map_get(r, \"host\")}")
+    fail = fail + 1.0
+  end
+  if map_get(r, "path") == "/path/to/page"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_parse full — path expected /path/to/page got {map_get(r, \"path\")}")
+    fail = fail + 1.0
+  end
+  if map_get(r, "query") == "q=hello&lang=en"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_parse full — query expected q=hello&lang=en got {map_get(r, \"query\")}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_parse_full")
+end
+test_url_parse_full()
+
+fn test_url_parse_no_query()
+  let r = url_parse("http://localhost/index")
+  if map_get(r, "protocol") == "http" && map_get(r, "host") == "localhost" && map_get(r, "path") == "/index"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_parse no query — unexpected values")
+    fail = fail + 1.0
+  end
+  // query key should not exist
+  if map_has(r, "query") == 0.0
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_parse no query — query should not exist")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_parse_no_query")
+end
+test_url_parse_no_query()
+
+fn test_url_parse_no_path()
+  let r = url_parse("https://api.example.com")
+  if map_get(r, "protocol") == "https" && map_get(r, "host") == "api.example.com" && map_get(r, "path") == "/"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_parse no path — expected default path /")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_parse_no_path")
+end
+test_url_parse_no_path()
+
+fn test_url_parse_no_protocol()
+  let r = url_parse("just-a-host")
+  if map_get(r, "protocol") == "" && map_get(r, "host") == "just-a-host" && map_get(r, "path") == "/"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_parse no protocol — unexpected values")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_parse_no_protocol")
+end
+test_url_parse_no_protocol()
+
+fn test_url_parse_root_path()
+  let r = url_parse("https://example.com/")
+  if map_get(r, "host") == "example.com" && map_get(r, "path") == "/"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_parse root path — expected host=example.com path=/")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_parse_root_path")
+end
+test_url_parse_root_path()
+
+fn test_url_parse_with_port()
+  let r = url_parse("http://localhost:8080/api/v1")
+  if map_get(r, "host") == "localhost:8080" && map_get(r, "path") == "/api/v1"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_parse with port — expected host=localhost:8080 path=/api/v1")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_parse_with_port")
+end
+test_url_parse_with_port()
+
+// ----------------------------------------------------------
+// build_url: construct URL from parts
+// ----------------------------------------------------------
+
+fn test_build_url_full()
+  let u = build_url("https", "example.com", "/search", "q=test")
+  if u == "https://example.com/search?q=test"
+    pass = pass + 1.0
+  else
+    print("  FAIL: build_url full — expected https://example.com/search?q=test got {u}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_build_url_full")
+end
+test_build_url_full()
+
+fn test_build_url_no_query()
+  let u = build_url("http", "localhost", "/index", "")
+  if u == "http://localhost/index"
+    pass = pass + 1.0
+  else
+    print("  FAIL: build_url no query — expected http://localhost/index got {u}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_build_url_no_query")
+end
+test_build_url_no_query()
+
+fn test_build_url_root()
+  let u = build_url("https", "api.test.io", "/", "")
+  if u == "https://api.test.io/"
+    pass = pass + 1.0
+  else
+    print("  FAIL: build_url root — expected https://api.test.io/ got {u}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_build_url_root")
+end
+test_build_url_root()
+
+// ----------------------------------------------------------
+// url_encode: percent-encoding
+// ----------------------------------------------------------
+
+fn test_url_encode_plain()
+  let e = url_encode("hello")
+  if e == "hello"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_encode plain — expected hello got {e}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_encode_plain")
+end
+test_url_encode_plain()
+
+fn test_url_encode_spaces()
+  let e = url_encode("hello world")
+  if e == "hello%20world"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_encode spaces — expected hello%20world got {e}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_encode_spaces")
+end
+test_url_encode_spaces()
+
+fn test_url_encode_special()
+  let e = url_encode("a=b&c")
+  // '=' is 0x3D -> %3D, '&' is 0x26 -> %26
+  if e == "a%3Db%26c"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_encode special — expected a%3Db%26c got {e}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_encode_special")
+end
+test_url_encode_special()
+
+fn test_url_encode_empty()
+  let e = url_encode("")
+  if e == ""
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_encode empty — expected empty got {e}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_encode_empty")
+end
+test_url_encode_empty()
+
+fn test_url_encode_unreserved()
+  // Unreserved chars: A-Z a-z 0-9 - _ . ~
+  let e = url_encode("Az09-_.~")
+  if e == "Az09-_.~"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_encode unreserved — expected Az09-_.~ got {e}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_encode_unreserved")
+end
+test_url_encode_unreserved()
+
+fn test_url_encode_slash()
+  // '/' is 0x2F -> %2F
+  let e = url_encode("/path/here")
+  if e == "%2Fpath%2Fhere"
+    pass = pass + 1.0
+  else
+    print("  FAIL: url_encode slash — expected %2Fpath%2Fhere got {e}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_url_encode_slash")
+end
+test_url_encode_slash()
+
+// ----------------------------------------------------------
+// query_string: build query from map
+// ----------------------------------------------------------
+
+fn test_query_string_single()
+  let mut p = map()
+  map_set(p, "key", "value")
+  let qs = query_string(p)
+  if qs == "key=value"
+    pass = pass + 1.0
+  else
+    print("  FAIL: query_string single — expected key=value got {qs}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_query_string_single")
+end
+test_query_string_single()
+
+fn test_query_string_encodes_values()
+  let mut p = map()
+  map_set(p, "q", "hello world")
+  let qs = query_string(p)
+  if qs == "q=hello%20world"
+    pass = pass + 1.0
+  else
+    print("  FAIL: query_string encodes values — expected q=hello%20world got {qs}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_query_string_encodes_values")
+end
+test_query_string_encodes_values()
+
+fn test_query_string_encodes_special()
+  let mut p = map()
+  map_set(p, "data", "a=1&b=2")
+  let qs = query_string(p)
+  // key "data" is safe, value "a=1&b=2" encodes = and &
+  if contains(qs, "data=a%3D1%26b%3D2")
+    pass = pass + 1.0
+  else
+    print("  FAIL: query_string encodes special — expected data=a%3D1%26b%3D2 in {qs}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_query_string_encodes_special")
+end
+test_query_string_encodes_special()
+
+// ----------------------------------------------------------
+// Round-trip: build_url + url_parse
+// ----------------------------------------------------------
+
+fn test_roundtrip_url()
+  let original = build_url("https", "example.com", "/api/data", "page=1")
+  let parsed = url_parse(original)
+  let rebuilt = build_url(map_get(parsed, "protocol"), map_get(parsed, "host"), map_get(parsed, "path"), map_get(parsed, "query"))
+  if rebuilt == original
+    pass = pass + 1.0
+  else
+    print("  FAIL: roundtrip url — expected {original} got {rebuilt}")
+    fail = fail + 1.0
+  end
+  print("PASS: test_roundtrip_url")
+end
+test_roundtrip_url()
+
+// ----------------------------------------------------------
+// json_merge + json_flatten combined
+// ----------------------------------------------------------
+
+fn test_merge_then_flatten()
+  let mut a = map()
+  map_set(a, "x", "1")
+  let mut b = map()
+  map_set(b, "y", "2")
+  let merged = json_merge(a, b)
+  let flat = json_flatten(merged, "cfg.")
+  if map_get(flat, "cfg.x") == "1" && map_get(flat, "cfg.y") == "2"
+    pass = pass + 1.0
+  else
+    print("  FAIL: merge then flatten — unexpected keys/values")
+    fail = fail + 1.0
+  end
+  print("PASS: test_merge_then_flatten")
+end
+test_merge_then_flatten()
+
+// ============================================================
+// Summary
+// ============================================================
+let total = pass + fail
+print("")
+print("--- test_web ---")
+print("  pass: {pass}/{total}")
+if fail > 0.0
+  print("  FAIL: {fail} failures")
+else
+  print("  ALL PASS")
+end

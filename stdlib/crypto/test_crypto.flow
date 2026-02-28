@@ -1,0 +1,159 @@
+// test_crypto.flow — Tests for stdlib/crypto modules
+// Tests: hash.flow (djb2, fnv1a, checksum, crc_simple)
+//        random.flow (random_float, random_int, random_hex, uuid_v4)
+
+use "crypto/hash"
+use "crypto/random"
+
+// ── Hash Tests ──────────────────────────────────────────
+
+fn test_djb2_deterministic()
+  let h1 = djb2("hello")
+  let h2 = djb2("hello")
+  assert(h1 == h2, "djb2 should be deterministic")
+  print("PASS: test_djb2_deterministic")
+  return 0.0
+end
+
+fn test_djb2_different_inputs()
+  let h1 = djb2("hello")
+  let h2 = djb2("world")
+  assert(h1 != h2, "different strings should produce different hashes")
+  print("PASS: test_djb2_different_inputs")
+  return 0.0
+end
+
+fn test_djb2_empty()
+  let h = djb2("")
+  assert(h == 5381.0, "djb2 of empty string should be initial seed")
+  print("PASS: test_djb2_empty")
+  return 0.0
+end
+
+fn test_fnv1a_deterministic()
+  let h1 = fnv1a("test")
+  let h2 = fnv1a("test")
+  assert(h1 == h2, "fnv1a should be deterministic")
+  print("PASS: test_fnv1a_deterministic")
+  return 0.0
+end
+
+fn test_fnv1a_different_inputs()
+  let h1 = fnv1a("abc")
+  let h2 = fnv1a("def")
+  assert(h1 != h2, "different strings should produce different hashes")
+  print("PASS: test_fnv1a_different_inputs")
+  return 0.0
+end
+
+fn test_fnv1a_empty()
+  let h = fnv1a("")
+  assert(h > 0.0, "fnv1a of empty string should be positive")
+  print("PASS: test_fnv1a_empty")
+  return 0.0
+end
+
+fn test_checksum_basic()
+  let arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+  assert(checksum(arr) == 15.0, "checksum should sum all elements")
+  print("PASS: test_checksum_basic")
+  return 0.0
+end
+
+fn test_checksum_empty()
+  let arr = []
+  assert(checksum(arr) == 0.0, "checksum of empty array should be 0")
+  print("PASS: test_checksum_empty")
+  return 0.0
+end
+
+fn test_checksum_single()
+  let arr = [42.0]
+  assert(checksum(arr) == 42.0, "checksum of single element")
+  print("PASS: test_checksum_single")
+  return 0.0
+end
+
+fn test_crc_simple_deterministic()
+  let c1 = crc_simple("hello")
+  let c2 = crc_simple("hello")
+  assert(c1 == c2, "crc_simple should be deterministic")
+  print("PASS: test_crc_simple_deterministic")
+  return 0.0
+end
+
+fn test_crc_simple_empty()
+  let c = crc_simple("")
+  assert(c == 0.0, "crc of empty string should be 0")
+  print("PASS: test_crc_simple_empty")
+  return 0.0
+end
+
+// ── Random Tests ────────────────────────────────────────
+
+fn test_random_float_range()
+  let r = random_float(10.0, 20.0)
+  assert(r >= 10.0 && r <= 20.0, "random_float should be in [lo, hi]")
+  print("PASS: test_random_float_range")
+  return 0.0
+end
+
+fn test_random_int_range()
+  let r = random_int(1.0, 6.0)
+  assert(r >= 1.0 && r <= 6.0, "random_int should be in [lo, hi]")
+  assert(r == floor(r), "random_int should return integer")
+  print("PASS: test_random_int_range")
+  return 0.0
+end
+
+fn test_random_hex_length()
+  let h = random_hex(8.0)
+  assert(len(h) == 8.0, "random_hex should produce correct length")
+  print("PASS: test_random_hex_length")
+  return 0.0
+end
+
+fn test_random_hex_empty()
+  let h = random_hex(0.0)
+  assert(len(h) == 0.0, "random_hex(0) should produce empty string")
+  print("PASS: test_random_hex_empty")
+  return 0.0
+end
+
+fn test_uuid_v4_format()
+  let u = uuid_v4()
+  assert(len(u) == 36.0, "UUID v4 should be 36 characters")
+  // Check dashes at positions 8, 13, 18, 23
+  assert(char_at(u, 8.0) == "-", "UUID dash at position 8")
+  assert(char_at(u, 13.0) == "-", "UUID dash at position 13")
+  assert(char_at(u, 18.0) == "-", "UUID dash at position 18")
+  assert(char_at(u, 23.0) == "-", "UUID dash at position 23")
+  // Check version 4 indicator
+  assert(char_at(u, 14.0) == "4", "UUID v4 should have '4' at position 14")
+  print("PASS: test_uuid_v4_format")
+  return 0.0
+end
+
+fn test_uuid_v4_unique()
+  let u1 = uuid_v4()
+  let u2 = uuid_v4()
+  assert(u1 != u2, "two UUID v4s should be different")
+  print("PASS: test_uuid_v4_unique")
+  return 0.0
+end
+
+fn test_random_choice()
+  let arr = [10.0, 20.0, 30.0]
+  let c = random_choice(arr)
+  assert(c == 10.0 || c == 20.0 || c == 30.0, "choice should be from array")
+  print("PASS: test_random_choice")
+  return 0.0
+end
+
+fn test_random_shuffle_length()
+  let mut arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+  random_shuffle(arr)
+  assert(len(arr) == 5.0, "shuffle should preserve length")
+  print("PASS: test_random_shuffle_length")
+  return 0.0
+end
