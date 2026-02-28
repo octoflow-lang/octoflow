@@ -3,7 +3,7 @@
 // Functions: noise_perlin_2d, noise_value_2d, noise_fbm_2d,
 //            noise_to_tilemap
 //
-// CPU noise generators. Returns flat float arrays (row-major).
+// CPU noise generators (value, Perlin, fBm). Returns flat float arrays (row-major).
 // Values normalized to [0, 1] range.
 
 // ── Internal helpers ──────────────────────────────────────
@@ -31,6 +31,9 @@ end
 
 fn noise_value_2d(width, height, scale, seed)
   let mut out = []
+  if scale <= 0.0
+    return out
+  end
   let mut py = 0.0
   while py < height
     let mut px = 0.0
@@ -75,6 +78,9 @@ end
 
 fn noise_perlin_2d(width, height, scale, octaves, seed)
   let mut out = []
+  if scale <= 0.0
+    return out
+  end
   let mut py = 0.0
   while py < height
     let mut px = 0.0
@@ -131,6 +137,9 @@ end
 
 fn noise_fbm_2d(width, height, scale, octaves, lacunarity, gain, seed)
   let mut out = []
+  if scale <= 0.0
+    return out
+  end
   let mut py = 0.0
   while py < height
     let mut px = 0.0

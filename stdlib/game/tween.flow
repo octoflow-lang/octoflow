@@ -82,9 +82,11 @@ fn ease_in_elastic(t)
   let p = 0.3
   let s = p / 4.0
   let t1 = t - 1.0
-  let pow2 = 1.0
+  // Compute 2^(10 * (1 - t)) via repeated doubling
+  let mut pow2 = 1.0
   let mut ii = 0.0
-  while ii < 10.0 * t1 * -1.0
+  let exp = floor(10.0 * (1.0 - t))
+  while ii < exp
     pow2 = pow2 * 2.0
     ii = ii + 1.0
   end
@@ -100,10 +102,12 @@ fn ease_out_elastic(t)
   end
   let p = 0.3
   let s = p / 4.0
-  let pow2 = 1.0
+  // Compute 2^(-10 * t) via repeated halving
+  let mut pow2 = 1.0
   let mut ii = 0.0
-  while ii < 10.0 * t * -1.0
-    pow2 = pow2 * 2.0
+  let exp = floor(10.0 * t)
+  while ii < exp
+    pow2 = pow2 * 0.5
     ii = ii + 1.0
   end
   return pow2 * sin((t - s) * 6.28318 / p) + 1.0
@@ -169,7 +173,12 @@ fn tween_create(start, target, duration, easing)
   let id = len(_tw_start)
   push(_tw_start, start)
   push(_tw_target, target)
-  push(_tw_dur, duration)
+  // Guard against zero duration (would cause div-by-zero)
+  let mut dur = duration
+  if dur <= 0.0
+    dur = 0.001
+  end
+  push(_tw_dur, dur)
   push(_tw_elapsed, 0.0)
   push(_tw_easing, easing)
   push(_tw_dir, 1.0)

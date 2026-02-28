@@ -78,6 +78,9 @@ end
 // ── Mandelbrot Set ────────────────────────────────────────
 
 fn fractal_mandelbrot(canvas_id, cx, cy, zoom, max_iter)
+  if zoom <= 0.0 || max_iter <= 0.0
+    return 0.0
+  end
   _frac_init_palette()
   // Get canvas dimensions from widget arrays
   let cw = _gui_w[int(canvas_id)]
@@ -121,6 +124,9 @@ end
 // ── Julia Set ─────────────────────────────────────────────
 
 fn fractal_julia(canvas_id, cr, ci, zoom, max_iter)
+  if zoom <= 0.0 || max_iter <= 0.0
+    return 0.0
+  end
   _frac_init_palette()
   let cw = _gui_w[int(canvas_id)]
   let ch = _gui_h[int(canvas_id)]
@@ -162,6 +168,9 @@ end
 // ── Burning Ship ──────────────────────────────────────────
 
 fn fractal_burning_ship(canvas_id, cx, cy, zoom, max_iter)
+  if zoom <= 0.0 || max_iter <= 0.0
+    return 0.0
+  end
   _frac_init_palette()
   let cw = _gui_w[int(canvas_id)]
   let ch = _gui_h[int(canvas_id)]
