@@ -138,37 +138,7 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 
 Four crates. Zero external Rust dependencies. Only system libraries (vulkan-1, ws2_32).
 
-| Crate | Purpose | Lines |
-|---|---|---|
-| `octoflow-vulkan` | Raw Vulkan compute + Loom Engine | ~5,000 |
-| `octoflow-parser` | Recursive descent parser | ~4,500 |
-| `octoflow-cli` | Compiler + runtime + REPL + chat | ~45,000 |
-
-~59K Rust (OS boundary) + ~143K .flow (stdlib + compiler) = ~202K total. 69% is .flow.
-
-## Building from Source
-
-Requires: Rust 1.56+, Vulkan-capable GPU with driver installed.
-
-```bash
-cargo build --release
-./target/release/octoflow --version
-```
-
-Vulkan SDK only needed for development (spirv-val). End users just need GPU drivers.
-
-## Tests
-
-**1,136 tests**, all passing. Zero failures.
-
-```
-octoflow-cli:          716 (compiler, runtime, builtins, MCP)
-octoflow-parser:       146 (lexer, AST, edge cases)
-octoflow-vulkan:        48 (GPU dispatch, kernels, memory)
-octoview-browser:      163 (HTML, CSS, rendering)
-octoview:               32 (TUI transpiler)
-octoflow-cli bin:       31 (integration tests)
-```
+~202K lines total: ~59K Rust + ~143K .flow (stdlib). Zero external dependencies.
 
 ## License
 
