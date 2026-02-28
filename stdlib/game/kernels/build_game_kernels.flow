@@ -1,0 +1,32 @@
+// build_game_kernels.flow — Build all game engine compute shaders
+//
+// Run once: octoflow run stdlib/game/kernels/build_game_kernels.flow
+
+use "emit_raymarch"
+use "emit_fx_color"
+use "emit_fx_vignette"
+use "emit_fx_pixelate"
+use "emit_fx_chromatic"
+use "emit_lightmap"
+
+let dir = "stdlib/game/kernels/"
+
+let _rm = emit_raymarch(dir + "raymarch.spv")
+print("Emitted raymarch.spv")
+
+let _fc = emit_fx_color(dir + "fx_color.spv")
+print("Emitted fx_color.spv")
+
+let _fv = emit_fx_vignette(dir + "fx_vignette.spv")
+print("Emitted fx_vignette.spv")
+
+let _fp = emit_fx_pixelate(dir + "fx_pixelate.spv")
+print("Emitted fx_pixelate.spv")
+
+let _fch = emit_fx_chromatic(dir + "fx_chromatic.spv")
+print("Emitted fx_chromatic.spv")
+
+let _lm = emit_lightmap(dir + "lightmap.spv")
+print("Emitted lightmap.spv")
+
+print("All game kernels built.")

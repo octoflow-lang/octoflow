@@ -1,0 +1,137 @@
+// stdlib/game/fx.flow — Post-Processing FX Pipeline (GPU)
+//
+// GPU compute shader post-processing effects applied after rendering.
+// Each effect reads the existing framebuffer, transforms pixels, and writes back.
+//
+// Usage:
+//   fx_begin(vm_id, total, width, height)  — set render target
+//   fx_grayscale()                          — convert to grayscale
+//   fx_invert()                             — invert colors
+//   fx_color_grade(r, g, b)                 — multiply channels
+//   fx_scanlines(intensity)                 — darken even rows
+//   fx_vignette(intensity, radius, soft)    — darken edges
+//   fx_pixelate(block_size)                 — block pixelation
+//   fx_chromatic(offset)                    — chromatic aberration
+//   fx_apply()                              — build + run + present
+//
+// Functions: fx_begin, fx_grayscale, fx_invert, fx_color_grade,
+//   fx_scanlines, fx_vignette, fx_pixelate, fx_chromatic, fx_apply
+
+// ── FX State ──────────────────────────────────────────────
+// [vm_id, total, width, height, dispatch_count]
+let mut _fx = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+fn _fx_wg()
+  if _fx[1] <= 0.0
+    return 1.0
+  end
+  return int((_fx[1] + 255.0) / 256.0)
+end
+
+// ── Target ────────────────────────────────────────────────
+
+fn fx_begin(vm_id, total, w, h)
+  _fx[0] = vm_id
+  _fx[1] = total
+  _fx[2] = w
+  _fx[3] = h
+  _fx[4] = 0.0
+  return 0.0
+end
+
+// ── Color Effects (fx_color.spv) ──────────────────────────
+
+fn fx_grayscale()
+  if _fx[0] <= 0.0
+    return 0.0
+  end
+  let pc = [_fx[1], _fx[2], 0.0, 0.0, 0.0, 0.0]
+  loom_dispatch(_fx[0], "stdlib/game/kernels/fx_color.spv", pc, _fx_wg())
+  _fx[4] = _fx[4] + 1.0
+  return 0.0
+end
+
+fn fx_invert()
+  if _fx[0] <= 0.0
+    return 0.0
+  end
+  let pc = [_fx[1], _fx[2], 1.0, 0.0, 0.0, 0.0]
+  loom_dispatch(_fx[0], "stdlib/game/kernels/fx_color.spv", pc, _fx_wg())
+  _fx[4] = _fx[4] + 1.0
+  return 0.0
+end
+
+fn fx_color_grade(r, g, b)
+  if _fx[0] <= 0.0
+    return 0.0
+  end
+  let pc = [_fx[1], _fx[2], 2.0, r, g, b]
+  loom_dispatch(_fx[0], "stdlib/game/kernels/fx_color.spv", pc, _fx_wg())
+  _fx[4] = _fx[4] + 1.0
+  return 0.0
+end
+
+fn fx_scanlines(intensity)
+  if _fx[0] <= 0.0
+    return 0.0
+  end
+  let pc = [_fx[1], _fx[2], 3.0, intensity, 0.0, 0.0]
+  loom_dispatch(_fx[0], "stdlib/game/kernels/fx_color.spv", pc, _fx_wg())
+  _fx[4] = _fx[4] + 1.0
+  return 0.0
+end
+
+// ── Vignette (fx_vignette.spv) ────────────────────────────
+
+fn fx_vignette(intensity, radius, softness)
+  if _fx[0] <= 0.0
+    return 0.0
+  end
+  let pc = [_fx[1], _fx[2], _fx[3], intensity, radius, softness]
+  loom_dispatch(_fx[0], "stdlib/game/kernels/fx_vignette.spv", pc, _fx_wg())
+  _fx[4] = _fx[4] + 1.0
+  return 0.0
+end
+
+// ── Pixelation (fx_pixelate.spv) ──────────────────────────
+
+fn fx_pixelate(block_size)
+  if _fx[0] <= 0.0
+    return 0.0
+  end
+  let pc = [_fx[1], _fx[2], block_size]
+  loom_dispatch(_fx[0], "stdlib/game/kernels/fx_pixelate.spv", pc, _fx_wg())
+  _fx[4] = _fx[4] + 1.0
+  return 0.0
+end
+
+// ── Chromatic Aberration (fx_chromatic.spv) ────────────────
+
+fn fx_chromatic(offset)
+  if _fx[0] <= 0.0
+    return 0.0
+  end
+  let pc = [_fx[1], _fx[2], _fx[3], offset]
+  loom_dispatch(_fx[0], "stdlib/game/kernels/fx_chromatic.spv", pc, _fx_wg())
+  _fx[4] = _fx[4] + 1.0
+  return 0.0
+end
+
+// ── Apply ─────────────────────────────────────────────────
+
+fn fx_apply()
+  if _fx[0] <= 0.0
+    return 0.0
+  end
+  if _fx[4] <= 0.0
+    return 0.0
+  end
+  let prog = loom_build(_fx[0])
+  if prog < 0.0
+    return 0.0
+  end
+  loom_run(prog)
+  vm_present(_fx[0], _fx[1])
+  _fx[4] = 0.0
+  return 1.0
+end

@@ -1,0 +1,87 @@
+// emit_fx_vignette.flow — Edge darkening vignette kernel
+//
+// Push constants:
+//   pc[0] = total   pc[1] = width   pc[2] = height
+//   pc[3] = intensity (0..1)   pc[4] = radius (0..1)   pc[5] = softness (0..1)
+//
+// Darkens pixels based on distance from screen center.
+
+use "../../compiler/ir"
+
+fn emit_fx_vignette(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let c0 = ir_const_f(entry, 0.0)
+  let c1 = ir_const_f(entry, 1.0)
+  let c2 = ir_const_f(entry, 2.0)
+  let c05 = ir_const_f(entry, 0.5)
+  let c255 = ir_const_f(entry, 255.0)
+
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_w = ir_push_const(entry, 1.0)
+  let pc_h = ir_push_const(entry, 2.0)
+  let pc_intensity = ir_push_const(entry, 3.0)
+  let pc_radius = ir_push_const(entry, 4.0)
+  let pc_soft = ir_push_const(entry, 5.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_b = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_b, work, main_m)
+
+  // Pixel coords
+  let wu = ir_ftou(work, pc_w)
+  let py = ir_udiv(work, gid, wu)
+  let px = ir_umod(work, gid, wu)
+  let px_f = ir_utof(work, px)
+  let py_f = ir_utof(work, py)
+
+  // Normalized coords: (px/w - 0.5)*2, (py/h - 0.5)*2 → range [-1, 1]
+  let nx = ir_fmul(work, ir_fsub(work, ir_fdiv(work, px_f, pc_w), c05), c2)
+  let ny = ir_fmul(work, ir_fsub(work, ir_fdiv(work, py_f, pc_h), c05), c2)
+
+  // Distance from center: sqrt(nx*nx + ny*ny)
+  let d2 = ir_fadd(work, ir_fmul(work, nx, nx), ir_fmul(work, ny, ny))
+  let dist = ir_sqrt(work, d2)
+
+  // Vignette factor: smoothstep between radius and radius+softness
+  // raw = clamp((dist - radius) / softness, 0, 1)
+  let raw = ir_fdiv(work, ir_fsub(work, dist, pc_radius), ir_fmax(work, pc_soft, ir_const_f(work, 0.001)))
+  let clamped = ir_fmin(work, ir_fmax(work, raw, c0), c1)
+
+  // Smoothstep: 3*t^2 - 2*t^3
+  let c3f = ir_const_f(work, 3.0)
+  let ss = ir_fmul(work, ir_fmul(work, clamped, clamped), ir_fsub(work, c3f, ir_fmul(work, c2, clamped)))
+
+  // factor = 1.0 - intensity * ss
+  let factor = ir_fsub(work, c1, ir_fmul(work, pc_intensity, ss))
+
+  // Read existing pixel
+  let totu = ir_ftou(work, pc_total)
+  let old_r = ir_load_output_at(work, gid)
+  let g_off = ir_iadd(work, gid, totu)
+  let old_g = ir_load_output_at(work, g_off)
+  let b_off = ir_iadd(work, g_off, totu)
+  let old_b = ir_load_output_at(work, b_off)
+
+  // Apply vignette
+  let fr = ir_fmin(work, ir_fmax(work, ir_fmul(work, old_r, factor), c0), c255)
+  let fg = ir_fmin(work, ir_fmax(work, ir_fmul(work, old_g, factor), c0), c255)
+  let fb = ir_fmin(work, ir_fmax(work, ir_fmul(work, old_b, factor), c0), c255)
+
+  ir_store_output_at(work, gid, fr)
+  ir_store_output_at(work, g_off, fg)
+  ir_store_output_at(work, b_off, fb)
+
+  ir_term_branch(work, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

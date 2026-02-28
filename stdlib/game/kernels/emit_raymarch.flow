@@ -1,0 +1,365 @@
+// emit_raymarch.flow — SDF Ray March GPU compute shader emitter
+//
+// Generates a SPIR-V compute kernel for real-time SDF ray marching.
+// Reads scene objects from register buffer (binding 0), camera from push constants.
+// Writes planar RGB framebuffer to output (binding 2).
+//
+// Push constants (27 floats):
+//   pc[0]  = total pixels      pc[1]  = width       pc[2]  = height
+//   pc[3]  = object count      pc[4]  = light count
+//   pc[5..7]   = eye position   pc[8..10]  = forward direction
+//   pc[11..13] = right direction pc[14..16] = up direction
+//   pc[17] = fov factor (tan(fov/2))
+//   pc[18..20] = ambient light (r, g, b)
+//   pc[21..26] = main light (x, y, z, r, g, b)
+//
+// Register buffer layout (binding 0):
+//   obj[i*16 + 0]  = type (1=sphere, 2=box, 3=plane)
+//   obj[i*16 + 1..3] = position (x, y, z)
+//   obj[i*16 + 4..6] = params (radius/half-size/normal)
+//   obj[i*16 + 8..10] = material color (r, g, b)
+
+use "../../compiler/ir"
+
+fn emit_raymarch(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  // ── Constants ──────────────────────────────────────────
+  let entry = ir_block("entry")
+
+  let c0f = ir_const_f(entry, 0.0)
+  let c1f = ir_const_f(entry, 1.0)
+  let c2f = ir_const_f(entry, 2.0)
+  let c255 = ir_const_f(entry, 255.0)
+  let c_half = ir_const_f(entry, 0.5)
+  let c_eps = ir_const_f(entry, 0.001)
+  let c_big = ir_const_f(entry, 99999.0)
+  let c_max_steps = ir_const_f(entry, 64.0)
+  let c_max_t = ir_const_f(entry, 100.0)
+  let c_n1f = ir_const_f(entry, -1.0)
+  let c_3f = ir_const_f(entry, 3.0)
+
+  let c0u = ir_const_u(entry, 0.0)
+  let c1u = ir_const_u(entry, 1.0)
+  let c2u = ir_const_u(entry, 2.0)
+  let c3u = ir_const_u(entry, 3.0)
+  let c4u = ir_const_u(entry, 4.0)
+  let c5u = ir_const_u(entry, 5.0)
+  let c6u = ir_const_u(entry, 6.0)
+  let c8u = ir_const_u(entry, 8.0)
+  let c9u = ir_const_u(entry, 9.0)
+  let c10u = ir_const_u(entry, 10.0)
+  let c16u = ir_const_u(entry, 16.0)
+
+  // ── Push Constants ─────────────────────────────────────
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_w = ir_push_const(entry, 1.0)
+  let pc_h = ir_push_const(entry, 2.0)
+  let pc_obj_n = ir_push_const(entry, 3.0)
+  let pc_lit_n = ir_push_const(entry, 4.0)
+  let pc_ex = ir_push_const(entry, 5.0)
+  let pc_ey = ir_push_const(entry, 6.0)
+  let pc_ez = ir_push_const(entry, 7.0)
+  let pc_fx = ir_push_const(entry, 8.0)
+  let pc_fy = ir_push_const(entry, 9.0)
+  let pc_fz = ir_push_const(entry, 10.0)
+  let pc_rx = ir_push_const(entry, 11.0)
+  let pc_ry = ir_push_const(entry, 12.0)
+  let pc_rz = ir_push_const(entry, 13.0)
+  let pc_ux = ir_push_const(entry, 14.0)
+  let pc_uy = ir_push_const(entry, 15.0)
+  let pc_uz = ir_push_const(entry, 16.0)
+  let pc_fov = ir_push_const(entry, 17.0)
+  let pc_ar = ir_push_const(entry, 18.0)
+  let pc_ag = ir_push_const(entry, 19.0)
+  let pc_ab = ir_push_const(entry, 20.0)
+  let pc_lx = ir_push_const(entry, 21.0)
+  let pc_ly = ir_push_const(entry, 22.0)
+  let pc_lz = ir_push_const(entry, 23.0)
+  let pc_lr = ir_push_const(entry, 24.0)
+  let pc_lg = ir_push_const(entry, 25.0)
+  let pc_lb = ir_push_const(entry, 26.0)
+
+  // ── Bounds Check ───────────────────────────────────────
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_bounds, work, main_m)
+
+  // ── Pixel → Ray ───────────────────────────────────────
+  let wu = ir_ftou(work, pc_w)
+  let pxu = ir_umod(work, gid, wu)
+  let pyu = ir_udiv(work, gid, wu)
+  let pxf = ir_utof(work, pxu)
+  let pyf = ir_utof(work, pyu)
+
+  // NDC
+  let aspect = ir_fdiv(work, pc_w, pc_h)
+  let nx_raw = ir_fsub(work, ir_fmul(work, c2f, ir_fdiv(work, pxf, pc_w)), c1f)
+  let ny_raw = ir_fsub(work, c1f, ir_fmul(work, c2f, ir_fdiv(work, pyf, pc_h)))
+  let ndcx = ir_fmul(work, ir_fmul(work, nx_raw, aspect), pc_fov)
+  let ndcy = ir_fmul(work, ny_raw, pc_fov)
+
+  // dir = normalize(forward + right*ndcx + up*ndcy)
+  let drx = ir_fadd(work, pc_fx, ir_fadd(work, ir_fmul(work, pc_rx, ndcx), ir_fmul(work, pc_ux, ndcy)))
+  let dry = ir_fadd(work, pc_fy, ir_fadd(work, ir_fmul(work, pc_ry, ndcx), ir_fmul(work, pc_uy, ndcy)))
+  let drz = ir_fadd(work, pc_fz, ir_fadd(work, ir_fmul(work, pc_rz, ndcx), ir_fmul(work, pc_uz, ndcy)))
+  let dl2 = ir_fadd(work, ir_fmul(work, drx, drx), ir_fadd(work, ir_fmul(work, dry, dry), ir_fmul(work, drz, drz)))
+  let dli = ir_fdiv(work, c1f, ir_sqrt(work, dl2))
+  let dx = ir_fmul(work, drx, dli)
+  let dy = ir_fmul(work, dry, dli)
+  let dz = ir_fmul(work, drz, dli)
+
+  // ── March Loop ─────────────────────────────────────────
+  let mh = ir_block("mh")
+  let mb = ir_block("mb")
+  let mc = ir_block("mc")
+  let mm = ir_block("mm")
+
+  ir_term_branch(work, mh)
+  ir_loop_merge(mh, mm, mc)
+
+  let phi_step = ir_phi(mh, IR_TYPE_FLOAT)
+  let phi_t = ir_phi(mh, IR_TYPE_FLOAT)
+  let phi_hit = ir_phi(mh, IR_TYPE_FLOAT)
+  let phi_clo = ir_phi(mh, IR_TYPE_FLOAT)
+
+  let step_ok = ir_folt(mh, phi_step, c_max_steps)
+  let not_hit = ir_foeq(mh, phi_hit, c0f)
+  let m_cond = ir_land(mh, step_ok, not_hit)
+  ir_term_cond_branch(mh, m_cond, mb, mm)
+
+  // Ray position = eye + t * dir
+  let rpx = ir_fadd(mb, pc_ex, ir_fmul(mb, phi_t, dx))
+  let rpy = ir_fadd(mb, pc_ey, ir_fmul(mb, phi_t, dy))
+  let rpz = ir_fadd(mb, pc_ez, ir_fmul(mb, phi_t, dz))
+
+  // ── SDF Eval Loop (nested) ─────────────────────────────
+  let sh = ir_block("sh")
+  let sb = ir_block("sb")
+  let sc = ir_block("sc")
+  let sm = ir_block("sm")
+
+  ir_term_branch(mb, sh)
+  ir_loop_merge(sh, sm, sc)
+
+  let s_idx = ir_phi(sh, IR_TYPE_FLOAT)
+  let s_min = ir_phi(sh, IR_TYPE_FLOAT)
+  let s_clo = ir_phi(sh, IR_TYPE_FLOAT)
+
+  let s_cond = ir_folt(sh, s_idx, pc_obj_n)
+  ir_term_cond_branch(sh, s_cond, sb, sm)
+
+  // Read object from register buffer (binding 0)
+  let iu = ir_ftou(sb, s_idx)
+  let base = ir_imul(sb, iu, c16u)
+  let obj_t = ir_load_input_at(sb, 0.0, base)
+  let ox = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c1u))
+  let oy = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c2u))
+  let oz = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c3u))
+  let p1 = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c4u))
+  let p2 = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c5u))
+  let p3 = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c6u))
+
+  // dx, dy, dz from ray point to object center
+  let odx = ir_fsub(sb, rpx, ox)
+  let ody = ir_fsub(sb, rpy, oy)
+  let odz = ir_fsub(sb, rpz, oz)
+
+  // Sphere SDF: sqrt(dx²+dy²+dz²) - radius
+  let s_dsq = ir_fadd(sb, ir_fmul(sb, odx, odx), ir_fadd(sb, ir_fmul(sb, ody, ody), ir_fmul(sb, odz, odz)))
+  let s_dist = ir_fsub(sb, ir_sqrt(sb, s_dsq), p1)
+
+  // Box SDF: max(max(|dx|-hx, |dy|-hy), |dz|-hz)
+  let bx = ir_fsub(sb, ir_fabs(sb, odx), p1)
+  let by = ir_fsub(sb, ir_fabs(sb, ody), p2)
+  let bz = ir_fsub(sb, ir_fabs(sb, odz), p3)
+  let b_dist = ir_fmax(sb, ir_fmax(sb, bx, by), bz)
+
+  // Plane SDF: dot(point - origin, normal) = odx*p1 + ody*p2 + odz*p3
+  let p_dist = ir_fadd(sb, ir_fmul(sb, odx, p1), ir_fadd(sb, ir_fmul(sb, ody, p2), ir_fmul(sb, odz, p3)))
+
+  // Select distance by type: type==1→sphere, type==2→box, else→plane
+  let is_sph = ir_foeq(sb, obj_t, c1f)
+  let is_box = ir_foeq(sb, obj_t, c2f)
+  let inner_d = ir_select(sb, IR_TYPE_FLOAT, is_box, b_dist, p_dist)
+  let obj_d = ir_select(sb, IR_TYPE_FLOAT, is_sph, s_dist, inner_d)
+
+  // Update min distance & closest
+  let new_min = ir_fmin(sb, s_min, obj_d)
+  let closer = ir_folt(sb, obj_d, s_min)
+  let new_clo = ir_select(sb, IR_TYPE_FLOAT, closer, s_idx, s_clo)
+
+  ir_term_branch(sb, sc)
+
+  // SDF continue: increment
+  let s_next = ir_fadd(sc, s_idx, c1f)
+  ir_term_branch(sc, sh)
+
+  // Wire SDF phi nodes
+  ir_phi_add(s_idx, c0f, mb)
+  ir_phi_add(s_idx, s_next, sc)
+  ir_phi_add(s_min, c_big, mb)
+  ir_phi_add(s_min, new_min, sc)
+  ir_phi_add(s_clo, c0f, mb)
+  ir_phi_add(s_clo, new_clo, sc)
+
+  // ── After SDF eval: check hit ──────────────────────────
+  // s_min is the min distance, s_clo is the closest object
+  let is_h = ir_folt(sm, s_min, c_eps)
+  let new_hit = ir_select(sm, IR_TYPE_FLOAT, is_h, c1f, c0f)
+  let new_t = ir_fadd(sm, phi_t, s_min)
+  let too_far = ir_fogt(sm, new_t, c_max_t)
+  let exit_f = ir_select(sm, IR_TYPE_FLOAT, too_far, c1f, new_hit)
+
+  ir_term_branch(sm, mc)
+
+  // March continue
+  let nxt_step = ir_fadd(mc, phi_step, c1f)
+  ir_term_branch(mc, mh)
+
+  // Wire march phi nodes
+  ir_phi_add(phi_step, c0f, work)
+  ir_phi_add(phi_step, nxt_step, mc)
+  ir_phi_add(phi_t, c0f, work)
+  ir_phi_add(phi_t, new_t, mc)
+  ir_phi_add(phi_hit, c0f, work)
+  ir_phi_add(phi_hit, exit_f, mc)
+  ir_phi_add(phi_clo, c0f, work)
+  ir_phi_add(phi_clo, s_clo, mc)
+
+  // ── March Merge: Shade or Sky ──────────────────────────
+  let did_hit = ir_fogt(mm, phi_hit, c_half)
+
+  let shade_b = ir_block("shade")
+  let sky_b = ir_block("sky")
+  let final_m = ir_block("final_m")
+  ir_selection_merge(mm, final_m)
+  ir_term_cond_branch(mm, did_hit, shade_b, sky_b)
+
+  // ── Shade Block ────────────────────────────────────────
+  // Hit point
+  let hx = ir_fadd(shade_b, pc_ex, ir_fmul(shade_b, phi_t, dx))
+  let hy = ir_fadd(shade_b, pc_ey, ir_fmul(shade_b, phi_t, dy))
+  let hz = ir_fadd(shade_b, pc_ez, ir_fmul(shade_b, phi_t, dz))
+
+  // Read closest object data
+  let cu = ir_ftou(shade_b, phi_clo)
+  let cb_off = ir_imul(shade_b, cu, c16u)
+  let ctype = ir_load_input_at(shade_b, 0.0, cb_off)
+  let ccx = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c1u))
+  let ccy = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c2u))
+  let ccz = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c3u))
+  let cp1 = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c4u))
+  let cp2 = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c5u))
+  let cp3 = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c6u))
+  let mr = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c8u))
+  let mg = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c9u))
+  let mbb = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c10u))
+
+  // Analytic normal
+  // Sphere: normalize(hit - center)
+  let snx = ir_fsub(shade_b, hx, ccx)
+  let sny = ir_fsub(shade_b, hy, ccy)
+  let snz = ir_fsub(shade_b, hz, ccz)
+  let snl = ir_sqrt(shade_b, ir_fadd(shade_b, ir_fmul(shade_b, snx, snx), ir_fadd(shade_b, ir_fmul(shade_b, sny, sny), ir_fmul(shade_b, snz, snz))))
+  let snli = ir_fdiv(shade_b, c1f, ir_fmax(shade_b, snl, c_eps))
+  let snnx = ir_fmul(shade_b, snx, snli)
+  let snny = ir_fmul(shade_b, sny, snli)
+  let snnz = ir_fmul(shade_b, snz, snli)
+
+  // Box: normal = direction of largest |point-center|/half component
+  let bdx = ir_fsub(shade_b, hx, ccx)
+  let bdy = ir_fsub(shade_b, hy, ccy)
+  let bdz = ir_fsub(shade_b, hz, ccz)
+  let adx = ir_fabs(shade_b, ir_fdiv(shade_b, bdx, ir_fmax(shade_b, cp1, c_eps)))
+  let ady = ir_fabs(shade_b, ir_fdiv(shade_b, bdy, ir_fmax(shade_b, cp2, c_eps)))
+  let adz = ir_fabs(shade_b, ir_fdiv(shade_b, bdz, ir_fmax(shade_b, cp3, c_eps)))
+  let xdom = ir_land(shade_b, ir_foge(shade_b, adx, ady), ir_foge(shade_b, adx, adz))
+  let ydom = ir_land(shade_b, ir_fogt(shade_b, ady, adx), ir_foge(shade_b, ady, adz))
+  let bsgnx = ir_select(shade_b, IR_TYPE_FLOAT, ir_fogt(shade_b, bdx, c0f), c1f, c_n1f)
+  let bsgny = ir_select(shade_b, IR_TYPE_FLOAT, ir_fogt(shade_b, bdy, c0f), c1f, c_n1f)
+  let bsgnz = ir_select(shade_b, IR_TYPE_FLOAT, ir_fogt(shade_b, bdz, c0f), c1f, c_n1f)
+  let bnx = ir_select(shade_b, IR_TYPE_FLOAT, xdom, bsgnx, c0f)
+  let bny = ir_select(shade_b, IR_TYPE_FLOAT, ydom, bsgny, ir_select(shade_b, IR_TYPE_FLOAT, xdom, c0f, c0f))
+  let bnz_cond = ir_land(shade_b, ir_foeq(shade_b, bnx, c0f), ir_foeq(shade_b, bny, c0f))
+  let bnz = ir_select(shade_b, IR_TYPE_FLOAT, bnz_cond, bsgnz, c0f)
+
+  // Plane: normal = (p1, p2, p3)
+  // Select by type
+  let iss = ir_foeq(shade_b, ctype, c1f)
+  let isb = ir_foeq(shade_b, ctype, c2f)
+  let ni_x = ir_select(shade_b, IR_TYPE_FLOAT, isb, bnx, cp1)
+  let nx = ir_select(shade_b, IR_TYPE_FLOAT, iss, snnx, ni_x)
+  let ni_y = ir_select(shade_b, IR_TYPE_FLOAT, isb, bny, cp2)
+  let ny = ir_select(shade_b, IR_TYPE_FLOAT, iss, snny, ni_y)
+  let ni_z = ir_select(shade_b, IR_TYPE_FLOAT, isb, bnz, cp3)
+  let nz = ir_select(shade_b, IR_TYPE_FLOAT, iss, snnz, ni_z)
+
+  // Diffuse lighting from main light (push constants)
+  let ldx = ir_fsub(shade_b, pc_lx, hx)
+  let ldy = ir_fsub(shade_b, pc_ly, hy)
+  let ldz = ir_fsub(shade_b, pc_lz, hz)
+  let ll2 = ir_fadd(shade_b, ir_fmul(shade_b, ldx, ldx), ir_fadd(shade_b, ir_fmul(shade_b, ldy, ldy), ir_fmul(shade_b, ldz, ldz)))
+  let lli = ir_fdiv(shade_b, c1f, ir_sqrt(shade_b, ll2))
+  let lnx = ir_fmul(shade_b, ldx, lli)
+  let lny = ir_fmul(shade_b, ldy, lli)
+  let lnz = ir_fmul(shade_b, ldz, lli)
+
+  let ndotl = ir_fadd(shade_b, ir_fmul(shade_b, nx, lnx), ir_fadd(shade_b, ir_fmul(shade_b, ny, lny), ir_fmul(shade_b, nz, lnz)))
+  let diff = ir_fmax(shade_b, ndotl, c0f)
+
+  // Final color = (ambient + diff * light) * material * 255
+  let cr = ir_fmul(shade_b, ir_fadd(shade_b, ir_fmul(shade_b, pc_ar, mr), ir_fmul(shade_b, diff, ir_fmul(shade_b, pc_lr, mr))), c255)
+  let cg = ir_fmul(shade_b, ir_fadd(shade_b, ir_fmul(shade_b, pc_ag, mg), ir_fmul(shade_b, diff, ir_fmul(shade_b, pc_lg, mg))), c255)
+  let cbb = ir_fmul(shade_b, ir_fadd(shade_b, ir_fmul(shade_b, pc_ab, mbb), ir_fmul(shade_b, diff, ir_fmul(shade_b, pc_lb, mbb))), c255)
+
+  // Clamp 0-255
+  let fr = ir_fmin(shade_b, ir_fmax(shade_b, cr, c0f), c255)
+  let fg = ir_fmin(shade_b, ir_fmax(shade_b, cg, c0f), c255)
+  let fb = ir_fmin(shade_b, ir_fmax(shade_b, cbb, c0f), c255)
+
+  // Write planar RGB
+  let totu = ir_ftou(shade_b, pc_total)
+  ir_store_output_at(shade_b, gid, fr)
+  let goff = ir_iadd(shade_b, gid, totu)
+  ir_store_output_at(shade_b, goff, fg)
+  let boff = ir_iadd(shade_b, goff, totu)
+  ir_store_output_at(shade_b, boff, fb)
+
+  ir_term_branch(shade_b, final_m)
+
+  // ── Sky Block ──────────────────────────────────────────
+  let sky_t = ir_fdiv(sky_b, pyf, pc_h)
+  let inv_st = ir_fsub(sky_b, c1f, sky_t)
+  let c60 = ir_const_f(sky_b, 60.0)
+  let c80 = ir_const_f(sky_b, 80.0)
+  let c140 = ir_const_f(sky_b, 140.0)
+  let c20 = ir_const_f(sky_b, 20.0)
+  let c30 = ir_const_f(sky_b, 30.0)
+  let c50 = ir_const_f(sky_b, 50.0)
+  let sr = ir_fadd(sky_b, ir_fmul(sky_b, inv_st, c60), ir_fmul(sky_b, sky_t, c20))
+  let sg = ir_fadd(sky_b, ir_fmul(sky_b, inv_st, c80), ir_fmul(sky_b, sky_t, c30))
+  let sbb = ir_fadd(sky_b, ir_fmul(sky_b, inv_st, c140), ir_fmul(sky_b, sky_t, c50))
+
+  let totu2 = ir_ftou(sky_b, pc_total)
+  ir_store_output_at(sky_b, gid, sr)
+  let goff2 = ir_iadd(sky_b, gid, totu2)
+  ir_store_output_at(sky_b, goff2, sg)
+  let boff2 = ir_iadd(sky_b, goff2, totu2)
+  ir_store_output_at(sky_b, boff2, sbb)
+
+  ir_term_branch(sky_b, final_m)
+
+  // ── Final merge + return ───────────────────────────────
+  ir_term_branch(final_m, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

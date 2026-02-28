@@ -1,0 +1,66 @@
+// emit_fx_pixelate.flow — Block pixelation kernel
+//
+// Push constants:
+//   pc[0] = total   pc[1] = width   pc[2] = block_size
+//
+// Snaps each pixel to the nearest block origin and copies that pixel's color.
+
+use "../../compiler/ir"
+
+fn emit_fx_pixelate(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let c0 = ir_const_f(entry, 0.0)
+  let c255 = ir_const_f(entry, 255.0)
+
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_w = ir_push_const(entry, 1.0)
+  let pc_block = ir_push_const(entry, 2.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_b = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_b, work, main_m)
+
+  // Pixel coords
+  let wu = ir_ftou(work, pc_w)
+  let py = ir_udiv(work, gid, wu)
+  let px = ir_umod(work, gid, wu)
+  let px_f = ir_utof(work, px)
+  let py_f = ir_utof(work, py)
+
+  // Block origin: floor(px/block)*block, floor(py/block)*block
+  let bx_f = ir_fmul(work, ir_floor(work, ir_fdiv(work, px_f, pc_block)), pc_block)
+  let by_f = ir_fmul(work, ir_floor(work, ir_fdiv(work, py_f, pc_block)), pc_block)
+
+  // Source gid = by * width + bx
+  let src_gid = ir_ftou(work, ir_fadd(work, ir_fmul(work, by_f, pc_w), bx_f))
+
+  // Read source pixel
+  let totu = ir_ftou(work, pc_total)
+  let src_r = ir_load_output_at(work, src_gid)
+  let src_g_off = ir_iadd(work, src_gid, totu)
+  let src_g = ir_load_output_at(work, src_g_off)
+  let src_b_off = ir_iadd(work, src_g_off, totu)
+  let src_b = ir_load_output_at(work, src_b_off)
+
+  // Write to current pixel
+  let g_off = ir_iadd(work, gid, totu)
+  let b_off = ir_iadd(work, g_off, totu)
+
+  ir_store_output_at(work, gid, src_r)
+  ir_store_output_at(work, g_off, src_g)
+  ir_store_output_at(work, b_off, src_b)
+
+  ir_term_branch(work, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

@@ -1,0 +1,114 @@
+// emit_fx_color.flow — Multi-mode per-pixel color transform kernel
+//
+// Push constants:
+//   pc[0] = total   pc[1] = width   pc[2] = mode   pc[3..5] = params
+//
+// Modes:
+//   0 = grayscale (luminance)
+//   1 = invert (255 - color)
+//   2 = color_grade (r*p3, g*p4, b*p5)
+//   3 = scanlines (darken every 2nd row by p3 intensity)
+
+use "../../compiler/ir"
+
+fn emit_fx_color(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let c0 = ir_const_f(entry, 0.0)
+  let c1 = ir_const_f(entry, 1.0)
+  let c2 = ir_const_f(entry, 2.0)
+  let c3 = ir_const_f(entry, 3.0)
+  let c255 = ir_const_f(entry, 255.0)
+  let c_lum_r = ir_const_f(entry, 0.299)
+  let c_lum_g = ir_const_f(entry, 0.587)
+  let c_lum_b = ir_const_f(entry, 0.114)
+
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_w = ir_push_const(entry, 1.0)
+  let pc_mode = ir_push_const(entry, 2.0)
+  let pc_p1 = ir_push_const(entry, 3.0)
+  let pc_p2 = ir_push_const(entry, 4.0)
+  let pc_p3 = ir_push_const(entry, 5.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_b = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_b, work, main_m)
+
+  // Read existing pixel
+  let totu = ir_ftou(work, pc_total)
+  let old_r = ir_load_output_at(work, gid)
+  let g_off = ir_iadd(work, gid, totu)
+  let old_g = ir_load_output_at(work, g_off)
+  let b_off = ir_iadd(work, g_off, totu)
+  let old_b = ir_load_output_at(work, b_off)
+
+  // Pixel y for scanlines
+  let wu = ir_ftou(work, pc_w)
+  let py = ir_udiv(work, gid, wu)
+  let py_f = ir_utof(work, py)
+
+  // Mode 0: Grayscale
+  let lum = ir_fadd(work, ir_fmul(work, old_r, c_lum_r), ir_fadd(work, ir_fmul(work, old_g, c_lum_g), ir_fmul(work, old_b, c_lum_b)))
+  let gs_r = lum
+  let gs_g = lum
+  let gs_b = lum
+
+  // Mode 1: Invert
+  let inv_r = ir_fsub(work, c255, old_r)
+  let inv_g = ir_fsub(work, c255, old_g)
+  let inv_b = ir_fsub(work, c255, old_b)
+
+  // Mode 2: Color grade
+  let cg_r = ir_fmul(work, old_r, pc_p1)
+  let cg_g = ir_fmul(work, old_g, pc_p2)
+  let cg_b = ir_fmul(work, old_b, pc_p3)
+
+  // Mode 3: Scanlines — darken even rows
+  let py_half = ir_fdiv(work, py_f, c2)
+  let py_floor = ir_floor(work, py_half)
+  let py_frac = ir_fsub(work, py_half, py_floor)
+  let is_even = ir_folt(work, py_frac, ir_const_f(work, 0.25))
+  let sl_factor = ir_select(work, IR_TYPE_FLOAT, is_even, ir_fsub(work, c1, pc_p1), c1)
+  let sl_r = ir_fmul(work, old_r, sl_factor)
+  let sl_g = ir_fmul(work, old_g, sl_factor)
+  let sl_b = ir_fmul(work, old_b, sl_factor)
+
+  // Select output by mode
+  let is_m0 = ir_foeq(work, pc_mode, c0)
+  let is_m1 = ir_foeq(work, pc_mode, c1)
+  let is_m2 = ir_foeq(work, pc_mode, c2)
+
+  let r3 = ir_select(work, IR_TYPE_FLOAT, is_m2, cg_r, sl_r)
+  let r2 = ir_select(work, IR_TYPE_FLOAT, is_m1, inv_r, r3)
+  let out_r = ir_select(work, IR_TYPE_FLOAT, is_m0, gs_r, r2)
+
+  let g3 = ir_select(work, IR_TYPE_FLOAT, is_m2, cg_g, sl_g)
+  let g2 = ir_select(work, IR_TYPE_FLOAT, is_m1, inv_g, g3)
+  let out_g = ir_select(work, IR_TYPE_FLOAT, is_m0, gs_g, g2)
+
+  let b3 = ir_select(work, IR_TYPE_FLOAT, is_m2, cg_b, sl_b)
+  let b2 = ir_select(work, IR_TYPE_FLOAT, is_m1, inv_b, b3)
+  let out_b = ir_select(work, IR_TYPE_FLOAT, is_m0, gs_b, b2)
+
+  // Clamp and write
+  let fr = ir_fmin(work, ir_fmax(work, out_r, c0), c255)
+  let fg = ir_fmin(work, ir_fmax(work, out_g, c0), c255)
+  let fb = ir_fmin(work, ir_fmax(work, out_b, c0), c255)
+
+  ir_store_output_at(work, gid, fr)
+  ir_store_output_at(work, g_off, fg)
+  ir_store_output_at(work, b_off, fb)
+
+  ir_term_branch(work, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

@@ -1,0 +1,140 @@
+// test_signal.flow — Tests for stdlib/science/signal.flow
+// Functions tested: convolve, moving_avg_filter, hamming_window, hanning_window,
+//                   blackman_window, envelope, zero_crossings, peak_detect,
+//                   cross_correlate, gaussian_kernel
+use "signal"
+
+fn approx(a, b, eps)
+  let mut diff = a - b
+  if diff < 0.0
+    diff = diff * -1.0
+  end
+  if diff < eps
+    return 1.0
+  end
+  return 0.0
+end
+
+fn test_hamming_window()
+  let w = hamming_window(5.0)
+  assert(len(w) == 5.0, "hamming_window(5) has 5 elements")
+  // Hamming: 0.54 - 0.46 * cos(2*PI*i/(n-1))
+  // At i=0: 0.54 - 0.46*cos(0) = 0.54 - 0.46 = 0.08
+  assert(approx(w[0], 0.08, 0.01) == 1.0, "hamming w[0] ~= 0.08")
+  // At center i=2: 0.54 - 0.46*cos(PI) = 0.54 + 0.46 = 1.0
+  assert(approx(w[2], 1.0, 0.01) == 1.0, "hamming w[2] ~= 1.0 (center)")
+  // Symmetric: w[0] == w[4]
+  assert(approx(w[0], w[4], 0.01) == 1.0, "hamming window is symmetric")
+  print("PASS: test_hamming_window")
+  return 0.0
+end
+
+fn test_hanning_window()
+  let w = hanning_window(5.0)
+  assert(len(w) == 5.0, "hanning_window(5) has 5 elements")
+  // At i=0: 0.5*(1-cos(0)) = 0.5*(1-1) = 0.0
+  assert(approx(w[0], 0.0, 0.01) == 1.0, "hanning w[0] ~= 0.0")
+  // At center i=2: 0.5*(1-cos(PI)) = 0.5*2 = 1.0
+  assert(approx(w[2], 1.0, 0.01) == 1.0, "hanning w[2] ~= 1.0 (center)")
+  print("PASS: test_hanning_window")
+  return 0.0
+end
+
+fn test_blackman_window()
+  let w = blackman_window(5.0)
+  assert(len(w) == 5.0, "blackman_window(5) has 5 elements")
+  // Blackman at i=0: 0.42 - 0.5*cos(0) + 0.08*cos(0) = 0.42 - 0.5 + 0.08 = 0.0
+  assert(approx(w[0], 0.0, 0.02) == 1.0, "blackman w[0] ~= 0.0")
+  // Symmetric
+  assert(approx(w[0], w[4], 0.01) == 1.0, "blackman window is symmetric")
+  print("PASS: test_blackman_window")
+  return 0.0
+end
+
+fn test_zero_crossings()
+  let s = [1.0, -1.0, 1.0, -1.0]
+  assert(zero_crossings(s) == 3.0, "alternating signs have 3 crossings")
+  let s2 = [1.0, 2.0, 3.0]
+  assert(zero_crossings(s2) == 0.0, "all positive has 0 crossings")
+  let s3 = [-1.0, 1.0]
+  assert(zero_crossings(s3) == 1.0, "single crossing")
+  print("PASS: test_zero_crossings")
+  return 0.0
+end
+
+fn test_peak_detect()
+  let s = [0.0, 1.0, 0.0, 2.0, 0.0]
+  let p = peak_detect(s, 0.5)
+  assert(len(p) == 2.0, "two peaks detected at indices 1 and 3")
+  assert(p[0] == 1.0, "first peak at index 1")
+  assert(p[1] == 3.0, "second peak at index 3")
+  print("PASS: test_peak_detect")
+  return 0.0
+end
+
+fn test_peak_detect_threshold()
+  let s = [0.0, 0.3, 0.0, 2.0, 0.0]
+  let p = peak_detect(s, 0.5)
+  // Only peak at index 3 is above threshold 0.5
+  assert(len(p) == 1.0, "only one peak above threshold")
+  assert(p[0] == 3.0, "peak at index 3")
+  print("PASS: test_peak_detect_threshold")
+  return 0.0
+end
+
+fn test_moving_avg()
+  let s = [1.0, 2.0, 3.0, 4.0, 5.0]
+  let r = moving_avg_filter(s, 3.0)
+  assert(len(r) == 5.0, "moving avg preserves length")
+  // Middle value: convolution with [1/3, 1/3, 1/3] at center
+  // r[2] = (2+3+4)/3 = 3.0
+  assert(approx(r[2], 3.0, 0.01) == 1.0, "moving avg center value ~= 3.0")
+  print("PASS: test_moving_avg")
+  return 0.0
+end
+
+fn test_convolve_identity()
+  // Convolving with [1.0] should return the same signal
+  let s = [1.0, 2.0, 3.0]
+  let r = convolve(s, [1.0])
+  assert(len(r) == 3.0, "convolve with [1] preserves length")
+  assert(approx(r[0], 1.0, 0.01) == 1.0, "convolve identity r[0]")
+  assert(approx(r[1], 2.0, 0.01) == 1.0, "convolve identity r[1]")
+  assert(approx(r[2], 3.0, 0.01) == 1.0, "convolve identity r[2]")
+  print("PASS: test_convolve_identity")
+  return 0.0
+end
+
+fn test_envelope()
+  let s = [1.0, -2.0, 3.0, -4.0, 5.0]
+  let e = envelope(s)
+  assert(len(e) == 5.0, "envelope preserves length")
+  // Envelope applies abs then moving_avg(5), so all values processed
+  print("PASS: test_envelope")
+  return 0.0
+end
+
+fn test_gaussian_kernel()
+  let k = gaussian_kernel(5.0, 1.0)
+  assert(len(k) == 5.0, "gaussian kernel has 5 elements")
+  // Center should be the largest value
+  assert(k[2] > k[0], "gaussian center > edge")
+  assert(k[2] > k[1], "gaussian center > near-edge")
+  // Should be symmetric
+  assert(approx(k[0], k[4], 0.001) == 1.0, "gaussian kernel is symmetric")
+  assert(approx(k[1], k[3], 0.001) == 1.0, "gaussian kernel inner symmetric")
+  // Should sum to ~1.0 (normalized)
+  let total = k[0] + k[1] + k[2] + k[3] + k[4]
+  assert(approx(total, 1.0, 0.01) == 1.0, "gaussian kernel sums to ~1.0")
+  print("PASS: test_gaussian_kernel")
+  return 0.0
+end
+
+fn test_cross_correlate()
+  let a = [1.0, 0.0, 0.0]
+  let b = [1.0]
+  let r = cross_correlate(a, b)
+  assert(len(r) > 0.0, "cross_correlate produces output")
+  print("PASS: test_cross_correlate")
+  return 0.0
+end

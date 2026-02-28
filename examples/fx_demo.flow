@@ -1,0 +1,176 @@
+// fx_demo.flow — Post-Processing FX Demo
+//
+// GPU-accelerated post-processing effects applied to a ray-traced scene.
+// Press 1-7 to toggle effects, R to reset. Effects stack.
+//
+// Controls:
+//   1 = Grayscale       2 = Invert         3 = Color Grade (warm)
+//   4 = Scanlines       5 = Vignette       6 = Pixelate
+//   7 = Chromatic       R = Reset all      Arrow keys = orbit camera
+
+use "game/game"
+use "game/input"
+use "game/raymarcher"
+use "game/fx"
+
+let cvs = game_init(400.0, 300.0, "FX Demo")
+
+// Build a scene
+let scene = sdf_scene()
+let ground = sdf_plane(scene, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+sdf_material(scene, ground, 0.5, 0.5, 0.45)
+let s1 = sdf_sphere(scene, 0.0, 1.2, 0.0, 1.2)
+sdf_material(scene, s1, 0.9, 0.15, 0.1)
+let s2 = sdf_sphere(scene, -2.5, 0.8, 1.5, 0.8)
+sdf_material(scene, s2, 0.1, 0.3, 0.9)
+let b1 = sdf_box(scene, 2.0, 0.6, -1.0, 0.6, 0.6, 0.6)
+sdf_material(scene, b1, 0.2, 0.8, 0.3)
+sdf_light(scene, 3.0, 5.0, -2.0, 1.0, 0.95, 0.85)
+sdf_ambient(scene, 0.08, 0.08, 0.1)
+sdf_fov(scene, 55.0)
+
+// State: [angle, distance, fx1..fx7]
+// fx toggles: 0=off, 1=on
+let mut _fd = [0.0, 6.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+
+  // Auto-rotate
+  _fd[0] = _fd[0] + dt * 0.3
+
+  // Camera orbit
+  if input_key_held("left") == 1.0
+    _fd[0] = _fd[0] - dt * 1.2
+  end
+  if input_key_held("right") == 1.0
+    _fd[0] = _fd[0] + dt * 1.2
+  end
+
+  // Toggle effects
+  if input_key_down("1") == 1.0
+    if _fd[2] == 0.0
+      _fd[2] = 1.0
+    else
+      _fd[2] = 0.0
+    end
+  end
+  if input_key_down("2") == 1.0
+    if _fd[3] == 0.0
+      _fd[3] = 1.0
+    else
+      _fd[3] = 0.0
+    end
+  end
+  if input_key_down("3") == 1.0
+    if _fd[4] == 0.0
+      _fd[4] = 1.0
+    else
+      _fd[4] = 0.0
+    end
+  end
+  if input_key_down("4") == 1.0
+    if _fd[5] == 0.0
+      _fd[5] = 1.0
+    else
+      _fd[5] = 0.0
+    end
+  end
+  if input_key_down("5") == 1.0
+    if _fd[6] == 0.0
+      _fd[6] = 1.0
+    else
+      _fd[6] = 0.0
+    end
+  end
+  if input_key_down("6") == 1.0
+    if _fd[7] == 0.0
+      _fd[7] = 1.0
+    else
+      _fd[7] = 0.0
+    end
+  end
+  if input_key_down("7") == 1.0
+    if _fd[8] == 0.0
+      _fd[8] = 1.0
+    else
+      _fd[8] = 0.0
+    end
+  end
+  if input_key_down("r") == 1.0
+    _fd[2] = 0.0
+    _fd[3] = 0.0
+    _fd[4] = 0.0
+    _fd[5] = 0.0
+    _fd[6] = 0.0
+    _fd[7] = 0.0
+    _fd[8] = 0.0
+  end
+
+  // Camera
+  let cx = sin(_fd[0]) * _fd[1]
+  let cz = cos(_fd[0]) * _fd[1]
+  sdf_camera(scene, cx, 2.5, cz, 0.0, 0.8, 0.0)
+
+  // Render scene
+  game_frame_end()
+  sdf_render(scene, cvs)
+
+  // Apply FX on the SDF VM
+  let sdf_vm = _sdf_cfg[2]
+  let sdf_total = _sdf_cfg[3] * _sdf_cfg[4]
+  let sdf_w = _sdf_cfg[3]
+  let sdf_h = _sdf_cfg[4]
+
+  let mut has_fx = 0.0
+  if _fd[2] == 1.0
+    has_fx = 1.0
+  end
+  if _fd[3] == 1.0
+    has_fx = 1.0
+  end
+  if _fd[4] == 1.0
+    has_fx = 1.0
+  end
+  if _fd[5] == 1.0
+    has_fx = 1.0
+  end
+  if _fd[6] == 1.0
+    has_fx = 1.0
+  end
+  if _fd[7] == 1.0
+    has_fx = 1.0
+  end
+  if _fd[8] == 1.0
+    has_fx = 1.0
+  end
+
+  if has_fx == 1.0 && sdf_vm > 0.0
+    fx_begin(sdf_vm, sdf_total, sdf_w, sdf_h)
+
+    if _fd[2] == 1.0
+      fx_grayscale()
+    end
+    if _fd[3] == 1.0
+      fx_invert()
+    end
+    if _fd[4] == 1.0
+      fx_color_grade(1.2, 0.9, 0.7)
+    end
+    if _fd[5] == 1.0
+      fx_scanlines(0.3)
+    end
+    if _fd[6] == 1.0
+      fx_vignette(0.8, 0.5, 0.5)
+    end
+    if _fd[7] == 1.0
+      fx_pixelate(4.0)
+    end
+    if _fd[8] == 1.0
+      fx_chromatic(3.0)
+    end
+
+    fx_apply()
+  end
+end

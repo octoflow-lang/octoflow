@@ -1,0 +1,159 @@
+// emit_lightmap.flow — 2D Point Light Map kernel
+//
+// Push constants (30 floats):
+//   pc[0] = total   pc[1] = width   pc[2] = height
+//   pc[3] = ambient_r   pc[4] = ambient_g   pc[5] = ambient_b
+//   pc[6..11]  = light0: x, y, radius, r, g, b
+//   pc[12..17] = light1: x, y, radius, r, g, b
+//   pc[18..23] = light2: x, y, radius, r, g, b
+//   pc[24..29] = light3: x, y, radius, r, g, b
+//
+// For each pixel: accumulate ambient + 4 point light contributions,
+// multiply existing framebuffer RGB. Inactive lights have color=(0,0,0).
+// Quadratic falloff: atten = max(0, 1 - dist/radius)^2
+
+use "../../compiler/ir"
+
+fn emit_lightmap(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let c0 = ir_const_f(entry, 0.0)
+  let c1 = ir_const_f(entry, 1.0)
+  let c255 = ir_const_f(entry, 255.0)
+  let c_eps = ir_const_f(entry, 0.001)
+
+  // Push constants
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_w = ir_push_const(entry, 1.0)
+  let pc_h = ir_push_const(entry, 2.0)
+  let pc_amb_r = ir_push_const(entry, 3.0)
+  let pc_amb_g = ir_push_const(entry, 4.0)
+  let pc_amb_b = ir_push_const(entry, 5.0)
+
+  // Light 0
+  let pc_l0x = ir_push_const(entry, 6.0)
+  let pc_l0y = ir_push_const(entry, 7.0)
+  let pc_l0rad = ir_push_const(entry, 8.0)
+  let pc_l0r = ir_push_const(entry, 9.0)
+  let pc_l0g = ir_push_const(entry, 10.0)
+  let pc_l0b = ir_push_const(entry, 11.0)
+
+  // Light 1
+  let pc_l1x = ir_push_const(entry, 12.0)
+  let pc_l1y = ir_push_const(entry, 13.0)
+  let pc_l1rad = ir_push_const(entry, 14.0)
+  let pc_l1r = ir_push_const(entry, 15.0)
+  let pc_l1g = ir_push_const(entry, 16.0)
+  let pc_l1b = ir_push_const(entry, 17.0)
+
+  // Light 2
+  let pc_l2x = ir_push_const(entry, 18.0)
+  let pc_l2y = ir_push_const(entry, 19.0)
+  let pc_l2rad = ir_push_const(entry, 20.0)
+  let pc_l2r = ir_push_const(entry, 21.0)
+  let pc_l2g = ir_push_const(entry, 22.0)
+  let pc_l2b = ir_push_const(entry, 23.0)
+
+  // Light 3
+  let pc_l3x = ir_push_const(entry, 24.0)
+  let pc_l3y = ir_push_const(entry, 25.0)
+  let pc_l3rad = ir_push_const(entry, 26.0)
+  let pc_l3r = ir_push_const(entry, 27.0)
+  let pc_l3g = ir_push_const(entry, 28.0)
+  let pc_l3b = ir_push_const(entry, 29.0)
+
+  // Bounds check
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_b = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_b, work, main_m)
+
+  // Pixel coords
+  let wu = ir_ftou(work, pc_w)
+  let py = ir_udiv(work, gid, wu)
+  let px = ir_umod(work, gid, wu)
+  let px_f = ir_utof(work, px)
+  let py_f = ir_utof(work, py)
+
+  // Start with ambient
+  let mut acc_r = pc_amb_r
+  let mut acc_g = pc_amb_g
+  let mut acc_b = pc_amb_b
+
+  // ── Light 0 contribution ──
+  let l0_dx = ir_fsub(work, px_f, pc_l0x)
+  let l0_dy = ir_fsub(work, py_f, pc_l0y)
+  let l0_d2 = ir_fadd(work, ir_fmul(work, l0_dx, l0_dx), ir_fmul(work, l0_dy, l0_dy))
+  let l0_dist = ir_sqrt(work, l0_d2)
+  let l0_radsafe = ir_fmax(work, pc_l0rad, c_eps)
+  let l0_t = ir_fmax(work, ir_fsub(work, c1, ir_fdiv(work, l0_dist, l0_radsafe)), c0)
+  let l0_att = ir_fmul(work, l0_t, l0_t)
+  acc_r = ir_fadd(work, acc_r, ir_fmul(work, pc_l0r, l0_att))
+  acc_g = ir_fadd(work, acc_g, ir_fmul(work, pc_l0g, l0_att))
+  acc_b = ir_fadd(work, acc_b, ir_fmul(work, pc_l0b, l0_att))
+
+  // ── Light 1 contribution ──
+  let l1_dx = ir_fsub(work, px_f, pc_l1x)
+  let l1_dy = ir_fsub(work, py_f, pc_l1y)
+  let l1_d2 = ir_fadd(work, ir_fmul(work, l1_dx, l1_dx), ir_fmul(work, l1_dy, l1_dy))
+  let l1_dist = ir_sqrt(work, l1_d2)
+  let l1_radsafe = ir_fmax(work, pc_l1rad, c_eps)
+  let l1_t = ir_fmax(work, ir_fsub(work, c1, ir_fdiv(work, l1_dist, l1_radsafe)), c0)
+  let l1_att = ir_fmul(work, l1_t, l1_t)
+  acc_r = ir_fadd(work, acc_r, ir_fmul(work, pc_l1r, l1_att))
+  acc_g = ir_fadd(work, acc_g, ir_fmul(work, pc_l1g, l1_att))
+  acc_b = ir_fadd(work, acc_b, ir_fmul(work, pc_l1b, l1_att))
+
+  // ── Light 2 contribution ──
+  let l2_dx = ir_fsub(work, px_f, pc_l2x)
+  let l2_dy = ir_fsub(work, py_f, pc_l2y)
+  let l2_d2 = ir_fadd(work, ir_fmul(work, l2_dx, l2_dx), ir_fmul(work, l2_dy, l2_dy))
+  let l2_dist = ir_sqrt(work, l2_d2)
+  let l2_radsafe = ir_fmax(work, pc_l2rad, c_eps)
+  let l2_t = ir_fmax(work, ir_fsub(work, c1, ir_fdiv(work, l2_dist, l2_radsafe)), c0)
+  let l2_att = ir_fmul(work, l2_t, l2_t)
+  acc_r = ir_fadd(work, acc_r, ir_fmul(work, pc_l2r, l2_att))
+  acc_g = ir_fadd(work, acc_g, ir_fmul(work, pc_l2g, l2_att))
+  acc_b = ir_fadd(work, acc_b, ir_fmul(work, pc_l2b, l2_att))
+
+  // ── Light 3 contribution ──
+  let l3_dx = ir_fsub(work, px_f, pc_l3x)
+  let l3_dy = ir_fsub(work, py_f, pc_l3y)
+  let l3_d2 = ir_fadd(work, ir_fmul(work, l3_dx, l3_dx), ir_fmul(work, l3_dy, l3_dy))
+  let l3_dist = ir_sqrt(work, l3_d2)
+  let l3_radsafe = ir_fmax(work, pc_l3rad, c_eps)
+  let l3_t = ir_fmax(work, ir_fsub(work, c1, ir_fdiv(work, l3_dist, l3_radsafe)), c0)
+  let l3_att = ir_fmul(work, l3_t, l3_t)
+  acc_r = ir_fadd(work, acc_r, ir_fmul(work, pc_l3r, l3_att))
+  acc_g = ir_fadd(work, acc_g, ir_fmul(work, pc_l3g, l3_att))
+  acc_b = ir_fadd(work, acc_b, ir_fmul(work, pc_l3b, l3_att))
+
+  // Read existing pixel
+  let totu = ir_ftou(work, pc_total)
+  let old_r = ir_load_output_at(work, gid)
+  let g_off = ir_iadd(work, gid, totu)
+  let old_g = ir_load_output_at(work, g_off)
+  let b_off = ir_iadd(work, g_off, totu)
+  let old_b = ir_load_output_at(work, b_off)
+
+  // Multiply pixel by accumulated light, clamp to [0, 255]
+  let fr = ir_fmin(work, ir_fmax(work, ir_fmul(work, old_r, acc_r), c0), c255)
+  let fg = ir_fmin(work, ir_fmax(work, ir_fmul(work, old_g, acc_g), c0), c255)
+  let fb = ir_fmin(work, ir_fmax(work, ir_fmul(work, old_b, acc_b), c0), c255)
+
+  ir_store_output_at(work, gid, fr)
+  ir_store_output_at(work, g_off, fg)
+  ir_store_output_at(work, b_off, fb)
+
+  ir_term_branch(work, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

@@ -1,0 +1,86 @@
+// emit_fx_chromatic.flow — Chromatic aberration kernel
+//
+// Push constants:
+//   pc[0] = total   pc[1] = width   pc[2] = height   pc[3] = offset
+//
+// Shifts R channel left and B channel right by offset pixels.
+// Creates a color-fringing effect from the center outward.
+
+use "../../compiler/ir"
+
+fn emit_fx_chromatic(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let c0 = ir_const_f(entry, 0.0)
+  let c05 = ir_const_f(entry, 0.5)
+  let c1 = ir_const_f(entry, 1.0)
+  let c2 = ir_const_f(entry, 2.0)
+  let c255 = ir_const_f(entry, 255.0)
+
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_w = ir_push_const(entry, 1.0)
+  let pc_h = ir_push_const(entry, 2.0)
+  let pc_offset = ir_push_const(entry, 3.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_b = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_b, work, main_m)
+
+  // Pixel coords
+  let wu = ir_ftou(work, pc_w)
+  let py = ir_udiv(work, gid, wu)
+  let px = ir_umod(work, gid, wu)
+  let px_f = ir_utof(work, px)
+  let py_f = ir_utof(work, py)
+
+  // Direction from center (normalized)
+  let nx = ir_fsub(work, ir_fdiv(work, px_f, pc_w), c05)
+  let ny = ir_fsub(work, ir_fdiv(work, py_f, pc_h), c05)
+
+  // Distance-based offset scale: stronger at edges
+  let d2 = ir_fadd(work, ir_fmul(work, nx, nx), ir_fmul(work, ny, ny))
+  let dist = ir_sqrt(work, d2)
+  let scale = ir_fmul(work, dist, c2)
+
+  // R offset: shift toward center (negative offset along x)
+  let r_dx = ir_fmul(work, ir_fmul(work, nx, pc_offset), scale)
+  let r_dy = ir_fmul(work, ir_fmul(work, ny, pc_offset), scale)
+  let r_sx = ir_fmin(work, ir_fmax(work, ir_fadd(work, px_f, r_dx), c0), ir_fsub(work, pc_w, c1))
+  let r_sy = ir_fmin(work, ir_fmax(work, ir_fadd(work, py_f, r_dy), c0), ir_fsub(work, pc_h, c1))
+  let r_src = ir_ftou(work, ir_fadd(work, ir_fmul(work, ir_floor(work, r_sy), pc_w), ir_floor(work, r_sx)))
+
+  // B offset: shift away from center (positive offset along x)
+  let neg_off = ir_fsub(work, c0, pc_offset)
+  let b_dx = ir_fmul(work, ir_fmul(work, nx, neg_off), scale)
+  let b_dy = ir_fmul(work, ir_fmul(work, ny, neg_off), scale)
+  let b_sx = ir_fmin(work, ir_fmax(work, ir_fadd(work, px_f, b_dx), c0), ir_fsub(work, pc_w, c1))
+  let b_sy = ir_fmin(work, ir_fmax(work, ir_fadd(work, py_f, b_dy), c0), ir_fsub(work, pc_h, c1))
+  let b_src = ir_ftou(work, ir_fadd(work, ir_fmul(work, ir_floor(work, b_sy), pc_w), ir_floor(work, b_sx)))
+
+  // Read channels from different positions
+  let totu = ir_ftou(work, pc_total)
+  let new_r = ir_load_output_at(work, r_src)
+  let g_off = ir_iadd(work, gid, totu)
+  let new_g = ir_load_output_at(work, g_off)
+  let b_src_g = ir_iadd(work, b_src, ir_iadd(work, totu, totu))
+  let new_b = ir_load_output_at(work, b_src_g)
+
+  // Write
+  let b_off = ir_iadd(work, g_off, totu)
+  ir_store_output_at(work, gid, new_r)
+  ir_store_output_at(work, g_off, new_g)
+  ir_store_output_at(work, b_off, new_b)
+
+  ir_term_branch(work, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

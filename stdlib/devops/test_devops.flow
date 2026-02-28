@@ -1,0 +1,97 @@
+// test_devops.flow — Tests for stdlib/devops/template.flow
+// Functions tested: render, escape_html, render_safe
+use "template"
+
+fn test_render_basic()
+  let t = render("Hello {name}!", map())
+  // With empty map, placeholder remains (no key matched)
+  assert(contains(t, "{name}") == 1.0, "empty vars leaves placeholder")
+  print("PASS: test_render_basic")
+  return 0.0
+end
+
+fn test_render_with_vars()
+  let mut vars = map()
+  map_set(vars, "name", "World")
+  let result = render("Hello {name}!", vars)
+  assert(result == "Hello World!", "render replaces {name} with World")
+  print("PASS: test_render_with_vars")
+  return 0.0
+end
+
+fn test_render_multiple_vars()
+  let mut vars = map()
+  map_set(vars, "greeting", "Hi")
+  map_set(vars, "target", "OctoFlow")
+  let result = render("{greeting}, {target}!", vars)
+  assert(result == "Hi, OctoFlow!", "render replaces multiple placeholders")
+  print("PASS: test_render_multiple_vars")
+  return 0.0
+end
+
+fn test_render_no_placeholders()
+  let mut vars = map()
+  map_set(vars, "name", "World")
+  let result = render("No placeholders here", vars)
+  assert(result == "No placeholders here", "render with no placeholders is identity")
+  print("PASS: test_render_no_placeholders")
+  return 0.0
+end
+
+fn test_escape_html_angle_brackets()
+  assert(escape_html("<script>") == "&lt;script&gt;", "escape < and >")
+  print("PASS: test_escape_html_angle_brackets")
+  return 0.0
+end
+
+fn test_escape_html_ampersand()
+  assert(escape_html("a&b") == "a&amp;b", "escape &")
+  print("PASS: test_escape_html_ampersand")
+  return 0.0
+end
+
+fn test_escape_html_quotes()
+  let dq = chr(34.0)
+  let input = dq + "quote" + dq
+  let expected = "&quot;quote&quot;"
+  assert(escape_html(input) == expected, "escape double quotes")
+  print("PASS: test_escape_html_quotes")
+  return 0.0
+end
+
+fn test_escape_html_safe_text()
+  assert(escape_html("hello") == "hello", "safe text unchanged")
+  assert(escape_html("") == "", "empty string unchanged")
+  print("PASS: test_escape_html_safe_text")
+  return 0.0
+end
+
+fn test_render_safe()
+  let mut vars = map()
+  map_set(vars, "name", "<b>bold</b>")
+  let result = render_safe("Hi {name}", vars)
+  assert(contains(result, "&lt;b&gt;") == 1.0, "render_safe escapes < in value")
+  assert(contains(result, "&lt;/b&gt;") == 1.0, "render_safe escapes </ in value")
+  assert(contains(result, "<b>") == 0.0, "render_safe removes raw <b>")
+  print("PASS: test_render_safe")
+  return 0.0
+end
+
+fn test_render_safe_ampersand()
+  let mut vars = map()
+  map_set(vars, "val", "a&b")
+  let result = render_safe("{val}", vars)
+  assert(result == "a&amp;b", "render_safe escapes & in value")
+  print("PASS: test_render_safe_ampersand")
+  return 0.0
+end
+
+fn test_escape_html_mixed()
+  let result = escape_html("<a href=\"x\">y&z</a>")
+  assert(contains(result, "&lt;a") == 1.0, "mixed: escapes <a")
+  assert(contains(result, "&amp;") == 1.0, "mixed: escapes &")
+  assert(contains(result, "&quot;") == 1.0, "mixed: escapes quotes")
+  assert(contains(result, "&lt;/a&gt;") == 1.0, "mixed: escapes </a>")
+  print("PASS: test_escape_html_mixed")
+  return 0.0
+end

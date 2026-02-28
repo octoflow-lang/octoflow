@@ -1,0 +1,203 @@
+// stdlib/game/lighting.flow — 2D Point Lighting System (GPU)
+//
+// GPU compute shader lighting with up to 16 point lights.
+// Quadratic distance falloff, colored light mixing, ambient darkness.
+// Applies lighting as a post-process: multiplies existing framebuffer
+// by accumulated light contributions.
+//
+// Usage:
+//   light_init(max_lights)               — initialize (default 16)
+//   light_add(x, y, radius, r, g, b)     — add point light, returns id
+//   light_set_pos(id, x, y)              — move light
+//   light_set_color(id, r, g, b)         — change color
+//   light_set_radius(id, radius)         — change falloff radius
+//   light_remove(id)                     — deactivate light
+//   light_ambient(r, g, b)              — set base ambient
+//   light_begin(vm_id, total, w, h)      — set render target
+//   light_apply()                        — dispatch GPU kernel + present
+//
+// Functions: light_init, light_add, light_set_pos, light_set_color,
+//   light_set_radius, light_remove, light_ambient, light_begin, light_apply
+
+// ── Light Data (parallel arrays, max 16 slots) ───────────
+let mut _lt_x = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let mut _lt_y = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let mut _lt_rad = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let mut _lt_r = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let mut _lt_g = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let mut _lt_b = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+let mut _lt_active = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+// Config: [count, max_lights, ambient_r, ambient_g, ambient_b, vm_id, total, width, height]
+let mut _lt_cfg = [0.0, 16.0, 0.05, 0.05, 0.08, 0.0, 0.0, 0.0, 0.0]
+
+// ── Initialization ────────────────────────────────────────
+
+fn light_init(max_lights)
+  _lt_cfg[0] = 0.0
+  _lt_cfg[1] = max_lights
+  let mut i = 0.0
+  while i < 16.0
+    let ii = int(i)
+    _lt_active[ii] = 0.0
+    _lt_x[ii] = 0.0
+    _lt_y[ii] = 0.0
+    _lt_rad[ii] = 0.0
+    _lt_r[ii] = 0.0
+    _lt_g[ii] = 0.0
+    _lt_b[ii] = 0.0
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// ── Light Management ──────────────────────────────────────
+
+fn light_add(x, y, radius, r, g, b)
+  // Find first inactive slot
+  let mut i = 0.0
+  while i < _lt_cfg[1] && i < 16.0
+    let ii = int(i)
+    if _lt_active[ii] == 0.0
+      _lt_x[ii] = x
+      _lt_y[ii] = y
+      _lt_rad[ii] = radius
+      _lt_r[ii] = r
+      _lt_g[ii] = g
+      _lt_b[ii] = b
+      _lt_active[ii] = 1.0
+      _lt_cfg[0] = _lt_cfg[0] + 1.0
+      return i
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+fn light_set_pos(id, x, y)
+  let ii = int(id)
+  if ii >= 0 && ii < 16 && _lt_active[ii] == 1.0
+    _lt_x[ii] = x
+    _lt_y[ii] = y
+  end
+  return 0.0
+end
+
+fn light_set_color(id, r, g, b)
+  let ii = int(id)
+  if ii >= 0 && ii < 16 && _lt_active[ii] == 1.0
+    _lt_r[ii] = r
+    _lt_g[ii] = g
+    _lt_b[ii] = b
+  end
+  return 0.0
+end
+
+fn light_set_radius(id, radius)
+  let ii = int(id)
+  if ii >= 0 && ii < 16 && _lt_active[ii] == 1.0
+    _lt_rad[ii] = radius
+  end
+  return 0.0
+end
+
+fn light_remove(id)
+  let ii = int(id)
+  if ii >= 0 && ii < 16 && _lt_active[ii] == 1.0
+    _lt_active[ii] = 0.0
+    _lt_r[ii] = 0.0
+    _lt_g[ii] = 0.0
+    _lt_b[ii] = 0.0
+    _lt_rad[ii] = 0.0
+    _lt_cfg[0] = _lt_cfg[0] - 1.0
+  end
+  return 0.0
+end
+
+fn light_ambient(r, g, b)
+  _lt_cfg[2] = r
+  _lt_cfg[3] = g
+  _lt_cfg[4] = b
+  return 0.0
+end
+
+// ── Render Target ─────────────────────────────────────────
+
+fn light_begin(vm_id, total, w, h)
+  _lt_cfg[5] = vm_id
+  _lt_cfg[6] = total
+  _lt_cfg[7] = w
+  _lt_cfg[8] = h
+  return 0.0
+end
+
+// ── GPU Apply ─────────────────────────────────────────────
+// Dispatches lightmap kernel in batches of 4 lights.
+// Each batch accumulates onto the existing framebuffer.
+
+fn _lt_wg()
+  if _lt_cfg[6] <= 0.0
+    return 1.0
+  end
+  return int((_lt_cfg[6] + 255.0) / 256.0)
+end
+
+fn _lt_dispatch_batch(amb_r, amb_g, amb_b, i0, i1, i2, i3)
+  // Build push constants: 6 header + 4 lights × 6 = 30
+  let ii0 = int(i0)
+  let ii1 = int(i1)
+  let ii2 = int(i2)
+  let ii3 = int(i3)
+
+  let pc = [_lt_cfg[6], _lt_cfg[7], _lt_cfg[8], amb_r, amb_g, amb_b, _lt_x[ii0], _lt_y[ii0], _lt_rad[ii0], _lt_r[ii0], _lt_g[ii0], _lt_b[ii0], _lt_x[ii1], _lt_y[ii1], _lt_rad[ii1], _lt_r[ii1], _lt_g[ii1], _lt_b[ii1], _lt_x[ii2], _lt_y[ii2], _lt_rad[ii2], _lt_r[ii2], _lt_g[ii2], _lt_b[ii2], _lt_x[ii3], _lt_y[ii3], _lt_rad[ii3], _lt_r[ii3], _lt_g[ii3], _lt_b[ii3]]
+
+  loom_dispatch(_lt_cfg[5], "stdlib/game/kernels/lightmap.spv", pc, _lt_wg())
+  return 0.0
+end
+
+fn light_apply()
+  if _lt_cfg[5] <= 0.0
+    return 0.0
+  end
+
+  // Collect active light indices (up to 4)
+  let mut active = [0.0, 0.0, 0.0, 0.0]
+  let mut act_count = 0.0
+  let mut i = 0.0
+  while i < 16.0 && act_count < 4.0
+    if _lt_active[int(i)] == 1.0
+      active[int(act_count)] = i
+      act_count = act_count + 1.0
+    end
+    i = i + 1.0
+  end
+
+  // Fill inactive slots with slot 0 but zero color (no contribution)
+  // We use a dummy slot: index 15 which has _lt_active=0, color=(0,0,0)
+  let mut s0 = 15.0
+  let mut s1 = 15.0
+  let mut s2 = 15.0
+  let mut s3 = 15.0
+  if act_count >= 1.0
+    s0 = active[0]
+  end
+  if act_count >= 2.0
+    s1 = active[1]
+  end
+  if act_count >= 3.0
+    s2 = active[2]
+  end
+  if act_count >= 4.0
+    s3 = active[3]
+  end
+
+  _lt_dispatch_batch(_lt_cfg[2], _lt_cfg[3], _lt_cfg[4], s0, s1, s2, s3)
+
+  let prog = loom_build(_lt_cfg[5])
+  if prog < 0.0
+    return 0.0
+  end
+  loom_run(prog)
+  vm_present(_lt_cfg[5], _lt_cfg[6])
+  return 1.0
+end

@@ -1,0 +1,167 @@
+// test_encoding.flow — Tests for built-in base64/hex encoding and
+//                      stdlib/encoding/base64.flow, stdlib/encoding/hex.flow
+// Functions tested: base64_encode, base64_decode (builtins, string-level),
+//                   hex_encode, hex_decode (builtins, string-level),
+//                   b64_char, b64_val, b64_encode, b64_decode (stdlib, byte-array),
+//                   bytes_to_hex, hex_to_bytes, hex_nibble, hex_val (stdlib, byte-array)
+use "base64"
+use "hex"
+
+// ── Built-in string-level base64 tests ──────────────────────
+
+fn test_base64_encode()
+  assert(base64_encode("Hello") == "SGVsbG8=", "base64_encode Hello")
+  assert(base64_encode("") == "", "base64_encode empty string")
+  assert(base64_encode("A") == "QQ==", "base64_encode single char")
+  assert(base64_encode("AB") == "QUI=", "base64_encode two chars")
+  assert(base64_encode("ABC") == "QUJD", "base64_encode three chars")
+  print("PASS: test_base64_encode")
+  return 0.0
+end
+
+fn test_base64_decode()
+  assert(base64_decode("SGVsbG8=") == "Hello", "base64_decode Hello")
+  assert(base64_decode("") == "", "base64_decode empty string")
+  assert(base64_decode("QQ==") == "A", "base64_decode single char")
+  assert(base64_decode("QUJD") == "ABC", "base64_decode three chars")
+  print("PASS: test_base64_decode")
+  return 0.0
+end
+
+fn test_base64_roundtrip()
+  let original = "OctoFlow Language!"
+  assert(base64_decode(base64_encode(original)) == original, "base64 roundtrip")
+  let s2 = "Hello, World!"
+  assert(base64_decode(base64_encode(s2)) == s2, "base64 roundtrip hello world")
+  print("PASS: test_base64_roundtrip")
+  return 0.0
+end
+
+// ── Built-in string-level hex tests ─────────────────────────
+
+fn test_hex_encode()
+  assert(hex_encode("AB") == "4142", "hex_encode AB")
+  assert(hex_encode("") == "", "hex_encode empty")
+  assert(hex_encode("a") == "61", "hex_encode lowercase a")
+  print("PASS: test_hex_encode")
+  return 0.0
+end
+
+fn test_hex_decode()
+  assert(hex_decode("4142") == "AB", "hex_decode 4142 -> AB")
+  assert(hex_decode("") == "", "hex_decode empty")
+  assert(hex_decode("61") == "a", "hex_decode 61 -> a")
+  print("PASS: test_hex_decode")
+  return 0.0
+end
+
+fn test_hex_roundtrip()
+  let original = "OctoFlow"
+  assert(hex_decode(hex_encode(original)) == original, "hex roundtrip")
+  print("PASS: test_hex_roundtrip")
+  return 0.0
+end
+
+// ── stdlib byte-array level base64 tests (b64_encode/b64_decode) ──
+
+fn test_b64_char()
+  // Index 0 -> 'A', 25 -> 'Z', 26 -> 'a', 51 -> 'z', 52 -> '0', 62 -> '+', 63 -> '/'
+  assert(b64_char(0.0) == "A", "b64_char(0) is A")
+  assert(b64_char(25.0) == "Z", "b64_char(25) is Z")
+  assert(b64_char(26.0) == "a", "b64_char(26) is a")
+  assert(b64_char(51.0) == "z", "b64_char(51) is z")
+  assert(b64_char(52.0) == "0", "b64_char(52) is 0")
+  assert(b64_char(62.0) == "+", "b64_char(62) is +")
+  assert(b64_char(63.0) == "/", "b64_char(63) is /")
+  print("PASS: test_b64_char")
+  return 0.0
+end
+
+fn test_b64_val()
+  assert(b64_val("A") == 0.0, "b64_val A is 0")
+  assert(b64_val("Z") == 25.0, "b64_val Z is 25")
+  assert(b64_val("a") == 26.0, "b64_val a is 26")
+  assert(b64_val("z") == 51.0, "b64_val z is 51")
+  assert(b64_val("0") == 52.0, "b64_val 0 is 52")
+  assert(b64_val("+") == 62.0, "b64_val + is 62")
+  assert(b64_val("/") == 63.0, "b64_val / is 63")
+  assert(b64_val("=") == -1.0, "b64_val = is -1 (padding)")
+  print("PASS: test_b64_val")
+  return 0.0
+end
+
+fn test_b64_encode_bytes()
+  // b64_encode works on byte arrays (f32 values 0-255)
+  // "Hi" = [72, 105] -> base64 "SGk="
+  let data = [72.0, 105.0]
+  let encoded = b64_encode(data)
+  assert(encoded == "SGk=", "b64_encode [72,105] -> SGk=")
+  // Empty
+  let empty = b64_encode([])
+  assert(empty == "", "b64_encode empty array")
+  print("PASS: test_b64_encode_bytes")
+  return 0.0
+end
+
+fn test_b64_decode_bytes()
+  // b64_decode returns byte array
+  let decoded = b64_decode("SGk=")
+  assert(len(decoded) == 2.0, "b64_decode SGk= has 2 bytes")
+  assert(decoded[0] == 72.0, "b64_decode byte 0 is 72 (H)")
+  assert(decoded[1] == 105.0, "b64_decode byte 1 is 105 (i)")
+  print("PASS: test_b64_decode_bytes")
+  return 0.0
+end
+
+// ── stdlib byte-array level hex tests (bytes_to_hex/hex_to_bytes) ──
+
+fn test_hex_nibble()
+  assert(hex_nibble(0.0) == "0", "hex_nibble(0) is 0")
+  assert(hex_nibble(9.0) == "9", "hex_nibble(9) is 9")
+  assert(hex_nibble(10.0) == "a", "hex_nibble(10) is a")
+  assert(hex_nibble(15.0) == "f", "hex_nibble(15) is f")
+  print("PASS: test_hex_nibble")
+  return 0.0
+end
+
+fn test_hex_val()
+  assert(hex_val("0") == 0.0, "hex_val 0")
+  assert(hex_val("9") == 9.0, "hex_val 9")
+  assert(hex_val("a") == 10.0, "hex_val a")
+  assert(hex_val("f") == 15.0, "hex_val f")
+  assert(hex_val("A") == 10.0, "hex_val A (uppercase)")
+  assert(hex_val("F") == 15.0, "hex_val F (uppercase)")
+  assert(hex_val("g") == -1.0, "hex_val g is invalid")
+  print("PASS: test_hex_val")
+  return 0.0
+end
+
+fn test_bytes_to_hex()
+  let data = [65.0, 66.0]
+  assert(bytes_to_hex(data) == "4142", "bytes_to_hex [65,66] -> 4142")
+  assert(bytes_to_hex([]) == "", "bytes_to_hex empty")
+  assert(bytes_to_hex([0.0]) == "00", "bytes_to_hex [0] -> 00")
+  assert(bytes_to_hex([255.0]) == "ff", "bytes_to_hex [255] -> ff")
+  print("PASS: test_bytes_to_hex")
+  return 0.0
+end
+
+fn test_hex_to_bytes()
+  let r = hex_to_bytes("4142")
+  assert(len(r) == 2.0, "hex_to_bytes 4142 has 2 bytes")
+  assert(r[0] == 65.0, "hex_to_bytes byte 0 is 65")
+  assert(r[1] == 66.0, "hex_to_bytes byte 1 is 66")
+  // Empty
+  let r2 = hex_to_bytes("")
+  assert(len(r2) == 0.0, "hex_to_bytes empty")
+  print("PASS: test_hex_to_bytes")
+  return 0.0
+end
+
+fn test_hex_to_bytes_odd_length()
+  // Odd-length hex string returns empty array
+  let r = hex_to_bytes("ABC")
+  assert(len(r) == 0.0, "hex_to_bytes odd length returns empty")
+  print("PASS: test_hex_to_bytes_odd_length")
+  return 0.0
+end

@@ -1,0 +1,355 @@
+// stdlib/game/raymarcher.flow — SDF Ray Marching Engine (GPU)
+//
+// Scene description API + GPU compute dispatch for real-time SDF ray marching.
+// Objects stored as 16-float records in a flat array, uploaded to Loom VM
+// register buffer for GPU access. Camera basis computed on CPU, passed via
+// push constants. Rendering done entirely on GPU.
+//
+// Functions: sdf_scene, sdf_sphere, sdf_box, sdf_plane, sdf_cylinder,
+//   sdf_torus, sdf_capsule, sdf_material, sdf_reflective, sdf_emissive,
+//   sdf_roughness, sdf_union, sdf_subtract, sdf_intersect, sdf_smooth_union,
+//   sdf_light, sdf_ambient, sdf_camera, sdf_fov, sdf_render
+
+use "gui/gui"
+use "gui/canvas"
+
+// Object records: 16 floats each
+// [type, x, y, z, p1, p2, p3, p4, mat_r, mat_g, mat_b, reflect, emissive, roughness, op_type, op_param]
+let mut _sdf_objs = []
+
+// Light records: 6 floats each [x, y, z, r, g, b]
+let mut _sdf_lights = []
+
+// Camera: [eye_x, eye_y, eye_z, look_x, look_y, look_z, fov_degrees]
+let mut _sdf_cam = [0.0, 2.0, -5.0, 0.0, 0.0, 0.0, 60.0]
+
+// Ambient light: [r, g, b]
+let mut _sdf_amb = [0.05, 0.05, 0.08]
+
+// Config: [obj_count, light_count, vm_id, vm_w, vm_h, dirty]
+let mut _sdf_cfg = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+// ── Scene Management ─────────────────────────────────────
+
+fn sdf_scene()
+  while len(_sdf_objs) > 0.0
+    pop(_sdf_objs)
+  end
+  while len(_sdf_lights) > 0.0
+    pop(_sdf_lights)
+  end
+  _sdf_cfg[0] = 0.0
+  _sdf_cfg[1] = 0.0
+  _sdf_cfg[5] = 1.0
+  _sdf_cam[0] = 0.0
+  _sdf_cam[1] = 2.0
+  _sdf_cam[2] = -5.0
+  _sdf_cam[3] = 0.0
+  _sdf_cam[4] = 0.0
+  _sdf_cam[5] = 0.0
+  _sdf_cam[6] = 60.0
+  _sdf_amb[0] = 0.05
+  _sdf_amb[1] = 0.05
+  _sdf_amb[2] = 0.08
+  return 1.0
+end
+
+fn _sdf_push_obj(t, x, y, z, a, b, c, d)
+  let id = _sdf_cfg[0]
+  push(_sdf_objs, t)
+  push(_sdf_objs, x)
+  push(_sdf_objs, y)
+  push(_sdf_objs, z)
+  push(_sdf_objs, a)
+  push(_sdf_objs, b)
+  push(_sdf_objs, c)
+  push(_sdf_objs, d)
+  push(_sdf_objs, 0.8)
+  push(_sdf_objs, 0.8)
+  push(_sdf_objs, 0.8)
+  push(_sdf_objs, 0.0)
+  push(_sdf_objs, 0.0)
+  push(_sdf_objs, 0.0)
+  push(_sdf_objs, 0.0)
+  push(_sdf_objs, 0.0)
+  _sdf_cfg[0] = _sdf_cfg[0] + 1.0
+  _sdf_cfg[5] = 1.0
+  return id
+end
+
+// ── Primitive Constructors ───────────────────────────────
+
+fn sdf_sphere(scene, x, y, z, r)
+  return _sdf_push_obj(1.0, x, y, z, r, 0.0, 0.0, 0.0)
+end
+
+fn sdf_box(scene, x, y, z, hw, hh, hd)
+  return _sdf_push_obj(2.0, x, y, z, hw, hh, hd, 0.0)
+end
+
+fn sdf_plane(scene, px, py, pz, nx, ny, nz)
+  return _sdf_push_obj(3.0, px, py, pz, nx, ny, nz, 0.0)
+end
+
+fn sdf_cylinder(scene, x, y, z, r, h)
+  return _sdf_push_obj(4.0, x, y, z, r, h, 0.0, 0.0)
+end
+
+fn sdf_torus(scene, x, y, z, big_r, r)
+  return _sdf_push_obj(5.0, x, y, z, big_r, r, 0.0, 0.0)
+end
+
+fn sdf_capsule(scene, ax, ay, az, bx, by, bz, r)
+  return _sdf_push_obj(6.0, ax, ay, az, bx, by, bz, r)
+end
+
+// ── Boolean Operations ───────────────────────────────────
+
+fn sdf_union(scene, a, b)
+  return 0.0
+end
+
+fn sdf_subtract(scene, a, b)
+  let idx = int(b) * 16 + 14
+  _sdf_objs[idx] = 1.0
+  _sdf_objs[idx + 1] = a
+  _sdf_cfg[5] = 1.0
+  return 0.0
+end
+
+fn sdf_intersect(scene, a, b)
+  let idx = int(b) * 16 + 14
+  _sdf_objs[idx] = 2.0
+  _sdf_objs[idx + 1] = a
+  _sdf_cfg[5] = 1.0
+  return 0.0
+end
+
+fn sdf_smooth_union(scene, a, b, k)
+  let idx = int(b) * 16 + 14
+  _sdf_objs[idx] = 3.0
+  _sdf_objs[idx + 1] = k
+  _sdf_cfg[5] = 1.0
+  return 0.0
+end
+
+// ── Material Properties ──────────────────────────────────
+
+fn sdf_material(scene, obj, r, g, b)
+  let base = int(obj) * 16
+  _sdf_objs[base + 8] = r
+  _sdf_objs[base + 9] = g
+  _sdf_objs[base + 10] = b
+  _sdf_cfg[5] = 1.0
+  return 0.0
+end
+
+fn sdf_reflective(scene, obj, amount)
+  _sdf_objs[int(obj) * 16 + 11] = amount
+  _sdf_cfg[5] = 1.0
+  return 0.0
+end
+
+fn sdf_emissive(scene, obj, intensity)
+  _sdf_objs[int(obj) * 16 + 12] = intensity
+  _sdf_cfg[5] = 1.0
+  return 0.0
+end
+
+fn sdf_roughness(scene, obj, amount)
+  _sdf_objs[int(obj) * 16 + 13] = amount
+  _sdf_cfg[5] = 1.0
+  return 0.0
+end
+
+// ── Lights ───────────────────────────────────────────────
+
+fn sdf_light(scene, x, y, z, r, g, b)
+  let id = _sdf_cfg[1]
+  push(_sdf_lights, x)
+  push(_sdf_lights, y)
+  push(_sdf_lights, z)
+  push(_sdf_lights, r)
+  push(_sdf_lights, g)
+  push(_sdf_lights, b)
+  _sdf_cfg[1] = _sdf_cfg[1] + 1.0
+  _sdf_cfg[5] = 1.0
+  return id
+end
+
+fn sdf_ambient(scene, r, g, b)
+  _sdf_amb[0] = r
+  _sdf_amb[1] = g
+  _sdf_amb[2] = b
+  _sdf_cfg[5] = 1.0
+  return 0.0
+end
+
+// ── Camera ───────────────────────────────────────────────
+
+fn sdf_camera(scene, ex, ey, ez, lx, ly, lz)
+  _sdf_cam[0] = ex
+  _sdf_cam[1] = ey
+  _sdf_cam[2] = ez
+  _sdf_cam[3] = lx
+  _sdf_cam[4] = ly
+  _sdf_cam[5] = lz
+  _sdf_cfg[5] = 1.0
+  return 0.0
+end
+
+fn sdf_fov(scene, degrees)
+  _sdf_cam[6] = degrees
+  _sdf_cfg[5] = 1.0
+  return 0.0
+end
+
+// ── GPU Rendering ────────────────────────────────────────
+
+fn _sdf_vm_init(w, h)
+  let total = w * h
+  let fb_size = total * 3.0
+  // Max 64 objects * 16 floats + 8 lights * 6 floats + padding
+  let reg_size = 1024.0 + 48.0 + 16.0
+  let vm_id = loom_boot(1.0, reg_size, fb_size)
+  _sdf_cfg[2] = vm_id
+  _sdf_cfg[3] = w
+  _sdf_cfg[4] = h
+  return vm_id
+end
+
+fn sdf_render(scene, canvas_id)
+  let cw = _gui_w[int(canvas_id)]
+  let ch = _gui_h[int(canvas_id)]
+  let total = cw * ch
+
+  // Init or resize VM
+  if _sdf_cfg[2] == 0.0
+    _sdf_vm_init(cw, ch)
+  end
+  if _sdf_cfg[3] != cw
+    if _sdf_cfg[2] > 0.0
+      loom_shutdown(_sdf_cfg[2])
+    end
+    _sdf_vm_init(cw, ch)
+  end
+  if _sdf_cfg[4] != ch
+    if _sdf_cfg[2] > 0.0 && _sdf_cfg[3] == cw
+      loom_shutdown(_sdf_cfg[2])
+      _sdf_vm_init(cw, ch)
+    end
+  end
+
+  let vm = _sdf_cfg[2]
+  if vm <= 0.0
+    return 0.0
+  end
+
+  // Upload scene data to register buffer (binding 0)
+  // Layout: [objects..., lights...]
+  let mut reg_data = []
+  let mut i = 0.0
+  while i < len(_sdf_objs)
+    push(reg_data, _sdf_objs[int(i)])
+    i = i + 1.0
+  end
+  let mut j = 0.0
+  while j < len(_sdf_lights)
+    push(reg_data, _sdf_lights[int(j)])
+    j = j + 1.0
+  end
+  // Pad to at least 1 element (avoid empty array)
+  if len(reg_data) == 0.0
+    push(reg_data, 0.0)
+  end
+  vm_write_register(vm, 0.0, 0.0, reg_data)
+
+  // Compute camera basis vectors on CPU
+  let mut fx = _sdf_cam[3] - _sdf_cam[0]
+  let mut fy = _sdf_cam[4] - _sdf_cam[1]
+  let mut fz = _sdf_cam[5] - _sdf_cam[2]
+  let fl = sqrt(fx * fx + fy * fy + fz * fz)
+  if fl > 0.0001
+    fx = fx / fl
+    fy = fy / fl
+    fz = fz / fl
+  end
+
+  // right = normalize(cross(forward, world_up(0,1,0)))
+  // cross(f, (0,1,0)) = (-fz, 0, fx)
+  let mut rrx = 0.0 - fz
+  let mut rry = 0.0
+  let mut rrz = fx
+  let rl = sqrt(rrx * rrx + rrz * rrz)
+  if rl > 0.0001
+    rrx = rrx / rl
+    rrz = rrz / rl
+  end
+
+  // up_cam = cross(right, forward)
+  let ucx = rry * fz - rrz * fy
+  let ucy = rrz * fx - rrx * fz
+  let ucz = rrx * fy - rry * fx
+
+  let fov_rad = _sdf_cam[6] * 3.14159265 / 180.0
+  let fov_f = tan(fov_rad / 2.0)
+
+  // Get main light (first light, or default)
+  let mut l1x = 3.0
+  let mut l1y = 5.0
+  let mut l1z = 2.0
+  let mut l1r = 1.0
+  let mut l1g = 0.95
+  let mut l1b = 0.8
+  if _sdf_cfg[1] > 0.0
+    l1x = _sdf_lights[0]
+    l1y = _sdf_lights[1]
+    l1z = _sdf_lights[2]
+    l1r = _sdf_lights[3]
+    l1g = _sdf_lights[4]
+    l1b = _sdf_lights[5]
+  end
+
+  // Build push constants (27 floats)
+  let mut pc = []
+  push(pc, total)
+  push(pc, cw)
+  push(pc, ch)
+  push(pc, _sdf_cfg[0])
+  push(pc, _sdf_cfg[1])
+  push(pc, _sdf_cam[0])
+  push(pc, _sdf_cam[1])
+  push(pc, _sdf_cam[2])
+  push(pc, fx)
+  push(pc, fy)
+  push(pc, fz)
+  push(pc, rrx)
+  push(pc, rry)
+  push(pc, rrz)
+  push(pc, ucx)
+  push(pc, ucy)
+  push(pc, ucz)
+  push(pc, fov_f)
+  push(pc, _sdf_amb[0])
+  push(pc, _sdf_amb[1])
+  push(pc, _sdf_amb[2])
+  push(pc, l1x)
+  push(pc, l1y)
+  push(pc, l1z)
+  push(pc, l1r)
+  push(pc, l1g)
+  push(pc, l1b)
+
+  // Dispatch ray march kernel
+  let wg = int((total + 255.0) / 256.0)
+  loom_dispatch(vm, "stdlib/game/kernels/raymarch.spv", pc, wg)
+
+  // Build + Run + Present
+  let prog = loom_build(vm)
+  if prog >= 0.0
+    loom_run(prog)
+    vm_present(vm, total)
+  end
+
+  return 0.0
+end

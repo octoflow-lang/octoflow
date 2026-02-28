@@ -1,0 +1,90 @@
+// raytracing_demo.flow — SDF Ray Marching Demo
+//
+// GPU-accelerated ray marching with reflective spheres, box, and ground plane.
+// Controls: Arrow keys to orbit camera, +/- to zoom, R to reset
+
+use "game/game"
+use "game/input"
+use "game/raymarcher"
+
+let cvs = game_init(400.0, 300.0, "Ray Tracing Demo")
+
+// Create scene
+let scene = sdf_scene()
+
+// Ground plane at y=0, normal pointing up
+let ground = sdf_plane(scene, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+sdf_material(scene, ground, 0.6, 0.6, 0.55)
+
+// Red sphere
+let s1 = sdf_sphere(scene, 0.0, 1.5, 5.0, 1.0)
+sdf_material(scene, s1, 0.9, 0.2, 0.15)
+sdf_reflective(scene, s1, 0.5)
+
+// Blue sphere
+let s2 = sdf_sphere(scene, -2.5, 1.0, 6.0, 0.8)
+sdf_material(scene, s2, 0.2, 0.3, 0.9)
+sdf_reflective(scene, s2, 0.3)
+
+// Green box
+let b1 = sdf_box(scene, 2.5, 0.75, 5.5, 0.75, 0.75, 0.75)
+sdf_material(scene, b1, 0.2, 0.8, 0.3)
+
+// Yellow sphere
+let s3 = sdf_sphere(scene, 1.0, 0.5, 3.5, 0.5)
+sdf_material(scene, s3, 0.95, 0.85, 0.2)
+
+// Lighting
+sdf_light(scene, 3.0, 5.0, 2.0, 1.0, 0.95, 0.8)
+sdf_ambient(scene, 0.08, 0.08, 0.1)
+
+// Camera
+let mut _rd = [0.0, 5.0]
+sdf_camera(scene, 0.0, 2.5, -2.0, 0.0, 1.0, 5.0)
+sdf_fov(scene, 60.0)
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+
+  // Orbit camera with arrow keys
+  if input_key_held("left") == 1.0
+    _rd[0] = _rd[0] - dt * 0.8
+  end
+  if input_key_held("right") == 1.0
+    _rd[0] = _rd[0] + dt * 0.8
+  end
+  if input_key_down("+") == 1.0
+    _rd[1] = _rd[1] - 0.5
+    if _rd[1] < 2.0
+      _rd[1] = 2.0
+    end
+  end
+  if input_key_down("-") == 1.0
+    _rd[1] = _rd[1] + 0.5
+    if _rd[1] > 12.0
+      _rd[1] = 12.0
+    end
+  end
+  if input_key_down("=") == 1.0
+    _rd[1] = _rd[1] - 0.5
+    if _rd[1] < 2.0
+      _rd[1] = 2.0
+    end
+  end
+
+  // Reset
+  if input_key_down("r") == 1.0
+    _rd[0] = 0.0
+    _rd[1] = 5.0
+  end
+
+  // Compute camera position from angle + distance
+  let cx = sin(_rd[0]) * _rd[1]
+  let cz = cos(_rd[0]) * _rd[1]
+  sdf_camera(scene, cx, 2.5, cz, 0.0, 1.0, 5.0)
+
+  // GPU ray march render
+  game_frame_end()
+  sdf_render(scene, cvs)
+end

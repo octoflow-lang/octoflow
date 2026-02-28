@@ -1,0 +1,154 @@
+// lighting_demo.flow — 2D Point Lighting Demo
+//
+// Dark scene with colored point lights. Player torch follows mouse.
+// Press 1-4 to toggle colored lights, R to reset, +/- to change ambient.
+//
+// Demonstrates GPU-accelerated 2D lighting with quadratic falloff.
+
+use "game/game"
+use "game/input"
+use "game/lighting"
+
+let cvs = game_init(400.0, 300.0, "2D Lighting Demo")
+
+// Initialize lighting
+light_init(16.0)
+
+// Set dark ambient
+light_ambient(0.03, 0.03, 0.05)
+
+// Player torch (warm white, follows arrow keys)
+let torch = light_add(200.0, 150.0, 150.0, 1.0, 0.9, 0.7)
+
+// Colored lights
+let red_light = light_add(80.0, 80.0, 120.0, 1.0, 0.2, 0.1)
+let blue_light = light_add(320.0, 80.0, 100.0, 0.1, 0.3, 1.0)
+let green_light = light_add(200.0, 240.0, 130.0, 0.2, 1.0, 0.3)
+let yellow_light = light_add(320.0, 220.0, 90.0, 1.0, 0.9, 0.2)
+
+// State: [torch_x, torch_y, ambient_level, red_on, blue_on, green_on, yellow_on]
+let mut _ld = [200.0, 150.0, 0.03, 1.0, 1.0, 1.0, 1.0]
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+
+  // Move torch with arrow keys
+  if input_key_held("left") == 1.0
+    _ld[0] = _ld[0] - dt * 120.0
+  end
+  if input_key_held("right") == 1.0
+    _ld[0] = _ld[0] + dt * 120.0
+  end
+  if input_key_held("up") == 1.0
+    _ld[1] = _ld[1] - dt * 120.0
+  end
+  if input_key_held("down") == 1.0
+    _ld[1] = _ld[1] + dt * 120.0
+  end
+
+  // Clamp torch to screen
+  if _ld[0] < 0.0
+    _ld[0] = 0.0
+  end
+  if _ld[0] > 400.0
+    _ld[0] = 400.0
+  end
+  if _ld[1] < 0.0
+    _ld[1] = 0.0
+  end
+  if _ld[1] > 300.0
+    _ld[1] = 300.0
+  end
+
+  light_set_pos(torch, _ld[0], _ld[1])
+
+  // Toggle lights
+  if input_key_down("1") == 1.0
+    if _ld[3] == 1.0
+      _ld[3] = 0.0
+      light_remove(red_light)
+    else
+      _ld[3] = 1.0
+      light_set_color(red_light, 1.0, 0.2, 0.1)
+      _lt_active[int(red_light)] = 1.0
+      _lt_rad[int(red_light)] = 120.0
+      _lt_cfg[0] = _lt_cfg[0] + 1.0
+    end
+  end
+  if input_key_down("2") == 1.0
+    if _ld[4] == 1.0
+      _ld[4] = 0.0
+      light_remove(blue_light)
+    else
+      _ld[4] = 1.0
+      light_set_color(blue_light, 0.1, 0.3, 1.0)
+      _lt_active[int(blue_light)] = 1.0
+      _lt_rad[int(blue_light)] = 100.0
+      _lt_cfg[0] = _lt_cfg[0] + 1.0
+    end
+  end
+  if input_key_down("3") == 1.0
+    if _ld[5] == 1.0
+      _ld[5] = 0.0
+      light_remove(green_light)
+    else
+      _ld[5] = 1.0
+      light_set_color(green_light, 0.2, 1.0, 0.3)
+      _lt_active[int(green_light)] = 1.0
+      _lt_rad[int(green_light)] = 130.0
+      _lt_cfg[0] = _lt_cfg[0] + 1.0
+    end
+  end
+  if input_key_down("4") == 1.0
+    if _ld[6] == 1.0
+      _ld[6] = 0.0
+      light_remove(yellow_light)
+    else
+      _ld[6] = 1.0
+      light_set_color(yellow_light, 1.0, 0.9, 0.2)
+      _lt_active[int(yellow_light)] = 1.0
+      _lt_rad[int(yellow_light)] = 90.0
+      _lt_cfg[0] = _lt_cfg[0] + 1.0
+    end
+  end
+
+  // Ambient adjustment
+  if input_key_down("+") == 1.0
+    _ld[2] = _ld[2] + 0.02
+    if _ld[2] > 0.5
+      _ld[2] = 0.5
+    end
+    light_ambient(_ld[2], _ld[2], _ld[2])
+  end
+  if input_key_down("=") == 1.0
+    _ld[2] = _ld[2] + 0.02
+    if _ld[2] > 0.5
+      _ld[2] = 0.5
+    end
+    light_ambient(_ld[2], _ld[2], _ld[2])
+  end
+  if input_key_down("-") == 1.0
+    _ld[2] = _ld[2] - 0.02
+    if _ld[2] < 0.0
+      _ld[2] = 0.0
+    end
+    light_ambient(_ld[2], _ld[2], _ld[2])
+  end
+
+  // Reset
+  if input_key_down("r") == 1.0
+    _ld[0] = 200.0
+    _ld[1] = 150.0
+    _ld[2] = 0.03
+    light_set_pos(torch, 200.0, 150.0)
+    light_ambient(0.03, 0.03, 0.05)
+  end
+
+  // Render: first draw the base scene (bright colored rectangles)
+  game_frame_end()
+
+  // Apply 2D lighting on the GUI VM
+  light_begin(_gvm[0], _gvm[1], _gvm[2], _gvm[3])
+  light_apply()
+end
