@@ -2,7 +2,7 @@
 
 **Describe it. Build it. Ship it.** The complete vibe coding stack in one binary.
 
-OctoFlow is a GPU-native programming language with built-in AI code generation. Describe what you want in natural language — OctoFlow generates, validates, auto-repairs, and runs the code. Zero external dependencies. 2.8 MB binary. Any Vulkan GPU.
+OctoFlow is a GPU-native programming language with built-in AI code generation. Describe what you want in natural language — OctoFlow generates, validates, auto-repairs, and runs the code. Zero external dependencies. 3.3 MB binary. Any Vulkan GPU.
 
 ## `octoflow chat` — Describe What You Want
 
