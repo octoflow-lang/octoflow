@@ -85,21 +85,49 @@ CLAUDE.md
 OctoBrain/
 octoui/
 
-# Internal docs
+# Internal docs (only user-facing docs are tracked)
 docs/archive/
 docs/plans/
 docs/llm/
 docs/octoflow-docs/
+docs/stdlib/
 docs/annex-*.md
 docs/positioning.md
 docs/roadmap.md
 docs/blueprint.md
 docs/*.zip
+docs/AUDIT_AND_HARDENING.md
+docs/CODING-GUIDE.md
+docs/COMPILER_ON_GPU.md
+docs/DEBUG.md
+docs/GPU_VIRTUAL_MACHINE.md
+docs/LAUNCH_CHECKLIST.md
+docs/OCTOFLOW_*.md
+docs/benchmark-gpu.md
+docs/domain-*.md
+docs/ffi-design.md
+docs/gpu-*.md
+docs/milestone-*.md
+docs/octoflow-*.md
+docs/octoview-*.md
+docs/phase*.md
+docs/public-release-readiness.md
+docs/rust-dependency-audit.md
+docs/stdlib.md
+docs/zero-dependency-vision.md
+
+# Binary assets in examples
+examples/*.png
+examples/*.PNG
+examples/*.jpg
+examples/*.mp4
+examples/*.gif
 
 # Benchmark files
 examples/benchmark_*.py
 examples/benchmark_*.cu
 examples/benchmark_*.flow
+examples/benchmark.flow
 examples/bench_*.flow
 examples/run_*.ps1
 examples/run_*.bat

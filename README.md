@@ -1,20 +1,28 @@
 # OctoFlow
 
-OctoFlow is a general-purpose programming language where the GPU is the primary execution target. Data born on the GPU stays on the GPU. The CPU handles I/O — file reads, network, console — and nothing else. Zero external dependencies. The compiler is written in OctoFlow itself.
+**Describe it. Build it. Ship it.** The complete vibe coding stack in one binary.
 
-**CPU on demand, not GPU on demand.**
+OctoFlow is a GPU-native programming language with built-in AI code generation. Describe what you want in natural language — OctoFlow generates, validates, auto-repairs, and runs the code. Zero external dependencies. 2.8 MB binary. Any Vulkan GPU.
 
-2.8 MB binary. 246 stdlib modules. 1,200+ tests.
-Any GPU vendor. One file download. No CUDA. No Python. No pip.
+```
+$ octoflow chat --model qwen2.5-coder-1.5b.gguf
+> Build a program that counts primes below one million using the GPU
+
+Generating...
+✓ Syntax valid
+✓ Running...
+
+Primes below 1000000: 78498
+```
 
 ## Quickstart
 
 ```
 $ octoflow --version
-OctoFlow 1.0.0
+OctoFlow 1.2.0
 
 $ octoflow repl
-OctoFlow 1.0.0 — GPU-native language (246 stdlib modules)
+OctoFlow 1.2.0 — GPU-native language (246 stdlib modules)
 GPU: NVIDIA GeForce GTX 1660 SUPER
 >>> let a = gpu_fill(1.0, 10000000)
 >>> let b = gpu_fill(2.0, 10000000)
@@ -23,7 +31,102 @@ GPU: NVIDIA GeForce GTX 1660 SUPER
 30000000
 ```
 
-Download the binary. Unzip. Run. GPU detected automatically.
+Download the binary. Unzip. Run. GPU detected automatically. Works without GPU too — all operations fall back to CPU.
+
+## Features
+
+### AI Code Generation (`octoflow chat`)
+
+Built-in LLM inference with GGUF models. Describe what you want, get working code.
+
+```
+$ octoflow chat --model model.gguf
+> Create a dashboard that reads sales.csv and shows total revenue per region
+
+[Generating → Validating → Running]
+```
+
+- Auto-repair: structured errors fed back to LLM, up to 3 fix attempts
+- ReAct tool-use: LLM searches the web and reads pages for context (`--web-tools`)
+- Streaming output, 8-message conversation memory, multiline input
+- Works with any GGUF model (Qwen2.5-Coder, Llama, etc.)
+
+### Web Builtins
+
+```flow
+let results = web_search("OctoFlow GPU language")
+for r in results
+    print("{r.title}: {r.url}")
+end
+
+let page = web_read("https://example.com")
+print("{page.text}")
+```
+
+Gated on `--allow-net`. DuckDuckGo HTML search + page content extraction.
+
+### Integer Type
+
+```flow
+let count = 42         // int (i64)
+let pi = 3.14          // float (f32)
+let result = count + 1 // int + int = int
+let mixed = count + pi // int + float = float (auto-promotion)
+let even = x % 2 == 0  // modulo operator
+```
+
+### Scoped Permissions
+
+Deno-inspired security with path and host scoping:
+
+```bash
+octoflow run app.flow --allow-read=./data --allow-write=./output --allow-net=api.example.com
+```
+
+### Single-File Bundler (`octoflow build`)
+
+Bundle multi-file projects into one distributable `.flow` file:
+
+```bash
+octoflow build main.flow -o bundle.flow
+octoflow build main.flow --list   # show dependency tree
+```
+
+Recursive import tracing, topological sort, circular import detection.
+
+### Structured Errors (`--format json`)
+
+Machine-readable error output for tooling and LLM integration:
+
+```bash
+octoflow check program.flow --format json
+```
+
+```json
+{"code":"E016","message":"expected 'end' to close 'if' block","line":15,"suggestion":"Add 'end' on its own line"}
+```
+
+69 error codes with per-code fix suggestions.
+
+### CPU Fallback
+
+All GPU operations work on machines without a GPU. Matrix multiply, reductions, map ops, sort — everything runs on CPU when no Vulkan device is detected. A startup note tells you which mode you're in.
+
+### VS Code Extension
+
+Syntax highlighting for `.flow` files with ~90 builtins, string interpolation, keywords, operators, and code folding:
+
+```bash
+code --install-extension vscode/octoflow-0.1.0.vsix
+```
+
+### Project Scaffolding (`octoflow new`)
+
+```bash
+octoflow new dashboard my-project    # 7 built-in templates
+octoflow new api my-service
+octoflow new gpu-compute my-pipeline
+```
 
 ## Performance
 
@@ -34,43 +137,43 @@ Download the binary. Unzip. Run. GPU detected automatically.
 | 5-step pipeline | 2.57 ms | 75 ms | Upload + compute + reduce |
 | Install size | ~4 GB SDK | **2.8 MB** binary | Zero dependencies |
 
-Deferred dispatch batches chained GPU operations into a single Vulkan command buffer submission. Per-operation overhead drops from ~12ms (synchronous) to ~4ms (batched) as chains grow.
+Deferred dispatch batches chained GPU operations into a single Vulkan command buffer submission.
 
 ## What Makes OctoFlow Different
 
 | | CUDA/OpenCL | GLSL/HLSL/WGSL | OctoFlow |
 |---|---|---|---|
 | **Primary target** | CPU (with GPU kernels) | GPU (shaders only) | **GPU (general purpose)** |
-| **Self-hosting** | No | No | **Yes** |
+| **AI code gen** | No | No | **Built-in** |
+| **Self-hosting** | No | No | **Yes (69% .flow)** |
 | **External deps** | NVIDIA SDK / vendor SDK | Graphics API | **None** |
-| **GPU VM** | N/A | N/A | **Built-in** (5 SSBOs, indirect dispatch) |
 | **Install** | Multi-GB SDK | Driver-only | **2.8 MB binary** |
 
-## GPU Virtual Machine
+## Loom Engine
 
-OctoFlow includes a GPU-resident virtual machine with 5 memory regions:
+OctoFlow's GPU compute runtime — weaves thousands of parallel threads into coordinated computation.
 
 ```flow
-let vm = vm_boot(1.0, 8.0, 16.0)
+// Boot a compute unit, upload data, dispatch kernels
+let unit = loom_boot(1.0, 8194, 4096)
+loom_write(unit, 0.0, data)
 
-// Load data, dispatch compute kernels, read results
-let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-let _w = vm_write_register(vm, 0.0, 0.0, data)
-let pc = [0.0, 3.0, 8.0]
-let _d = vm_dispatch(vm, "stdlib/gpu/kernels/vm_scale.spv", pc, 1.0)
+loom_dispatch(unit, "stdlib/loom/kernels/sieve_init.spv", params, 32.0)
+loom_dispatch(unit, "stdlib/loom/kernels/sieve_mark.spv", params, 32.0)
+loom_dispatch(unit, "stdlib/loom/kernels/sieve_count.spv", params, 32.0)
 
-let prog = vm_build(vm)
-let _e = vm_execute(prog)
+let prog = loom_build(unit)
+loom_launch(prog)
 
-let result = vm_read_register(vm, 0.0, 0.0, 8.0)
-// result = [3, 6, 9, 12, 15, 18, 21, 24]
+while loom_poll(prog) < 0.5
+end
+let result = loom_read(unit, 0.0, 0.0, 8194)
 ```
 
+- **40+ compute kernels**: sieve, reduce, affine, matvec, WHERE, delta encode/decode
+- **Async execution**: `loom_launch` + `loom_poll` for non-blocking GPU work
+- **JIT kernels**: `loom_dispatch_jit` compiles SPIR-V from IR at runtime
 - **HOST_VISIBLE polling**: CPU reads GPU status in ~1us (zero-copy)
-- **Dormant VMs**: Over-provisioned command buffers with indirect dispatch
-- **I/O streaming**: CPU feeds data batches, GPU processes with reusable command buffers
-- **Homeostasis**: GPU self-regulates via maxnorm + regulator kernels
-- **73+ compute kernels**: Scale, affine, matvec, reduce, WHERE, delta encode/decode, dictionary lookup
 
 ## Language
 
@@ -84,8 +187,8 @@ print("total: {total}")
 
 // Imperative — full control flow
 fn fibonacci(n)
-  let mut a = 0.0
-  let mut b = 1.0
+  let mut a = 0
+  let mut b = 1
   for i in range(0, n)
     let tmp = b
     b = a + b
@@ -94,82 +197,56 @@ fn fibonacci(n)
   return a
 end
 
-// Stream pipelines — GPU-dispatched map/reduce
-use filters
-stream photo = tap("input.jpg")
-stream warm = photo |> filters.brightness(20.0) |> filters.contrast(1.2)
-emit(warm, "output.png")
+// String interpolation, maps, closures
+let user = { name: "Alice", score: 95 }
+print("Hello {user.name}, score: {user.score}")
 ```
-
-Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 
 ## Standard Library — 246 Modules
 
-| Domain | Modules | Coverage |
-|---|---|---|
-| **ai** | transformer, inference, generate, weight_loader | GGUF model loading, tokenization |
-| **collections** | stack, queue, heap, graph | Data structures |
-| **compiler** | lexer, eval, parser, preflight, codegen, ir | Self-hosted compiler |
-| **crypto** | hash, encoding, random | SHA-256, base64, CSPRNG |
-| **data** | csv, io, pipeline, transform, validate | ETL and data processing |
-| **db** | core, query, schema | Database abstractions |
-| **devops** | config, fs, log, process, template | System automation |
-| **formats** | gguf, json | GGUF tensor files, JSON |
-| **gpu** | VM, emitters, runtime, kernels | 73+ GPU compute kernels |
-| **gui** | widgets, layout, themes, events | Native GUI toolkit |
-| **llm** | generate, stream, chat, decompose | LLM inference (Qwen2.5) |
-| **media** | image (PNG/JPEG/GIF/BMP), video (AVI/MP4/H.264), audio (WAV) | Native codecs |
-| **ml** | nn, regression, classify, cluster, tree, linalg | Machine learning primitives |
-| **science** | calculus, physics, signal, matrix, optimize | Scientific computing |
-| **stats** | descriptive, distribution, correlation, risk | Statistical analysis |
-| **string** | string, regex, format | Text processing |
-| **sys** | args, env, memory, platform, timer | System interfaces |
-| **terminal** | term_image, colors | Kitty/Sixel/halfblock graphics |
-| **web** | http, json_util, url | HTTP client, JSON, URLs |
+| Domain | Highlights |
+|---|---|
+| **ai** | Transformer inference, GGUF model loading, tokenization |
+| **collections** | Stack, queue, heap, graph |
+| **compiler** | Self-hosted lexer, parser, eval, codegen, IR |
+| **crypto** | SHA-256, base64, CSPRNG |
+| **data** | CSV, pipeline, transform, validate |
+| **db** | Columnar storage, query, schema |
+| **devops** | Config, filesystem, logging, process |
+| **formats** | GGUF tensor files, JSON |
+| **gui** | Widgets, layout, themes, events |
+| **llm** | LLM inference, streaming, chat, decompose |
+| **loom** | 40+ GPU compute kernels, IR builder, patterns |
+| **media** | PNG, JPEG, GIF, BMP, AVI, MP4, H.264, WAV |
+| **ml** | Neural nets, regression, classification, clustering |
+| **science** | Calculus, physics, signal processing, optimization |
+| **stats** | Descriptive, distributions, correlation, risk |
+| **string** | Regex, formatting, text processing |
+| **sys** | Args, env, memory, platform, timer |
+| **web** | HTTP client, web search, web read, JSON, URLs |
 
 ## Architecture
 
 ```
-.flow source -> Parser -> Preflight -> Compiler -> GPU VM / Vulkan Dispatch -> GPU
-                                          |
-                              SPIR-V emitters (written in .flow)
-                              62+ pre-built compute kernels
+.flow source → Parser → Preflight → Runtime → Loom Engine / Vulkan → GPU
+                                        |
+                           SPIR-V emitters (written in .flow)
+                           40+ pre-built compute kernels
 ```
 
-Four crates. Zero external Rust dependencies. Only system libraries (vulkan-1, ws2_32).
-
-| Crate | Purpose | Lines |
-|---|---|---|
-| `flowgpu-spirv` | SPIR-V bytecode emitter | ~3,200 |
-| `flowgpu-vulkan` | Raw Vulkan compute + GPU VM | ~3,800 |
-| `flowgpu-parser` | Recursive descent parser | ~4,000 |
-| `flowgpu-cli` | Compiler + runtime + REPL | ~26,000 |
-
-~37K Rust (OS boundary) + ~84K .flow (stdlib + compiler) = ~121K total. 69% is .flow.
-
-## Building from Source
-
-Requires: Rust 1.56+, Vulkan-capable GPU with driver installed.
-
-```bash
-cargo build --release
-./target/release/octoflow --version
-```
-
-Vulkan SDK only needed for development (spirv-val). End users just need GPU drivers.
+Three crates. Zero external Rust dependencies. Only system libraries (vulkan-1, ws2_32).
 
 ## Tests
 
-**1,200+ tests**, all passing. Zero failures.
+**1,017+ tests**, all passing. Zero failures.
 
 ```
-Rust unit tests:       646 (compiler, parser, SPIR-V, Vulkan)
-GPU stdlib tests:        31 (VM dispatch, kernels, polling, streaming)
-.flow stdlib tests:    523 (gui, media, data, formats, AI/LLM)
+Rust unit tests:       854 (compiler, parser, Vulkan, OctoView)
+.flow stdlib tests:    163 (GPU, media, data, formats, AI/LLM)
 ```
 
 ## License
 
-- **Compiler** (arms/): Proprietary — free binary download
+- **Compiler**: Proprietary — free binary download
 - **Standard library, docs, examples**: Apache 2.0
 - **Your .flow programs**: Yours entirely
