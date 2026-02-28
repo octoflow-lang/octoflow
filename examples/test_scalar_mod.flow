@@ -1,0 +1,4 @@
+// Test module: scalar function only
+fn triple(x)
+  return x * 3.0
+end

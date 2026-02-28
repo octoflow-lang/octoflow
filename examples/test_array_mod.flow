@@ -1,0 +1,2 @@
+// Test module: array only
+let arr = [10.0, 20.0, 30.0]

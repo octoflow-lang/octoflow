@@ -1,0 +1,6 @@
+// Test module: has nested use (should NOT be transitively imported)
+use test_const_mod
+
+fn noop(x)
+  return x
+end

@@ -1,0 +1,2 @@
+// Test module: struct only
+struct Color(r, g, b)

@@ -1,0 +1,19 @@
+// Test module: math functions for import testing
+
+fn min_of(a, b)
+  if a < b
+    return a
+  end
+  return b
+end
+
+fn max_of(a, b)
+  if a > b
+    return a
+  end
+  return b
+end
+
+fn lerp(a, b, t)
+  return a + (b - a) * t
+end

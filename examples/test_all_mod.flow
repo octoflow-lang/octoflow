@@ -1,0 +1,12 @@
+// Test module: all importable types
+let SCALE = 2.0
+
+let data = [1.0, 2.0, 3.0]
+
+struct Vec2(x, y)
+
+fn double(): multiply(2.0)
+
+fn add_one(x)
+  return x + 1.0
+end

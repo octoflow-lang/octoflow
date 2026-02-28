@@ -1,0 +1,68 @@
+// Test module: array functions for import testing
+
+fn arr_sum(arr)
+  let mut total = 0.0
+  for x in arr
+    total = total + x
+  end
+  return total
+end
+
+fn arr_contains(arr, val)
+  for x in arr
+    if x == val
+      return 1.0
+    end
+  end
+  return 0.0
+end
+
+fn arr_index_of(arr, val)
+  let mut i = 0.0
+  for x in arr
+    if x == val
+      return i
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+fn swap(arr, i, j)
+  let tmp = arr[i]
+  arr[i] = arr[j]
+  arr[j] = tmp
+  return 0.0
+end
+
+fn reverse(arr)
+  let n = len(arr)
+  let half = floor(n / 2.0)
+  for i in range(0, half)
+    let j = n - 1.0 - i
+    let tmp = arr[i]
+    arr[i] = arr[j]
+    arr[j] = tmp
+  end
+  return 0.0
+end
+
+fn bubble_sort(arr)
+  let n = len(arr)
+  for i in range(0, n)
+    let mut swapped = 0.0
+    let limit = n - 1.0 - i
+    for j in range(0, limit)
+      if arr[j] > arr[j + 1.0]
+        let tmp = arr[j]
+        arr[j] = arr[j + 1.0]
+        arr[j + 1.0] = tmp
+        swapped = 1.0
+      end
+    end
+    if swapped == 0.0
+      break
+    end
+  end
+  return 0.0
+end
