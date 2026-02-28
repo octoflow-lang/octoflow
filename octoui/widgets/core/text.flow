@@ -1,0 +1,21 @@
+// widgets/core/text.flow — Text Label Widget
+//
+// Displays text using SDF font. Auto-sizes width based on proportional metrics.
+
+use "../../engine/tree"
+use "../../engine/sdf_font"
+use "../../themes/dark"
+
+// Create a text label
+// parent: parent widget ID (-1 for root)
+// content: text string to display
+// color_idx: theme color index for text color
+// Returns: widget ID
+fn ui_text(parent, content, color_idx)
+  let font_size = 16.0
+  let text_w = ui_text_width(content, font_size)
+  let text_h = font_size + 4.0
+  let id = ui_tree_add(UI_TEXT, parent, text_w, text_h, content)
+  let _s = ui_tree_set_color_themed(id, color_idx)
+  return id
+end

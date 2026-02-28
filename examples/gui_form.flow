@@ -1,0 +1,95 @@
+// gui_form.flow — User registration form with validation
+//
+// Demonstrates: form layout (label + input pairs), text input,
+// spinbox, dropdown, checkbox, validation, success/error display.
+//
+// Run: octoflow run gui_form.flow
+
+use "gui/gui"
+use "gui/layout"
+use "gui/theme"
+
+let _t = gui_theme_ocean()
+gui_init(450, 480, "User Registration")
+
+let _title = gui_label(20, 15, "Create Account")
+let _sep = gui_separator(20, 38, 410)
+
+// Name
+let _l1 = gui_label(20, 55, "Name:")
+let name_input = gui_textinput(120, 52, 300)
+
+// Email
+let _l2 = gui_label(20, 95, "Email:")
+let email_input = gui_textinput(120, 92, 300)
+
+// Password
+let _l3 = gui_label(20, 135, "Password:")
+let pass_input = gui_textinput(120, 132, 300)
+
+// Age
+let _l4 = gui_label(20, 175, "Age:")
+let age_spin = gui_spinbox(120, 172, 150, 13, 120, 25, 1)
+
+// Role
+let _l5 = gui_label(20, 215, "Role:")
+let role_dd = gui_dropdown(120, 212, 200)
+let _r1 = gui_dropdown_add(role_dd, "Developer")
+let _r2 = gui_dropdown_add(role_dd, "Designer")
+let _r3 = gui_dropdown_add(role_dd, "Manager")
+let _r4 = gui_dropdown_add(role_dd, "Other")
+
+// Checkboxes
+let terms_chk = gui_checkbox(20, 260, "I accept the terms")
+let news_chk  = gui_checkbox(20, 290, "Subscribe to newsletter")
+
+// Buttons
+let submit_btn = gui_button(20, 340, 120, 36, "Submit")
+let clear_btn  = gui_button(160, 340, 120, 36, "Clear")
+
+// Feedback
+let _sep2 = gui_separator(20, 390, 410)
+let msg = gui_label(20, 410, " ")
+let detail = gui_label(20, 435, " ")
+
+while gui_running() == 1.0
+  gui_update()
+
+  if gui_clicked(submit_btn) == 1.0
+    let name = gui_get_text(name_input)
+    let email = gui_get_text(email_input)
+    let pass = gui_get_text(pass_input)
+    let age = gui_spinbox_value(age_spin)
+    let terms = gui_checked(terms_chk)
+
+    // Validation
+    if len(name) < 3.0
+      gui_set_text(msg, "ERROR: Name must be at least 2 chars")
+      gui_set_text(detail, " ")
+    elif len(email) < 5.0
+      gui_set_text(msg, "ERROR: Enter a valid email")
+      gui_set_text(detail, " ")
+    elif len(pass) < 5.0
+      gui_set_text(msg, "ERROR: Password min 4 characters")
+      gui_set_text(detail, " ")
+    elif terms == 0.0
+      gui_set_text(msg, "ERROR: Accept the terms first")
+      gui_set_text(detail, " ")
+    else
+      let role_idx = gui_dropdown_selected(role_dd)
+      let role = gui_dropdown_text(role_dd, role_idx)
+      gui_set_text(msg, "SUCCESS: Welcome, " + name + "!")
+      gui_set_text(detail, role + ", age " + str(age))
+    end
+  end
+
+  // Clear form
+  if gui_clicked(clear_btn) == 1.0
+    gui_set_checked(terms_chk, 0)
+    gui_set_checked(news_chk, 0)
+    gui_set_spinbox(age_spin, 25)
+    gui_set_dropdown(role_dd, 0)
+    gui_set_text(msg, " ")
+    gui_set_text(detail, " ")
+  end
+end

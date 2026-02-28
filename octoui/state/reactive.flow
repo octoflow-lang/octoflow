@@ -1,0 +1,80 @@
+// state/reactive.flow — OctoUI Reactive State System
+//
+// Simple reactive state: values in arrays, bindings trigger widget updates.
+// When state changes, bound widgets are marked dirty and their text updates.
+//
+// Usage:
+//   let counter_state = ui_state(0.0)
+//   ui_state_set(counter_state, 5.0)
+//   let val = ui_state_get(counter_state)
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/dirty"
+
+// State values
+let mut _ui_state_vals = []
+
+// Bindings: parallel arrays mapping widget_id → state_id
+// -1.0 means no binding
+let mut _ui_bind_widget = []
+let mut _ui_bind_state = []
+
+// Create a new state slot with initial value, returns state_id
+fn ui_state(initial)
+  let id = len(_ui_state_vals)
+  push(_ui_state_vals, initial)
+  return id
+end
+
+// Get current state value
+fn ui_state_get(state_id)
+  return _ui_state_vals[state_id]
+end
+
+// Set state value — marks dirty if changed
+fn ui_state_set(state_id, val)
+  let old = _ui_state_vals[state_id]
+  _ui_state_vals[state_id] = val
+  if old != val
+    let _d = ui_mark_dirty()
+    // Update bound widgets
+    let mut needs_layout = 0.0
+    let n_binds = len(_ui_bind_widget)
+    let mut bi = 0.0
+    while bi < n_binds
+      if _ui_bind_state[bi] == state_id
+        let wid = _ui_bind_widget[bi]
+        // Convert value to string for text display
+        let sval = str(val)
+        let old_len = len(_ui_texts[wid])
+        _ui_texts[wid] = sval
+        _ui_dirty[wid] = 1.0
+        // Update text widget width if length changed
+        let new_len = len(sval)
+        if new_len != old_len
+          _ui_w[wid] = ui_text_width(sval, 16.0)
+          needs_layout = 1.0
+        end
+      end
+      bi = bi + 1.0
+    end
+    // Re-run layout if any text widget changed size
+    if needs_layout == 1.0
+      let _l = ui_layout_update()
+    end
+  end
+  return 0.0
+end
+
+// Bind a widget's text to a state value
+// When state changes, widget text auto-updates
+fn ui_bind_text(widget_id, state_id)
+  push(_ui_bind_widget, widget_id)
+  push(_ui_bind_state, state_id)
+  // Set initial text
+  let val = _ui_state_vals[state_id]
+  let sval = str(val)
+  _ui_texts[widget_id] = sval
+  return 0.0
+end

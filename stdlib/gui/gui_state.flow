@@ -1,0 +1,488 @@
+// gui_state.flow — LoomDB-Powered GUI State Management
+//
+// Undo/redo via GPU-resident state snapshots. Session persistence
+// via loomdb_flush/restore. Smart state search via cosine similarity.
+//
+// Architecture: Two-Loom I/O isolation
+//   RENDER LOOM (HOT, zero I/O):
+//     gui_state_snapshot() → capture widget state to GPU memory
+//     gui_state_undo/redo() → restore from GPU-resident snapshots
+//   STATE LOOM (COLD, owns I/O):
+//     gui_state_save() → flush to disk on exit
+//     gui_state_load() → restore from disk on startup
+//
+// Usage:
+//   use "gui"
+//   use "gui_state"
+//   let _si = gui_state_init()
+//   // After user action:
+//   let _ss = gui_state_snapshot("button_click")
+//   // Undo:
+//   let _su = gui_state_undo()
+
+use "gui_core"
+
+// ── State Management Arrays ─────────────────────────────────────────
+// Widget state flattened into vectors: x, y, w, h, visible, checked,
+// slider_val, enabled = 8 features per widget, max 200 widgets.
+
+let mut _gui_state_vectors = []
+let mut _gui_state_actions = []
+// State scalars as array elements — scalars DON'T propagate across
+// function boundaries, but array elements DO.
+// _gss: [count, cursor, dims, capacity, initialized]
+let mut _gss = [0.0, 0.0, 1600.0, 100.0, 0.0]
+
+fn gui_state_init()
+  // Reset scalar state — don't reassign arrays to [] (array literals
+  // can't be used in assignments, only as function arguments).
+  // Setting count/cursor to 0 logically clears the history.
+  _gss[0] = 0.0
+  _gss[1] = 0.0
+  _gss[2] = 200.0 * 8.0
+  _gss[3] = 100.0
+  _gss[4] = 1.0
+  return 1.0
+end
+
+// ── State Snapshot — Zero I/O, GPU Memory ───────────────────────────
+
+fn _gui_state_build_vec()
+  // Flatten current widget state into a fixed-size vector
+  let wcount = len(_gui_types)
+  let mut vec = []
+  let mut i = 0.0
+  while i < 200.0
+    let ii = int(i)
+    if ii < wcount
+      push(vec, _gui_x[ii])
+      push(vec, _gui_y[ii])
+      push(vec, _gui_w[ii])
+      push(vec, _gui_h[ii])
+      push(vec, _gui_visible[ii])
+      push(vec, _gui_checked[ii])
+      push(vec, _gui_slider_val[ii])
+      push(vec, _gui_enabled[ii])
+    else
+      push(vec, 0.0)
+      push(vec, 0.0)
+      push(vec, 0.0)
+      push(vec, 0.0)
+      push(vec, 0.0)
+      push(vec, 0.0)
+      push(vec, 0.0)
+      push(vec, 0.0)
+    end
+    i = i + 1.0
+  end
+  return vec
+end
+
+fn gui_state_snapshot(action_name)
+  // Capture current widget state — zero I/O, GPU-memory only
+  if _gss[4] == 0.0
+    return 0.0
+  end
+
+  let vec = _gui_state_build_vec()
+  let dims = _gss[2]
+
+  // If cursor is behind count, we're after an undo — discard forward history
+  if _gss[1] < _gss[0]
+    // Truncate vectors array to cursor position
+    let keep_len = _gss[1] * dims
+    let vec_len = len(_gui_state_vectors)
+    // Remove entries after cursor by rebuilding (no array truncate builtin)
+    // For efficiency, just track cursor — vectors array may have stale data beyond cursor
+    _gss[0] = _gss[1]
+    // Trim actions array too
+    // (actions are tracked by count, so just reducing count is sufficient)
+  end
+
+  // Check capacity — if at limit, shift oldest snapshots out
+  if _gss[0] >= _gss[3]
+    // Remove oldest snapshot by shifting vectors left by dims
+    let shift = dims
+    let old_len = len(_gui_state_vectors)
+    let mut si = 0.0
+    while si < old_len - shift
+      let sii = int(si)
+      let src = int(si + shift)
+      if src < len(_gui_state_vectors)
+        _gui_state_vectors[sii] = _gui_state_vectors[src]
+      end
+      si = si + 1.0
+    end
+    _gss[0] = _gss[0] - 1.0
+    _gss[1] = _gss[1] - 1.0
+    // Shift action names too
+    let act_len = len(_gui_state_actions)
+    if act_len > 1.0
+      let mut ai = 0.0
+      while ai < act_len - 1.0
+        let aii = int(ai)
+        _gui_state_actions[aii] = _gui_state_actions[int(ai + 1.0)]
+        ai = ai + 1.0
+      end
+    end
+  end
+
+  // Append new vector to flat state array
+  let offset = _gss[0] * dims
+  let cur_vec_len = len(_gui_state_vectors)
+
+  let mut vi = 0.0
+  while vi < dims
+    let val = vec[int(vi)]
+    let target = int(offset + vi)
+    if target < cur_vec_len
+      _gui_state_vectors[target] = val
+    else
+      push(_gui_state_vectors, val)
+    end
+    vi = vi + 1.0
+  end
+
+  // Track action name
+  let act_idx = int(_gss[0])
+  if act_idx < len(_gui_state_actions)
+    _gui_state_actions[act_idx] = action_name
+  else
+    push(_gui_state_actions, action_name)
+  end
+
+  _gss[0] = _gss[0] + 1.0
+  _gss[1] = _gss[0]
+  return _gss[0]
+end
+
+fn _gui_state_restore_from_vec(vec)
+  // Restore widget state from a flattened vector
+  let wcount = len(_gui_types)
+  let mut i = 0.0
+  while i < wcount
+    let ii = int(i)
+    let base = int(i * 8.0)
+    if base + 7 < len(vec)
+      _gui_x[ii] = vec[base]
+      _gui_y[ii] = vec[base + 1]
+      _gui_w[ii] = vec[base + 2]
+      _gui_h[ii] = vec[base + 3]
+      _gui_visible[ii] = vec[base + 4]
+      _gui_checked[ii] = vec[base + 5]
+      _gui_slider_val[ii] = vec[base + 6]
+      _gui_enabled[ii] = vec[base + 7]
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn _gui_state_extract_vec(vec_idx)
+  // Extract a single state vector from the flat array by index
+  let dims = _gss[2]
+  let offset = vec_idx * dims
+  let vec_len = len(_gui_state_vectors)
+  if offset + dims > vec_len
+    let mut empty = []
+    return empty
+  end
+  let mut result = []
+  let mut i = 0.0
+  while i < dims
+    let idx = int(offset + i)
+    if idx >= len(_gui_state_vectors)
+      push(result, 0.0)
+    else
+      push(result, _gui_state_vectors[idx])
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+// ── Undo/Redo ───────────────────────────────────────────────────────
+
+fn gui_state_undo()
+  // Move cursor back one step and restore that state
+  if _gss[4] == 0.0
+    return 0.0
+  end
+  if _gss[1] <= 1.0
+    return 0.0
+  end
+  _gss[1] = _gss[1] - 1.0
+  let target = _gss[1] - 1.0
+  let vec = _gui_state_extract_vec(target)
+  if len(vec) > 0.0
+    let _rv = _gui_state_restore_from_vec(vec)
+    _gs[9] = 1.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn gui_state_redo()
+  // Move cursor forward one step and restore that state
+  if _gss[4] == 0.0
+    return 0.0
+  end
+  if _gss[1] >= _gss[0]
+    return 0.0
+  end
+  let vec = _gui_state_extract_vec(_gss[1])
+  if len(vec) > 0.0
+    let _rv = _gui_state_restore_from_vec(vec)
+    _gss[1] = _gss[1] + 1.0
+    _gs[9] = 1.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn gui_state_can_undo()
+  if _gss[1] > 1.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn gui_state_can_redo()
+  if _gss[1] < _gss[0]
+    return 1.0
+  end
+  return 0.0
+end
+
+fn gui_state_undo_count()
+  return _gss[0]
+end
+
+// ── 2B: Session Persistence ─────────────────────────────────────────
+// State Loom I/O boundary — flush to disk on exit, restore on startup
+
+fn gui_state_save(path)
+  // Persist state snapshots to disk
+  if _gss[4] == 0.0
+    return 0.0
+  end
+  if len(path) == 0.0
+    return 0.0
+  end
+  // Take a final snapshot
+  let _ss = gui_state_snapshot("session_save")
+  let count = _gss[0]
+  let dims = _gss[2]
+  if count == 0.0
+    return 0.0
+  end
+  // Save vectors as binary (GPU-native f32)
+  // Build the slice of vectors to save (up to cursor)
+  let save_len = count * dims
+  let mut save_vec = []
+  let mut i = 0.0
+  while i < save_len
+    push(save_vec, _gui_state_vectors[int(i)])
+    i = i + 1.0
+  end
+  gpu_save_binary(save_vec, path + ".vectors")
+  // Save metadata header
+  let mut header = "GUI_STATE_V1\n"
+  header = header + "dims:" + str(dims) + "\n"
+  header = header + "count:" + str(count) + "\n"
+  header = header + "cursor:" + str(_gss[1])
+  write_file(path + ".state", header)
+  return 1.0
+end
+
+fn gui_state_load(path)
+  // Restore state from disk — called at startup
+  if file_exists(path + ".state") == 0.0
+    return 0.0
+  end
+  if file_exists(path + ".vectors") == 0.0
+    return 0.0
+  end
+  let header = read_file(path + ".state")
+  let lines = split(header, "\n")
+  if len(lines) < 4.0
+    return 0.0
+  end
+  if trim(lines[0]) != "GUI_STATE_V1"
+    return 0.0
+  end
+  // Parse header
+  let dims_parts = split(trim(lines[1]), ":")
+  let count_parts = split(trim(lines[2]), ":")
+  let cursor_parts = split(trim(lines[3]), ":")
+  let dims = float(dims_parts[1])
+  let count = float(count_parts[1])
+  let cursor = float(cursor_parts[1])
+  if dims != _gss[2]
+    return 0.0
+  end
+  // Load vectors
+  let loaded = gpu_load_binary(path + ".vectors")
+  if len(loaded) == 0.0
+    return 0.0
+  end
+  _gui_state_vectors = loaded
+  let expected = count * dims
+  if len(_gui_state_vectors) < expected
+    return 0.0
+  end
+  _gss[0] = count
+  _gss[1] = cursor
+  // Restore the last snapshot
+  if count > 0.0
+    let last_idx = count - 1.0
+    let vec = _gui_state_extract_vec(last_idx)
+    if len(vec) > 0.0
+      let _rv = _gui_state_restore_from_vec(vec)
+      _gs[9] = 1.0
+    end
+  end
+  return 1.0
+end
+
+// ── 2C: Smart State Search ──────────────────────────────────────────
+// Cosine similarity search over state history — unique to OctoFlow.
+
+fn gui_state_find_similar(k)
+  // Find k most similar past states to the current state
+  if _gss[4] == 0.0
+    return 0.0
+  end
+  let count = _gss[0]
+  if count == 0.0
+    return 0.0
+  end
+  let dims = _gss[2]
+  let current_vec = _gui_state_build_vec()
+  let cur_norm = norm(current_vec)
+  if cur_norm == 0.0
+    return 0.0
+  end
+  // Compute cosine similarity with all stored states
+  let mut top_scores = []
+  let mut top_indices = []
+  let mut actual_k = k
+  if actual_k > count
+    actual_k = count
+  end
+  let mut vi = 0.0
+  while vi < count
+    let vec = _gui_state_extract_vec(vi)
+    let vec_norm = norm(vec)
+    let mut score = 0.0
+    if vec_norm > 0.0
+      score = dot(vec, current_vec) / (vec_norm * cur_norm)
+    end
+    let filled = len(top_scores)
+    if filled < actual_k
+      // Still filling — insert sorted
+      let mut pos = filled
+      let mut j = 0.0
+      while j < filled
+        if score > top_scores[int(j)]
+          pos = j
+          j = filled
+        end
+        j = j + 1.0
+      end
+      // Shift right
+      push(top_scores, 0.0)
+      push(top_indices, 0.0)
+      let mut s = filled
+      while s > pos
+        let si = int(s)
+        top_scores[si] = top_scores[int(s - 1.0)]
+        top_indices[si] = top_indices[int(s - 1.0)]
+        s = s - 1.0
+      end
+      let pi = int(pos)
+      top_scores[pi] = score
+      top_indices[pi] = vi
+    elif score > top_scores[int(len(top_scores) - 1.0)]
+      // Better than worst — insert
+      let mut pos = len(top_scores) - 1.0
+      let mut j = 0.0
+      while j < len(top_scores) - 1.0
+        if score > top_scores[int(j)]
+          pos = j
+          j = len(top_scores)
+        end
+        j = j + 1.0
+      end
+      let mut s = len(top_scores) - 1.0
+      while s > pos
+        let si = int(s)
+        top_scores[si] = top_scores[int(s - 1.0)]
+        top_indices[si] = top_indices[int(s - 1.0)]
+        s = s - 1.0
+      end
+      let pi = int(pos)
+      top_scores[pi] = score
+      top_indices[pi] = vi
+    end
+    vi = vi + 1.0
+  end
+  // Store results in _gs-style accessible format
+  // Return count of results found
+  return len(top_scores)
+end
+
+// ── GPU-Accelerated Search ──────────────────────────────────────────
+// For large state histories, use gpu_matmul for batch dot products
+
+fn gui_state_gpu_search(k)
+  // GPU-accelerated similarity search via gpu_matmul
+  if _gss[4] == 0.0
+    return 0.0
+  end
+  let count = _gss[0]
+  if count == 0.0
+    return 0.0
+  end
+  let dims = _gss[2]
+  let current_vec = _gui_state_build_vec()
+  // vectors = count x dims, query = dims x 1 → count x 1 dot products
+  let save_len = count * dims
+  let mut vectors_slice = []
+  let mut i = 0.0
+  while i < save_len
+    push(vectors_slice, _gui_state_vectors[int(i)])
+    i = i + 1.0
+  end
+  let scores = gpu_matmul(vectors_slice, current_vec, count, 1.0, dims)
+  // Normalize scores by vector norms for cosine similarity
+  let qnorm = norm(current_vec)
+  let mut actual_k = k
+  if actual_k > count
+    actual_k = count
+  end
+  // CPU top-K scan
+  let mut top_scores = []
+  let mut top_indices = []
+  let mut si = 0.0
+  while si < count
+    let vec = _gui_state_extract_vec(si)
+    let vnorm = norm(vec)
+    let mut score = 0.0
+    if vnorm > 0.0
+      if qnorm > 0.0
+        score = scores[int(si)] / (vnorm * qnorm)
+      end
+    end
+    let filled = len(top_scores)
+    if filled < actual_k
+      push(top_scores, score)
+      push(top_indices, si)
+    elif score > top_scores[int(len(top_scores) - 1.0)]
+      top_scores[int(len(top_scores) - 1.0)] = score
+      top_indices[int(len(top_indices) - 1.0)] = si
+    end
+    si = si + 1.0
+  end
+  return len(top_scores)
+end

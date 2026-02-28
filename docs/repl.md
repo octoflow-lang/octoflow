@@ -4,9 +4,9 @@
 
 ```
 $ octoflow repl
-OctoFlow v0.83.1 — GPU-native language
+OctoFlow v1.3.0 — GPU-native language
 GPU: NVIDIA GeForce GTX 1660 SUPER
-143 stdlib modules | :help | :time
+246 stdlib modules | :help | :time
 ```
 
 ## Commands
@@ -24,6 +24,7 @@ GPU: NVIDIA GeForce GTX 1660 SUPER
 | `:time <expr>` | | Benchmark any expression |
 | `:load <file>` | `:l` | Load and run a .flow file |
 | `:reset` | | Clear all state (variables, functions, arrays) |
+| `:history` | `:hist` | Show command history |
 | `:clear` | `:cls` | Clear screen |
 | `:exit` | `:q` | Exit the REPL |
 

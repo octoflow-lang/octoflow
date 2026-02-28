@@ -1,0 +1,181 @@
+// examples/tabs.flow — OctoUI Tabbed Interface
+//
+// Demonstrates tab container with different content per tab,
+// including a listbox for selectable items.
+//
+// Controls:
+//   TAB        — Cycle focus
+//   SPACE      — Toggle/select focused widget
+//   ENTER      — Click button
+//   UP/DOWN    — Navigate listbox items
+//   LEFT/RIGHT — Adjust focused slider
+//   ESCAPE     — Quit
+//
+// Run: octoflow run octoui/examples/tabs.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/core/label"
+use "../widgets/core/progress"
+use "../widgets/input/button"
+use "../widgets/input/checkbox"
+use "../widgets/input/textinput"
+use "../widgets/input/slider"
+use "../widgets/input/radio"
+use "../widgets/input/toggle"
+use "../widgets/input/tabs"
+use "../widgets/input/listbox"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../state/reactive"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(480.0, 420.0, "OctoUI Tabs Demo")
+
+// Root layout
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 480.0, 420.0)
+
+// Header
+let title = ui_text(root, "TABBED INTERFACE", UI_COLOR_PRIMARY)
+let sep1 = ui_separator(root, 448.0)
+
+// Tab container
+let tabs = ui_tabs(root, 448.0)
+let _t1 = ui_tab(tabs, "PROFILE")
+let _t2 = ui_tab(tabs, "FILES")
+let _t3 = ui_tab(tabs, "SETTINGS")
+let _fin = ui_tabs_finalize(tabs)
+
+// ── Tab 1: Profile ──
+let p1 = ui_tab_panel(tabs, 0.0)
+let p1_title = ui_text(p1, "USER PROFILE", UI_COLOR_TEXT)
+
+let p1_name_row = ui_row(p1, 12.0)
+let p1_name_lbl = ui_text(p1_name_row, "NAME", UI_COLOR_TEXT_DIM)
+let p1_name = ui_textinput(p1_name_row, 200.0, 26.0)
+
+let p1_role_row = ui_row(p1, 12.0)
+let p1_role_lbl = ui_text(p1_role_row, "ROLE", UI_COLOR_TEXT_DIM)
+let p1_role = ui_radio_group(p1)
+let _r1 = ui_radio(p1_role, "ADMIN")
+let _r2 = ui_radio(p1_role, "USER")
+let _r3 = ui_radio(p1_role, "GUEST")
+
+let p1_active = ui_toggle(p1, "ACTIVE")
+let _sa = ui_toggle_set(p1_active, 1.0)
+
+// ── Tab 2: Files ──
+let p2 = ui_tab_panel(tabs, 1.0)
+let p2_title = ui_text(p2, "FILE BROWSER", UI_COLOR_TEXT)
+
+let lb = ui_listbox(p2, 420.0, 7.0)
+let _li1 = ui_listbox_add(lb, "README.MD")
+let _li2 = ui_listbox_add(lb, "CHANGELOG.MD")
+let _li3 = ui_listbox_add(lb, "LICENSE")
+let _li4 = ui_listbox_add(lb, "SRC/MAIN.FLOW")
+let _li5 = ui_listbox_add(lb, "SRC/ENGINE.FLOW")
+let _li6 = ui_listbox_add(lb, "SRC/RENDER.FLOW")
+let _li7 = ui_listbox_add(lb, "SRC/INPUT.FLOW")
+let _li8 = ui_listbox_add(lb, "SRC/LAYOUT.FLOW")
+let _li9 = ui_listbox_add(lb, "TESTS/TEST_ALL.FLOW")
+let _li10 = ui_listbox_add(lb, "DOCS/GUIDE.MD")
+let _lf = ui_listbox_finalize(lb)
+
+let p2_sel_row = ui_row(p2, 8.0)
+let p2_sel_label = ui_label(p2_sel_row, "SELECTED", "README.MD", UI_COLOR_PRIMARY)
+
+// ── Tab 3: Settings ──
+let p3 = ui_tab_panel(tabs, 2.0)
+let p3_title = ui_text(p3, "APPLICATION SETTINGS", UI_COLOR_TEXT)
+
+let p3_tgl1 = ui_toggle(p3, "DARK MODE")
+let _st1 = ui_toggle_set(p3_tgl1, 1.0)
+let p3_tgl2 = ui_toggle(p3, "NOTIFICATIONS")
+let _st2 = ui_toggle_set(p3_tgl2, 1.0)
+let p3_tgl3 = ui_toggle(p3, "AUTO UPDATE")
+
+let p3_sep = ui_separator(p3, 420.0)
+
+let p3_vol_row = ui_row(p3, 12.0)
+let p3_vol_lbl = ui_text(p3_vol_row, "FONT SIZE", UI_COLOR_TEXT_DIM)
+let p3_vol = ui_slider(p3, 300.0, 14.0, 8.0, 24.0, 14.0)
+
+// ── Bottom bar ──
+let sep2 = ui_separator(root, 448.0)
+let status_row = ui_row(root, 12.0)
+let status = ui_label(status_row, "TAB", "PROFILE", UI_COLOR_PRIMARY)
+
+// Initial layout
+let _l = ui_layout_update()
+let _su = ui_slider_update_all()
+let _tu = ui_toggle_update_all()
+let _ta = ui_tabs_update_all()
+let _lu = ui_listbox_update_all()
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  // Process text input
+  let key = ui_key_down()
+  let _tk = ui_textinput_process_key(key)
+
+  // Process sliders
+  let _sp2 = ui_slider_process(ui_mouse_x(), ui_mouse_y(), ui_mouse_down())
+  let _sk = ui_slider_process_key(key)
+
+  // Process tabs
+  let _tp = ui_tabs_process()
+
+  // Process listbox keyboard
+  let _lp = ui_listbox_process(key)
+
+  // Update status based on active tab
+  let sel_tab = ui_tabs_selected(tabs)
+  if sel_tab == 0.0
+    let _sl = ui_label_set_value(status, "PROFILE")
+  end
+  if sel_tab == 1.0
+    let _sl = ui_label_set_value(status, "FILES")
+    // Update selected file display
+    let sel_file = ui_listbox_selected_text(lb)
+    let _sf = ui_label_set_value(p2_sel_label, sel_file)
+  end
+  if sel_tab == 2.0
+    let _sl = ui_label_set_value(status, "SETTINGS")
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl6 = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Tabs demo finished.")

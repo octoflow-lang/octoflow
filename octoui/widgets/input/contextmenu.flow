@@ -1,0 +1,257 @@
+// widgets/input/contextmenu.flow — Right-Click Context Menu
+//
+// A popup menu that appears at the cursor position on right-click.
+// Widgets register a context menu; right-click hit-tests registered
+// widgets and shows their menu. Only one context menu open at a time.
+//
+// Usage:
+//   let ctx = ui_contextmenu()
+//   let ci1 = ui_contextmenu_item(ctx, "DELETE")
+//   let ci2 = ui_contextmenu_item(ctx, "RENAME")
+//   let _reg = ui_contextmenu_register(my_box, ctx)
+//
+//   // In event loop:
+//   let _cp = ui_contextmenu_process(mx, my, right_clicked, left_clicked)
+//
+//   if ui_ctx_item_clicked(ci1) == 1.0
+//     // handle DELETE
+//   end
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+use "../../widgets/input/button"
+use "../../widgets/layout/menubar"
+
+// Context menu registry
+let mut _ui_ctx_cols = []         // context menu column IDs (one per menu)
+let mut _ui_ctx_items = []        // flat array of item button IDs
+let mut _ui_ctx_item_menu = []    // which context menu owns each item
+let mut _ui_ctx_item_start = []   // per-menu: first item index
+let mut _ui_ctx_item_count = []   // per-menu: number of items
+
+// Widget-to-context-menu associations
+let mut _ui_ctx_owner_widget = [] // widget IDs that have context menus
+let mut _ui_ctx_owner_menu = []   // corresponding context menu index
+
+// Global state
+let mut _ui_ctx_open_idx = -1.0   // which context menu is open (-1 = none)
+let mut _ui_ctx_clicked_item = -1.0  // last clicked item ID (-1 = none)
+
+// Create a context menu (hidden column)
+// Returns: context menu index
+fn ui_contextmenu()
+  let col = ui_tree_add(UI_COLUMN, -1.0, 140.0, 0.0, " ")
+  _ui_visible[col] = 0.0
+  let _cc = ui_tree_set_color_themed(col, UI_COLOR_SURFACE)
+
+  let ctx_idx = len(_ui_ctx_cols)
+  push(_ui_ctx_cols, col)
+  push(_ui_ctx_item_start, len(_ui_ctx_items))
+  push(_ui_ctx_item_count, 0.0)
+
+  return ctx_idx
+end
+
+// Add an item to a context menu
+// ctx_idx: context menu index from ui_contextmenu()
+// label: item text
+// Returns: item button widget ID
+fn ui_contextmenu_item(ctx_idx, label)
+  let col = _ui_ctx_cols[ctx_idx]
+  let item_w = 140.0
+  let item_h = 24.0
+
+  let item = ui_button(col, item_w, item_h, label)
+  _ui_visible[item] = 0.0
+
+  push(_ui_ctx_items, item)
+  push(_ui_ctx_item_menu, ctx_idx)
+  _ui_ctx_item_count[ctx_idx] = _ui_ctx_item_count[ctx_idx] + 1.0
+
+  return item
+end
+
+// Register a widget to use a context menu on right-click
+// widget_id: the widget to attach the context menu to
+// ctx_idx: context menu index from ui_contextmenu()
+fn ui_contextmenu_register(widget_id, ctx_idx)
+  push(_ui_ctx_owner_widget, widget_id)
+  push(_ui_ctx_owner_menu, ctx_idx)
+  return 0.0
+end
+
+// Check if a context menu item was clicked this frame
+fn ui_ctx_item_clicked(item_id)
+  if _ui_ctx_clicked_item == item_id
+    return 1.0
+  end
+  return 0.0
+end
+
+// Open a context menu at a position
+fn ui_ctx_open(ctx_idx, px, py)
+  // Close any open context menu
+  if _ui_ctx_open_idx >= 0.0
+    let _c = ui_ctx_close(_ui_ctx_open_idx)
+  end
+
+  // Close any open menubar menu (mutual exclusion)
+  let _mc = ui_menubar_close_all()
+
+  let col = _ui_ctx_cols[ctx_idx]
+  let count = _ui_ctx_item_count[ctx_idx]
+  let start = _ui_ctx_item_start[ctx_idx]
+
+  // Position column at cursor
+  _ui_x[col] = px
+  _ui_y[col] = py
+
+  // Position and show each item
+  let mut total_h = 0.0
+  let mut ii = 0.0
+  while ii < count
+    let item_idx = start + ii
+    let item_id = _ui_ctx_items[item_idx]
+    let ih = _ui_h[item_id]
+    _ui_x[item_id] = px
+    _ui_y[item_id] = py + total_h
+    _ui_w[item_id] = 140.0
+    _ui_visible[item_id] = 1.0
+    total_h = total_h + ih
+    ii = ii + 1.0
+  end
+
+  _ui_w[col] = 140.0
+  _ui_h[col] = total_h
+  _ui_visible[col] = 1.0
+
+  _ui_ctx_open_idx = ctx_idx
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Close a context menu
+fn ui_ctx_close(ctx_idx)
+  let col = _ui_ctx_cols[ctx_idx]
+  let count = _ui_ctx_item_count[ctx_idx]
+  let start = _ui_ctx_item_start[ctx_idx]
+
+  _ui_visible[col] = 0.0
+
+  let mut ii = 0.0
+  while ii < count
+    let item_idx = start + ii
+    let item_id = _ui_ctx_items[item_idx]
+    _ui_visible[item_id] = 0.0
+    ii = ii + 1.0
+  end
+
+  _ui_ctx_open_idx = -1.0
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Point-in-rect hit test
+fn ui_ctx_hit(mx, my, wid)
+  let wx = _ui_x[wid]
+  let wy = _ui_y[wid]
+  let ww = _ui_w[wid]
+  let wh = _ui_h[wid]
+  if mx >= wx
+    if mx < wx + ww
+      if my >= wy
+        if my < wy + wh
+          return 1.0
+        end
+      end
+    end
+  end
+  return 0.0
+end
+
+// Process context menu interactions each frame
+// mx, my: mouse position
+// right_clicked: 1.0 if right mouse just clicked
+// left_clicked: 1.0 if left mouse just clicked
+fn ui_contextmenu_process(mx, my, right_clicked, left_clicked)
+  // Clear last clicked item
+  _ui_ctx_clicked_item = -1.0
+
+  // Escape closes open context menu
+  if _ui_ctx_open_idx >= 0.0
+    if _ui_key_down == "escape"
+      let _c = ui_ctx_close(_ui_ctx_open_idx)
+      return 0.0
+    end
+  end
+
+  // Right-click: find which registered widget was hit
+  if right_clicked == 1.0
+    let n_owners = len(_ui_ctx_owner_widget)
+    let mut oi = 0.0
+    while oi < n_owners
+      let owner_wid = _ui_ctx_owner_widget[oi]
+      if _ui_visible[owner_wid] == 1.0
+        if ui_ctx_hit(mx, my, owner_wid) == 1.0
+          let ctx_idx = _ui_ctx_owner_menu[oi]
+          let _o = ui_ctx_open(ctx_idx, mx, my)
+          return 0.0
+        end
+      end
+      oi = oi + 1.0
+    end
+
+    // Right-click not on any registered widget — close if open
+    if _ui_ctx_open_idx >= 0.0
+      let _c = ui_ctx_close(_ui_ctx_open_idx)
+    end
+  end
+
+  // Left-click: check item clicks or click-outside-to-close
+  if _ui_ctx_open_idx >= 0.0
+    let oi2 = _ui_ctx_open_idx
+    let start = _ui_ctx_item_start[oi2]
+    let count = _ui_ctx_item_count[oi2]
+
+    // Check item clicks
+    let mut ii = 0.0
+    while ii < count
+      let item_idx = start + ii
+      let item_id = _ui_ctx_items[item_idx]
+      if ui_button_clicked(item_id) == 1.0
+        _ui_ctx_clicked_item = item_id
+        let _c = ui_ctx_close(oi2)
+        return 0.0
+      end
+      ii = ii + 1.0
+    end
+
+    // Click outside closes
+    if left_clicked == 1.0
+      let mut on_item = 0.0
+      let mut ji = 0.0
+      while ji < count
+        let jidx = start + ji
+        let jid = _ui_ctx_items[jidx]
+        if ui_ctx_hit(mx, my, jid) == 1.0
+          on_item = 1.0
+        end
+        ji = ji + 1.0
+      end
+      if on_item == 0.0
+        let _c = ui_ctx_close(oi2)
+      end
+    end
+  end
+
+  return 0.0
+end
+
+// Close any open context menu (for external use)
+fn ui_contextmenu_close_all()
+  if _ui_ctx_open_idx >= 0.0
+    let _c = ui_ctx_close(_ui_ctx_open_idx)
+  end
+  return 0.0
+end

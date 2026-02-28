@@ -19,10 +19,16 @@ fn stack_push(s, val)
 end
 
 fn stack_pop(s)
+  if len(s) == 0.0
+    return ""
+  end
   return pop(s)
 end
 
 fn stack_peek(s)
+  if len(s) == 0.0
+    return ""
+  end
   return s[len(s) - 1.0]
 end
 

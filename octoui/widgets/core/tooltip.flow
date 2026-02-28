@@ -1,0 +1,134 @@
+// widgets/core/tooltip.flow — Tooltip System
+//
+// Hover-triggered text popups. Register tooltip text for any widget,
+// and when the mouse hovers over it for a brief delay, a floating
+// tooltip appears near the cursor.
+//
+// Usage:
+//   let _tt = ui_tooltip_register(button_id, "SAVE CHANGES")
+//
+//   // In event loop (after ui_poll_events):
+//   let _tp = ui_tooltip_process(ui_mouse_x(), ui_mouse_y())
+//
+//   // In render section (after ui_pipeline_render, before present):
+//   // Tooltip renders automatically via pipeline overlay
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// Tooltip registration
+let mut _ui_tt_widgets = []     // widget IDs with tooltips
+let mut _ui_tt_texts = []       // tooltip text for each widget
+
+// Tooltip display state
+// [0]=visible [1]=x [2]=y [3]=hover_widget [4]=hover_frames
+let mut _ui_tt_state = [0.0, 0.0, 0.0, -1.0, 0.0]
+
+// Active tooltip text
+let mut _ui_tt_active_text = " "
+
+// Hover delay (frames at ~60fps, ~30 frames = 0.5s)
+let UI_TOOLTIP_DELAY = 20.0
+
+// Register a tooltip for a widget
+// widget_id: the widget to attach tooltip to
+// text: tooltip text to display
+fn ui_tooltip_register(widget_id, text)
+  push(_ui_tt_widgets, widget_id)
+  push(_ui_tt_texts, text)
+  return 0.0
+end
+
+// Process tooltip state each frame
+// mx, my: current mouse position
+fn ui_tooltip_process(mx, my)
+  let n = len(_ui_tt_widgets)
+
+  // Find which tooltip widget (if any) the mouse is hovering over
+  let mut hover_id = -1.0
+  let mut i = 0.0
+  while i < n
+    let wid = _ui_tt_widgets[i]
+    if _ui_visible[wid] == 1.0
+      let wx = _ui_x[wid]
+      let wy = _ui_y[wid]
+      let ww = _ui_w[wid]
+      let wh = _ui_h[wid]
+      if mx >= wx
+        if mx < wx + ww
+          if my >= wy
+            if my < wy + wh
+              hover_id = wid
+            end
+          end
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  let prev_widget = _ui_tt_state[3]
+
+  if hover_id >= 0.0
+    // Hovering over a tooltipped widget
+    if hover_id == prev_widget
+      // Same widget — increment hover counter
+      _ui_tt_state[4] = _ui_tt_state[4] + 1.0
+    else
+      // New widget — reset counter
+      _ui_tt_state[3] = hover_id
+      _ui_tt_state[4] = 0.0
+      _ui_tt_state[0] = 0.0
+    end
+
+    // Show tooltip after delay
+    if _ui_tt_state[4] >= UI_TOOLTIP_DELAY
+      if _ui_tt_state[0] == 0.0
+        _ui_tt_state[0] = 1.0
+        // Position tooltip near mouse, offset down-right
+        _ui_tt_state[1] = mx + 10.0
+        _ui_tt_state[2] = my + 18.0
+
+        // Find tooltip text for this widget
+        let mut j = 0.0
+        while j < n
+          if _ui_tt_widgets[j] == hover_id
+            _ui_tt_active_text = _ui_tt_texts[j]
+          end
+          j = j + 1.0
+        end
+
+        let _d = ui_mark_dirty()
+      end
+    end
+  else
+    // Not hovering — hide tooltip
+    if _ui_tt_state[0] == 1.0
+      let _d = ui_mark_dirty()
+    end
+    _ui_tt_state[0] = 0.0
+    _ui_tt_state[3] = -1.0
+    _ui_tt_state[4] = 0.0
+  end
+
+  return 0.0
+end
+
+// Check if tooltip is currently visible
+fn ui_tooltip_visible()
+  return _ui_tt_state[0]
+end
+
+// Get tooltip position and text (for pipeline overlay rendering)
+fn ui_tooltip_x()
+  return _ui_tt_state[1]
+end
+
+fn ui_tooltip_y()
+  return _ui_tt_state[2]
+end
+
+fn ui_tooltip_text()
+  return _ui_tt_active_text
+end

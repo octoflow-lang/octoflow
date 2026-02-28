@@ -1,0 +1,266 @@
+// tree.flow — OctoUI Widget Tree (Columnar Storage)
+//
+// Foundation module for the OctoUI rendering engine. Stores all widget
+// data in parallel arrays (columnar layout) for cache-friendly iteration
+// and future GPU upload.
+//
+// Widget types:
+//   UI_BOX       = 1   UI_TEXT     = 2   UI_BUTTON   = 3
+//   UI_ROW       = 4   UI_COLUMN  = 5   UI_CHECKBOX  = 6
+//   UI_TEXTINPUT = 7   UI_SLIDER  = 8   UI_RADIO     = 9
+//   UI_TOGGLE    = 10  UI_LISTBOX = 12  UI_SPINBOX   = 13
+//   UI_SCROLL    = 14  UI_TABLE   = 15  UI_TREEVIEW  = 16
+//   UI_TEXTAREA  = 17
+
+// -- Widget Type Constants --------------------------------------------------
+let UI_BOX = 1.0
+let UI_TEXT = 2.0
+let UI_BUTTON = 3.0
+let UI_ROW = 4.0
+let UI_COLUMN = 5.0
+let UI_CHECKBOX = 6.0
+let UI_TEXTINPUT = 7.0
+let UI_SLIDER = 8.0
+let UI_RADIO = 9.0
+let UI_TOGGLE = 10.0
+let UI_LISTBOX = 12.0
+let UI_SPINBOX = 13.0
+let UI_SCROLL = 14.0
+let UI_TABLE = 15.0
+let UI_TREEVIEW = 16.0
+let UI_TEXTAREA = 17.0
+
+// -- Focus State (shared across modules) ------------------------------------
+let mut _ui_focus_id = -1.0
+
+// -- Parallel Arrays (Widget Registry) --------------------------------------
+// Every widget gets one entry at the same index across all arrays.
+
+let mut _ui_types = []
+let mut _ui_x = []
+let mut _ui_y = []
+let mut _ui_w = []
+let mut _ui_h = []
+let mut _ui_parent = []
+let mut _ui_visible = []
+let mut _ui_dirty = []
+let mut _ui_state = []
+
+// Per-widget RGB color (0-255 range)
+let mut _ui_colors_r = []
+let mut _ui_colors_g = []
+let mut _ui_colors_b = []
+
+// Text content and font index
+let mut _ui_texts = []
+let mut _ui_text_idx = []
+
+// Semantic color index (-1 = no semantic color / custom)
+let mut _ui_color_idx = []
+
+// Enabled state (1.0 = enabled, 0.0 = disabled)
+let mut _ui_enabled = []
+
+// Container layout properties
+let mut _ui_spacing = []
+let mut _ui_padding = []
+
+// -- Functions --------------------------------------------------------------
+
+fn ui_tree_init()
+  // Arrays are already initialized empty at module level.
+  // Nothing to do.
+  return 0.0
+end
+
+fn ui_tree_add(wtype, parent, w, h, text)
+  // Capture the ID before any pushes (ID = current length)
+  let id = len(_ui_types)
+
+  // Type
+  push(_ui_types, wtype)
+
+  // Position (0,0 by default; layout pass sets these)
+  push(_ui_x, 0.0)
+  push(_ui_y, 0.0)
+
+  // Size
+  push(_ui_w, w)
+  push(_ui_h, h)
+
+  // Hierarchy
+  push(_ui_parent, parent)
+
+  // Visibility and dirty
+  push(_ui_visible, 1.0)
+  push(_ui_dirty, 1.0)
+
+  // Interaction state (0=normal, 1=hovered, 2=pressed)
+  push(_ui_state, 0.0)
+
+  // Color (default black)
+  push(_ui_colors_r, 0.0)
+  push(_ui_colors_g, 0.0)
+  push(_ui_colors_b, 0.0)
+
+  // Text
+  push(_ui_texts, text)
+  push(_ui_text_idx, 0.0)
+
+  // Semantic color index
+  push(_ui_color_idx, -1.0)
+
+  // Enabled state (default: enabled)
+  push(_ui_enabled, 1.0)
+
+  // Container properties (spacing and padding)
+  push(_ui_spacing, 0.0)
+  push(_ui_padding, 0.0)
+
+  return id
+end
+
+fn ui_tree_set_color(id, r, g, b)
+  let i = int(id)
+  _ui_colors_r[i] = r
+  _ui_colors_g[i] = g
+  _ui_colors_b[i] = b
+  _ui_dirty[i] = 1.0
+  return 0.0
+end
+
+// Set color by semantic index (records for theme switching)
+fn ui_tree_set_color_themed(id, color_idx)
+  let i = int(id)
+  _ui_colors_r[i] = ui_theme_r(color_idx)
+  _ui_colors_g[i] = ui_theme_g(color_idx)
+  _ui_colors_b[i] = ui_theme_b(color_idx)
+  _ui_color_idx[i] = color_idx
+  _ui_dirty[i] = 1.0
+  return 0.0
+end
+
+// Re-apply theme colors to all widgets that have a semantic color index
+fn ui_theme_apply_all()
+  let n = len(_ui_types)
+  let mut i = 0.0
+  while i < n
+    let cidx = _ui_color_idx[i]
+    if cidx >= 0.0
+      _ui_colors_r[i] = ui_theme_r(cidx)
+      _ui_colors_g[i] = ui_theme_g(cidx)
+      _ui_colors_b[i] = ui_theme_b(cidx)
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn ui_tree_set_text(id, text)
+  let i = int(id)
+  _ui_texts[i] = text
+  _ui_dirty[i] = 1.0
+  return 0.0
+end
+
+fn ui_tree_set_pos(id, x, y)
+  let i = int(id)
+  _ui_x[i] = x
+  _ui_y[i] = y
+  _ui_dirty[i] = 1.0
+  return 0.0
+end
+
+fn ui_tree_set_size(id, w, h)
+  let i = int(id)
+  _ui_w[i] = w
+  _ui_h[i] = h
+  _ui_dirty[i] = 1.0
+  return 0.0
+end
+
+fn ui_tree_set_spacing(id, spacing)
+  let i = int(id)
+  _ui_spacing[i] = spacing
+  _ui_dirty[i] = 1.0
+  return 0.0
+end
+
+fn ui_tree_set_padding(id, padding)
+  let i = int(id)
+  _ui_padding[i] = padding
+  _ui_dirty[i] = 1.0
+  return 0.0
+end
+
+fn ui_tree_count()
+  return len(_ui_types)
+end
+
+fn ui_tree_is_container(id)
+  let i = int(id)
+  let wtype = _ui_types[i]
+  if wtype == UI_ROW
+    return 1.0
+  end
+  if wtype == UI_COLUMN
+    return 1.0
+  end
+  return 0.0
+end
+
+// Check if a widget is a descendant of an ancestor (up to 4 levels)
+fn ui_tree_is_descendant(widget_id, ancestor_id)
+  if widget_id == ancestor_id
+    return 1.0
+  end
+  let p1 = _ui_parent[widget_id]
+  if p1 == ancestor_id
+    return 1.0
+  end
+  if p1 >= 0.0
+    let p2 = _ui_parent[p1]
+    if p2 == ancestor_id
+      return 1.0
+    end
+    if p2 >= 0.0
+      let p3 = _ui_parent[p2]
+      if p3 == ancestor_id
+        return 1.0
+      end
+      if p3 >= 0.0
+        let p4 = _ui_parent[p3]
+        if p4 == ancestor_id
+          return 1.0
+        end
+      end
+    end
+  end
+  return 0.0
+end
+
+// Set widget visibility (1.0 = visible, 0.0 = hidden)
+// Hidden widgets are skipped in rendering, layout sizing, and tab navigation.
+fn ui_tree_set_visible(id, flag)
+  let i = int(id)
+  _ui_visible[i] = flag
+  _ui_dirty[i] = 1.0
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Set widget enabled state (1.0 = enabled, 0.0 = disabled)
+// Disabled widgets render dimmed and do not accept input or focus.
+fn ui_tree_set_enabled(id, flag)
+  let i = int(id)
+  _ui_enabled[i] = flag
+  _ui_dirty[i] = 1.0
+  // Clear focus if disabling the currently focused widget
+  if flag == 0.0
+    if _ui_focus_id == i
+      _ui_focus_id = -1.0
+    end
+  end
+  let _d = ui_mark_dirty()
+  return 0.0
+end

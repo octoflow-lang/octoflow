@@ -1,0 +1,445 @@
+// stdlib/db/vector.flow — GPU-accelerated vector/embedding database
+//
+// Tier 2: Loom DB — vector similarity search with persistence.
+// Stores embeddings as a flat f32 array, supports cosine/dot/euclidean metrics.
+// GPU path via gpu_matmul for large datasets (1000+ vectors).
+//
+// Design: VDB is split into two objects that must be passed together:
+//   vdb     = map (metadata: dims, count, IDs, per-vector metadata)
+//   vectors = flat array (all embeddings concatenated, dims floats per vector)
+//
+// Functions: vdb_create, vdb_create_vectors, vdb_insert, vdb_extract_vector,
+//            vdb_search, vdb_gpu_search, vdb_normalize,
+//            vdb_cache_to_db, vdb_load_from_db,
+//            loom_stream_save, loom_stream_load
+
+fn vdb_create(dimensions)
+  // Create vector database metadata map
+  let mut vdb = map()
+  map_set(vdb, "__vdb_dims", str(dimensions))
+  map_set(vdb, "__vdb_count", "0")
+  map_set(vdb, "__vdb_ids", "")
+  map_set(vdb, "__vdb_normalized", "0")
+  return vdb
+end
+
+fn vdb_create_vectors()
+  // Create the companion flat vectors array
+  let mut vectors = []
+  return vectors
+end
+
+fn vdb_insert(vdb, vectors, id, embedding, metadata)
+  // Add an embedding vector with ID and metadata string
+  // Returns updated count, or 0.0 on dimension mismatch
+  let dims = float(map_get(vdb, "__vdb_dims"))
+  if len(embedding) != dims
+    return 0.0
+  end
+  // Append embedding to flat vectors array
+  let mut i = 0.0
+  while i < dims
+    push(vectors, embedding[i])
+    i = i + 1.0
+  end
+  // Track ID
+  let ids_str = map_get(vdb, "__vdb_ids")
+  if len(ids_str) > 0.0
+    map_set(vdb, "__vdb_ids", ids_str + "," + id)
+  else
+    map_set(vdb, "__vdb_ids", id)
+  end
+  // Store metadata
+  map_set(vdb, "__vdb_meta_" + id, metadata)
+  // Increment count
+  let count = float(map_get(vdb, "__vdb_count"))
+  map_set(vdb, "__vdb_count", str(count + 1.0))
+  map_set(vdb, "__vdb_normalized", "0")
+  return count + 1.0
+end
+
+fn vdb_extract_vector(vectors, dims, vec_idx)
+  // Extract a single vector from the flat array by index
+  let offset = vec_idx * dims
+  let mut result = []
+  let mut i = 0.0
+  while i < dims
+    push(result, vectors[offset + i])
+    i = i + 1.0
+  end
+  return result
+end
+
+fn vdb_cosine_sim(a, b)
+  // Cosine similarity = dot(a,b) / (norm(a) * norm(b))
+  let d = dot(a, b)
+  let na = norm(a)
+  let nb = norm(b)
+  if na == 0.0 || nb == 0.0
+    return 0.0
+  end
+  return d / (na * nb)
+end
+
+fn vdb_euclidean_dist(a, b)
+  // Negative euclidean distance (higher = more similar for top-K)
+  let n = len(a)
+  let mut sum_sq = 0.0
+  let mut i = 0.0
+  while i < n
+    let diff = a[i] - b[i]
+    sum_sq = sum_sq + diff * diff
+    i = i + 1.0
+  end
+  return 0.0 - sqrt(sum_sq)
+end
+
+fn vdb_search(vdb, vectors, query_embedding, k, metric)
+  // CPU similarity search — stores top-K results in vdb map
+  // metric: "cosine", "dot", "euclidean"
+  // Results stored as: __count, __id_N, __score_N, __meta_N in vdb
+  let count = float(map_get(vdb, "__vdb_count"))
+  let dims = float(map_get(vdb, "__vdb_dims"))
+
+  if count == 0.0 || len(query_embedding) != dims
+    map_set(vdb, "__count", "0")
+    return 0.0
+  end
+
+  let mut actual_k = k
+  if actual_k > count
+    actual_k = count
+  end
+
+  let ids_str = map_get(vdb, "__vdb_ids")
+  let ids = split(ids_str, ",")
+  let normalized = map_get(vdb, "__vdb_normalized")
+
+  // Top-K: simple selection (k is typically small 5-20)
+  let mut top_scores = []
+  let mut top_indices = []
+
+  let mut vi = 0.0
+  while vi < count
+    let vec = vdb_extract_vector(vectors, dims, vi)
+
+    // Compute similarity score
+    let mut score = 0.0
+    if metric == "cosine"
+      if normalized == "1"
+        score = dot(vec, query_embedding)
+      else
+        score = vdb_cosine_sim(vec, query_embedding)
+      end
+    elif metric == "dot"
+      score = dot(vec, query_embedding)
+    elif metric == "euclidean"
+      score = vdb_euclidean_dist(vec, query_embedding)
+    end
+
+    // Insert into top-K
+    let filled = len(top_scores)
+    if filled < actual_k
+      // Still filling — find insertion position
+      let mut pos = filled
+      let mut j = 0.0
+      while j < filled
+        if score > top_scores[j]
+          pos = j
+          break
+        end
+        j = j + 1.0
+      end
+      // Shift right from end
+      push(top_scores, 0.0)
+      push(top_indices, 0.0)
+      let mut s = filled
+      while s > pos
+        top_scores[s] = top_scores[s - 1.0]
+        top_indices[s] = top_indices[s - 1.0]
+        s = s - 1.0
+      end
+      top_scores[pos] = score
+      top_indices[pos] = vi
+    elif score > top_scores[len(top_scores) - 1.0]
+      // Better than worst — find insertion position
+      let mut pos = len(top_scores) - 1.0
+      let mut j = 0.0
+      while j < len(top_scores) - 1.0
+        if score > top_scores[j]
+          pos = j
+          break
+        end
+        j = j + 1.0
+      end
+      // Shift right, dropping last
+      let mut s = len(top_scores) - 1.0
+      while s > pos
+        top_scores[s] = top_scores[s - 1.0]
+        top_indices[s] = top_indices[s - 1.0]
+        s = s - 1.0
+      end
+      top_scores[pos] = score
+      top_indices[pos] = vi
+    end
+
+    vi = vi + 1.0
+  end
+
+  // Store results in vdb map
+  let final_k = len(top_scores)
+  map_set(vdb, "__count", str(final_k))
+  let mut ri = 0.0
+  while ri < final_k
+    let idx = top_indices[ri]
+    let id = ids[idx]
+    map_set(vdb, "__id_" + str(ri), id)
+    map_set(vdb, "__score_" + str(ri), str(top_scores[ri]))
+    map_set(vdb, "__meta_" + str(ri), map_get(vdb, "__vdb_meta_" + id))
+    ri = ri + 1.0
+  end
+  return final_k
+end
+
+fn vdb_gpu_search(vdb, vectors, query_embedding, k)
+  // GPU-accelerated cosine similarity search via gpu_matmul
+  // For large vector databases (1000+ vectors)
+  let count = float(map_get(vdb, "__vdb_count"))
+  let dims = float(map_get(vdb, "__vdb_dims"))
+
+  if count == 0.0 || len(query_embedding) != dims
+    map_set(vdb, "__count", "0")
+    return 0.0
+  end
+
+  let mut actual_k = k
+  if actual_k > count
+    actual_k = count
+  end
+
+  let ids_str = map_get(vdb, "__vdb_ids")
+  let ids = split(ids_str, ",")
+
+  // gpu_matmul(A, B, m, n, k): A=m×k, B=k×n → m×n
+  // vectors=count×dims, query=dims×1 → count×1 dot products
+  let scores = gpu_matmul(vectors, query_embedding, count, 1.0, dims)
+
+  // Normalize for cosine similarity
+  let qnorm = norm(query_embedding)
+  let mut normed_scores = []
+  let mut vi = 0.0
+  while vi < count
+    let vec = vdb_extract_vector(vectors, dims, vi)
+    let vnorm = norm(vec)
+    if vnorm > 0.0 && qnorm > 0.0
+      push(normed_scores, scores[vi] / (vnorm * qnorm))
+    else
+      push(normed_scores, 0.0)
+    end
+    vi = vi + 1.0
+  end
+
+  // CPU top-K scan
+  let mut top_scores = []
+  let mut top_indices = []
+
+  let mut si = 0.0
+  while si < count
+    let score = normed_scores[si]
+    let filled = len(top_scores)
+
+    if filled < actual_k
+      push(top_scores, score)
+      push(top_indices, si)
+      // Bubble into position
+      let mut j = len(top_scores) - 1.0
+      while j > 0.0
+        if top_scores[j] > top_scores[j - 1.0]
+          let tmp_s = top_scores[j]
+          let tmp_i = top_indices[j]
+          top_scores[j] = top_scores[j - 1.0]
+          top_indices[j] = top_indices[j - 1.0]
+          top_scores[j - 1.0] = tmp_s
+          top_indices[j - 1.0] = tmp_i
+        end
+        j = j - 1.0
+      end
+    elif score > top_scores[len(top_scores) - 1.0]
+      top_scores[len(top_scores) - 1.0] = score
+      top_indices[len(top_indices) - 1.0] = si
+      let mut j = len(top_scores) - 1.0
+      while j > 0.0
+        if top_scores[j] > top_scores[j - 1.0]
+          let tmp_s = top_scores[j]
+          let tmp_i = top_indices[j]
+          top_scores[j] = top_scores[j - 1.0]
+          top_indices[j] = top_indices[j - 1.0]
+          top_scores[j - 1.0] = tmp_s
+          top_indices[j - 1.0] = tmp_i
+        end
+        j = j - 1.0
+      end
+    end
+    si = si + 1.0
+  end
+
+  // Store results in vdb map
+  let final_k = len(top_scores)
+  map_set(vdb, "__count", str(final_k))
+  let mut ri = 0.0
+  while ri < final_k
+    let idx = top_indices[ri]
+    let id = ids[idx]
+    map_set(vdb, "__id_" + str(ri), id)
+    map_set(vdb, "__score_" + str(ri), str(top_scores[ri]))
+    map_set(vdb, "__meta_" + str(ri), map_get(vdb, "__vdb_meta_" + id))
+    ri = ri + 1.0
+  end
+  return final_k
+end
+
+fn vdb_normalize(vdb, vectors)
+  // Pre-normalize all vectors to unit length
+  // After this, cosine similarity = dot product (faster search)
+  let count = float(map_get(vdb, "__vdb_count"))
+  let dims = float(map_get(vdb, "__vdb_dims"))
+  let mut vi = 0.0
+  while vi < count
+    let offset = vi * dims
+    let vec = vdb_extract_vector(vectors, dims, vi)
+    let n = norm(vec)
+    if n > 0.0
+      let mut di = 0.0
+      while di < dims
+        vectors[offset + di] = vectors[offset + di] / n
+        di = di + 1.0
+      end
+    end
+    vi = vi + 1.0
+  end
+  map_set(vdb, "__vdb_normalized", "1")
+  return 1.0
+end
+
+fn vdb_cache_to_db(vdb, vectors, path)
+  // Persist vector DB to disk:
+  //   path.vectors — binary float array
+  //   path.vdb_index — text header (dims, count, normalized, IDs)
+  //   path.meta — metadata table
+  let count = float(map_get(vdb, "__vdb_count"))
+  let dims = float(map_get(vdb, "__vdb_dims"))
+  let ids_str = map_get(vdb, "__vdb_ids")
+  let normalized = map_get(vdb, "__vdb_normalized")
+
+  // Binary vectors
+  gpu_save_binary(vectors, path + ".vectors")
+
+  // Index header
+  let mut header = "OCTOFLOW_VDB_V1\n"
+  header = header + str(dims) + "\n"
+  header = header + str(count) + "\n"
+  header = header + normalized + "\n"
+  header = header + ids_str
+  write_file(path + ".vdb_index", header)
+
+  // Metadata as tab-separated
+  let ids = split(ids_str, ",")
+  let mut meta_lines = []
+  push(meta_lines, "OCTOFLOW_DB_V1")
+  push(meta_lines, "id,metadata")
+  push(meta_lines, str(count))
+  let mut i = 0.0
+  while i < count
+    let id = ids[i]
+    let meta = map_get(vdb, "__vdb_meta_" + id)
+    push(meta_lines, id + "\t" + meta)
+    i = i + 1.0
+  end
+  write_file(path + ".meta", join(meta_lines, "\n"))
+  return count
+end
+
+fn vdb_load_meta(path)
+  // Load vector DB metadata from cached files
+  // Returns the vdb metadata map (call vdb_load_vectors separately for array)
+  let mut vdb = map()
+  if file_exists(path + ".vdb_index") == 0.0
+    map_set(vdb, "__vdb_dims", "0")
+    map_set(vdb, "__vdb_count", "0")
+    map_set(vdb, "__vdb_ids", "")
+    map_set(vdb, "__vdb_normalized", "0")
+    return vdb
+  end
+
+  let header = read_file(path + ".vdb_index")
+  let lines = split(header, "\n")
+  let dims = trim(lines[1])
+  let count = trim(lines[2])
+  let normalized = trim(lines[3])
+  let ids_str = trim(lines[4])
+
+  map_set(vdb, "__vdb_dims", dims)
+  map_set(vdb, "__vdb_count", count)
+  map_set(vdb, "__vdb_ids", ids_str)
+  map_set(vdb, "__vdb_normalized", normalized)
+
+  // Load metadata
+  if file_exists(path + ".meta")
+    let meta_content = read_file(path + ".meta")
+    let meta_lines = split(meta_content, "\n")
+    let mut i = 3.0
+    while i < len(meta_lines)
+      let line = trim(meta_lines[i])
+      if len(line) > 0.0
+        let parts = split(line, "\t")
+        if len(parts) >= 2.0
+          map_set(vdb, "__vdb_meta_" + parts[0], parts[1])
+        end
+      end
+      i = i + 1.0
+    end
+  end
+  return vdb
+end
+
+fn vdb_load_vectors(path)
+  // Load the binary vectors array from cached file
+  let mut vectors = gpu_load_binary(path + ".vectors")
+  return vectors
+end
+
+// Result accessors — use these to read vdb_search/vdb_gpu_search results
+// (Needed because cross-module map return type tracking is limited)
+
+fn vdb_result_count(result)
+  return float(map_get(result, "__count"))
+end
+
+fn vdb_result_id(result, idx)
+  return map_get(result, "__id_" + str(idx))
+end
+
+fn vdb_result_score(result, idx)
+  return float(map_get(result, "__score_" + str(idx)))
+end
+
+fn vdb_result_meta(result, idx)
+  return map_get(result, "__meta_" + str(idx))
+end
+
+fn loom_stream_save(vm_id, register, path)
+  // Save a Loom VM GPU register to disk as binary
+  let data = loom_read(vm_id, 0.0, register, 0.0)
+  gpu_save_binary(data, path)
+  return len(data)
+end
+
+fn loom_stream_load(vm_id, register, path)
+  // Load binary data back into a Loom VM GPU register
+  if file_exists(path) == 0.0
+    return 0.0
+  end
+  let data = gpu_load_binary(path)
+  vm_write_register(vm_id, 0.0, register, data)
+  return len(data)
+end

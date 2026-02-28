@@ -1,0 +1,161 @@
+// animation.flow — Animation Helpers
+//
+// Provides interpolation and easing functions for smooth animations.
+// Uses elapsed time for frame-independent animation.
+//
+// Usage:
+//   use "gui"
+//   use "animation"
+//   let val = gui_animate(0.0, 100.0, 500.0, "ease_out")
+//   let _tw = gui_tween(btn_id, "x", 200.0, 300.0)
+
+use "gui_core"
+
+// Animation registry
+let mut _anim_from = []
+let mut _anim_to = []
+let mut _anim_duration = []
+let mut _anim_elapsed = []
+let mut _anim_easing = []
+let mut _anim_active = []
+
+// Easing functions — take t in [0, 1], return eased t
+fn ease_linear(t)
+  return t
+end
+
+fn ease_in(t)
+  return t * t
+end
+
+fn ease_out(t)
+  return 1.0 - (1.0 - t) * (1.0 - t)
+end
+
+fn ease_in_out(t)
+  if t < 0.5
+    return 2.0 * t * t
+  end
+  return 1.0 - (0.0 - 2.0 * t + 2.0) * (0.0 - 2.0 * t + 2.0) / 2.0
+end
+
+// Create a new animation, returns animation id
+fn gui_anim_create(from, to, duration_ms, easing)
+  let id = len(_anim_from)
+  push(_anim_from, from)
+  push(_anim_to, to)
+  push(_anim_duration, duration_ms)
+  push(_anim_elapsed, 0.0)
+  push(_anim_easing, easing)
+  push(_anim_active, 1.0)
+  return id
+end
+
+// Step animation by dt milliseconds, returns current value
+fn gui_anim_step(anim_id, dt)
+  if anim_id < 0.0
+    return 0.0
+  end
+  if anim_id >= len(_anim_from)
+    return 0.0
+  end
+  let ii = int(anim_id)
+  if _anim_active[ii] == 0.0
+    return _anim_to[ii]
+  end
+  _anim_elapsed[ii] = _anim_elapsed[ii] + dt
+  let elapsed = _anim_elapsed[ii]
+  let dur = _anim_duration[ii]
+  let mut t = elapsed / dur
+  if t >= 1.0
+    t = 1.0
+    _anim_active[ii] = 0.0
+  end
+  // Apply easing
+  let easing = _anim_easing[ii]
+  let mut eased = t
+  if easing == "ease_in"
+    eased = ease_in(t)
+  elif easing == "ease_out"
+    eased = ease_out(t)
+  elif easing == "ease_in_out"
+    eased = ease_in_out(t)
+  end
+  // Interpolate
+  let from = _anim_from[ii]
+  let to = _anim_to[ii]
+  return from + (to - from) * eased
+end
+
+fn gui_anim_done(anim_id)
+  if anim_id < 0.0
+    return 1.0
+  end
+  if anim_id >= len(_anim_active)
+    return 1.0
+  end
+  if _anim_active[int(anim_id)] == 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn gui_anim_reset(anim_id)
+  if anim_id < 0.0
+    return 0.0
+  end
+  if anim_id >= len(_anim_from)
+    return 0.0
+  end
+  let ii = int(anim_id)
+  _anim_elapsed[ii] = 0.0
+  _anim_active[ii] = 1.0
+  return 1.0
+end
+
+// Simple lerp helper (no animation state)
+fn gui_lerp(a, b, t)
+  return a + (b - a) * t
+end
+
+// Tween a widget property — convenience wrapper
+fn gui_tween(widget_id, property, target, duration_ms)
+  if _gui_id_ok(widget_id) == 0.0
+    return -1.0
+  end
+  let ii = int(widget_id)
+  let mut current = 0.0
+  if property == "x"
+    current = _gui_x[ii]
+  elif property == "y"
+    current = _gui_y[ii]
+  elif property == "w"
+    current = _gui_w[ii]
+  elif property == "h"
+    current = _gui_h[ii]
+  else
+    return -1.0
+  end
+  let anim_id = gui_anim_create(current, target, duration_ms, "ease_out")
+  return anim_id
+end
+
+// Apply tween result to widget — call each frame
+fn gui_tween_apply(widget_id, property, anim_id, dt)
+  let val = gui_anim_step(anim_id, dt)
+  if _gui_id_ok(widget_id) == 0.0
+    return 0.0
+  end
+  let ii = int(widget_id)
+  if property == "x"
+    _gui_x[ii] = val
+  elif property == "y"
+    _gui_y[ii] = val
+  elif property == "w"
+    _gui_w[ii] = val
+  elif property == "h"
+    _gui_h[ii] = val
+  end
+  _gs[9] = 1.0
+  return val
+end

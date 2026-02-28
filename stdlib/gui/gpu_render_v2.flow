@@ -1,0 +1,322 @@
+// gpu_render_v2.flow — Level 2: Shader-Based GUI Renderer
+//
+// Custom SPIR-V compute shaders dispatched via loom_dispatch().
+// Framebuffer lives in Loom VM globals buffer. Display via vm_present().
+// Zero CPU pixel math — all shape rasterization on GPU.
+//
+// Architecture:
+//   loom_dispatch(clear) → loom_dispatch(rect) × N → loom_dispatch(circle) × N
+//   → loom_build(vm_id) → loom_run(prog_id) → vm_present(vm_id, total)
+//   ONE fence wait for ALL shapes.
+//
+// Three rendering tiers:
+//   Level 0 (CPU):  _gui_render()        — original software rasterizer
+//   Level 1 (gpu_*): _gui_render_gpu()   — gpu_fill/where/scatter builtins
+//   Level 2 (shaders): _gui_render_v2()  — this file
+//
+// Usage: Imported via gui.flow. Activated by _gui_vm_init() at startup.
+
+use "gui_core"
+
+// ── VM State ────────────────────────────────────────────────────────
+// Cross-function state via array elements (scalars don't propagate).
+// _gvm: [vm_id, total, win_w, win_h, ready]
+let mut _gvm = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+// ── VM Initialization ───────────────────────────────────────────────
+
+fn _gui_vm_init(w, h)
+  let total = w * h
+  let globals_size = total * 3.0
+
+  // Boot Loom VM: 1 instance, 0 register size, globals = framebuffer
+  let vm_id = loom_boot(1.0, 0.0, globals_size)
+  if vm_id <= 0.0
+    _gvm[4] = 0.0
+    return 0.0
+  end
+  _gvm[0] = vm_id
+  _gvm[1] = total
+  _gvm[2] = w
+  _gvm[3] = h
+  _gvm[4] = 1.0
+  return vm_id
+end
+
+fn _gui_vm_shutdown()
+  if _gvm[4] == 1.0
+    let _s = loom_shutdown(_gvm[0])
+    _gvm[4] = 0.0
+  end
+  return 0.0
+end
+
+fn _gui_vm_resize(w, h)
+  let _s = _gui_vm_shutdown()
+  let _v = _gui_vm_init(w, h)
+  return 0.0
+end
+
+// ── Workgroup Calculation ───────────────────────────────────────────
+
+fn _gui_wg(total)
+  if total <= 0.0
+    return 1.0
+  end
+  return int((total + 255.0) / 256.0)
+end
+
+// ── Dispatch Helpers ────────────────────────────────────────────────
+// Each function builds push constants and dispatches the shader.
+// Shaders are loaded from .spv files — Vulkan caches pipelines by SPIR-V hash.
+
+fn _gui_dispatch_clear(r, g, b)
+  if _gvm[1] <= 0.0
+    return 0.0
+  end
+  let pc = [_gvm[1], r, g, b]
+  loom_dispatch(_gvm[0], "stdlib/gui/kernels/clear.spv", pc, _gui_wg(_gvm[1]))
+  return 0.0
+end
+
+fn _gui_dispatch_rect(x, y, w, h, r, g, b)
+  if _gvm[1] <= 0.0
+    return 0.0
+  end
+  let pc = [_gvm[1], _gvm[2], x, y, w, h, r, g, b]
+  loom_dispatch(_gvm[0], "stdlib/gui/kernels/rect.spv", pc, _gui_wg(_gvm[1]))
+  return 0.0
+end
+
+fn _gui_dispatch_rounded_rect(x, y, w, h, r, g, b, radius)
+  if _gvm[1] <= 0.0
+    return 0.0
+  end
+  let pc = [_gvm[1], _gvm[2], x, y, w, h, r, g, b, radius]
+  loom_dispatch(_gvm[0], "stdlib/gui/kernels/rounded_rect.spv", pc, _gui_wg(_gvm[1]))
+  return 0.0
+end
+
+fn _gui_dispatch_circle(cx, cy, radius, r, g, b)
+  if _gvm[1] <= 0.0
+    return 0.0
+  end
+  let pc = [_gvm[1], _gvm[2], cx, cy, radius, r, g, b]
+  loom_dispatch(_gvm[0], "stdlib/gui/kernels/circle.spv", pc, _gui_wg(_gvm[1]))
+  return 0.0
+end
+
+fn _gui_dispatch_line(x0, y0, x1, y1, r, g, b, thickness)
+  if _gvm[1] <= 0.0
+    return 0.0
+  end
+  let pc = [_gvm[1], _gvm[2], x0, y0, x1, y1, r, g, b, thickness]
+  loom_dispatch(_gvm[0], "stdlib/gui/kernels/line.spv", pc, _gui_wg(_gvm[1]))
+  return 0.0
+end
+
+fn _gui_dispatch_blend(x, y, w, h, r, g, b, alpha)
+  if _gvm[1] <= 0.0
+    return 0.0
+  end
+  let pc = [_gvm[1], alpha, r, g, b, x, y, w, h, _gvm[2]]
+  loom_dispatch(_gvm[0], "stdlib/gui/kernels/blend.spv", pc, _gui_wg(_gvm[1]))
+  return 0.0
+end
+
+fn _gui_dispatch_gradient(x, y, w, h, r1, g1, b1, r2, g2, b2)
+  return _gui_dispatch_gradient_dir(x, y, w, h, r1, g1, b1, r2, g2, b2, 0.0)
+end
+
+fn _gui_dispatch_gradient_dir(x, y, w, h, r1, g1, b1, r2, g2, b2, direction)
+  if _gvm[1] <= 0.0
+    return 0.0
+  end
+  let pc = [_gvm[1], _gvm[2], x, y, w, h, r1, g1, b1, r2, g2, b2, direction]
+  loom_dispatch(_gvm[0], "stdlib/gui/kernels/gradient.spv", pc, _gui_wg(_gvm[1]))
+  return 0.0
+end
+
+// ── Frame Rendering ─────────────────────────────────────────────────
+
+fn _gui_render_v2()
+  if _gvm[4] == 0.0
+    return 0.0
+  end
+
+  let ww = _gvm[2]
+  let wh = _gvm[3]
+  let wcount = len(_gui_types)
+
+  // ── Step 1: Clear ─────────────────────────────────────
+  let _cl = _gui_dispatch_clear(_tc[0], _tc[1], _tc[2])
+
+  // ── Step 2: Panels (background rects) ─────────────────
+  let mut i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      if _gui_types[ii] == GUI_PANEL
+        let _dp = _gui_dispatch_rect(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[3], _tc[4], _tc[5])
+      end
+    end
+    i = i + 1.0
+  end
+
+  // ── Step 3: Widget backgrounds ────────────────────────
+  let mut i2 = 0.0
+  while i2 < wcount
+    let ii = int(i2)
+    if _gui_visible[ii] == 1.0
+      let t = _gui_types[ii]
+
+      if t == GUI_BUTTON
+        let mut br = _tc[6]
+        let mut bg = _tc[7]
+        let mut bb = _tc[8]
+        if _gui_hovered[ii] == 1.0
+          br = _tc[9]
+          bg = _tc[10]
+          bb = _tc[11]
+        end
+        let _db = _gui_dispatch_rounded_rect(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], br, bg, bb, 4.0)
+      end
+
+      if t == GUI_TEXTINPUT
+        let _dt = _gui_dispatch_rect(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[6], _tc[7], _tc[8])
+      end
+
+      if t == GUI_CHECKBOX
+        let _dc = _gui_dispatch_rect(_gui_x[ii], _gui_y[ii], 16.0, 16.0, _tc[6], _tc[7], _tc[8])
+        if _gui_checked[ii] == 1.0
+          let _dck = _gui_dispatch_rect(_gui_x[ii] + 3.0, _gui_y[ii] + 3.0, 10.0, 10.0, _tc[24], _tc[25], _tc[26])
+        end
+      end
+
+      if t == GUI_RADIO
+        let _dr = _gui_dispatch_circle(_gui_x[ii] + 8.0, _gui_y[ii] + 8.0, 8.0, _tc[6], _tc[7], _tc[8])
+        if _gui_checked[ii] == 1.0
+          let _drf = _gui_dispatch_circle(_gui_x[ii] + 8.0, _gui_y[ii] + 8.0, 4.0, _tc[24], _tc[25], _tc[26])
+        end
+      end
+
+      if t == GUI_SLIDER
+        // Track
+        let _ds = _gui_dispatch_rect(_gui_x[ii], _gui_y[ii] + 8.0, _gui_w[ii], 4.0, _tc[6], _tc[7], _tc[8])
+        // Thumb
+        let mut s_frac = _gui_slider_val[ii]
+        if s_frac < 0.0
+          s_frac = 0.0
+        end
+        if s_frac > 1.0
+          s_frac = 1.0
+        end
+        let thumb_x = _gui_x[ii] + s_frac * _gui_w[ii]
+        let _dst = _gui_dispatch_circle(thumb_x, _gui_y[ii] + 10.0, 6.0, _tc[24], _tc[25], _tc[26])
+      end
+
+      if t == GUI_PROGRESS
+        // Track
+        let _dpb = _gui_dispatch_rect(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[6], _tc[7], _tc[8])
+        // Fill
+        let mut p_frac = _gui_slider_val[ii]
+        if p_frac < 0.0
+          p_frac = 0.0
+        end
+        if p_frac > 1.0
+          p_frac = 1.0
+        end
+        let fill_w = p_frac * _gui_w[ii]
+        let _dpf = _gui_dispatch_rect(_gui_x[ii], _gui_y[ii], fill_w, _gui_h[ii], _tc[24], _tc[25], _tc[26])
+      end
+
+      if t == GUI_SEPARATOR
+        let _dse = _gui_dispatch_rect(_gui_x[ii], _gui_y[ii], _gui_w[ii], 1.0, _tc[6], _tc[7], _tc[8])
+      end
+
+      if t == GUI_LISTBOX
+        let _dlb = _gui_dispatch_rect(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[6], _tc[7], _tc[8])
+      end
+
+      if t == GUI_DROPDOWN
+        let _ddd = _gui_dispatch_rect(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[6], _tc[7], _tc[8])
+      end
+
+      if t == GUI_TABS
+        let _dtb = _gui_dispatch_rect(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[3], _tc[4], _tc[5])
+      end
+    end
+    i2 = i2 + 1.0
+  end
+
+  // ── Step 4: Borders ────────────────────────────────────
+  let mut i3 = 0.0
+  while i3 < wcount
+    let ii = int(i3)
+    if _gui_visible[ii] == 1.0
+      let t = _gui_types[ii]
+      if t == GUI_BUTTON
+        let bx = _gui_x[ii]
+        let by = _gui_y[ii]
+        let bw = _gui_w[ii]
+        let bh = _gui_h[ii]
+        let _bt = _gui_dispatch_line(bx, by, bx + bw, by, _tc[21], _tc[22], _tc[23], 1.0)
+        let _bb = _gui_dispatch_line(bx, by + bh, bx + bw, by + bh, _tc[21], _tc[22], _tc[23], 1.0)
+        let _bl = _gui_dispatch_line(bx, by, bx, by + bh, _tc[21], _tc[22], _tc[23], 1.0)
+        let _br = _gui_dispatch_line(bx + bw, by, bx + bw, by + bh, _tc[21], _tc[22], _tc[23], 1.0)
+      end
+      if t == GUI_TEXTINPUT
+        let bx = _gui_x[ii]
+        let by = _gui_y[ii]
+        let bw = _gui_w[ii]
+        let bh = _gui_h[ii]
+        let _bt = _gui_dispatch_line(bx, by, bx + bw, by, _tc[21], _tc[22], _tc[23], 1.0)
+        let _bb = _gui_dispatch_line(bx, by + bh, bx + bw, by + bh, _tc[21], _tc[22], _tc[23], 1.0)
+        let _bl = _gui_dispatch_line(bx, by, bx, by + bh, _tc[21], _tc[22], _tc[23], 1.0)
+        let _br = _gui_dispatch_line(bx + bw, by, bx + bw, by + bh, _tc[21], _tc[22], _tc[23], 1.0)
+      end
+      if t == GUI_LISTBOX
+        let bx = _gui_x[ii]
+        let by = _gui_y[ii]
+        let bw = _gui_w[ii]
+        let bh = _gui_h[ii]
+        let _bt = _gui_dispatch_line(bx, by, bx + bw, by, _tc[21], _tc[22], _tc[23], 1.0)
+        let _bb = _gui_dispatch_line(bx, by + bh, bx + bw, by + bh, _tc[21], _tc[22], _tc[23], 1.0)
+        let _bl = _gui_dispatch_line(bx, by, bx, by + bh, _tc[21], _tc[22], _tc[23], 1.0)
+        let _br = _gui_dispatch_line(bx + bw, by, bx + bw, by + bh, _tc[21], _tc[22], _tc[23], 1.0)
+      end
+    end
+    i3 = i3 + 1.0
+  end
+
+  // ── Step 5: Dropdown overlay (semi-transparent) ───────
+  if _gs[11] >= 0.0
+    let dd_id = int(_gs[11])
+    if dd_id < wcount
+      let dd_x = _gui_x[dd_id]
+      let dd_y = _gui_y[dd_id] + _gui_h[dd_id]
+      let dd_w = _gui_w[dd_id]
+      let mut item_count = _gui_list_count[dd_id]
+      if item_count > 10.0
+        item_count = 10.0
+      end
+      let dd_h = item_count * 20.0
+      let _dbl = _gui_dispatch_blend(dd_x, dd_y, dd_w, dd_h, _tc[3], _tc[4], _tc[5], 0.95)
+    end
+  end
+
+  // ── Step 6: Build + Run + Present ─────────────────────
+  // ALL dispatches staged. ONE build + ONE run = one GPU submission.
+  let prog = loom_build(_gvm[0])
+  if prog < 0.0
+    return 0.0
+  end
+  let _run = loom_run(prog)
+  if _run < 0.0
+    return 0.0
+  end
+
+  // Display framebuffer directly from GPU memory
+  vm_present(_gvm[0], _gvm[1])
+  return 1.0
+end

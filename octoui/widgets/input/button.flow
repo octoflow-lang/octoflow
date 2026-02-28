@@ -1,0 +1,65 @@
+// widgets/input/button.flow — Clickable Button Widget
+//
+// Button with hover/press visual states and click detection.
+// State tracking: _ui_state[id] = 0 (normal), 1 (hovered), 2 (pressed)
+
+use "../../engine/tree"
+use "../../themes/dark"
+use "../../engine/dirty"
+
+// Per-frame click tracking
+let mut _ui_btn_clicked = []
+
+// Create a button widget
+// parent: parent widget ID (-1 for root)
+// w, h: dimensions
+// label: button text
+// Returns: widget ID
+fn ui_button(parent, w, h, label)
+  let id = ui_tree_add(UI_BUTTON, parent, w, h, label)
+  // Default color: surface (themed for runtime switching)
+  let _s = ui_tree_set_color_themed(id, UI_COLOR_SURFACE)
+  // Ensure click tracking array is big enough
+  let needed = id + 1.0
+  while len(_ui_btn_clicked) < needed
+    push(_ui_btn_clicked, 0.0)
+  end
+  return id
+end
+
+// Check if button was clicked this frame
+// Returns 1.0 if clicked, 0.0 otherwise
+fn ui_button_clicked(id)
+  if id < len(_ui_btn_clicked)
+    return _ui_btn_clicked[id]
+  end
+  return 0.0
+end
+
+// Clear all click states (called at start of each frame)
+fn ui_button_clear_clicks()
+  let n = len(_ui_btn_clicked)
+  let mut i = 0.0
+  while i < n
+    _ui_btn_clicked[i] = 0.0
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Update button visual based on state
+// Called by input system when hover/press state changes
+fn ui_button_update_visual(id)
+  let state = _ui_state[id]
+  let mut color_idx = UI_COLOR_SURFACE
+  if state == 1.0
+    // Hovered
+    color_idx = UI_COLOR_HOVER
+  end
+  if state == 2.0
+    // Pressed
+    color_idx = UI_COLOR_ACTIVE
+  end
+  let _s = ui_tree_set_color_themed(id, color_idx)
+  return 0.0
+end

@@ -1,0 +1,177 @@
+// examples/menubar.flow — Menubar + Status Bar Demo
+//
+// Demonstrates a menubar with File/Edit/View menus and a status bar.
+// Click menu items to see the status bar update.
+//
+// Controls:
+//   Click trigger  — Open/close menu
+//   Hover trigger  — Switch menu (when one is open)
+//   Click item     — Execute action (updates status bar)
+//   Escape         — Close menu
+//   Escape (no menu open) — Quit
+//
+// Run: octoflow run octoui/examples/menubar.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/input/button"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../widgets/layout/menubar"
+use "../widgets/layout/statusbar"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(520.0, 400.0, "OctoUI Menubar Demo")
+
+// Root layout
+let root = ui_column(-1.0, 0.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 520.0, 400.0)
+
+// ── Menubar ──
+let bar = ui_menubar(root)
+
+// File menu
+let file_m = ui_menu(bar, "FILE")
+let mi_new = ui_menu_item(file_m, "NEW")
+let mi_open = ui_menu_item(file_m, "OPEN")
+let mi_save = ui_menu_item(file_m, "SAVE")
+let _sep1 = ui_menu_separator(file_m)
+let mi_exit = ui_menu_item(file_m, "EXIT")
+
+// Edit menu
+let edit_m = ui_menu(bar, "EDIT")
+let mi_undo = ui_menu_item(edit_m, "UNDO")
+let mi_redo = ui_menu_item(edit_m, "REDO")
+let _sep2 = ui_menu_separator(edit_m)
+let mi_cut = ui_menu_item(edit_m, "CUT")
+let mi_copy = ui_menu_item(edit_m, "COPY")
+let mi_paste = ui_menu_item(edit_m, "PASTE")
+
+// View menu
+let view_m = ui_menu(bar, "VIEW")
+let mi_zin = ui_menu_item(view_m, "ZOOM IN")
+let mi_zout = ui_menu_item(view_m, "ZOOM OUT")
+
+// ── Main content area ──
+let content = ui_column(root, 8.0)
+let _cp = ui_tree_set_padding(content, 20.0)
+
+let title = ui_text(content, "MENUBAR DEMO", UI_COLOR_PRIMARY)
+let desc = ui_text(content, "CLICK A MENU ABOVE", UI_COLOR_TEXT_DIM)
+let action_label = ui_text(content, "LAST ACTION: NONE", UI_COLOR_TEXT)
+
+// ── Status bar at bottom ──
+let sbar = ui_statusbar(root, 520.0)
+let st_text = ui_statusbar_text(sbar, "READY")
+
+// Position status bar at bottom manually
+_ui_y[sbar] = 378.0
+_ui_x[sbar] = 0.0
+
+// Initial layout
+let _l = ui_layout_update()
+
+// Initialize pipeline
+let _pi2 = ui_pipeline_init(520.0, 400.0)
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  let _inp = ui_process_input()
+
+  let mx = ui_mouse_x()
+  let my = ui_mouse_y()
+  let mclicked = ui_mouse_clicked()
+
+  // Process menubar
+  let _mp = ui_menubar_process(mx, my, mclicked)
+
+  // Check menu item clicks
+  if ui_menu_item_clicked(mi_new) == 1.0
+    let _at = ui_tree_set_text(action_label, "LAST ACTION: NEW FILE")
+    let _st = ui_statusbar_set_text(st_text, "NEW FILE CREATED")
+    let _l2 = ui_layout_update()
+  end
+  if ui_menu_item_clicked(mi_open) == 1.0
+    let _at = ui_tree_set_text(action_label, "LAST ACTION: OPEN FILE")
+    let _st = ui_statusbar_set_text(st_text, "OPENING FILE...")
+    let _l2 = ui_layout_update()
+  end
+  if ui_menu_item_clicked(mi_save) == 1.0
+    let _at = ui_tree_set_text(action_label, "LAST ACTION: SAVE FILE")
+    let _st = ui_statusbar_set_text(st_text, "FILE SAVED")
+    let _l2 = ui_layout_update()
+  end
+  if ui_menu_item_clicked(mi_exit) == 1.0
+    running = 0.0
+  end
+  if ui_menu_item_clicked(mi_undo) == 1.0
+    let _at = ui_tree_set_text(action_label, "LAST ACTION: UNDO")
+    let _st = ui_statusbar_set_text(st_text, "UNDO")
+    let _l2 = ui_layout_update()
+  end
+  if ui_menu_item_clicked(mi_redo) == 1.0
+    let _at = ui_tree_set_text(action_label, "LAST ACTION: REDO")
+    let _st = ui_statusbar_set_text(st_text, "REDO")
+    let _l2 = ui_layout_update()
+  end
+  if ui_menu_item_clicked(mi_cut) == 1.0
+    let _at = ui_tree_set_text(action_label, "LAST ACTION: CUT")
+    let _st = ui_statusbar_set_text(st_text, "CUT TO CLIPBOARD")
+    let _l2 = ui_layout_update()
+  end
+  if ui_menu_item_clicked(mi_copy) == 1.0
+    let _at = ui_tree_set_text(action_label, "LAST ACTION: COPY")
+    let _st = ui_statusbar_set_text(st_text, "COPIED")
+    let _l2 = ui_layout_update()
+  end
+  if ui_menu_item_clicked(mi_paste) == 1.0
+    let _at = ui_tree_set_text(action_label, "LAST ACTION: PASTE")
+    let _st = ui_statusbar_set_text(st_text, "PASTED")
+    let _l2 = ui_layout_update()
+  end
+  if ui_menu_item_clicked(mi_zin) == 1.0
+    let _at = ui_tree_set_text(action_label, "LAST ACTION: ZOOM IN")
+    let _st = ui_statusbar_set_text(st_text, "ZOOMED IN")
+    let _l2 = ui_layout_update()
+  end
+  if ui_menu_item_clicked(mi_zout) == 1.0
+    let _at = ui_tree_set_text(action_label, "LAST ACTION: ZOOM OUT")
+    let _st = ui_statusbar_set_text(st_text, "ZOOMED OUT")
+    let _l2 = ui_layout_update()
+  end
+
+  // Escape quits (only when no menu is open)
+  if _ui_mb_open_idx < 0.0
+    if ui_key_pressed("escape") == 1.0
+      running = 0.0
+    end
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _ps = ui_pipeline_shutdown()
+let _wc = ui_window_close()
+print("Menubar example finished.")

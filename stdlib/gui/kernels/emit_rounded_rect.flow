@@ -1,0 +1,109 @@
+// emit_rounded_rect.flow — Fill a rounded rectangle with a solid color
+//
+// Push constants:
+//   pc[0] = total (width * height)
+//   pc[1] = win_w (window width)
+//   pc[2] = rect_x
+//   pc[3] = rect_y
+//   pc[4] = rect_w
+//   pc[5] = rect_h
+//   pc[6] = r (0.0-255.0)
+//   pc[7] = g
+//   pc[8] = b
+//   pc[9] = radius (corner radius)
+//
+// Per-thread: check bounding rect, then corner distance for rounded corners.
+// Uses clamp-to-inner-rect approach: compute nearest point on inset rect,
+// check distance from pixel to that point <= radius. Handles all 4 corners.
+// Dispatch: ceil(total / 256) workgroups
+
+use "../../compiler/ir"
+
+fn emit_rounded_rect(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+
+  // Read push constants
+  let total_f = ir_push_const(entry, 0.0)
+  let win_w_f = ir_push_const(entry, 1.0)
+  let rx_f = ir_push_const(entry, 2.0)
+  let ry_f = ir_push_const(entry, 3.0)
+  let rw_f = ir_push_const(entry, 4.0)
+  let rh_f = ir_push_const(entry, 5.0)
+  let cr = ir_push_const(entry, 6.0)
+  let cg = ir_push_const(entry, 7.0)
+  let cb = ir_push_const(entry, 8.0)
+  let rad_f = ir_push_const(entry, 9.0)
+
+  // Bounds check: gid < total
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, total_f)
+
+  let merge = ir_block("merge")
+  let check = ir_block("check")
+  ir_selection_merge(entry, merge)
+  ir_term_cond_branch(entry, in_bounds, check, merge)
+
+  // Compute pixel coordinates
+  let win_w_u = ir_ftou(check, win_w_f)
+  let px = ir_umod(check, gid, win_w_u)
+  let py = ir_udiv(check, gid, win_w_u)
+  let px_f = ir_utof(check, px)
+  let py_f = ir_utof(check, py)
+
+  // Step 1: Check bounding rect
+  let rx_end = ir_fadd(check, rx_f, rw_f)
+  let ry_end = ir_fadd(check, ry_f, rh_f)
+  let c1 = ir_foge(check, px_f, rx_f)
+  let c2 = ir_folt(check, px_f, rx_end)
+  let c3 = ir_foge(check, py_f, ry_f)
+  let c4 = ir_folt(check, py_f, ry_end)
+  let in_rect = ir_land(check, ir_land(check, c1, c2), ir_land(check, c3, c4))
+
+  let rect_ok = ir_block("rect_ok")
+  let skip2 = ir_block("skip2")
+  ir_selection_merge(check, skip2)
+  ir_term_cond_branch(check, in_rect, rect_ok, skip2)
+
+  // Step 2: Corner distance check via clamp-to-inner-rect
+  // Inner rect is inset by radius on all sides
+  let inner_x_min = ir_fadd(rect_ok, rx_f, rad_f)
+  let inner_x_max = ir_fsub(rect_ok, rx_end, rad_f)
+  let inner_y_min = ir_fadd(rect_ok, ry_f, rad_f)
+  let inner_y_max = ir_fsub(rect_ok, ry_end, rad_f)
+
+  // Nearest point on inner rect: clamp(px, inner_x_min, inner_x_max)
+  let near_x = ir_fmax(rect_ok, inner_x_min, ir_fmin(rect_ok, px_f, inner_x_max))
+  let near_y = ir_fmax(rect_ok, inner_y_min, ir_fmin(rect_ok, py_f, inner_y_max))
+
+  // Distance² from pixel to nearest inner rect point
+  let dx = ir_fsub(rect_ok, px_f, near_x)
+  let dy = ir_fsub(rect_ok, py_f, near_y)
+  let dist_sq = ir_fadd(rect_ok, ir_fmul(rect_ok, dx, dx), ir_fmul(rect_ok, dy, dy))
+  let rad_sq = ir_fmul(rect_ok, rad_f, rad_f)
+  let corner_ok = ir_fole(rect_ok, dist_sq, rad_sq)
+
+  let write = ir_block("write")
+  let skip3 = ir_block("skip3")
+  ir_selection_merge(rect_ok, skip3)
+  ir_term_cond_branch(rect_ok, corner_ok, write, skip3)
+
+  // Write R, G, B channels
+  let total_u = ir_ftou(write, total_f)
+  ir_store_output_at(write, gid, cr)
+  let g_off = ir_iadd(write, gid, total_u)
+  ir_store_output_at(write, g_off, cg)
+  let b_off = ir_iadd(write, g_off, total_u)
+  ir_store_output_at(write, b_off, cb)
+
+  ir_term_branch(write, skip3)
+  ir_term_branch(skip3, skip2)
+  ir_term_branch(skip2, merge)
+  ir_term_return(merge)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

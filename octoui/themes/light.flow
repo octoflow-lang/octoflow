@@ -1,0 +1,60 @@
+// themes/light.flow — OctoUI Light Theme
+//
+// A light color palette for OctoUI. Call ui_theme_load_light()
+// to switch all theme colors to light mode at runtime.
+//
+// Shares the same semantic color constants as dark.flow.
+
+use "dark"
+
+// Load light theme colors into the existing theme arrays
+fn ui_theme_load_light()
+  // BG: white
+  let _s0 = ui_theme_set(UI_COLOR_BG, 240.0, 240.0, 245.0)
+  // SURFACE: light gray
+  let _s1 = ui_theme_set(UI_COLOR_SURFACE, 220.0, 220.0, 228.0)
+  // PRIMARY: blue (same hue, slightly darker for contrast on light bg)
+  let _s2 = ui_theme_set(UI_COLOR_PRIMARY, 60.0, 100.0, 220.0)
+  // TEXT: dark
+  let _s3 = ui_theme_set(UI_COLOR_TEXT, 30.0, 30.0, 35.0)
+  // TEXT_DIM: medium gray
+  let _s4 = ui_theme_set(UI_COLOR_TEXT_DIM, 100.0, 102.0, 108.0)
+  // BORDER: medium gray
+  let _s5 = ui_theme_set(UI_COLOR_BORDER, 180.0, 182.0, 188.0)
+  // HOVER: light hover
+  let _s6 = ui_theme_set(UI_COLOR_HOVER, 200.0, 202.0, 210.0)
+  // ACTIVE: same primary
+  let _s7 = ui_theme_set(UI_COLOR_ACTIVE, 60.0, 100.0, 220.0)
+  // Extended slots
+  let _s8 = ui_theme_set(UI_COLOR_SURFACE_2, 255.0, 255.0, 255.0)
+  let _s9 = ui_theme_set(UI_COLOR_FOCUS_RING, 60.0, 100.0, 220.0)
+  let _s10 = ui_theme_set(UI_COLOR_SUCCESS, 40.0, 167.0, 69.0)
+  let _s11 = ui_theme_set(UI_COLOR_WARNING, 200.0, 150.0, 20.0)
+  let _s12 = ui_theme_set(UI_COLOR_ERROR, 200.0, 55.0, 55.0)
+  let _s13 = ui_theme_set(UI_COLOR_GRADIENT_A, 242.0, 244.0, 248.0)
+  let _s14 = ui_theme_set(UI_COLOR_GRADIENT_B, 232.0, 234.0, 240.0)
+  let _s15 = ui_theme_set(UI_COLOR_SHADOW, 160.0, 165.0, 180.0)
+  return 0.0
+end
+
+// Restore dark theme colors
+fn ui_theme_load_dark()
+  let _s0 = ui_theme_set(UI_COLOR_BG, 30.0, 30.0, 35.0)
+  let _s1 = ui_theme_set(UI_COLOR_SURFACE, 45.0, 45.0, 50.0)
+  let _s2 = ui_theme_set(UI_COLOR_PRIMARY, 90.0, 130.0, 240.0)
+  let _s3 = ui_theme_set(UI_COLOR_TEXT, 220.0, 222.0, 228.0)
+  let _s4 = ui_theme_set(UI_COLOR_TEXT_DIM, 140.0, 142.0, 148.0)
+  let _s5 = ui_theme_set(UI_COLOR_BORDER, 80.0, 82.0, 88.0)
+  let _s6 = ui_theme_set(UI_COLOR_HOVER, 75.0, 78.0, 85.0)
+  let _s7 = ui_theme_set(UI_COLOR_ACTIVE, 90.0, 130.0, 240.0)
+  // Extended slots (classic dark — no blue tint)
+  let _s8 = ui_theme_set(UI_COLOR_SURFACE_2, 55.0, 55.0, 60.0)
+  let _s9 = ui_theme_set(UI_COLOR_FOCUS_RING, 90.0, 130.0, 240.0)
+  let _s10 = ui_theme_set(UI_COLOR_SUCCESS, 80.0, 200.0, 120.0)
+  let _s11 = ui_theme_set(UI_COLOR_WARNING, 230.0, 180.0, 60.0)
+  let _s12 = ui_theme_set(UI_COLOR_ERROR, 230.0, 80.0, 80.0)
+  let _s13 = ui_theme_set(UI_COLOR_GRADIENT_A, 50.0, 50.0, 55.0)
+  let _s14 = ui_theme_set(UI_COLOR_GRADIENT_B, 40.0, 40.0, 45.0)
+  let _s15 = ui_theme_set(UI_COLOR_SHADOW, 10.0, 10.0, 12.0)
+  return 0.0
+end

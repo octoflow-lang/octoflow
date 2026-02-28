@@ -1,7 +1,8 @@
 // stdlib/db/core.flow — In-memory columnar database
 //
 // Functions: db_create, db_table, db_tables, db_insert, db_count,
-//            db_select_column, db_select_row, db_where, db_import_csv
+//            db_select_column, db_select_row, db_where, db_import_csv,
+//            db_save, db_load
 //
 // Tables stored as map of column_name → array
 // Database stored as map of table_name → table
@@ -128,6 +129,71 @@ fn db_where(table, col, op, val)
     i = i + 1.0
   end
   return indices
+end
+
+fn db_save(table, path)
+  // Serialize table to file — data survives across runs
+  let cols_str = map_get(table, "__columns")
+  let count = float(map_get(table, "__count"))
+  let cols = split(cols_str, ",")
+  let mut lines = []
+  push(lines, "OCTOFLOW_DB_V1")
+  push(lines, cols_str)
+  push(lines, str(count))
+  let mut i = 0.0
+  while i < count
+    let mut row_parts = []
+    for col in cols
+      let key = "__col_" + col + "_" + str(i)
+      if map_has(table, key)
+        push(row_parts, map_get(table, key))
+      else
+        push(row_parts, "")
+      end
+    end
+    push(lines, join(row_parts, "\t"))
+    i = i + 1.0
+  end
+  write_file(path, join(lines, "\n"))
+  return count
+end
+
+fn db_load(path)
+  // Deserialize table from file saved by db_save
+  let mut empty = map()
+  if file_exists(path) == 0.0
+    return empty
+  end
+  let content = read_file(path)
+  let lines = split(content, "\n")
+  if len(lines) < 3.0
+    return empty
+  end
+  let header = trim(lines[0])
+  if header != "OCTOFLOW_DB_V1"
+    return empty
+  end
+  let cols_str = trim(lines[1])
+  let count = float(trim(lines[2]))
+  let cols = split(cols_str, ",")
+  let mut table = map()
+  map_set(table, "__columns", cols_str)
+  map_set(table, "__count", str(count))
+  let mut i = 0.0
+  while i < count
+    let line_idx = 3.0 + i
+    if line_idx < len(lines)
+      let vals = split(lines[line_idx], "\t")
+      let mut j = 0.0
+      while j < len(cols) && j < len(vals)
+        let key = "__col_" + cols[j] + "_" + str(i)
+        map_set(table, key, vals[j])
+        j = j + 1.0
+      end
+    end
+    i = i + 1.0
+  end
+  return table
 end
 
 fn db_import_csv(table, path)

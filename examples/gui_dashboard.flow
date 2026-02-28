@@ -1,0 +1,151 @@
+// gui_dashboard.flow — Live data visualization dashboard
+//
+// Demonstrates: 2x2 grid layout with canvas, plot library, line chart,
+// bar chart, scatter plot, real-time data updates, statistics display.
+//
+// Run: octoflow run gui_dashboard.flow
+
+use "gui/gui"
+use "gui/layout"
+use "gui/canvas"
+use "gui/plot"
+use "gui/theme"
+
+let _t = gui_theme_dark()
+gui_init(820, 620, "Data Dashboard")
+
+// Title
+let _title = gui_label(20, 8, "REAL-TIME DASHBOARD")
+
+// 2x2 grid of canvases (panel layout)
+let p1_lbl = gui_label(20, 30, "Line Chart — Time Series")
+let cvs1 = gui_canvas(20, 50, 380, 250)
+
+let p2_lbl = gui_label(420, 30, "Bar Chart — Categories")
+let cvs2 = gui_canvas(420, 50, 380, 250)
+
+let p3_lbl = gui_label(20, 320, "Scatter — Correlation")
+let cvs3 = gui_canvas(20, 340, 380, 250)
+
+let p4_lbl = gui_label(420, 320, "Statistics")
+let stat_panel = gui_panel(420, 340, 380, 250)
+
+// Stat labels
+let stat_mean   = gui_label(440, 360, "Mean:   0.0")
+let stat_min    = gui_label(440, 385, "Min:    0.0")
+let stat_max    = gui_label(440, 410, "Max:    0.0")
+let stat_count  = gui_label(440, 435, "Count:  0")
+let stat_last   = gui_label(440, 460, "Last:   0.0")
+let stat_trend  = gui_label(440, 485, "Trend:  --")
+
+// Create plots
+let plot1 = plot_create(cvs1, 0, 50, 0, 100)
+let _pad1 = plot_set_padding(plot1, 5, 5)
+
+let plot2 = plot_create(cvs2, 0, 6, 0, 100)
+let _pad2 = plot_set_padding(plot2, 5, 5)
+
+let plot3 = plot_create(cvs3, 0, 100, 0, 100)
+let _pad3 = plot_set_padding(plot3, 5, 5)
+
+// Data storage
+let mut ts_x = []
+let mut ts_y = []
+let mut frame = 0
+let mut val = 50.0
+
+// Category data
+let cat_x = [0.5, 1.5, 2.5, 3.5, 4.5]
+let mut cat_y = [30.0, 55.0, 42.0, 68.0, 51.0]
+
+// Scatter data
+let mut sc_x = []
+let mut sc_y = []
+
+// Running stats
+let mut sum = 0.0
+let mut min_v = 999.0
+let mut max_v = -999.0
+
+while gui_running() == 1.0
+  gui_update()
+  frame = frame + 1
+
+  // Update every 5 frames (~80ms)
+  if frame % 5 == 0
+    // Generate new data point
+    val = val + (random() - 0.5) * 8.0
+    if val < 5.0
+      val = 5.0
+    end
+    if val > 95.0
+      val = 95.0
+    end
+
+    // Time series
+    let t = len(ts_x) * 1.0
+    push(ts_x, t)
+    push(ts_y, val)
+
+    // Scatter (val vs val + noise)
+    push(sc_x, val)
+    push(sc_y, val + (random() - 0.5) * 20.0)
+
+    // Update categories (shift values slightly)
+    let ci = int(random() * 5.0) % 5
+    cat_y[ci] = cat_y[ci] + (random() - 0.5) * 5.0
+    if cat_y[ci] < 5.0
+      cat_y[ci] = 5.0
+    end
+    if cat_y[ci] > 95.0
+      cat_y[ci] = 95.0
+    end
+
+    // Stats
+    sum = sum + val
+    let count = len(ts_y) * 1.0
+    if val < min_v
+      min_v = val
+    end
+    if val > max_v
+      max_v = val
+    end
+    let mean = sum / count
+    gui_set_text(stat_mean,  "Mean:   " + str(floor(mean * 10.0) / 10.0))
+    gui_set_text(stat_min,   "Min:    " + str(floor(min_v * 10.0) / 10.0))
+    gui_set_text(stat_max,   "Max:    " + str(floor(max_v * 10.0) / 10.0))
+    gui_set_text(stat_count, "Count:  " + str(count))
+    gui_set_text(stat_last,  "Last:   " + str(floor(val * 10.0) / 10.0))
+    if count > 2.0
+      let prev = ts_y[int(count - 2.0)]
+      if val > prev
+        gui_set_text(stat_trend, "Trend:  UP")
+      elif val < prev
+        gui_set_text(stat_trend, "Trend:  DOWN")
+      else
+        gui_set_text(stat_trend, "Trend:  FLAT")
+      end
+    end
+
+    // Redraw line chart
+    let _c1 = plot_clear(plot1)
+    let _s1 = plot_series_line(plot1, ts_x, ts_y, 0, 200, 255)
+    let _a1 = plot_autoscale(plot1)
+    let _g1 = plot_grid(plot1, 5, 4)
+    let _d1 = plot_draw(plot1)
+
+    // Redraw bar chart
+    let _c2 = plot_clear(plot2)
+    let _s2 = plot_series_bar(plot2, cat_x, cat_y, 100, 180, 100, 0.8)
+    let _r2 = plot_set_range(plot2, 0, 6, 0, 100)
+    let _g2 = plot_grid(plot2, 5, 4)
+    let _d2 = plot_draw(plot2)
+
+    // Redraw scatter
+    let _c3 = plot_clear(plot3)
+    let _s3 = plot_series_scatter(plot3, sc_x, sc_y, 255, 100, 50)
+    let _a3 = plot_autoscale(plot3)
+    let _g3 = plot_grid(plot3, 4, 4)
+    let _d3 = plot_draw(plot3)
+  end
+end

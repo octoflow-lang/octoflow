@@ -35,6 +35,9 @@ fn arr_sum(arr)
 end
 
 fn arr_avg(arr)
+  if len(arr) == 0.0
+    return 0.0
+  end
   let mut total = 0.0
   for x in arr
     total = total + x
@@ -43,6 +46,9 @@ fn arr_avg(arr)
 end
 
 fn arr_min(arr)
+  if len(arr) == 0.0
+    return 0.0
+  end
   let mut result = arr[0]
   for x in arr
     if x < result
@@ -53,6 +59,9 @@ fn arr_min(arr)
 end
 
 fn arr_max(arr)
+  if len(arr) == 0.0
+    return 0.0
+  end
   let mut result = arr[0]
   for x in arr
     if x > result

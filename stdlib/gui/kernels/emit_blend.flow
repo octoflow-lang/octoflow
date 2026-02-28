@@ -1,0 +1,101 @@
+// emit_blend.flow — Alpha blend a rectangle onto existing framebuffer
+//
+// Push constants:
+//   pc[0] = total (width * height)
+//   pc[1] = alpha (0.0-1.0)
+//   pc[2] = src_r (0.0-255.0)
+//   pc[3] = src_g
+//   pc[4] = src_b
+//   pc[5] = rect_x
+//   pc[6] = rect_y
+//   pc[7] = rect_w
+//   pc[8] = rect_h
+//   pc[9] = win_w
+//
+// Per-thread (for pixels inside rect):
+//   Read existing pixel from globals (framebuffer)
+//   Blend: out = dst * (1-alpha) + src * alpha
+//   Write back
+//
+// Uses ir_load_output_at to read from globals (binding 2).
+// Dispatch: ceil(total / 256) workgroups
+
+use "../../compiler/ir"
+
+fn emit_blend(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+
+  // Read push constants
+  let total_f = ir_push_const(entry, 0.0)
+  let alpha_f = ir_push_const(entry, 1.0)
+  let src_r = ir_push_const(entry, 2.0)
+  let src_g = ir_push_const(entry, 3.0)
+  let src_b = ir_push_const(entry, 4.0)
+  let rx_f = ir_push_const(entry, 5.0)
+  let ry_f = ir_push_const(entry, 6.0)
+  let rw_f = ir_push_const(entry, 7.0)
+  let rh_f = ir_push_const(entry, 8.0)
+  let win_w_f = ir_push_const(entry, 9.0)
+
+  // Bounds check: gid < total
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, total_f)
+
+  let merge = ir_block("merge")
+  let check = ir_block("check")
+  ir_selection_merge(entry, merge)
+  ir_term_cond_branch(entry, in_bounds, check, merge)
+
+  // Compute pixel coordinates
+  let win_w_u = ir_ftou(check, win_w_f)
+  let px = ir_umod(check, gid, win_w_u)
+  let py = ir_udiv(check, gid, win_w_u)
+  let px_f = ir_utof(check, px)
+  let py_f = ir_utof(check, py)
+
+  // Check inside rect
+  let rx_end = ir_fadd(check, rx_f, rw_f)
+  let ry_end = ir_fadd(check, ry_f, rh_f)
+  let c1 = ir_foge(check, px_f, rx_f)
+  let c2 = ir_folt(check, px_f, rx_end)
+  let c3 = ir_foge(check, py_f, ry_f)
+  let c4 = ir_folt(check, py_f, ry_end)
+  let inside = ir_land(check, ir_land(check, c1, c2), ir_land(check, c3, c4))
+
+  let blend = ir_block("blend")
+  let skip = ir_block("skip")
+  ir_selection_merge(check, skip)
+  ir_term_cond_branch(check, inside, blend, skip)
+
+  // Read existing pixel from framebuffer (binding 2 = output = globals)
+  let total_u = ir_ftou(blend, total_f)
+  let dst_r = ir_load_output_at(blend, gid)
+  let g_off = ir_iadd(blend, gid, total_u)
+  let dst_g = ir_load_output_at(blend, g_off)
+  let b_off = ir_iadd(blend, g_off, total_u)
+  let dst_b = ir_load_output_at(blend, b_off)
+
+  // Blend: out = dst * (1-alpha) + src * alpha
+  let one_f = ir_const_f(blend, 1.0)
+  let inv_alpha = ir_fsub(blend, one_f, alpha_f)
+
+  let out_r = ir_fadd(blend, ir_fmul(blend, dst_r, inv_alpha), ir_fmul(blend, src_r, alpha_f))
+  let out_g = ir_fadd(blend, ir_fmul(blend, dst_g, inv_alpha), ir_fmul(blend, src_g, alpha_f))
+  let out_b = ir_fadd(blend, ir_fmul(blend, dst_b, inv_alpha), ir_fmul(blend, src_b, alpha_f))
+
+  // Write blended result back
+  ir_store_output_at(blend, gid, out_r)
+  ir_store_output_at(blend, g_off, out_g)
+  ir_store_output_at(blend, b_off, out_b)
+
+  ir_term_branch(blend, skip)
+  ir_term_branch(skip, merge)
+  ir_term_return(merge)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

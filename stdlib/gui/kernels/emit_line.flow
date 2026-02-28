@@ -1,0 +1,134 @@
+// emit_line.flow — Draw a line segment with thickness
+//
+// Push constants:
+//   pc[0] = total (width * height)
+//   pc[1] = win_w (window width)
+//   pc[2] = x0 (start x)
+//   pc[3] = y0 (start y)
+//   pc[4] = x1 (end x)
+//   pc[5] = y1 (end y)
+//   pc[6] = r (0.0-255.0)
+//   pc[7] = g
+//   pc[8] = b
+//   pc[9] = thickness
+//
+// Per-thread: distance from point to line segment.
+// Anti-aliased on GPU. No per-pixel stepping.
+// Dispatch: ceil(total / 256) workgroups
+
+use "../../compiler/ir"
+
+fn emit_line(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+
+  // Read push constants
+  let total_f = ir_push_const(entry, 0.0)
+  let win_w_f = ir_push_const(entry, 1.0)
+  let x0_f = ir_push_const(entry, 2.0)
+  let y0_f = ir_push_const(entry, 3.0)
+  let x1_f = ir_push_const(entry, 4.0)
+  let y1_f = ir_push_const(entry, 5.0)
+  let cr = ir_push_const(entry, 6.0)
+  let cg = ir_push_const(entry, 7.0)
+  let cb = ir_push_const(entry, 8.0)
+  let thick_f = ir_push_const(entry, 9.0)
+
+  // Bounds check: gid < total
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, total_f)
+
+  let merge = ir_block("merge")
+  let check = ir_block("check")
+  ir_selection_merge(entry, merge)
+  ir_term_cond_branch(entry, in_bounds, check, merge)
+
+  // Compute pixel coordinates
+  let win_w_u = ir_ftou(check, win_w_f)
+  let px = ir_umod(check, gid, win_w_u)
+  let py = ir_udiv(check, gid, win_w_u)
+  let px_f = ir_utof(check, px)
+  let py_f = ir_utof(check, py)
+
+  // Line direction vector
+  let ldx = ir_fsub(check, x1_f, x0_f)
+  let ldy = ir_fsub(check, y1_f, y0_f)
+  let len_sq = ir_fadd(check, ir_fmul(check, ldx, ldx), ir_fmul(check, ldy, ldy))
+
+  // Project pixel onto line: t = dot(P-A, D) / len_sq, clamped to [0,1]
+  let apx = ir_fsub(check, px_f, x0_f)
+  let apy = ir_fsub(check, py_f, y0_f)
+  let dot_val = ir_fadd(check, ir_fmul(check, apx, ldx), ir_fmul(check, apy, ldy))
+
+  // Add small epsilon to avoid division by zero (degenerate line)
+  let eps = ir_const_f(check, 0.001)
+  let len_sq_safe = ir_fadd(check, len_sq, eps)
+  let t_raw = ir_fdiv(check, dot_val, len_sq_safe)
+
+  // Clamp t to [0, 1]
+  let zero_f = ir_const_f(check, 0.0)
+  let one_f = ir_const_f(check, 1.0)
+  let t_lo = ir_fmax(check, t_raw, zero_f)
+  let t = ir_fmin(check, t_lo, one_f)
+
+  // Closest point on line segment
+  let closest_x = ir_fadd(check, x0_f, ir_fmul(check, t, ldx))
+  let closest_y = ir_fadd(check, y0_f, ir_fmul(check, t, ldy))
+
+  // Distance² from pixel to closest point
+  let ddx = ir_fsub(check, px_f, closest_x)
+  let ddy = ir_fsub(check, py_f, closest_y)
+  let dist_sq = ir_fadd(check, ir_fmul(check, ddx, ddx), ir_fmul(check, ddy, ddy))
+
+  // Anti-aliased edge: smooth alpha falloff instead of hard threshold
+  let two_f = ir_const_f(check, 2.0)
+  let half_thick = ir_fdiv(check, thick_f, two_f)
+  let dist = ir_sqrt(check, dist_sq)
+  let edge_dist = ir_fsub(check, dist, half_thick)
+  let one_f2 = ir_const_f(check, 1.0)
+  let zero_f2 = ir_const_f(check, 0.0)
+  let raw_alpha = ir_fsub(check, one_f2, edge_dist)
+
+  // Clamp alpha to [0, 1]
+  let clamped_lo = ir_fmax(check, raw_alpha, zero_f2)
+  let alpha = ir_fmin(check, clamped_lo, one_f2)
+
+  // Skip pixel if fully transparent
+  let has_coverage = ir_fgt(check, alpha, zero_f2)
+
+  let write = ir_block("write")
+  let skip = ir_block("skip")
+  ir_selection_merge(check, skip)
+  ir_term_cond_branch(check, has_coverage, write, skip)
+
+  // Alpha-blend: dst = dst * (1 - alpha) + src * alpha
+  let total_u = ir_ftou(write, total_f)
+  let inv_alpha = ir_fsub(write, one_f2, alpha)
+
+  // R channel
+  let old_r = ir_load_output_at(write, gid)
+  let blended_r = ir_fadd(write, ir_fmul(write, old_r, inv_alpha), ir_fmul(write, cr, alpha))
+  ir_store_output_at(write, gid, blended_r)
+
+  // G channel
+  let g_off = ir_iadd(write, gid, total_u)
+  let old_g = ir_load_output_at(write, g_off)
+  let blended_g = ir_fadd(write, ir_fmul(write, old_g, inv_alpha), ir_fmul(write, cg, alpha))
+  ir_store_output_at(write, g_off, blended_g)
+
+  // B channel
+  let b_off = ir_iadd(write, g_off, total_u)
+  let old_b = ir_load_output_at(write, b_off)
+  let blended_b = ir_fadd(write, ir_fmul(write, old_b, inv_alpha), ir_fmul(write, cb, alpha))
+  ir_store_output_at(write, b_off, blended_b)
+
+  ir_term_branch(write, skip)
+  ir_term_branch(skip, merge)
+  ir_term_return(merge)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

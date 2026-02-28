@@ -1,0 +1,19 @@
+# Build artifacts
+*.exe
+*.dll
+*.obj
+*.o
+target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Keep .spv kernels in version control (they're build outputs but small)
+# !kernels/*.spv

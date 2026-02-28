@@ -66,9 +66,15 @@ fn str_count(s, sub)
   if sublen == 0.0
     return 0.0
   end
+  if slen == 0.0
+    return 0.0
+  end
+  if sublen > slen
+    return 0.0
+  end
   let mut i = 0.0
   while i <= slen - sublen
-    let chunk = substr(s, i, i + sublen)
+    let chunk = substr(s, i, sublen)
     if chunk == sub
       count = count + 1.0
       i = i + sublen

@@ -1,0 +1,152 @@
+// widgets/input/toggle.flow — Toggle Switch Widget
+//
+// A visual on/off switch: track (wide rect) + knob (smaller rect).
+// Off = knob on left, border color track.
+// On  = knob on right, primary color track.
+//
+// Click or Space (when focused) to toggle.
+//
+// Usage:
+//   let tgl = ui_toggle(parent, "DARK MODE")
+//   if ui_toggle_on(tgl) == 1.0
+//     // toggle is ON
+//   end
+//   let _s = ui_toggle_set(tgl, 1.0)  // Set programmatically
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// Toggle switch constants (UI_TOGGLE defined in tree.flow)
+let UI_TOGGLE_W = 36.0
+let UI_TOGGLE_H = 16.0
+let UI_TOGGLE_KNOB_W = 14.0
+
+// Toggle state tracking (indexed by row widget ID)
+let mut _ui_toggle_track = []   // track widget ID
+let mut _ui_toggle_knob = []    // knob widget ID
+let mut _ui_toggle_state = []   // 0.0 = off, 1.0 = on
+
+// Create a toggle switch with label
+// parent: parent widget ID
+// label: text shown next to toggle
+// Returns: row widget ID (use this ID for all toggle functions)
+fn ui_toggle(parent, label)
+  // Create row container: [track] [label]
+  let row = ui_tree_add(UI_ROW, parent, 0.0, UI_TOGGLE_H, " ")
+  let _rs = ui_tree_set_spacing(row, 8.0)
+
+  // Track (background bar)
+  let track = ui_tree_add(UI_TOGGLE, row, UI_TOGGLE_W, UI_TOGGLE_H, " ")
+  let _tc = ui_tree_set_color_themed(track, UI_COLOR_BORDER)
+
+  // Knob (slides left/right)
+  let knob = ui_tree_add(UI_BOX, track, UI_TOGGLE_KNOB_W, UI_TOGGLE_H, " ")
+  let _kc = ui_tree_set_color_themed(knob, UI_COLOR_TEXT)
+
+  // Label text
+  let txt = ui_tree_add(UI_TEXT, row, ui_text_width(label, 16.0), 16.0, label)
+  let _lc = ui_tree_set_color_themed(txt, UI_COLOR_TEXT)
+
+  // Track state
+  let needed = row + 1.0
+  while len(_ui_toggle_track) < needed
+    push(_ui_toggle_track, -1.0)
+    push(_ui_toggle_knob, -1.0)
+    push(_ui_toggle_state, 0.0)
+  end
+  _ui_toggle_track[row] = track
+  _ui_toggle_knob[row] = knob
+  _ui_toggle_state[row] = 0.0
+
+  return row
+end
+
+// Check if toggle is on
+fn ui_toggle_on(row_id)
+  if row_id < len(_ui_toggle_state)
+    return _ui_toggle_state[row_id]
+  end
+  return 0.0
+end
+
+// Set toggle state programmatically
+fn ui_toggle_set(row_id, val)
+  if row_id >= len(_ui_toggle_state)
+    return 0.0
+  end
+  _ui_toggle_state[row_id] = val
+  let _u = ui_toggle_update_visual(row_id)
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Toggle the switch (called by input system)
+fn ui_toggle_toggle(track_id)
+  // Find the row that owns this track
+  let mut row_id = -1.0
+  let mut i = 0.0
+  while i < len(_ui_toggle_track)
+    if _ui_toggle_track[i] == track_id
+      row_id = i
+    end
+    i = i + 1.0
+  end
+  if row_id < 0.0
+    return 0.0
+  end
+
+  // Toggle state
+  if _ui_toggle_state[row_id] == 0.0
+    _ui_toggle_state[row_id] = 1.0
+  else
+    _ui_toggle_state[row_id] = 0.0
+  end
+
+  let _u = ui_toggle_update_visual(row_id)
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Update track color and knob position based on state
+fn ui_toggle_update_visual(row_id)
+  let track = _ui_toggle_track[row_id]
+  let knob = _ui_toggle_knob[row_id]
+  let state = _ui_toggle_state[row_id]
+
+  if state == 1.0
+    // ON: primary color track
+    let _tc = ui_tree_set_color_themed(track, UI_COLOR_PRIMARY)
+  else
+    // OFF: border color track
+    let _tc = ui_tree_set_color_themed(track, UI_COLOR_BORDER)
+  end
+
+  return 0.0
+end
+
+// Position knob correctly (call after layout)
+fn ui_toggle_update_all()
+  let mut i = 0.0
+  while i < len(_ui_toggle_track)
+    let track = _ui_toggle_track[i]
+    if track >= 0.0
+      let knob = _ui_toggle_knob[i]
+      let state = _ui_toggle_state[i]
+      let tx = _ui_x[track]
+      let ty = _ui_y[track]
+
+      _ui_y[knob] = ty
+      if state == 1.0
+        // Knob on right
+        _ui_x[knob] = tx + UI_TOGGLE_W - UI_TOGGLE_KNOB_W
+      else
+        // Knob on left
+        _ui_x[knob] = tx
+      end
+      _ui_dirty[knob] = 1.0
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end

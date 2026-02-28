@@ -1,0 +1,76 @@
+// test_persistence.flow — Tests for db_save / db_load
+//
+// Test 1: roundtrip — create, insert, save, load, verify
+// Test 2: load nonexistent path returns empty map
+use "core"
+
+fn test_roundtrip()
+  let mut db = db_create()
+  let mut cols = ["name", "age", "city"]
+  let mut users = db_table(db, "users", cols)
+
+  let mut row1 = map()
+  map_set(row1, "name", "Alice")
+  map_set(row1, "age", "30")
+  map_set(row1, "city", "Seattle")
+  db_insert(users, row1)
+
+  let mut row2 = map()
+  map_set(row2, "name", "Bob")
+  map_set(row2, "age", "25")
+  map_set(row2, "city", "Portland")
+  db_insert(users, row2)
+
+  let mut row3 = map()
+  map_set(row3, "name", "Carol")
+  map_set(row3, "age", "35")
+  map_set(row3, "city", "Denver")
+  db_insert(users, row3)
+
+  // Save to file
+  let path = "stdlib/db/__test_db_persist.dat"
+  let saved = db_save(users, path)
+  assert(saved == 3.0, "db_save should return row count 3")
+
+  // Load back
+  let loaded = db_load(path)
+  let count = float(map_get(loaded, "__count"))
+  assert(count == 3.0, "loaded table should have 3 rows")
+
+  // Verify column structure preserved
+  let cols = map_get(loaded, "__columns")
+  assert(cols == "name,age,city", "columns should match original")
+
+  // Verify row 0 data
+  let name0 = map_get(loaded, "__col_name_0")
+  assert(name0 == "Alice", "row 0 name should be Alice")
+  let age0 = map_get(loaded, "__col_age_0")
+  assert(age0 == "30", "row 0 age should be 30")
+  let city0 = map_get(loaded, "__col_city_0")
+  assert(city0 == "Seattle", "row 0 city should be Seattle")
+
+  // Verify row 2 data
+  let name2 = map_get(loaded, "__col_name_2")
+  assert(name2 == "Carol", "row 2 name should be Carol")
+  let city2 = map_get(loaded, "__col_city_2")
+  assert(city2 == "Denver", "row 2 city should be Denver")
+
+  // Clean up test file
+  write_file(path, "")
+  print("PASS: test_roundtrip")
+  return 0.0
+end
+
+fn test_load_nonexistent()
+  let result = db_load("stdlib/db/__nonexistent_db_file_12345.dat")
+  // Should return empty map without crashing
+  let keys = map_keys(result)
+  assert(len(keys) == 0.0, "loading nonexistent file should return empty map")
+  print("PASS: test_load_nonexistent")
+  return 0.0
+end
+
+// Run tests
+test_roundtrip()
+test_load_nonexistent()
+print("All db persistence tests passed.")

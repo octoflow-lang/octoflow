@@ -1,12 +1,16 @@
 // test_gui.flow — GUI Widget Toolkit State Management Tests
 //
-// Tests all 13 widget types: creation, state queries, setters.
+// Tests all 16 widget types: creation, state queries, setters.
+// Also tests: OOB safety, text input roundtrip, gui_remove, themes,
+// canvas commands, layout positions, and new Phase 3H features.
 // Does NOT call gui_init() — exercises array-based state only.
 //
 // Usage:
 //   octoflow run stdlib/gui/test_gui.flow
 
 use "gui"
+use "layout"
+use "animation"
 
 // Array-based counters (scalar snapshot semantics — functions can't modify scalars)
 let mut _tcount = [0.0, 0.0]
@@ -312,6 +316,235 @@ let _c128 = check("total widgets", total_widgets, 18.0)
 print("20. State Array")
 let _c129 = check("dropdown_open init", _gs[11], -1.0)
 let _c130 = check("dirty flag", _gs[9], 1.0)
+
+// ════════════════════════════════════════════════════════════════════
+// ── NEW Phase 3H Tests ─────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════
+
+// ── H-20: OOB query safety ─────────────────────────────────────────
+print("21. OOB Query Safety (H-20)")
+let _oob1 = check("clicked OOB -1", gui_clicked(-1.0), 0.0)
+let _oob2 = check("clicked OOB 999", gui_clicked(999.0), 0.0)
+let _oob3 = check("checked OOB", gui_checked(-5.0), 0.0)
+let _oob4 = check("slider_value OOB", gui_slider_value(999.0), 0.0)
+let _oob5 = check_str("get_text OOB", gui_get_text(-1.0), "")
+let _oob6 = check("listbox_selected OOB", gui_listbox_selected(-1.0), -1.0)
+let _oob7 = check_str("listbox_text OOB", gui_listbox_text(-1.0, 0.0), "")
+let _oob8 = check("dropdown_selected OOB", gui_dropdown_selected(999.0), -1.0)
+let _oob9 = check_str("dropdown_text OOB", gui_dropdown_text(999.0, 0.0), "")
+let _oob10 = check("spinbox_value OOB", gui_spinbox_value(-1.0), 0.0)
+let _oob11 = check("tab_active OOB", gui_tab_active(999.0), 0.0)
+let _oob12 = check("tree_selected OOB", gui_tree_selected(-1.0), -1.0)
+let _oob13 = check_str("tree_text OOB", gui_tree_text(-1.0, 0.0), "")
+// OOB mutations should be no-ops (return 0.0)
+let _oob_m1 = check("set_text OOB", gui_set_text(-1.0, "X"), 0.0)
+let _oob_m2 = check("set_checked OOB", gui_set_checked(999.0, 1.0), 0.0)
+let _oob_m3 = check("set_slider OOB", gui_set_slider(-1.0, 50.0), 0.0)
+let _oob_m4 = check("set_visible OOB", gui_set_visible(999.0, 0.0), 0.0)
+let _oob_m5 = check("set_enabled OOB", gui_set_enabled(-1.0, 0.0), 0.0)
+let _oob_m6 = check("set_progress OOB", gui_set_progress(999.0, 50.0), 0.0)
+let _oob_m7 = check("set_spinbox OOB", gui_set_spinbox(-1.0, 10.0), 0.0)
+let _oob_m8 = check("set_dropdown OOB", gui_set_dropdown(-1.0, 0.0), 0.0)
+let _oob_m9 = check("set_tab OOB", gui_set_tab(999.0, 0.0), 0.0)
+let _oob_m10 = check("listbox_add OOB", gui_listbox_add(-1.0, "X"), 0.0)
+let _oob_m11 = check("dropdown_add OOB", gui_dropdown_add(-1.0, "X"), 0.0)
+let _oob_m12 = check("tab_add OOB", gui_tab_add(-1.0, "X"), 0.0)
+
+// ── H-23: Text input roundtrip ─────────────────────────────────────
+print("22. Text Input Roundtrip (H-23)")
+let _sit1 = gui_set_input_text(inp, "HELLO FLOW")
+let _ti1 = check("set_input_text ok", _sit1, 1.0)
+let _ti2 = check_str("get_text roundtrip", gui_get_text(inp), "HELLO FLOW")
+let _ti3 = check("cursor at end", _gui_input_cursor[int(inp)], 10.0)
+// Set empty text
+let _sit2 = gui_set_input_text(inp, "")
+let _ti4 = check_str("empty text", gui_get_text(inp), "")
+let _ti5 = check("cursor at 0", _gui_input_cursor[int(inp)], 0.0)
+// OOB set_input_text
+let _ti6 = check("set_input_text OOB", gui_set_input_text(-1.0, "X"), 0.0)
+
+// ── H-32: Widget removal ───────────────────────────────────────────
+print("23. Widget Removal (H-32)")
+// Create a temporary button then remove it
+let tmp_btn = gui_button(0.0, 0.0, 50.0, 20.0, "TEMP")
+let tmp_id = int(tmp_btn)
+let _rm0 = check("tmp btn type before", _gui_types[tmp_id], GUI_BUTTON)
+let _rm1 = gui_remove(tmp_btn)
+let _rm2 = check("remove returns 1", _rm1, 1.0)
+let _rm3 = check("removed type=0", _gui_types[tmp_id], 0.0)
+let _rm4 = check("removed visible=0", _gui_visible[tmp_id], 0.0)
+let _rm5 = check("removed enabled=0", _gui_enabled[tmp_id], 0.0)
+// OOB remove
+let _rm6 = check("remove OOB", gui_remove(-1.0), 0.0)
+let _rm7 = check("remove OOB 999", gui_remove(999.0), 0.0)
+
+// ── H-24: Theme 30-value check ─────────────────────────────────────
+print("24. Theme 30-value Check (H-24)")
+// Switch to dark theme and verify all 30 slots are set
+let _td2 = gui_theme_dark()
+let _tc0 = check("tc[0] bg_r", _tc[0], 30.0)
+let _tc1 = check("tc[3] panel_r", _tc[3], 45.0)
+let _tc2 = check("tc[6] widget_r", _tc[6], 60.0)
+let _tc3 = check("tc[9] hover_r", _tc[9], 75.0)
+let _tc4 = check("tc[12] active_r", _tc[12], 90.0)
+let _tc5 = check("tc[15] text_r", _tc[15], 220.0)
+let _tc6 = check("tc[18] text_dim_r", _tc[18], 140.0)
+let _tc7 = check("tc[21] border_r", _tc[21], 80.0)
+let _tc8 = check("tc[24] accent_r", _tc[24], 100.0)
+let _tc9 = check("tc[27] slider_r", _tc[27], 90.0)
+
+// ── H-24: New themes ───────────────────────────────────────────────
+print("25. New Themes (H-24)")
+// Midnight theme
+let _tmn = gui_theme_midnight()
+let _mn1 = check("midnight bg_r", _tc[0], 18.0)
+let _mn2 = check("midnight text_r", _tc[15], 210.0)
+let _mn3 = check("midnight accent_r", _tc[24], 160.0)
+// Forest theme
+let _tfo = gui_theme_forest()
+let _fo1 = check("forest bg_r", _tc[0], 20.0)
+let _fo2 = check("forest bg_g", _tc[1], 30.0)
+let _fo3 = check("forest accent_g", _tc[25], 200.0)
+// High contrast theme
+let _thc = gui_theme_high_contrast()
+let _hc1 = check("hicon bg_r", _tc[0], 0.0)
+let _hc2 = check("hicon text_r", _tc[15], 255.0)
+let _hc3 = check("hicon border_r", _tc[21], 255.0)
+let _hc4 = check("hicon accent_r", _tc[24], 255.0)
+
+// ── H-30: Canvas text commands ─────────────────────────────────────
+print("26. Canvas Text Commands (H-30)")
+// Redraw on canvas after clear
+let _ct1 = gui_canvas_text(cvs, 10.0, 10.0, "HELLO", 1.0)
+let _ct2 = check("canvas text cmd", _gui_list_count[15], 1.0)
+// Check text was stored in buffer
+let text_buf_len = len(_gui_canvas_text_buf)
+let _ct3 = check("text buf has entry", text_buf_len > 0.0, 1.0)
+// Colored text
+let _ct4 = gui_canvas_text_colored(cvs, 10.0, 30.0, "RED", 1.0, 255.0, 0.0, 0.0)
+let _ct5 = check("canvas 2 text cmds", _gui_list_count[15], 2.0)
+// Clear for next tests
+let _ct6 = gui_canvas_clear(cvs)
+
+// ── H-21: Canvas init fresh start ──────────────────────────────────
+print("27. Canvas Start Isolation (H-21)")
+let cvs2 = gui_canvas(0.0, 0.0, 100.0, 100.0)
+let _ci1 = check("cvs2 cmd count", _gui_list_count[int(cvs2)], 0.0)
+let _ci2 = gui_canvas_line(cvs2, 0.0, 0.0, 50.0, 50.0, 255.0, 255.0, 255.0)
+let _ci3 = check("cvs2 has 1 cmd", _gui_list_count[int(cvs2)], 1.0)
+// Original canvas should still be cleared
+let _ci4 = check("cvs1 still clear", _gui_list_count[15], 0.0)
+
+// ── Layout: vstack positions ───────────────────────────────────────
+print("28. VStack Positions")
+let vs = vstack(100.0, 50.0, 10.0)
+let vs_lbl = vstack_label(vs, "LABEL A")
+// Label placed at (100, 50), advance by 20 + 10 spacing = cursor at 80
+let _vs1 = check("vstack lbl x", _gui_x[int(vs_lbl)], 100.0)
+let _vs2 = check("vstack lbl y", _gui_y[int(vs_lbl)], 50.0)
+let vs_btn = vstack_button(vs, 120.0, 36.0, "BTN")
+// Button placed at (100, 80), advance by 36 + 10 = cursor at 126
+let _vs3 = check("vstack btn x", _gui_x[int(vs_btn)], 100.0)
+let _vs4 = check("vstack btn y", _gui_y[int(vs_btn)], 80.0)
+let vs_chk = vstack_checkbox(vs, "CHECK")
+// Checkbox at (100, 126)
+let _vs5 = check("vstack chk y", _gui_y[int(vs_chk)], 126.0)
+// Cursor should now be at 126 + 22 + 10 = 158
+let _vs6 = check("vstack cursor", vstack_cursor_y(vs), 158.0)
+
+// ── Layout: hstack positions ───────────────────────────────────────
+print("29. HStack Positions")
+let hs = hstack(200.0, 300.0, 8.0)
+let hs_btn1 = hstack_button(hs, 80.0, 30.0, "A")
+let _hs1 = check("hstack btn1 x", _gui_x[int(hs_btn1)], 200.0)
+let _hs2 = check("hstack btn1 y", _gui_y[int(hs_btn1)], 300.0)
+let hs_btn2 = hstack_button(hs, 80.0, 30.0, "B")
+// Second button at x = 200 + 80 + 8 = 288
+let _hs3 = check("hstack btn2 x", _gui_x[int(hs_btn2)], 288.0)
+let _hs4 = check("hstack btn2 y", _gui_y[int(hs_btn2)], 300.0)
+
+// ── Layout: grid positions ─────────────────────────────────────────
+print("30. Grid Positions")
+let g = grid(20.0, 20.0, 3.0, 100.0, 36.0, 4.0)
+let g_b00 = grid_button(g, 0.0, 0.0, "A")
+let g_b01 = grid_button(g, 0.0, 1.0, "B")
+let g_b10 = grid_button(g, 1.0, 0.0, "C")
+// (0,0) at (20, 20)
+let _g1 = check("grid 0,0 x", _gui_x[int(g_b00)], 20.0)
+let _g2 = check("grid 0,0 y", _gui_y[int(g_b00)], 20.0)
+// (0,1) at (20 + 1*(100+4), 20) = (124, 20)
+let _g3 = check("grid 0,1 x", _gui_x[int(g_b01)], 124.0)
+let _g4 = check("grid 0,1 y", _gui_y[int(g_b01)], 20.0)
+// (1,0) at (20, 20 + 1*(36+4)) = (20, 60)
+let _g5 = check("grid 1,0 x", _gui_x[int(g_b10)], 20.0)
+let _g6 = check("grid 1,0 y", _gui_y[int(g_b10)], 60.0)
+
+// ── H-36: Animation easing ─────────────────────────────────────────
+print("31. Animation Easing (H-36)")
+// ease_linear(0.5) = 0.5
+let _el1 = check("ease_linear 0", ease_linear(0.0), 0.0)
+let _el2 = check("ease_linear 1", ease_linear(1.0), 1.0)
+let _el3 = check("ease_linear 0.5", ease_linear(0.5), 0.5)
+// ease_in(0.5) = 0.25
+let _ei1 = check("ease_in 0.5", ease_in(0.5), 0.25)
+let _ei2 = check("ease_in 0", ease_in(0.0), 0.0)
+let _ei3 = check("ease_in 1", ease_in(1.0), 1.0)
+// ease_out(0.0) = 0.0, ease_out(1.0) = 1.0
+let _eo1 = check("ease_out 0", ease_out(0.0), 0.0)
+let _eo2 = check("ease_out 1", ease_out(1.0), 1.0)
+
+// ── H-36: Animation create + step ──────────────────────────────────
+print("32. Animation Create/Step (H-36)")
+let anim = gui_anim_create(0.0, 100.0, 1000.0, "linear")
+let _a1 = check("anim created", anim >= 0.0, 1.0)
+let _a2 = check("anim not done", gui_anim_done(anim), 0.0)
+// Step 500ms — should be at 50.0 (linear, 0→100 over 1000ms)
+let val_half = gui_anim_step(anim, 500.0)
+let _a3 = check("anim half", val_half, 50.0)
+// Step another 500ms — should be done at 100.0
+let val_full = gui_anim_step(anim, 500.0)
+let _a4 = check("anim full", val_full, 100.0)
+let _a5 = check("anim done", gui_anim_done(anim), 1.0)
+// Reset
+let _ar = gui_anim_reset(anim)
+let _a6 = check("anim reset not done", gui_anim_done(anim), 0.0)
+
+// ── H-36: Lerp helper ──────────────────────────────────────────────
+print("33. Lerp Helper (H-36)")
+let _lp1 = check("lerp 0", gui_lerp(10.0, 20.0, 0.0), 10.0)
+let _lp2 = check("lerp 1", gui_lerp(10.0, 20.0, 1.0), 20.0)
+let _lp3 = check("lerp 0.5", gui_lerp(10.0, 20.0, 0.5), 15.0)
+let _lp4 = check("lerp neg", gui_lerp(0.0, 100.0, 0.25), 25.0)
+
+// ── H-23: Dropdown list_start init ─────────────────────────────────
+print("34. Dropdown Init (H-23)")
+// Create a fresh dropdown — list_start should be set at creation
+let dd2 = gui_dropdown(0.0, 0.0, 100.0)
+let dd2_ii = int(dd2)
+let dd2_start = _gui_list_start[dd2_ii]
+// Start should be >= 0 and point into list_items
+let _di1 = check("dd2 start >= 0", dd2_start >= 0.0, 1.0)
+// Add items and verify they come back correctly
+let _da4 = gui_dropdown_add(dd2, "FIRST")
+let _da5 = gui_dropdown_add(dd2, "SECOND")
+let _di2 = check("dd2 count", _gui_list_count[dd2_ii], 2.0)
+let _di3 = check_str("dd2 item 0", gui_dropdown_text(dd2, 0.0), "FIRST")
+let _di4 = check_str("dd2 item 1", gui_dropdown_text(dd2, 1.0), "SECOND")
+let _di5 = check("dd2 auto select 0", gui_dropdown_selected(dd2), 0.0)
+
+// ── Listbox OOB item access ────────────────────────────────────────
+print("35. Listbox OOB Item Access")
+let _lo1 = check_str("listbox text OOB idx -1", gui_listbox_text(lst, -1.0), "")
+let _lo2 = check_str("listbox text OOB idx 99", gui_listbox_text(lst, 99.0), "")
+let _lo3 = check_str("dropdown text OOB idx -1", gui_dropdown_text(dd, -1.0), "")
+let _lo4 = check_str("dropdown text OOB idx 99", gui_dropdown_text(dd, 99.0), "")
+
+// ── _gui_id_ok helper ──────────────────────────────────────────────
+print("36. _gui_id_ok Helper")
+let _ok1 = check("id_ok valid", _gui_id_ok(0.0), 1.0)
+let _ok2 = check("id_ok last", _gui_id_ok(btn), 1.0)
+let _ok3 = check("id_ok -1", _gui_id_ok(-1.0), 0.0)
+let _ok4 = check("id_ok 99999", _gui_id_ok(99999.0), 0.0)
 
 // ── Summary ────────────────────────────────────────────────────────
 let total = _tcount[0] + _tcount[1]

@@ -1,0 +1,220 @@
+// examples/dialog.flow — OctoUI Modal Dialog + Scroll Container Demo
+//
+// Demonstrates:
+//   - Modal dialog with title bar and close button
+//   - Scroll container with many items
+//   - Opening/closing modals from button clicks
+//   - Scroll navigation with arrow keys
+//
+// Controls:
+//   TAB        — Cycle focus
+//   SPACE      — Click focused widget
+//   ESCAPE     — Close modal / Quit
+//   UP/DOWN    — Scroll when scroll container focused
+//   Click      — Interact with widgets
+//
+// Run: octoflow run octoui/examples/dialog.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/core/label"
+use "../widgets/core/notification"
+use "../widgets/core/modal"
+use "../widgets/input/button"
+use "../widgets/input/checkbox"
+use "../widgets/input/toggle"
+use "../widgets/input/slider"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../widgets/layout/scroll"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(600.0, 500.0, "OctoUI Dialog + Scroll Demo")
+
+// ── Root layout ──
+let root = ui_column(-1.0, 10.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 600.0, 500.0)
+
+// Title
+let title = ui_text(root, "MODAL + SCROLL DEMO", UI_COLOR_PRIMARY)
+let sep1 = ui_separator(root, 568.0)
+
+// ── Buttons to open modals ──
+let btn_row = ui_row(root, 12.0)
+let btn_info = ui_button(btn_row, 140.0, 32.0, "INFO DIALOG")
+let btn_confirm = ui_button(btn_row, 160.0, 32.0, "CONFIRM DIALOG")
+let btn_scroll = ui_button(btn_row, 150.0, 32.0, "SCROLL DEMO")
+
+let sep2 = ui_separator(root, 568.0)
+
+// ── Scroll container (always visible) ──
+let scroll_label = ui_text(root, "SCROLLABLE LIST (UP/DOWN KEYS)", UI_COLOR_TEXT_DIM)
+let scroll_panel = ui_scroll(root, 568.0, 180.0, 6.0)
+
+// Add many items to the scroll container
+let sc_b1 = ui_box(scroll_panel, 540.0, 28.0, UI_COLOR_SURFACE)
+let sc_t1 = ui_text(scroll_panel, "ITEM 1 - SCROLL DOWN TO SEE MORE", UI_COLOR_TEXT)
+let sc_b2 = ui_box(scroll_panel, 540.0, 28.0, UI_COLOR_PRIMARY)
+let sc_t2 = ui_text(scroll_panel, "ITEM 2 - HIGHLIGHTED ROW", UI_COLOR_TEXT)
+let sc_b3 = ui_box(scroll_panel, 540.0, 28.0, UI_COLOR_SURFACE)
+let sc_t3 = ui_text(scroll_panel, "ITEM 3 - ANOTHER ENTRY", UI_COLOR_TEXT)
+let sc_b4 = ui_box(scroll_panel, 540.0, 28.0, UI_COLOR_SURFACE)
+let sc_t4 = ui_text(scroll_panel, "ITEM 4 - KEEP SCROLLING", UI_COLOR_TEXT_DIM)
+let sc_b5 = ui_box(scroll_panel, 540.0, 28.0, UI_COLOR_SURFACE)
+let sc_t5 = ui_text(scroll_panel, "ITEM 5 - ALMOST THERE", UI_COLOR_TEXT_DIM)
+let sc_b6 = ui_box(scroll_panel, 540.0, 28.0, UI_COLOR_PRIMARY)
+let sc_t6 = ui_text(scroll_panel, "ITEM 6 - SECOND HIGHLIGHT", UI_COLOR_TEXT)
+let sc_b7 = ui_box(scroll_panel, 540.0, 28.0, UI_COLOR_SURFACE)
+let sc_t7 = ui_text(scroll_panel, "ITEM 7 - NEAR THE BOTTOM", UI_COLOR_TEXT_DIM)
+let sc_b8 = ui_box(scroll_panel, 540.0, 28.0, UI_COLOR_SURFACE)
+let sc_t8 = ui_text(scroll_panel, "ITEM 8 - LAST VISIBLE ITEM", UI_COLOR_TEXT)
+
+let sep3 = ui_separator(root, 568.0)
+
+// Status
+let status = ui_label(root, "STATUS", "READY", UI_COLOR_PRIMARY)
+
+// ── Create modal dialogs ──
+
+// Info dialog (simple text)
+let dlg_info = ui_modal(320.0, 180.0, "INFORMATION")
+let info_panel = ui_modal_panel(dlg_info)
+let info_text1 = ui_text(info_panel, "THIS IS AN INFO DIALOG", UI_COLOR_TEXT)
+let info_text2 = ui_text(info_panel, "CLICK X OR PRESS ESC", UI_COLOR_TEXT_DIM)
+let info_text3 = ui_text(info_panel, "TO CLOSE THIS DIALOG", UI_COLOR_TEXT_DIM)
+let info_ok = ui_button(info_panel, 100.0, 28.0, "OK")
+
+// Confirm dialog (with action buttons)
+let dlg_confirm = ui_modal(360.0, 200.0, "CONFIRM ACTION")
+let confirm_panel = ui_modal_panel(dlg_confirm)
+let confirm_text = ui_text(confirm_panel, "ARE YOU SURE?", UI_COLOR_TEXT)
+let confirm_desc = ui_text(confirm_panel, "THIS ACTION CANNOT BE UNDONE", UI_COLOR_TEXT_DIM)
+let confirm_btns = ui_row(confirm_panel, 12.0)
+let btn_yes = ui_button(confirm_btns, 100.0, 28.0, "YES")
+let btn_no = ui_button(confirm_btns, 100.0, 28.0, "NO")
+
+// Scroll dialog (scrollable content inside a modal)
+let dlg_scroll = ui_modal(400.0, 300.0, "SCROLL IN MODAL")
+let scroll_m_panel = ui_modal_panel(dlg_scroll)
+let scroll_m_text = ui_text(scroll_m_panel, "SCROLLABLE CONTENT BELOW", UI_COLOR_TEXT_DIM)
+let scroll_m = ui_scroll(scroll_m_panel, 370.0, 200.0, 4.0)
+// Add items to modal scroll
+let ms_b1 = ui_box(scroll_m, 350.0, 24.0, UI_COLOR_SURFACE)
+let ms_t1 = ui_text(scroll_m, "MODAL ITEM 1", UI_COLOR_TEXT)
+let ms_b2 = ui_box(scroll_m, 350.0, 24.0, UI_COLOR_SURFACE)
+let ms_t2 = ui_text(scroll_m, "MODAL ITEM 2", UI_COLOR_TEXT)
+let ms_b3 = ui_box(scroll_m, 350.0, 24.0, UI_COLOR_PRIMARY)
+let ms_t3 = ui_text(scroll_m, "MODAL ITEM 3 - HIGHLIGHTED", UI_COLOR_TEXT)
+let ms_b4 = ui_box(scroll_m, 350.0, 24.0, UI_COLOR_SURFACE)
+let ms_t4 = ui_text(scroll_m, "MODAL ITEM 4", UI_COLOR_TEXT_DIM)
+let ms_b5 = ui_box(scroll_m, 350.0, 24.0, UI_COLOR_SURFACE)
+let ms_t5 = ui_text(scroll_m, "MODAL ITEM 5", UI_COLOR_TEXT_DIM)
+let ms_b6 = ui_box(scroll_m, 350.0, 24.0, UI_COLOR_SURFACE)
+let ms_t6 = ui_text(scroll_m, "MODAL ITEM 6", UI_COLOR_TEXT)
+let ms_b7 = ui_box(scroll_m, 350.0, 24.0, UI_COLOR_SURFACE)
+let ms_t7 = ui_text(scroll_m, "MODAL ITEM 7", UI_COLOR_TEXT)
+let ms_b8 = ui_box(scroll_m, 350.0, 24.0, UI_COLOR_PRIMARY)
+let ms_t8 = ui_text(scroll_m, "MODAL ITEM 8 - END", UI_COLOR_TEXT)
+
+// Initial layout
+let _l = ui_layout_update()
+let _scu = ui_scroll_update_all()
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  // ESC: close modal if open, else quit
+  if ui_key_pressed("escape") == 1.0
+    if ui_modal_active() < 0.0
+      running = 0.0
+    end
+  end
+
+  let _pi = ui_process_input()
+
+  let key = ui_key_down()
+
+  // Process scroll mouse + keyboard input
+  let _sm = ui_scroll_process_mouse(ui_mouse_x(), ui_mouse_y(), ui_mouse_down(), ui_mouse_clicked())
+  let _sk = ui_scroll_process(key)
+
+  // Process modal close button
+  let _mp = ui_modal_process()
+
+  // Process notifications
+  let _np = ui_notify_process()
+
+  // ── Button handlers ──
+
+  // Open info dialog
+  if ui_button_clicked(btn_info) == 1.0
+    let _oi = ui_modal_open(dlg_info)
+    let _lv = ui_label_set_value(status, "INFO OPENED")
+    let _d = ui_mark_dirty()
+  end
+
+  // Open confirm dialog
+  if ui_button_clicked(btn_confirm) == 1.0
+    let _oc = ui_modal_open(dlg_confirm)
+    let _lv = ui_label_set_value(status, "CONFIRM OPENED")
+    let _d = ui_mark_dirty()
+  end
+
+  // Open scroll dialog
+  if ui_button_clicked(btn_scroll) == 1.0
+    let _os = ui_modal_open(dlg_scroll)
+    let _lv = ui_label_set_value(status, "SCROLL DIALOG OPENED")
+    let _d = ui_mark_dirty()
+  end
+
+  // Info OK button closes modal
+  if ui_button_clicked(info_ok) == 1.0
+    let _ci = ui_modal_close(dlg_info)
+    let _lv = ui_label_set_value(status, "INFO CLOSED")
+    let _n = ui_notify("INFO ACKNOWLEDGED", UI_COLOR_PRIMARY)
+  end
+
+  // Confirm YES
+  if ui_button_clicked(btn_yes) == 1.0
+    let _cc = ui_modal_close(dlg_confirm)
+    let _lv = ui_label_set_value(status, "CONFIRMED YES")
+    let _n = ui_notify("ACTION CONFIRMED", UI_COLOR_PRIMARY)
+  end
+
+  // Confirm NO
+  if ui_button_clicked(btn_no) == 1.0
+    let _cc = ui_modal_close(dlg_confirm)
+    let _lv = ui_label_set_value(status, "CONFIRMED NO")
+    let _n = ui_notify("ACTION CANCELLED", UI_COLOR_ACTIVE)
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _ly = ui_layout_update()
+    let _scu2 = ui_scroll_update_all()
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Dialog + scroll demo finished.")

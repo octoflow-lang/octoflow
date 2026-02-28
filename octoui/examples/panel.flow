@@ -1,0 +1,220 @@
+// examples/panel.flow — OctoUI Control Panel
+//
+// Demonstrates all widget types including the new dropdown and
+// dynamic visibility toggle. A polished settings panel.
+//
+// Controls:
+//   TAB        — Cycle focus
+//   SPACE      — Toggle checkbox/radio, click button
+//   ENTER      — Click button, submit text input
+//   LEFT/RIGHT — Adjust focused slider
+//   ESCAPE     — Quit
+//
+// Run: octoflow run octoui/examples/panel.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/core/label"
+use "../widgets/core/progress"
+use "../widgets/input/button"
+use "../widgets/input/checkbox"
+use "../widgets/input/textinput"
+use "../widgets/input/slider"
+use "../widgets/input/radio"
+use "../widgets/input/dropdown"
+use "../widgets/input/toggle"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../state/reactive"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(460.0, 500.0, "OctoUI Control Panel")
+
+// Reactive state
+let vol_state = ui_state(60.0)
+
+// Root layout
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 460.0, 500.0)
+
+// ── Header ──
+let title = ui_text(root, "CONTROL PANEL", UI_COLOR_PRIMARY)
+let subtitle = ui_text(root, "ALL WIDGETS DEMO", UI_COLOR_TEXT_DIM)
+let sep1 = ui_separator(root, 428.0)
+
+// ── Theme dropdown ──
+let theme_row = ui_row(root, 12.0)
+let theme_label = ui_text(theme_row, "THEME", UI_COLOR_TEXT_DIM)
+let dd_theme = ui_dropdown(theme_row, 140.0, 26.0)
+let _dt1 = ui_dropdown_option(dd_theme, "DARK")
+let _dt2 = ui_dropdown_option(dd_theme, "LIGHT")
+let _dt3 = ui_dropdown_option(dd_theme, "SOLARIZED")
+let _dt4 = ui_dropdown_option(dd_theme, "MONOKAI")
+let _dtf = ui_dropdown_finalize(dd_theme)
+
+// ── Mode dropdown ──
+let mode_row = ui_row(root, 12.0)
+let mode_label = ui_text(mode_row, "MODE", UI_COLOR_TEXT_DIM)
+let dd_mode = ui_dropdown(mode_row, 140.0, 26.0)
+let _dm1 = ui_dropdown_option(dd_mode, "NORMAL")
+let _dm2 = ui_dropdown_option(dd_mode, "COMPACT")
+let _dm3 = ui_dropdown_option(dd_mode, "EXPERT")
+let _dmf = ui_dropdown_finalize(dd_mode)
+
+let sep2 = ui_separator(root, 428.0)
+
+// ── Name input ──
+let name_row = ui_row(root, 12.0)
+let name_label = ui_text(name_row, "NAME", UI_COLOR_TEXT_DIM)
+let name_input = ui_textinput(name_row, 200.0, 26.0)
+
+// ── Toggles (toggle switches) ──
+let tgl_auto = ui_toggle(root, "AUTO-SAVE")
+let _sta = ui_toggle_set(tgl_auto, 1.0)
+let tgl_sound = ui_toggle(root, "SOUND EFFECTS")
+let tgl_tips = ui_toggle(root, "SHOW TOOLTIPS")
+let _stt = ui_toggle_set(tgl_tips, 1.0)
+
+let sep3 = ui_separator(root, 428.0)
+
+// ── Volume slider ──
+let vol_row = ui_row(root, 12.0)
+let vol_label = ui_text(vol_row, "VOLUME", UI_COLOR_TEXT_DIM)
+let vol_display = ui_text(vol_row, "60", UI_COLOR_TEXT)
+let _bvt = ui_bind_text(vol_display, vol_state)
+let vol_slider = ui_slider(root, 300.0, 14.0, 0.0, 100.0, 60.0)
+
+// ── Progress bar ──
+let prog_label = ui_text(root, "SYNC PROGRESS", UI_COLOR_TEXT_DIM)
+let pbar = ui_progress(root, 300.0, 10.0)
+let pct_state = ui_state(0.0)
+let _bp = ui_bind_progress(pbar, pct_state)
+
+let sep4 = ui_separator(root, 428.0)
+
+// ── Status display ──
+let status_row = ui_row(root, 12.0)
+let status_pair = ui_label(status_row, "STATUS", "READY", UI_COLOR_PRIMARY)
+
+// ── Action buttons ──
+let btn_row = ui_row(root, 10.0)
+let btn_apply = ui_button(btn_row, 90.0, 30.0, "APPLY")
+let btn_sync = ui_button(btn_row, 90.0, 30.0, "SYNC")
+let btn_reset = ui_button(btn_row, 90.0, 30.0, "RESET")
+let btn_close = ui_button(btn_row, 90.0, 30.0, "CLOSE")
+
+// Initial layout
+let _l = ui_layout_update()
+let _su = ui_slider_update_all()
+let _tu = ui_toggle_update_all()
+
+// Sync progress simulation state
+let mut sync_active = 0.0
+let mut sync_pct = 0.0
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  // Process text input
+  let key = ui_key_down()
+  let _tk = ui_textinput_process_key(key)
+
+  // Process sliders (mouse + keyboard)
+  let _sp2 = ui_slider_process(ui_mouse_x(), ui_mouse_y(), ui_mouse_down())
+  let _sk = ui_slider_process_key(key)
+
+  // Process dropdowns
+  let _dp = ui_dropdown_process(ui_mouse_x(), ui_mouse_y(), ui_mouse_clicked())
+
+  // Update volume display
+  let vol = floor(ui_slider_value(vol_slider))
+  let _sv = ui_state_set(vol_state, vol)
+
+  // Enter key submits name
+  if ui_textinput_submitted(name_input) == 1.0
+    let name = ui_textinput_value(name_input)
+    let _sl = ui_label_set_value(status_pair, "HELLO " + name)
+  end
+
+  // Button clicks
+  if ui_button_clicked(btn_apply) == 1.0
+    let theme_sel = ui_dropdown_selected(dd_theme)
+    let mode_sel = ui_dropdown_selected(dd_mode)
+    let _sl2 = ui_label_set_value(status_pair, "APPLIED")
+    let _d = ui_mark_dirty()
+  end
+
+  if ui_button_clicked(btn_sync) == 1.0
+    sync_active = 1.0
+    sync_pct = 0.0
+    let _sl3 = ui_label_set_value(status_pair, "SYNCING")
+    let _d = ui_mark_dirty()
+  end
+
+  if ui_button_clicked(btn_reset) == 1.0
+    let _s1 = ui_toggle_set(tgl_auto, 1.0)
+    let _s2 = ui_toggle_set(tgl_sound, 0.0)
+    let _s3 = ui_toggle_set(tgl_tips, 1.0)
+    let _s4 = ui_slider_set(vol_slider, 60.0)
+    let _s5 = ui_dropdown_set(dd_theme, 0.0)
+    let _s6 = ui_dropdown_set(dd_mode, 0.0)
+    let _s7 = ui_textinput_set(name_input, " ")
+    sync_active = 0.0
+    sync_pct = 0.0
+    let _sp3 = ui_state_set(pct_state, 0.0)
+    let _pu = ui_progress_update()
+    let _sl4 = ui_label_set_value(status_pair, "RESET")
+    let _d = ui_mark_dirty()
+  end
+
+  if ui_button_clicked(btn_close) == 1.0
+    running = 0.0
+  end
+
+  // Simulate sync progress
+  if sync_active == 1.0
+    sync_pct = sync_pct + 0.5
+    if sync_pct > 100.0
+      sync_pct = 100.0
+      sync_active = 0.0
+      let _sl5 = ui_label_set_value(status_pair, "SYNCED")
+    end
+    let _sp4 = ui_state_set(pct_state, sync_pct)
+    let _pu2 = ui_progress_update()
+    let _d2 = ui_mark_dirty()
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl6 = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Control panel finished.")

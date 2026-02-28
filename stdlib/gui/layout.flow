@@ -455,3 +455,202 @@ fn grid_spinbox(grid_id, row, col, smin, smax, sinit, sstep)
   let w = gui_spinbox(cx, cy, cw, smin, smax, sinit, sstep)
   return w
 end
+
+// ── Responsive Layout Anchoring ─────────────────────────────────────
+// Anchor widget edges to window edges so they reposition/resize on resize.
+// Values: distance from edge (>=0 means anchored, <0 means not anchored).
+// Call gui_anchor_apply(win_w, win_h) each frame to update positions.
+
+let mut _anchor_id = []
+let mut _anchor_left = []
+let mut _anchor_top = []
+let mut _anchor_right = []
+let mut _anchor_bottom = []
+
+fn gui_anchor(id, left, top, right, bottom)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
+  push(_anchor_id, id)
+  push(_anchor_left, left)
+  push(_anchor_top, top)
+  push(_anchor_right, right)
+  push(_anchor_bottom, bottom)
+  return 1.0
+end
+
+fn gui_anchor_apply(win_w, win_h)
+  let n = len(_anchor_id)
+  let mut i = 0.0
+  while i < n
+    let ii = int(i)
+    let id = _anchor_id[ii]
+    if _gui_id_ok(id) == 1.0
+      let wid = int(id)
+      let left = _anchor_left[ii]
+      let top = _anchor_top[ii]
+      let right = _anchor_right[ii]
+      let bottom = _anchor_bottom[ii]
+      // Both left and right anchored → resize width
+      if left >= 0.0
+        if right >= 0.0
+          _gui_x[wid] = left
+          _gui_w[wid] = win_w - left - right
+        else
+          _gui_x[wid] = left
+        end
+      elif right >= 0.0
+        _gui_x[wid] = win_w - right - _gui_w[wid]
+      end
+      // Both top and bottom anchored → resize height
+      if top >= 0.0
+        if bottom >= 0.0
+          _gui_y[wid] = top
+          _gui_h[wid] = win_h - top - bottom
+        else
+          _gui_y[wid] = top
+        end
+      elif bottom >= 0.0
+        _gui_y[wid] = win_h - bottom - _gui_h[wid]
+      end
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn gui_center(id)
+  // Center widget in window — uses anchor with negative edges
+  // Caller should call gui_center_apply(id, win_w, win_h) each frame
+  return id
+end
+
+fn gui_center_apply(id, win_w, win_h)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
+  let wid = int(id)
+  let w = _gui_w[wid]
+  let h = _gui_h[wid]
+  _gui_x[wid] = (win_w - w) / 2.0
+  _gui_y[wid] = (win_h - h) / 2.0
+  return 1.0
+end
+
+fn vstack_fill_width(lay_id, widget_id, available_w)
+  if _gui_id_ok(widget_id) == 0.0
+    return 0.0
+  end
+  let wid = int(widget_id)
+  _gui_w[wid] = available_w
+  return 1.0
+end
+
+// ── Form Layout Helper ──────────────────────────────────────────────
+// Two-column form: labels on left, inputs on right.
+//
+// Usage:
+//   let f = form(20.0, 20.0, 100.0, 200.0, 8.0)
+//   let name_inp = form_field(f, "NAME")
+//   let color_dd = form_dropdown_field(f, "COLOR")
+
+let LAY_FORM = 4.0
+
+let mut _form_label_w = []
+let mut _form_field_w = []
+let mut _form_row_h = []
+
+fn form(x, y, label_w, field_w, spacing)
+  let id = len(_lay_type)
+  push(_lay_type, LAY_FORM)
+  push(_lay_x, x)
+  push(_lay_y, y)
+  push(_lay_spacing, spacing)
+  push(_lay_cx, x)
+  push(_lay_cy, y)
+  push(_lay_w, label_w + field_w + 10.0)
+  // Grid arrays alignment
+  push(_lay_cols, 0.0)
+  push(_lay_cell_w, 0.0)
+  push(_lay_cell_h, 0.0)
+  push(_lay_gap, 0.0)
+  // Form-specific
+  push(_form_label_w, label_w)
+  push(_form_field_w, field_w)
+  push(_form_row_h, 30.0)
+  return id
+end
+
+fn _form_advance(form_id)
+  let ii = int(form_id)
+  let sp = _lay_spacing[ii]
+  _lay_cy[ii] = _lay_cy[ii] + 30.0 + sp
+  return 0.0
+end
+
+fn form_field(form_id, label_text)
+  let ii = int(form_id)
+  let x = _lay_x[ii]
+  let cy = _lay_cy[ii]
+  let lw = _form_label_w[ii]
+  let fw = _form_field_w[ii]
+  // Create label on left
+  let _lbl = gui_label(x, cy + 5.0, label_text)
+  // Create text input on right
+  let inp = gui_textinput(x + lw + 10.0, cy, fw)
+  let _a = _form_advance(form_id)
+  return inp
+end
+
+fn form_dropdown_field(form_id, label_text)
+  let ii = int(form_id)
+  let x = _lay_x[ii]
+  let cy = _lay_cy[ii]
+  let lw = _form_label_w[ii]
+  let fw = _form_field_w[ii]
+  // Create label on left
+  let _lbl = gui_label(x, cy + 5.0, label_text)
+  // Create dropdown on right
+  let dd = gui_dropdown(x + lw + 10.0, cy, fw)
+  let _a = _form_advance(form_id)
+  return dd
+end
+
+fn form_checkbox_field(form_id, label_text)
+  let ii = int(form_id)
+  let x = _lay_x[ii]
+  let cy = _lay_cy[ii]
+  let lw = _form_label_w[ii]
+  // Create checkbox at label position (it has its own text)
+  let chk = gui_checkbox(x + lw + 10.0, cy + 4.0, label_text)
+  let _a = _form_advance(form_id)
+  return chk
+end
+
+fn form_slider_field(form_id, label_text, smin, smax, sinit)
+  let ii = int(form_id)
+  let x = _lay_x[ii]
+  let cy = _lay_cy[ii]
+  let lw = _form_label_w[ii]
+  let fw = _form_field_w[ii]
+  // Create label on left
+  let _lbl = gui_label(x, cy + 5.0, label_text)
+  // Create slider on right
+  let sld = gui_slider(x + lw + 10.0, cy + 3.0, fw, smin, smax, sinit)
+  let _a = _form_advance(form_id)
+  return sld
+end
+
+fn form_spinbox_field(form_id, label_text, smin, smax, sinit, sstep)
+  let ii = int(form_id)
+  let x = _lay_x[ii]
+  let cy = _lay_cy[ii]
+  let lw = _form_label_w[ii]
+  let fw = _form_field_w[ii]
+  // Create label on left
+  let _lbl = gui_label(x, cy + 5.0, label_text)
+  // Create spinbox on right
+  let spn = gui_spinbox(x + lw + 10.0, cy, fw, smin, smax, sinit, sstep)
+  let _a = _form_advance(form_id)
+  return spn
+end

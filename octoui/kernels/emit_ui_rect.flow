@@ -1,0 +1,120 @@
+// emit_ui_rect.flow — OctoUI Rectangle Drawing Kernel Emitter
+//
+// Draws a filled rectangle into the planar RGB framebuffer.
+// Each thread handles one pixel within the rect (w*h threads total).
+// Thread gid maps to a local (x,y) within the rect, then to absolute
+// framebuffer coordinates. Out-of-bounds pixels are skipped.
+//
+// Framebuffer layout: planar RGB in globals (binding 2).
+//   globals[0 .. total-1]         = R channel
+//   globals[total .. 2*total-1]   = G channel
+//   globals[2*total .. 3*total-1] = B channel
+//
+// Push constants (9 floats):
+//   pc[0] = x0            (rect left edge, in pixels)
+//   pc[1] = y0            (rect top edge, in pixels)
+//   pc[2] = w             (rect width, in pixels)
+//   pc[3] = h             (rect height, in pixels)
+//   pc[4] = R             (red channel, 0.0-1.0)
+//   pc[5] = G             (green channel, 0.0-1.0)
+//   pc[6] = B             (blue channel, 0.0-1.0)
+//   pc[7] = screen_w      (framebuffer width in pixels)
+//   pc[8] = total_pixels  (screen_w * screen_h)
+//
+// VM SSBO layout:
+//   Binding 0: registers (unused)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (framebuffer — write R/G/B)
+//   Binding 3: control   (unused)
+//
+// Dispatch: workgroups = ceil(w * h / 256)
+//
+// Run: octoflow run octoui/kernels/emit_ui_rect.flow --allow-read --allow-write
+
+use "../../stdlib/compiler/ir"
+
+fn emit_ui_rect(out_path)
+  ir_new()
+  ir_input_count = 9.0
+
+  let entry = ir_block("entry")
+  let body = ir_block("body")
+  let write_blk = ir_block("write")
+  let merge = ir_block("merge")
+  let exit_block = ir_block("exit")
+
+  let gid = ir_load_gid(entry)
+
+  // Push constants
+  let x0_f = ir_push_const(entry, 0.0)
+  let y0_f = ir_push_const(entry, 1.0)
+  let w_f = ir_push_const(entry, 2.0)
+  let h_f = ir_push_const(entry, 3.0)
+  let r_color = ir_push_const(entry, 4.0)
+  let g_color = ir_push_const(entry, 5.0)
+  let b_color = ir_push_const(entry, 6.0)
+  let sw_f = ir_push_const(entry, 7.0)
+  let total_f = ir_push_const(entry, 8.0)
+
+  // Bounds check: gid >= w * h -> skip (thread outside rect area)
+  let rect_area_f = ir_fmul(entry, w_f, h_f)
+  let rect_area_u = ir_ftou(entry, rect_area_f)
+  let oob_rect = ir_ugte(entry, gid, rect_area_u)
+  let _sm = ir_selection_merge(entry, exit_block)
+  let _br = ir_term_cond_branch(entry, oob_rect, exit_block, body)
+
+  // body: map gid to local (x,y) within rect, then to absolute coords
+  // local_y = floor(gid / w)  — integer division via float
+  let gid_f = ir_utof(body, gid)
+  let local_y_f = ir_floor(body, ir_fdiv(body, gid_f, w_f))
+  // local_x = gid - local_y * w  — modulo via subtraction
+  let local_x_f = ir_fsub(body, gid_f, ir_fmul(body, local_y_f, w_f))
+
+  // Absolute pixel coordinates
+  let px_f = ir_fadd(body, x0_f, local_x_f)
+  let py_f = ir_fadd(body, y0_f, local_y_f)
+
+  // Framebuffer index: fb_idx = py * screen_w + px
+  let fb_idx_f = ir_fadd(body, ir_fmul(body, py_f, sw_f), px_f)
+  let fb_idx = ir_ftou(body, fb_idx_f)
+  let total_u = ir_ftou(body, total_f)
+
+  // Bounds check: fb_idx >= total_pixels -> skip (off-screen)
+  let oob_fb = ir_ugte(body, fb_idx, total_u)
+  // Also check px >= screen_w (right edge clipping)
+  let sw_u = ir_ftou(body, sw_f)
+  let px_u = ir_ftou(body, px_f)
+  let oob_right = ir_ugte(body, px_u, sw_u)
+  // Combined: skip if either is out of bounds
+  let oob_any = ir_lor(body, oob_fb, oob_right)
+  let _sm2 = ir_selection_merge(body, merge)
+  let _br2 = ir_term_cond_branch(body, oob_any, merge, write_blk)
+
+  // write_blk: write R, G, B to planar framebuffer
+  // R channel: globals[fb_idx]
+  let _s_r = ir_buf_store_f(write_blk, 2.0, fb_idx, r_color)
+
+  // G channel: globals[total + fb_idx]
+  let g_idx = ir_iadd(write_blk, total_u, fb_idx)
+  let _s_g = ir_buf_store_f(write_blk, 2.0, g_idx, g_color)
+
+  // B channel: globals[2*total + fb_idx]
+  let two_u = ir_const_u(write_blk, 2.0)
+  let two_total = ir_imul(write_blk, two_u, total_u)
+  let b_idx = ir_iadd(write_blk, two_total, fb_idx)
+  let _s_b = ir_buf_store_f(write_blk, 2.0, b_idx, b_color)
+
+  let _br3 = ir_term_branch(write_blk, merge)
+
+  // merge -> exit
+  let _br4 = ir_term_branch(merge, exit_block)
+
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "octoui/kernels/ui_rect.spv"
+let _r = emit_ui_rect(out)
+print("Emitted: {out}")

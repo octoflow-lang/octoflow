@@ -1,0 +1,198 @@
+// gui_calculator.flow — 4-function calculator with grid layout
+//
+// Demonstrates: grid layout, button click handling, keyboard input,
+// dark theme, state management.
+//
+// Run: octoflow run gui_calculator.flow
+
+use "gui/gui"
+use "gui/layout"
+use "gui/theme"
+
+let _t = gui_theme_dark()
+gui_init(280, 380, "Calculator")
+
+// Display
+let display = gui_label(20, 20, "0")
+
+// Number pad: 4 columns x 5 rows
+let g = grid(20, 60, 4, 60, 44, 4)
+
+// Row 0: C, +/-, %, /
+let btn_c   = grid_button(g, 0, 0, "C")
+let btn_neg = grid_button(g, 0, 1, "+/-")
+let btn_pct = grid_button(g, 0, 2, "%")
+let btn_div = grid_button(g, 0, 3, "/")
+
+// Row 1: 7, 8, 9, *
+let btn_7   = grid_button(g, 1, 0, "7")
+let btn_8   = grid_button(g, 1, 1, "8")
+let btn_9   = grid_button(g, 1, 2, "9")
+let btn_mul = grid_button(g, 1, 3, "*")
+
+// Row 2: 4, 5, 6, -
+let btn_4   = grid_button(g, 2, 0, "4")
+let btn_5   = grid_button(g, 2, 1, "5")
+let btn_6   = grid_button(g, 2, 2, "6")
+let btn_sub = grid_button(g, 2, 3, "-")
+
+// Row 3: 1, 2, 3, +
+let btn_1   = grid_button(g, 3, 0, "1")
+let btn_2   = grid_button(g, 3, 1, "2")
+let btn_3   = grid_button(g, 3, 2, "3")
+let btn_add = grid_button(g, 3, 3, "+")
+
+// Row 4: 0, ., =
+let btn_0   = grid_button(g, 4, 0, "0")
+let btn_dot = grid_button(g, 4, 1, ".")
+let btn_eq  = grid_button(g, 4, 2, "=")
+let btn_eq2 = grid_button(g, 4, 3, "=")
+
+// State
+let mut current = 0.0
+let mut accumulator = 0.0
+let mut op = 0.0       // 0=none, 1=add, 2=sub, 3=mul, 4=div
+let mut fresh = 1.0    // 1=start new number on next digit
+
+fn update_display(val)
+  gui_set_text(display, str(val))
+  return 0.0
+end
+
+fn input_digit(d)
+  if fresh == 1.0
+    current = d
+    fresh = 0.0
+  else
+    current = current * 10.0 + d
+  end
+  let _u = update_display(current)
+  return 0.0
+end
+
+fn do_op()
+  if op == 1.0
+    accumulator = accumulator + current
+  elif op == 2.0
+    accumulator = accumulator - current
+  elif op == 3.0
+    accumulator = accumulator * current
+  elif op == 4.0
+    if current != 0.0
+      accumulator = accumulator / current
+    end
+  else
+    accumulator = current
+  end
+  return 0.0
+end
+
+fn set_op(new_op)
+  let _d = do_op()
+  let _u = update_display(accumulator)
+  op = new_op
+  fresh = 1.0
+  return 0.0
+end
+
+while gui_running() == 1.0
+  gui_update()
+
+  // Digit buttons
+  if gui_clicked(btn_0) == 1.0
+    let _d = input_digit(0.0)
+  end
+  if gui_clicked(btn_1) == 1.0
+    let _d = input_digit(1.0)
+  end
+  if gui_clicked(btn_2) == 1.0
+    let _d = input_digit(2.0)
+  end
+  if gui_clicked(btn_3) == 1.0
+    let _d = input_digit(3.0)
+  end
+  if gui_clicked(btn_4) == 1.0
+    let _d = input_digit(4.0)
+  end
+  if gui_clicked(btn_5) == 1.0
+    let _d = input_digit(5.0)
+  end
+  if gui_clicked(btn_6) == 1.0
+    let _d = input_digit(6.0)
+  end
+  if gui_clicked(btn_7) == 1.0
+    let _d = input_digit(7.0)
+  end
+  if gui_clicked(btn_8) == 1.0
+    let _d = input_digit(8.0)
+  end
+  if gui_clicked(btn_9) == 1.0
+    let _d = input_digit(9.0)
+  end
+
+  // Operators
+  if gui_clicked(btn_add) == 1.0
+    let _s = set_op(1.0)
+  end
+  if gui_clicked(btn_sub) == 1.0
+    let _s = set_op(2.0)
+  end
+  if gui_clicked(btn_mul) == 1.0
+    let _s = set_op(3.0)
+  end
+  if gui_clicked(btn_div) == 1.0
+    let _s = set_op(4.0)
+  end
+
+  // Equals
+  if gui_clicked(btn_eq) == 1.0 || gui_clicked(btn_eq2) == 1.0
+    let _d = do_op()
+    let _u = update_display(accumulator)
+    op = 0.0
+    current = accumulator
+    fresh = 1.0
+  end
+
+  // Clear
+  if gui_clicked(btn_c) == 1.0
+    current = 0.0
+    accumulator = 0.0
+    op = 0.0
+    fresh = 1.0
+    let _u = update_display(0.0)
+  end
+
+  // Keyboard support
+  if _gs[7] == 1.0
+    let key = _gss[0]
+    if key == "0"
+      let _d = input_digit(0.0)
+    elif key == "1"
+      let _d = input_digit(1.0)
+    elif key == "2"
+      let _d = input_digit(2.0)
+    elif key == "3"
+      let _d = input_digit(3.0)
+    elif key == "4"
+      let _d = input_digit(4.0)
+    elif key == "5"
+      let _d = input_digit(5.0)
+    elif key == "6"
+      let _d = input_digit(6.0)
+    elif key == "7"
+      let _d = input_digit(7.0)
+    elif key == "8"
+      let _d = input_digit(8.0)
+    elif key == "9"
+      let _d = input_digit(9.0)
+    elif key == "+"
+      let _s = set_op(1.0)
+    elif key == "-"
+      let _s = set_op(2.0)
+    elif key == "*"
+      let _s = set_op(3.0)
+    elif key == "/"
+      let _s = set_op(4.0)
+    end
+  end
+end

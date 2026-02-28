@@ -1,0 +1,291 @@
+// test_gpu_render.flow — GPU Rendering + LoomDB State Tests
+//
+// Tests GPU-accelerated rendering pipeline and LoomDB state management
+// without opening a window. Exercises array-based state only.
+//
+// Usage:
+//   octoflow run stdlib/gui/test_gpu_render.flow
+
+use "gui"
+use "gpu_render"
+use "gui_state"
+
+let mut _tcount = [0.0, 0.0]
+
+fn check(name, got, expected)
+  if got == expected
+    _tcount[0] = _tcount[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected {expected}")
+  _tcount[1] = _tcount[1] + 1.0
+  return 0.0
+end
+
+fn check_gt(name, got, threshold)
+  if got > threshold
+    _tcount[0] = _tcount[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected > {threshold}")
+  _tcount[1] = _tcount[1] + 1.0
+  return 0.0
+end
+
+fn check_gte(name, got, threshold)
+  if got >= threshold
+    _tcount[0] = _tcount[0] + 1.0
+    return 1.0
+  end
+  print("  FAIL: {name} — got {got}, expected >= {threshold}")
+  _tcount[1] = _tcount[1] + 1.0
+  return 0.0
+end
+
+print("=== GPU Render + LoomDB State Tests ===")
+
+// ── 1. GPU Fallback Detection ──────────────────────────────────────
+print("1. GPU Fallback Detection")
+let gpu_result = gpu_render_init()
+// gpu_result is 0.0 (no GPU) or 1.0 (GPU available)
+let _g1 = check_gte("gpu_render_init returns 0 or 1", gpu_result, 0.0)
+// _gpu_flag[0] stores the GPU flag (array element, not scalar — propagates correctly)
+let _g2 = check("_gpu_flag set", _gpu_flag[0], gpu_result)
+
+// ── 2. GPU Buffer Clear ────────────────────────────────────────────
+print("2. GPU Buffer Clear")
+let test_total = 100.0
+let _gc = _gpu_render_clear(test_total, 30.0, 40.0, 50.0)
+let _g3 = check("clear returns 0", _gc, 0.0)
+let _g4 = check("px_r length", len(_gpu_px_r), test_total)
+let _g5 = check("px_g length", len(_gpu_px_g), test_total)
+let _g6 = check("px_b length", len(_gpu_px_b), test_total)
+// Check first pixel value
+let _g7 = check("px_r[0] = bg_r", _gpu_px_r[0], 30.0)
+let _g8 = check("px_g[0] = bg_g", _gpu_px_g[0], 40.0)
+let _g9 = check("px_b[0] = bg_b", _gpu_px_b[0], 50.0)
+// Check last pixel value
+let last = int(test_total - 1.0)
+let _g10 = check("px_r[last]", _gpu_px_r[last], 30.0)
+let _g11 = check("px_g[last]", _gpu_px_g[last], 40.0)
+let _g12 = check("px_b[last]", _gpu_px_b[last], 50.0)
+
+// ── 3. Rect Mask Building ──────────────────────────────────────────
+print("3. Rect Mask Building")
+// Build a 3x2 rect at (1,1) on a 5x5 grid (total=25)
+// Use _gpu_build_rect_indices + gpu_scatter to build mask locally
+// (GPU arrays can't be returned from functions — _gpu_rect_mask stores
+//  in GPU_ARRAYS which the pre-flight can't verify)
+let mask_idx = _gpu_build_rect_indices(1.0, 1.0, 3.0, 2.0, 5.0, 5.0)
+let mask_ones = gpu_fill(1.0, len(mask_idx))
+let mask = gpu_scatter(mask_ones, mask_idx, 25.0)
+let _m1 = check("mask idx count", len(mask_idx), 6.0)
+// Position (0,0) = index 0 — outside rect, should be 0
+let _m2 = check("mask[0,0]=0", mask[0], 0.0)
+// Position (1,1) = index 6 — inside rect, should be 1
+let _m3 = check("mask[1,1]=1", mask[6], 1.0)
+// Position (2,1) = index 7 — inside rect
+let _m4 = check("mask[2,1]=1", mask[7], 1.0)
+// Position (3,1) = index 8 — inside rect
+let _m5 = check("mask[3,1]=1", mask[8], 1.0)
+// Position (4,1) = index 9 — outside rect (x=4 >= x+w=4)
+let _m6 = check("mask[4,1]=0", mask[9], 0.0)
+// Position (1,2) = index 11 — inside rect (row 2)
+let _m7 = check("mask[1,2]=1", mask[11], 1.0)
+// Position (1,3) = index 16 — outside rect (y=3 >= y+h=3)
+let _m8 = check("mask[1,3]=0", mask[16], 0.0)
+
+// ── 4. Rect Apply ──────────────────────────────────────────────────
+print("4. Rect Apply")
+// Clear to black on 5x5, then apply red rect using _gpu_apply_rect_mask
+let _rc1 = _gpu_render_clear(25.0, 0.0, 0.0, 0.0)
+let _ra1 = _gpu_apply_rect_mask(1.0, 1.0, 3.0, 2.0, 255.0, 0.0, 0.0, 5.0, 5.0, 25.0)
+// Inside rect: should be red
+let _r1 = check("rect px_r[6]=255", _gpu_px_r[6], 255.0)
+let _r2 = check("rect px_g[6]=0", _gpu_px_g[6], 0.0)
+let _r3 = check("rect px_b[6]=0", _gpu_px_b[6], 0.0)
+// Outside rect: should be black
+let _r4 = check("outside px_r[0]=0", _gpu_px_r[0], 0.0)
+
+// ── 5. Mask Merging (Batching) ─────────────────────────────────────
+print("5. Mask Merging (GPU Batching)")
+// Two separate rects, merged into one mask — build locally via gpu_scatter
+let idx_a = _gpu_build_rect_indices(0.0, 0.0, 2.0, 1.0, 5.0, 5.0)
+let ones_a = gpu_fill(1.0, len(idx_a))
+let mask_a = gpu_scatter(ones_a, idx_a, 25.0)
+let idx_b = _gpu_build_rect_indices(3.0, 0.0, 2.0, 1.0, 5.0, 5.0)
+let ones_b = gpu_fill(1.0, len(idx_b))
+let mask_b = gpu_scatter(ones_b, idx_b, 25.0)
+let merged = gpu_add(mask_a, mask_b)
+let clamped = gpu_clamp(merged, 0.0, 1.0)
+// Positions 0,1 (mask_a) and 3,4 (mask_b) should be 1.0
+let _mb1 = check("merged[0]=1", clamped[0], 1.0)
+let _mb2 = check("merged[1]=1", clamped[1], 1.0)
+let _mb3 = check("merged[2]=0", clamped[2], 0.0)
+let _mb4 = check("merged[3]=1", clamped[3], 1.0)
+let _mb5 = check("merged[4]=1", clamped[4], 1.0)
+
+// ── 6. GPU Blend ───────────────────────────────────────────────────
+print("6. GPU Alpha Blending")
+// Test blending math directly with local GPU arrays (avoids cross-function
+// GPU_ARRAYS propagation issues with _gpu_px_r/g/b)
+// dst=white(255), src=black(0), alpha=0.5 → result=127.5
+let dst_r = gpu_fill(255.0, 10.0)
+let dst_g = gpu_fill(255.0, 10.0)
+let src_r = gpu_fill(0.0, 10.0)
+let src_g = gpu_fill(0.0, 10.0)
+// dst*(1-alpha) + src*alpha = 255*0.5 + 0*0.5 = 127.5
+let inv_fill = gpu_fill(0.5, 10.0)
+let alpha_fill = gpu_fill(0.5, 10.0)
+let bg_scaled_r = gpu_mul(dst_r, inv_fill)
+let fg_scaled_r = gpu_mul(src_r, alpha_fill)
+let blend_r = gpu_add(bg_scaled_r, fg_scaled_r)
+let bg_scaled_g = gpu_mul(dst_g, inv_fill)
+let fg_scaled_g = gpu_mul(src_g, alpha_fill)
+let blend_g = gpu_add(bg_scaled_g, fg_scaled_g)
+// Verify blended values
+let _bl1 = check("blend r≈127.5", floor(blend_r[0]), 127.0)
+let _bl2 = check("blend g≈127.5", floor(blend_g[0]), 127.0)
+// Test gpu_where with blend mask — apply blend only where mask=1
+let bl_idx = _gpu_build_rect_indices(0.0, 0.0, 5.0, 1.0, 10.0, 1.0)
+let bl_ones = gpu_fill(1.0, len(bl_idx))
+let bl_mask = gpu_scatter(bl_ones, bl_idx, 10.0)
+let result_r = gpu_where(bl_mask, blend_r, dst_r)
+// Positions 0-4 should be blended (127.5), positions 5-9 should be dst (255)
+let _bl3 = check("masked blend[0]≈127", floor(result_r[0]), 127.0)
+let _bl4 = check("masked keep[5]=255", result_r[5], 255.0)
+
+// ── 7. State Init ──────────────────────────────────────────────────
+print("7. State Init")
+let _si = gui_state_init()
+let _s1 = check("state init", _si, 1.0)
+let _s2 = check("state count 0", _gss[0], 0.0)
+let _s3 = check("state cursor 0", _gss[1], 0.0)
+let _s4 = check("state initialized", _gss[4], 1.0)
+
+// ── 8. State Snapshot ──────────────────────────────────────────────
+print("8. State Snapshot")
+// Create some widgets to capture
+let btn = gui_button(10.0, 20.0, 100.0, 30.0, "TEST")
+let chk = gui_checkbox(10.0, 60.0, "OPTION")
+let sld = gui_slider(10.0, 90.0, 200.0, 0.0, 100.0, 50.0)
+// Take first snapshot
+let snap1 = gui_state_snapshot("initial")
+let _s5 = check("snapshot 1 count", snap1, 1.0)
+let _s6 = check("state count", _gss[0], 1.0)
+let _s7 = check("state cursor", _gss[1], 1.0)
+
+// ── 9. Undo/Redo ──────────────────────────────────────────────────
+print("9. Undo/Redo")
+// Modify widget state
+let _sc = gui_set_checked(chk, 1.0)
+let _ss = gui_set_slider(sld, 75.0)
+// Take second snapshot
+let snap2 = gui_state_snapshot("modify")
+let _s8 = check("snapshot 2 count", snap2, 2.0)
+// Verify current state
+let _s9 = check("chk checked", gui_checked(chk), 1.0)
+let _s10 = check("sld value", gui_slider_value(sld), 75.0)
+// Undo — should restore initial state
+let undo_ok = gui_state_undo()
+let _s11 = check("undo ok", undo_ok, 1.0)
+let _s12 = check("chk unchecked after undo", gui_checked(chk), 0.0)
+let _s13 = check("sld 50 after undo", gui_slider_value(sld), 50.0)
+// Redo — should restore modified state
+let redo_ok = gui_state_redo()
+let _s14 = check("redo ok", redo_ok, 1.0)
+let _s15 = check("chk checked after redo", gui_checked(chk), 1.0)
+let _s16 = check("sld 75 after redo", gui_slider_value(sld), 75.0)
+
+// ── 10. Undo boundary ─────────────────────────────────────────────
+print("10. Undo Boundary")
+// Undo back to start
+let _u1 = gui_state_undo()
+// Try to undo again — should fail (at boundary)
+let _u2 = gui_state_undo()
+let _s17 = check("undo at boundary", _u2, 0.0)
+let _s18 = check("can_undo false", gui_state_can_undo(), 0.0)
+// Redo should still work
+let _s19 = check("can_redo true", gui_state_can_redo(), 1.0)
+
+// ── 11. Undo then new action (discards forward history) ───────────
+print("11. Undo + New Action")
+// Currently at snap1 (undo'd). Take a new snapshot.
+let _sc2 = gui_set_checked(chk, 1.0)
+let _ss2 = gui_set_slider(sld, 25.0)
+let snap3 = gui_state_snapshot("new_action")
+// Forward history (snap2) should be discarded
+let _s20 = check("count after new", _gss[0], 2.0)
+let _s21 = check("cursor at end", _gss[1], 2.0)
+// Redo should fail (forward history gone)
+let _s22 = check("can_redo false", gui_state_can_redo(), 0.0)
+
+// ── 12. State Build Vec ────────────────────────────────────────────
+print("12. State Build Vec")
+let vec = _gui_state_build_vec()
+// Should be 200 * 8 = 1600 elements
+let _s23 = check("vec dims", len(vec), 1600.0)
+// First widget (btn): x=10, y=20, w=100, h=30
+let _s24 = check("vec[0] btn x", vec[0], 10.0)
+let _s25 = check("vec[1] btn y", vec[1], 20.0)
+let _s26 = check("vec[2] btn w", vec[2], 100.0)
+let _s27 = check("vec[3] btn h", vec[3], 30.0)
+
+// ── 13. Rect Index Builder ─────────────────────────────────────────
+print("13. Rect Index Builder")
+// 2x2 rect at (0,0) on 4x4 grid
+let indices = _gpu_build_rect_indices(0.0, 0.0, 2.0, 2.0, 4.0, 4.0)
+let _i1 = check("indices count", len(indices), 4.0)
+// Should have indices: 0, 1, 4, 5 (row 0: col 0,1; row 1: col 0,1)
+let _i2 = check("idx[0]=0", indices[0], 0.0)
+let _i3 = check("idx[1]=1", indices[1], 1.0)
+let _i4 = check("idx[2]=4", indices[2], 4.0)
+let _i5 = check("idx[3]=5", indices[3], 5.0)
+// Out-of-bounds rect should be clamped
+let oob_indices = _gpu_build_rect_indices(-1.0, -1.0, 3.0, 3.0, 4.0, 4.0)
+// Should include only valid pixels (0,0), (1,0), (0,1), (1,1)
+let _i6 = check("oob indices count", len(oob_indices), 4.0)
+
+// ── 14. GPU Where Operation ────────────────────────────────────────
+print("14. GPU Where Operation")
+let cond = gpu_fill(0.0, 4.0)
+let true_vals = gpu_fill(100.0, 4.0)
+let false_vals = gpu_fill(200.0, 4.0)
+let result = gpu_where(cond, true_vals, false_vals)
+// Condition is all 0 → should select false_vals
+let _w1 = check("where all-false[0]", result[0], 200.0)
+let _w2 = check("where all-false[3]", result[3], 200.0)
+
+// ── 15. GPU Scale + Add ────────────────────────────────────────────
+print("15. GPU Mul + Add")
+let arr1 = gpu_fill(10.0, 4.0)
+let scale_factor = gpu_fill(2.0, 4.0)
+let scaled = gpu_mul(arr1, scale_factor)
+let _sc1 = check("mul 10*2", scaled[0], 20.0)
+let arr2 = gpu_fill(5.0, 4.0)
+let added = gpu_add(scaled, arr2)
+let _ad1 = check("add 20+5", added[0], 25.0)
+
+// ── 16. GPU Scatter ────────────────────────────────────────────────
+print("16. GPU Scatter")
+// scatter(values, indices, dest_size)
+let sc_vals = gpu_fill(99.0, 2.0)
+let mut sc_idx = []
+push(sc_idx, 1.0)
+push(sc_idx, 3.0)
+let scattered = gpu_scatter(sc_vals, sc_idx, 5.0)
+let _sc2 = check("scatter[0]=0", scattered[0], 0.0)
+let _sc3 = check("scatter[1]=99", scattered[1], 99.0)
+let _sc4 = check("scatter[2]=0", scattered[2], 0.0)
+let _sc5 = check("scatter[3]=99", scattered[3], 99.0)
+let _sc6 = check("scatter[4]=0", scattered[4], 0.0)
+
+// ── Summary ────────────────────────────────────────────────────────
+let total_tests = _tcount[0] + _tcount[1]
+let passed = _tcount[0]
+let failed = _tcount[1]
+print(" ")
+print("=== Results: {passed}/{total_tests} passed ===")
+if failed > 0.0
+  print("FAILURES: {failed}")
+end

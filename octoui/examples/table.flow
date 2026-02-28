@@ -1,0 +1,203 @@
+// examples/table.flow — OctoUI Data Table Demo
+//
+// Demonstrates the data table widget with:
+// - Fixed header row with column labels
+// - Scrollable body with alternating row colors
+// - Row selection via mouse click (toggle)
+// - Keyboard navigation (Up/Down/Home/End/PageUp/PageDown)
+// - Status bar showing selected row info
+//
+// Controls:
+//   TAB          — Cycle focus
+//   UP/DOWN      — Move row selection
+//   HOME/END     — First/last row
+//   PAGEUP/DOWN  — Jump by viewport
+//   ESCAPE       — Quit
+//   Click        — Select/deselect row
+//
+// Run: octoflow run octoui/examples/table.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/input/button"
+use "../widgets/data/table"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(520.0, 440.0, "OctoUI Table")
+
+// Root layout
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 520.0, 440.0)
+
+// Title
+let title = ui_text(root, "EMPLOYEE DIRECTORY", UI_COLOR_PRIMARY)
+let sep1 = ui_separator(root, 488.0)
+
+// Data table: 8 visible rows, 24px row height
+let tbl = ui_table(root, 192.0, 24.0)
+let _c1 = ui_table_column(tbl, "NAME", 140.0)
+let _c2 = ui_table_column(tbl, "ROLE", 160.0)
+let _c3 = ui_table_column(tbl, "DEPT", 100.0)
+let _c4 = ui_table_column(tbl, "ID", 80.0)
+let _fin = ui_table_finalize(tbl)
+
+// Add 12 rows of data (more than viewport to test scrolling)
+let _c = ui_table_cell(tbl, "ALICE")
+let _c = ui_table_cell(tbl, "ENGINEER")
+let _c = ui_table_cell(tbl, "R&D")
+let _c = ui_table_cell(tbl, "1001")
+
+let _c = ui_table_cell(tbl, "BOB")
+let _c = ui_table_cell(tbl, "DESIGNER")
+let _c = ui_table_cell(tbl, "UX")
+let _c = ui_table_cell(tbl, "1002")
+
+let _c = ui_table_cell(tbl, "CAROL")
+let _c = ui_table_cell(tbl, "MANAGER")
+let _c = ui_table_cell(tbl, "OPS")
+let _c = ui_table_cell(tbl, "1003")
+
+let _c = ui_table_cell(tbl, "DAN")
+let _c = ui_table_cell(tbl, "ANALYST")
+let _c = ui_table_cell(tbl, "DATA")
+let _c = ui_table_cell(tbl, "1004")
+
+let _c = ui_table_cell(tbl, "EVE")
+let _c = ui_table_cell(tbl, "ENGINEER")
+let _c = ui_table_cell(tbl, "R&D")
+let _c = ui_table_cell(tbl, "1005")
+
+let _c = ui_table_cell(tbl, "FRANK")
+let _c = ui_table_cell(tbl, "DIRECTOR")
+let _c = ui_table_cell(tbl, "EXEC")
+let _c = ui_table_cell(tbl, "1006")
+
+let _c = ui_table_cell(tbl, "GRACE")
+let _c = ui_table_cell(tbl, "ENGINEER")
+let _c = ui_table_cell(tbl, "R&D")
+let _c = ui_table_cell(tbl, "1007")
+
+let _c = ui_table_cell(tbl, "HENRY")
+let _c = ui_table_cell(tbl, "DESIGNER")
+let _c = ui_table_cell(tbl, "UX")
+let _c = ui_table_cell(tbl, "1008")
+
+let _c = ui_table_cell(tbl, "IVY")
+let _c = ui_table_cell(tbl, "ANALYST")
+let _c = ui_table_cell(tbl, "DATA")
+let _c = ui_table_cell(tbl, "1009")
+
+let _c = ui_table_cell(tbl, "JACK")
+let _c = ui_table_cell(tbl, "MANAGER")
+let _c = ui_table_cell(tbl, "OPS")
+let _c = ui_table_cell(tbl, "1010")
+
+let _c = ui_table_cell(tbl, "KATE")
+let _c = ui_table_cell(tbl, "ENGINEER")
+let _c = ui_table_cell(tbl, "R&D")
+let _c = ui_table_cell(tbl, "1011")
+
+let _c = ui_table_cell(tbl, "LEO")
+let _c = ui_table_cell(tbl, "DIRECTOR")
+let _c = ui_table_cell(tbl, "EXEC")
+let _c = ui_table_cell(tbl, "1012")
+
+let sep2 = ui_separator(root, 488.0)
+
+// Status bar
+let status_row = ui_row(root, 12.0)
+let status_label = ui_text(status_row, "SELECTED:", UI_COLOR_TEXT_DIM)
+let status_val = ui_text(status_row, "NONE", UI_COLOR_TEXT)
+
+// Buttons
+let btn_row = ui_row(root, 12.0)
+let btn_first = ui_button(btn_row, 100.0, 28.0, "FIRST")
+let btn_last = ui_button(btn_row, 100.0, 28.0, "LAST")
+let btn_clear = ui_button(btn_row, 100.0, 28.0, "CLEAR")
+
+// Initial layout
+let _l = ui_layout_update()
+let _tr = ui_table_refresh_all()
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  let key = ui_key_down()
+  let mx = ui_mouse_x()
+  let my = ui_mouse_y()
+  let mdown = ui_mouse_down()
+  let clicked = ui_mouse_clicked()
+
+  // Table interaction
+  let _tp = ui_table_process(mx, my, clicked)
+  let _tk = ui_table_process_key(key)
+
+  // Button clicks
+  if ui_button_clicked(btn_first) == 1.0
+    _ui_tbl_selected[0] = 0.0
+    _ui_tbl_scroll[0] = 0.0
+    let _r = ui_table_refresh(tbl)
+    let _d = ui_mark_dirty()
+  end
+  if ui_button_clicked(btn_last) == 1.0
+    let nr = _ui_tbl_nrows[0]
+    _ui_tbl_selected[0] = nr - 1.0
+    let _ev = ui_tbl_ensure_visible(0.0, nr - 1.0)
+    let _r = ui_table_refresh(tbl)
+    let _d = ui_mark_dirty()
+  end
+  if ui_button_clicked(btn_clear) == 1.0
+    _ui_tbl_selected[0] = -1.0
+    let _r = ui_table_refresh(tbl)
+    let _d = ui_mark_dirty()
+  end
+
+  // Update status text
+  let sel = ui_table_selected_row(tbl)
+  if sel < 0.0
+    let _st = ui_tree_set_text(status_val, "NONE")
+  else
+    // Show selected row number (1-based for display)
+    let sel_display = sel + 1.0
+    let _st = ui_tree_set_text(status_val, to_str(sel_display))
+    // Re-layout to update text width
+    let _lu = ui_layout_update()
+    let _tr2 = ui_table_refresh_all()
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Table example finished.")

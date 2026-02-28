@@ -1,0 +1,77 @@
+// test_persist.flow — Tests for db/persist.flow multi-table V2 format
+use "core"
+use "persist"
+
+fn test_save_load_multi()
+  let mut db = db_create()
+  let mut cols1 = ["name", "score"]
+  let mut t1 = db_table(db, "players", cols1)
+  let mut r1 = map()
+  map_set(r1, "name", "Alice")
+  map_set(r1, "score", "100")
+  db_insert(t1, r1)
+
+  let mut cols2 = ["item", "qty"]
+  let mut t2 = db_table(db, "inventory", cols2)
+  let mut i1 = map()
+  map_set(i1, "item", "Sword")
+  map_set(i1, "qty", "3")
+  db_insert(t2, i1)
+  let mut i2 = map()
+  map_set(i2, "item", "Shield")
+  map_set(i2, "qty", "1")
+  db_insert(t2, i2)
+
+  // Save using V2 multi-table format
+  let path = "stdlib/db/__test_v2_multi.dat"
+  db_save_all_start(db, path)
+  db_save_all_add(t1, "players", path)
+  db_save_all_add(t2, "inventory", path)
+
+  // Load back
+  let mut bundle = db_load_all(path)
+  let tables_str = map_get(bundle, "__db_tables")
+  assert(contains(tables_str, "players"), "bundle should contain players")
+  assert(contains(tables_str, "inventory"), "bundle should contain inventory")
+
+  // Extract players table
+  let mut players = db_load_table(bundle, "players")
+  let p_count = float(map_get(players, "__count"))
+  assert(p_count == 1.0, "players should have 1 row")
+  let p_name = map_get(players, "__col_name_0")
+  assert(p_name == "Alice", "player 0 should be Alice")
+  let p_score = map_get(players, "__col_score_0")
+  assert(p_score == "100", "player 0 score should be 100")
+
+  // Extract inventory table
+  let mut inv = db_load_table(bundle, "inventory")
+  let inv_count = float(map_get(inv, "__count"))
+  assert(inv_count == 2.0, "inventory should have 2 rows")
+  let inv_item0 = map_get(inv, "__col_item_0")
+  assert(inv_item0 == "Sword", "inventory item 0 should be Sword")
+  let inv_item1 = map_get(inv, "__col_item_1")
+  assert(inv_item1 == "Shield", "inventory item 1 should be Shield")
+
+  // Extract db metadata
+  let mut loaded_db = db_load_db(bundle)
+  assert(map_has(loaded_db, "__tbl_players"), "db should track players")
+  assert(map_has(loaded_db, "__tbl_inventory"), "db should track inventory")
+
+  // Clean up
+  write_file(path, "")
+  print("PASS: test_save_load_multi")
+  return 0.0
+end
+
+fn test_load_nonexistent_v2()
+  let mut bundle = db_load_all("stdlib/db/__nonexistent_v2.dat")
+  let tables_str = map_get(bundle, "__db_tables")
+  assert(tables_str == "", "loading nonexistent should give empty tables")
+  print("PASS: test_load_nonexistent_v2")
+  return 0.0
+end
+
+// Run tests
+test_save_load_multi()
+test_load_nonexistent_v2()
+print("All persist tests passed.")

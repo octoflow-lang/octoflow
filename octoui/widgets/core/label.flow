@@ -1,0 +1,47 @@
+// widgets/core/label.flow — Label + Value Pair Widget
+//
+// Convenience widget that creates a row with a dimmed label on the left
+// and a value text on the right. Common in forms and dashboards.
+//
+// Usage:
+//   let pair = ui_label(parent, "STATUS", "ACTIVE", UI_COLOR_PRIMARY)
+//   let _u = ui_label_set_value(pair, "INACTIVE")
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../engine/sdf_font"
+use "../../themes/dark"
+
+// Create a label + value pair
+// parent: parent widget ID
+// label_text: dimmed label text (left side)
+// value_text: value text (right side)
+// value_color: theme color index for the value text
+// Returns: row widget ID
+fn ui_label(parent, label_text, value_text, value_color)
+  let row = ui_tree_add(UI_ROW, parent, 0.0, 16.0, " ")
+  let _rs = ui_tree_set_spacing(row, 8.0)
+
+  // Label (dimmed)
+  let lbl = ui_tree_add(UI_TEXT, row, ui_text_width(label_text, 16.0), 16.0, label_text)
+  let _lc = ui_tree_set_color_themed(lbl, UI_COLOR_TEXT_DIM)
+
+  // Value (colored)
+  let val = ui_tree_add(UI_TEXT, row, ui_text_width(value_text, 16.0), 16.0, value_text)
+  let _vc = ui_tree_set_color_themed(val, value_color)
+
+  return row
+end
+
+// Update the value text of a label pair
+// row_id: the ID returned by ui_label()
+// new_text: new value text
+fn ui_label_set_value(row_id, new_text)
+  // Value widget is always row_id + 2 (row, label text, value text)
+  let val_id = row_id + 2.0
+  _ui_texts[val_id] = new_text
+  _ui_w[val_id] = ui_text_width(new_text, 16.0)
+  _ui_dirty[val_id] = 1.0
+  let _d = ui_mark_dirty()
+  return 0.0
+end

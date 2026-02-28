@@ -83,7 +83,6 @@ scripts/
 training/
 CLAUDE.md
 OctoBrain/
-octoui/
 
 # Internal docs (only user-facing docs are tracked)
 docs/archive/

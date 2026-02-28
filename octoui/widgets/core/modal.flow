@@ -1,0 +1,188 @@
+// widgets/core/modal.flow — Modal Dialog Widget
+//
+// Overlay dialog with dimmed background. Shows centered on screen.
+// Only one modal can be open at a time. ESC or close button dismisses.
+// While a modal is open, input to background widgets is blocked.
+//
+// Usage:
+//   let dlg = ui_modal(300.0, 200.0, "CONFIRM")
+//   let panel = ui_modal_panel(dlg)
+//   // Add widgets to panel...
+//   let _show = ui_modal_open(dlg)
+//
+//   // In event loop:
+//   let _mp = ui_modal_process()
+//
+//   // Check state:
+//   if ui_modal_is_open(dlg) == 0.0
+//     // Modal was closed
+//   end
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+use "../../widgets/input/button"
+
+// Modal registry
+let mut _ui_modal_ids = []         // modal container IDs
+let mut _ui_modal_open = []        // open state per modal (0=closed, 1=open)
+let mut _ui_modal_w = []           // dialog width
+let mut _ui_modal_h = []           // dialog height
+let mut _ui_modal_title = []       // title text
+let mut _ui_modal_close_btn = []   // close button widget ID
+let mut _ui_modal_panel = []       // content panel widget ID
+
+// Global: which modal is open (-1 = none)
+// Stored as array so function mutations propagate back (scalar snapshot semantics)
+let mut _ui_modal_active = [-1.0]
+
+// Screen dimensions (set during init)
+let mut _ui_modal_screen = [800.0, 600.0]
+
+// Set screen dimensions for centering
+fn ui_modal_set_screen(w, h)
+  _ui_modal_screen[0] = w
+  _ui_modal_screen[1] = h
+  return 0.0
+end
+
+// Create a modal dialog (initially hidden)
+// w, h: dialog dimensions
+// title: title bar text
+// Returns: modal ID (index into registry)
+fn ui_modal(w, h, title)
+  let modal_id = len(_ui_modal_ids)
+
+  // Create container column (root-level, initially hidden)
+  let container = ui_tree_add(UI_COLUMN, -1.0, w, h, " ")
+  _ui_visible[container] = 0.0
+
+  // Title bar row: title text + close button
+  let title_bar = ui_tree_add(UI_ROW, container, w, 28.0, " ")
+  let _tbs = ui_tree_set_spacing(title_bar, 0.0)
+  let _tbc = ui_tree_set_color_themed(title_bar, UI_COLOR_PRIMARY)
+
+  let title_text = ui_tree_add(UI_TEXT, title_bar, ui_text_width(title, 16.0), 16.0, title)
+  let _ttc = ui_tree_set_color_themed(title_text, UI_COLOR_TEXT)
+
+  // Close button at right end
+  let close_w = 28.0
+  let spacer_w = w - ui_text_width(title, 16.0) - close_w
+  if spacer_w > 0.0
+    let spacer = ui_tree_add(UI_BOX, title_bar, spacer_w, 28.0, " ")
+    let _spc = ui_tree_set_color_themed(spacer, UI_COLOR_PRIMARY)
+  end
+  let close_btn = ui_button(title_bar, close_w, 28.0, "X")
+
+  // Content panel
+  let panel = ui_tree_add(UI_COLUMN, container, w, h - 28.0, " ")
+  let _ps = ui_tree_set_spacing(panel, 8.0)
+  let _pp = ui_tree_set_padding(panel, 12.0)
+  let _pc = ui_tree_set_color_themed(panel, UI_COLOR_SURFACE)
+
+  // Register
+  push(_ui_modal_ids, container)
+  push(_ui_modal_open, 0.0)
+  push(_ui_modal_w, w)
+  push(_ui_modal_h, h)
+  push(_ui_modal_title, title)
+  push(_ui_modal_close_btn, close_btn)
+  push(_ui_modal_panel, panel)
+
+  return modal_id
+end
+
+// Get the content panel for adding widgets
+fn ui_modal_panel(modal_id)
+  if modal_id < len(_ui_modal_panel)
+    return _ui_modal_panel[modal_id]
+  end
+  return -1.0
+end
+
+// Open a modal dialog
+fn ui_modal_open(modal_id)
+  if modal_id >= len(_ui_modal_ids)
+    return 0.0
+  end
+
+  // Close any already open modal
+  if _ui_modal_active[0] >= 0.0
+    let _c = ui_modal_close(_ui_modal_active[0])
+  end
+
+  let container = _ui_modal_ids[modal_id]
+  let w = _ui_modal_w[modal_id]
+  let h = _ui_modal_h[modal_id]
+
+  // Center on screen
+  let cx = floor((_ui_modal_screen[0] - w) / 2.0)
+  let cy = floor((_ui_modal_screen[1] - h) / 2.0)
+  _ui_x[container] = cx
+  _ui_y[container] = cy
+
+  _ui_visible[container] = 1.0
+  _ui_modal_open[modal_id] = 1.0
+  _ui_modal_active[0] = modal_id
+
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Close a modal dialog
+fn ui_modal_close(modal_id)
+  if modal_id >= len(_ui_modal_ids)
+    return 0.0
+  end
+
+  let container = _ui_modal_ids[modal_id]
+  _ui_visible[container] = 0.0
+  _ui_modal_open[modal_id] = 0.0
+
+  if _ui_modal_active[0] == modal_id
+    _ui_modal_active[0] = -1.0
+  end
+
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Check if a modal is open
+fn ui_modal_is_open(modal_id)
+  if modal_id < len(_ui_modal_open)
+    return _ui_modal_open[modal_id]
+  end
+  return 0.0
+end
+
+// Check if any modal is active (used by input system to block background input)
+fn ui_modal_active()
+  return _ui_modal_active[0]
+end
+
+// Process modal interactions each frame
+// Call after ui_process_input()
+fn ui_modal_process()
+  if _ui_modal_active[0] < 0.0
+    return 0.0
+  end
+
+  let modal_id = _ui_modal_active[0]
+  let close_btn = _ui_modal_close_btn[modal_id]
+
+  // Close button click
+  if ui_button_clicked(close_btn) == 1.0
+    let _c = ui_modal_close(modal_id)
+    return 0.0
+  end
+
+  return 0.0
+end
+
+// Get modal container ID (for pipeline overlay rendering)
+fn ui_modal_container()
+  if _ui_modal_active[0] < 0.0
+    return -1.0
+  end
+  return _ui_modal_ids[_ui_modal_active[0]]
+end

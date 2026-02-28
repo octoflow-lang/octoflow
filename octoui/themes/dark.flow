@@ -1,0 +1,118 @@
+// dark.flow — OctoUI Dark Theme (Modern Default)
+//
+// Provides a dark color palette for the OctoUI rendering engine.
+// Colors are stored as RGB triples (0-255 range) in parallel arrays,
+// indexed by semantic color constants.
+//
+// Usage:
+//   let r = ui_theme_r(UI_COLOR_PRIMARY)
+//   let g = ui_theme_g(UI_COLOR_PRIMARY)
+//   let b = ui_theme_b(UI_COLOR_PRIMARY)
+
+// -- Color Index Constants --------------------------------------------------
+let UI_COLOR_BG = 0.0
+let UI_COLOR_SURFACE = 1.0
+let UI_COLOR_PRIMARY = 2.0
+let UI_COLOR_TEXT = 3.0
+let UI_COLOR_TEXT_DIM = 4.0
+let UI_COLOR_BORDER = 5.0
+let UI_COLOR_HOVER = 6.0
+let UI_COLOR_ACTIVE = 7.0
+// -- Extended Color Constants (Modern) --
+let UI_COLOR_SURFACE_2 = 8.0
+let UI_COLOR_FOCUS_RING = 9.0
+let UI_COLOR_SUCCESS = 10.0
+let UI_COLOR_WARNING = 11.0
+let UI_COLOR_ERROR = 12.0
+let UI_COLOR_GRADIENT_A = 13.0
+let UI_COLOR_GRADIENT_B = 14.0
+let UI_COLOR_SHADOW = 15.0
+
+// -- Theme Color Arrays (16 entries each) ------------------------------------
+// Indices match the constants above.
+//   0=BG        1=SURFACE    2=PRIMARY    3=TEXT
+//   4=TEXT_DIM   5=BORDER     6=HOVER      7=ACTIVE
+//   8=SURFACE_2  9=FOCUS_RING 10=SUCCESS   11=WARNING
+//   12=ERROR     13=GRADIENT_A 14=GRADIENT_B 15=SHADOW
+let mut _ui_theme_r = [22.0, 30.0, 99.0, 205.0, 110.0, 44.0, 40.0, 99.0, 38.0, 120.0, 80.0, 230.0, 230.0, 36.0, 28.0, 10.0]
+let mut _ui_theme_g = [22.0, 31.0, 130.0, 214.0, 118.0, 46.0, 42.0, 130.0, 40.0, 150.0, 200.0, 180.0, 80.0, 38.0, 29.0, 16.0]
+let mut _ui_theme_b = [30.0, 40.0, 237.0, 230.0, 138.0, 58.0, 55.0, 237.0, 52.0, 255.0, 120.0, 60.0, 80.0, 50.0, 38.0, 16.0]
+
+// -- Theme Settings (non-color rendering properties) -------------------------
+// [0]=corner_radius [1]=gradient_enabled [2]=border_width
+// [3]=shadow_alpha [4]=shadow_offset_x [5]=shadow_offset_y
+// [6]=focus_ring_width [7]=font_size [8]=font_size_small [9]=font_size_large
+// [10]=spacing [11]=padding
+let mut _ui_theme_settings = [6.0, 1.0, 1.0, 0.8, 3.0, 3.0, 2.0, 16.0, 12.0, 20.0, 8.0, 12.0]
+
+// -- Settings Constants --
+let UI_TS_CORNER_RADIUS = 0.0
+let UI_TS_GRADIENT_ENABLED = 1.0
+let UI_TS_BORDER_WIDTH = 2.0
+let UI_TS_SHADOW_ALPHA = 3.0
+let UI_TS_SHADOW_OFFSET_X = 4.0
+let UI_TS_SHADOW_OFFSET_Y = 5.0
+let UI_TS_FOCUS_RING_WIDTH = 6.0
+let UI_TS_FONT_SIZE = 7.0
+let UI_TS_FONT_SIZE_SMALL = 8.0
+let UI_TS_FONT_SIZE_LARGE = 9.0
+let UI_TS_SPACING = 10.0
+let UI_TS_PADDING = 11.0
+
+// -- Getter Functions -------------------------------------------------------
+
+fn ui_theme_r(idx)
+  return _ui_theme_r[int(idx)]
+end
+
+fn ui_theme_g(idx)
+  return _ui_theme_g[int(idx)]
+end
+
+fn ui_theme_b(idx)
+  return _ui_theme_b[int(idx)]
+end
+
+fn ui_theme_set(idx, r, g, b)
+  if idx < 0.0
+    return 0.0
+  end
+  if idx >= 16.0
+    return 0.0
+  end
+  let i = int(idx)
+  let mut cr = r
+  let mut cg = g
+  let mut cb = b
+  if cr < 0.0
+    cr = 0.0
+  end
+  if cr > 255.0
+    cr = 255.0
+  end
+  if cg < 0.0
+    cg = 0.0
+  end
+  if cg > 255.0
+    cg = 255.0
+  end
+  if cb < 0.0
+    cb = 0.0
+  end
+  if cb > 255.0
+    cb = 255.0
+  end
+  _ui_theme_r[i] = cr
+  _ui_theme_g[i] = cg
+  _ui_theme_b[i] = cb
+  return 0.0
+end
+
+fn ui_theme_setting(idx)
+  return _ui_theme_settings[int(idx)]
+end
+
+fn ui_theme_set_setting(idx, val)
+  _ui_theme_settings[int(idx)] = val
+  return 0.0
+end

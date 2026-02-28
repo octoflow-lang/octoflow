@@ -1,12 +1,25 @@
 // widgets.flow — GUI Widget Creation + Queries
 //
 // All 16 widget types: creation functions, helpers, and state queries.
+// All query/mutation functions bounds-check id before array access.
 //
 // Usage:
 //   use "gui"
 //   let btn = gui_button(10.0, 10.0, 120.0, 36.0, "CLICK")
 
 use "gui_core"
+
+// ── Internal bounds helper ──────────────────────────────────────────
+// Returns 1.0 if id is valid widget index, 0.0 otherwise
+fn _gui_id_ok(id)
+  if id < 0.0
+    return 0.0
+  end
+  if id >= len(_gui_types)
+    return 0.0
+  end
+  return 1.0
+end
 
 // ── Basic Widgets ───────────────────────────────────────────────────
 
@@ -77,6 +90,9 @@ fn gui_listbox(x, y, w, h)
 end
 
 fn gui_listbox_add(id, text)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   push(_gui_list_items, text)
   let ii = int(id)
   _gui_list_count[ii] = _gui_list_count[ii] + 1.0
@@ -85,10 +101,16 @@ fn gui_listbox_add(id, text)
 end
 
 fn gui_listbox_selected(id)
+  if _gui_id_ok(id) == 0.0
+    return -1.0
+  end
   return _gui_list_selected[int(id)]
 end
 
 fn gui_listbox_text(id, idx)
+  if _gui_id_ok(id) == 0.0
+    return ""
+  end
   let ii = int(id)
   let count = _gui_list_count[ii]
   if idx < 0.0 || idx >= count
@@ -96,6 +118,9 @@ fn gui_listbox_text(id, idx)
   end
   let start = _gui_list_start[ii]
   let actual = int(start + idx)
+  if actual < 0.0 || actual >= len(_gui_list_items)
+    return ""
+  end
   return _gui_list_items[actual]
 end
 
@@ -111,10 +136,16 @@ fn gui_spinbox(x, y, w, min_val, max_val, initial, step)
 end
 
 fn gui_spinbox_value(id)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   return _gui_slider_val[int(id)]
 end
 
 fn gui_set_spinbox(id, val)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   let ii = int(id)
   let mut v = val
   let smin = _gui_slider_min[ii]
@@ -134,10 +165,15 @@ end
 
 fn gui_dropdown(x, y, w)
   let id = _gui_add_widget(GUI_DROPDOWN, x, y, w, 30.0, " ")
+  // Fix H-23: initialize list_start for dropdown
+  _gui_list_start[int(id)] = len(_gui_list_items)
   return id
 end
 
 fn gui_dropdown_add(id, text)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   let ii = int(id)
   let count = _gui_list_count[ii]
   if count == 0.0
@@ -153,20 +189,33 @@ fn gui_dropdown_add(id, text)
 end
 
 fn gui_dropdown_selected(id)
+  if _gui_id_ok(id) == 0.0
+    return -1.0
+  end
   return _gui_list_selected[int(id)]
 end
 
 fn gui_dropdown_text(id, idx)
+  if _gui_id_ok(id) == 0.0
+    return ""
+  end
   let ii = int(id)
   let count = _gui_list_count[ii]
   if idx < 0.0 || idx >= count
     return ""
   end
   let start = _gui_list_start[ii]
-  return _gui_list_items[int(start + idx)]
+  let actual = int(start + idx)
+  if actual < 0.0 || actual >= len(_gui_list_items)
+    return ""
+  end
+  return _gui_list_items[actual]
 end
 
 fn gui_set_dropdown(id, idx)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   let ii = int(id)
   let count = _gui_list_count[ii]
   if idx >= 0.0
@@ -187,6 +236,9 @@ fn gui_tabs(x, y, w, h)
 end
 
 fn gui_tab_add(id, label)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   let ii = int(id)
   let count = _gui_list_count[ii]
   if count == 0.0
@@ -199,10 +251,16 @@ fn gui_tab_add(id, label)
 end
 
 fn gui_tab_active(id)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   return _gui_slider_val[int(id)]
 end
 
 fn gui_set_tab(id, idx)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   _gui_slider_val[int(id)] = idx
   _gui_clicked[int(id)] = 1.0
   _gs[9] = 1.0
@@ -221,11 +279,19 @@ fn gui_treeview(x, y, w, h)
 end
 
 fn gui_tree_add(id, label, parent_node)
+  if _gui_id_ok(id) == 0.0
+    return -1.0
+  end
   let ii = int(id)
   let tree_start = _gui_list_start[ii]
   let mut depth = 0.0
   if parent_node >= 0.0
-    depth = _gui_tree_depth[int(tree_start + parent_node)] + 1.0
+    let pidx = int(tree_start + parent_node)
+    if pidx >= 0.0
+      if pidx < len(_gui_tree_depth)
+        depth = _gui_tree_depth[pidx] + 1.0
+      end
+    end
   end
   push(_gui_tree_labels, label)
   push(_gui_tree_parents, parent_node)
@@ -238,26 +304,42 @@ fn gui_tree_add(id, label, parent_node)
 end
 
 fn gui_tree_selected(id)
+  if _gui_id_ok(id) == 0.0
+    return -1.0
+  end
   return _gui_list_selected[int(id)]
 end
 
 fn gui_tree_text(id, node_idx)
+  if _gui_id_ok(id) == 0.0
+    return ""
+  end
   let ii = int(id)
   let count = _gui_list_count[ii]
   if node_idx < 0.0 || node_idx >= count
     return ""
   end
   let start = _gui_list_start[ii]
-  return _gui_tree_labels[int(start + node_idx)]
+  let actual = int(start + node_idx)
+  if actual < 0.0 || actual >= len(_gui_tree_labels)
+    return ""
+  end
+  return _gui_tree_labels[actual]
 end
 
 fn gui_tree_toggle(id, node_idx)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   let ii = int(id)
   let count = _gui_list_count[ii]
   if node_idx < 0.0 || node_idx >= count
     return 0.0
   end
   let abs_idx = int(_gui_list_start[ii] + node_idx)
+  if abs_idx < 0.0 || abs_idx >= len(_gui_tree_expanded)
+    return 0.0
+  end
   if _gui_tree_expanded[abs_idx] == 1.0
     _gui_tree_expanded[abs_idx] = 0.0
   else
@@ -268,24 +350,49 @@ fn gui_tree_toggle(id, node_idx)
 end
 
 fn gui_tree_is_expanded(id, node_idx)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   let ii = int(id)
   let count = _gui_list_count[ii]
   if node_idx < 0.0 || node_idx >= count
     return 0.0
   end
   let abs_idx = int(_gui_list_start[ii] + node_idx)
+  if abs_idx < 0.0 || abs_idx >= len(_gui_tree_expanded)
+    return 0.0
+  end
   return _gui_tree_expanded[abs_idx]
 end
 
 fn _gui_tree_node_visible(id, node_idx)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   let ii = int(id)
   let tree_start = _gui_list_start[ii]
-  let mut p = _gui_tree_parents[int(tree_start + node_idx)]
+  let abs = int(tree_start + node_idx)
+  if abs < 0.0 || abs >= len(_gui_tree_parents)
+    return 0.0
+  end
+  let mut p = _gui_tree_parents[abs]
+  let mut depth = 0.0
   while p >= 0.0
-    if _gui_tree_expanded[int(tree_start + p)] == 0.0
+    depth = depth + 1.0
+    if depth > 100.0
       return 0.0
     end
-    p = _gui_tree_parents[int(tree_start + p)]
+    let pidx = int(tree_start + p)
+    if pidx < 0.0 || pidx >= len(_gui_tree_expanded)
+      return 0.0
+    end
+    if _gui_tree_expanded[pidx] == 0.0
+      return 0.0
+    end
+    if pidx >= len(_gui_tree_parents)
+      return 0.0
+    end
+    p = _gui_tree_parents[pidx]
   end
   return 1.0
 end
@@ -300,63 +407,91 @@ fn gui_tooltip(target_id, text)
   return id
 end
 
-// ── Widget Queries ──────────────────────────────────────────────────
+// ── Widget Queries (all bounds-checked) ─────────────────────────────
 
 fn gui_running()
   return _gs[0]
 end
 
 fn gui_clicked(id)
-  let v = _gui_clicked[int(id)]
-  return v
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
+  return _gui_clicked[int(id)]
 end
 
 fn gui_checked(id)
-  let v = _gui_checked[int(id)]
-  return v
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
+  return _gui_checked[int(id)]
 end
 
 fn gui_slider_value(id)
-  let v = _gui_slider_val[int(id)]
-  return v
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
+  return _gui_slider_val[int(id)]
 end
 
 fn gui_get_text(id)
-  let v = _gui_input_text[int(id)]
-  return v
+  if _gui_id_ok(id) == 0.0
+    return ""
+  end
+  return _gui_input_text[int(id)]
 end
 
+// ── Widget Mutations (all bounds-checked) ───────────────────────────
+
 fn gui_set_text(id, text)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   _gui_texts[int(id)] = text
   _gs[9] = 1.0
   return 0.0
 end
 
 fn gui_set_checked(id, val)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   _gui_checked[int(id)] = val
   _gs[9] = 1.0
   return 0.0
 end
 
 fn gui_set_slider(id, val)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   _gui_slider_val[int(id)] = val
   _gs[9] = 1.0
   return 0.0
 end
 
 fn gui_set_visible(id, val)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   _gui_visible[int(id)] = val
   _gs[9] = 1.0
   return 0.0
 end
 
 fn gui_set_enabled(id, val)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   _gui_enabled[int(id)] = val
   _gs[9] = 1.0
   return 0.0
 end
 
 fn gui_set_progress(id, val)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
   let mut v = val
   if v < 0.0
     v = 0.0
@@ -367,6 +502,17 @@ fn gui_set_progress(id, val)
   _gui_slider_val[int(id)] = v
   _gs[9] = 1.0
   return 0.0
+end
+
+// H-23: Set text input value programmatically
+fn gui_set_input_text(id, text)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
+  _gui_input_text[int(id)] = text
+  _gui_input_cursor[int(id)] = len(text)
+  _gs[9] = 1.0
+  return 1.0
 end
 
 fn gui_radio_value(group)
@@ -384,4 +530,17 @@ fn gui_radio_value(group)
     j = j + 1.0
   end
   return -1.0
+end
+
+// H-32: Widget removal — mark widget as removed
+fn gui_remove(id)
+  if _gui_id_ok(id) == 0.0
+    return 0.0
+  end
+  let ii = int(id)
+  _gui_types[ii] = 0.0
+  _gui_visible[ii] = 0.0
+  _gui_enabled[ii] = 0.0
+  _gs[9] = 1.0
+  return 1.0
 end

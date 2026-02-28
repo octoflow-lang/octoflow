@@ -1,0 +1,235 @@
+// examples/kitchen.flow — OctoUI Kitchen Sink
+//
+// Comprehensive demo of all widget types in a single application.
+// Uses tabs to organize widgets into categories with collapsible sections.
+//
+// Controls:
+//   TAB        — Cycle focus
+//   SPACE      — Toggle/select/click focused widget
+//   ENTER      — Click button, submit text input
+//   LEFT/RIGHT — Adjust slider
+//   UP/DOWN    — Adjust spinbox, navigate listbox
+//   ESCAPE     — Quit
+//
+// Run: octoflow run octoui/examples/kitchen.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/core/label"
+use "../widgets/core/progress"
+use "../widgets/core/tooltip"
+use "../widgets/input/button"
+use "../widgets/input/checkbox"
+use "../widgets/input/textinput"
+use "../widgets/input/slider"
+use "../widgets/input/radio"
+use "../widgets/input/dropdown"
+use "../widgets/input/toggle"
+use "../widgets/input/tabs"
+use "../widgets/input/listbox"
+use "../widgets/input/spinbox"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../widgets/layout/section"
+use "../state/reactive"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(520.0, 500.0, "OctoUI Kitchen Sink")
+
+// Reactive state for displays
+let counter_state = ui_state(0.0)
+
+// Root layout
+let root = ui_column(-1.0, 6.0)
+let _sp = ui_tree_set_padding(root, 12.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 520.0, 500.0)
+
+// Header
+let title = ui_text(root, "OCTOUI KITCHEN SINK", UI_COLOR_PRIMARY)
+let subtitle = ui_text(root, "19 WIDGET TYPES + SECTIONS + DISABLED", UI_COLOR_TEXT_DIM)
+let sep1 = ui_separator(root, 496.0)
+
+// Tab container
+let tabs = ui_tabs(root, 496.0)
+let _t1 = ui_tab(tabs, "INPUTS")
+let _t2 = ui_tab(tabs, "DATA")
+let _t3 = ui_tab(tabs, "LAYOUT")
+let _fin = ui_tabs_finalize(tabs)
+
+// ── Tab 1: Input Widgets ──
+let p1 = ui_tab_panel(tabs, 0.0)
+
+// Buttons section
+let sec_btn = ui_section(p1, "BUTTONS")
+let btn_row = ui_row(sec_btn, 8.0)
+let btn1 = ui_button(btn_row, 80.0, 28.0, "COUNT")
+let btn2 = ui_button(btn_row, 80.0, 28.0, "RESET")
+let counter_txt = ui_text(btn_row, "0", UI_COLOR_PRIMARY)
+let _bc = ui_bind_text(counter_txt, counter_state)
+let _tt1 = ui_tooltip_register(btn1, "INCREMENT COUNTER")
+let _tt2 = ui_tooltip_register(btn2, "RESET TO ZERO")
+
+// Disabled button demo
+let dis_row = ui_row(sec_btn, 8.0)
+let btn_dis = ui_button(dis_row, 100.0, 28.0, "DISABLED")
+let _ed = ui_tree_set_enabled(btn_dis, 0.0)
+let btn_act = ui_button(dis_row, 100.0, 28.0, "ENABLED")
+
+// Text input section
+let sec_ti = ui_section(p1, "TEXT INPUT")
+let ti_row = ui_row(sec_ti, 8.0)
+let ti_lbl = ui_text(ti_row, "NAME", UI_COLOR_TEXT_DIM)
+let ti = ui_textinput(ti_row, 200.0, 26.0)
+
+// Toggles section
+let sec_tgl = ui_section(p1, "TOGGLES")
+let ctl_row = ui_row(sec_tgl, 12.0)
+let chk = ui_checkbox(ctl_row, "CHECKBOX")
+let tgl = ui_toggle(ctl_row, "TOGGLE")
+
+// Radio group
+let radio_row = ui_row(sec_tgl, 8.0)
+let radio_lbl = ui_text(radio_row, "PRIORITY", UI_COLOR_TEXT_DIM)
+let rg = ui_radio_group(radio_row)
+let _r1 = ui_radio(rg, "LOW")
+let _r2 = ui_radio(rg, "MED")
+let _r3 = ui_radio(rg, "HIGH")
+
+// ── Tab 2: Data Widgets ──
+let p2 = ui_tab_panel(tabs, 1.0)
+
+// Slider section
+let sec_sl = ui_section(p2, "SLIDER")
+let sl_row = ui_row(sec_sl, 8.0)
+let sl_lbl = ui_text(sl_row, "VOLUME", UI_COLOR_TEXT_DIM)
+let sl = ui_slider(sec_sl, 350.0, 14.0, 0.0, 100.0, 75.0)
+
+// Spinbox section
+let sec_sp = ui_section(p2, "SPINBOX")
+let sp_row = ui_row(sec_sp, 8.0)
+let sp_lbl = ui_text(sp_row, "QUANTITY", UI_COLOR_TEXT_DIM)
+let spin = ui_spinbox(sp_row, 120.0, 26.0, 0.0, 99.0, 1.0, 10.0)
+
+// Dropdown
+let dd_row = ui_row(sec_sp, 8.0)
+let dd_lbl = ui_text(dd_row, "FORMAT", UI_COLOR_TEXT_DIM)
+let dd = ui_dropdown(dd_row, 140.0, 26.0)
+let _do1 = ui_dropdown_option(dd, "JSON")
+let _do2 = ui_dropdown_option(dd, "CSV")
+let _do3 = ui_dropdown_option(dd, "XML")
+let _do4 = ui_dropdown_option(dd, "YAML")
+let _dof = ui_dropdown_finalize(dd)
+
+// Progress + Listbox section
+let sec_list = ui_section(p2, "LISTS")
+let pg_lbl = ui_text(sec_list, "PROGRESS", UI_COLOR_TEXT_DIM)
+let pbar = ui_progress(sec_list, 350.0, 10.0)
+let pct_state = ui_state(45.0)
+let _bp = ui_bind_progress(pbar, pct_state)
+
+let lb_lbl = ui_text(sec_list, "ITEMS", UI_COLOR_TEXT_DIM)
+let lb = ui_listbox(sec_list, 350.0, 4.0)
+let _li1 = ui_listbox_add(lb, "ALPHA")
+let _li2 = ui_listbox_add(lb, "BETA")
+let _li3 = ui_listbox_add(lb, "GAMMA")
+let _li4 = ui_listbox_add(lb, "DELTA")
+let _li5 = ui_listbox_add(lb, "EPSILON")
+let _li6 = ui_listbox_add(lb, "ZETA")
+let _lf = ui_listbox_finalize(lb)
+
+// ── Tab 3: Layout Widgets ──
+let p3 = ui_tab_panel(tabs, 2.0)
+
+let sec_nest = ui_section(p3, "NESTED CONTAINERS")
+
+// Nested row/column demo
+let outer_row = ui_row(sec_nest, 12.0)
+
+// Left column: colored boxes
+let left_col = ui_column(outer_row, 4.0)
+let box1 = ui_box(left_col, 80.0, 30.0, UI_COLOR_PRIMARY)
+let box2 = ui_box(left_col, 80.0, 30.0, UI_COLOR_HOVER)
+let box3 = ui_box(left_col, 80.0, 30.0, UI_COLOR_BORDER)
+
+// Right column: labels
+let right_col = ui_column(outer_row, 4.0)
+let lbl1 = ui_label(right_col, "STATUS", "ACTIVE", UI_COLOR_PRIMARY)
+let lbl2 = ui_label(right_col, "MODE", "NORMAL", UI_COLOR_TEXT)
+let lbl3 = ui_label(right_col, "ITEMS", "6", UI_COLOR_TEXT_DIM)
+
+let sec_info = ui_section(p3, "INFO")
+let p3_txt = ui_text(sec_info, "BOX + TEXT + SEPARATOR", UI_COLOR_TEXT_DIM)
+let p3_txt2 = ui_text(sec_info, "LABEL + ROW + COLUMN", UI_COLOR_TEXT_DIM)
+let p3_txt3 = ui_text(sec_info, "SECTION (COLLAPSIBLE)", UI_COLOR_TEXT_DIM)
+
+// ── Bottom status ──
+let sep2 = ui_separator(root, 496.0)
+let status_row = ui_row(root, 8.0)
+let status = ui_label(status_row, "WIDGETS", "19", UI_COLOR_PRIMARY)
+
+// Initial layout
+let _l = ui_layout_update()
+let _su = ui_slider_update_all()
+let _tu = ui_toggle_update_all()
+let _ta = ui_tabs_update_all()
+let _lu = ui_listbox_update_all()
+let _pu = ui_progress_update()
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  let key = ui_key_down()
+  let _tk = ui_textinput_process_key(key)
+  let _sp2 = ui_slider_process(ui_mouse_x(), ui_mouse_y(), ui_mouse_down())
+  let _sk = ui_slider_process_key(key)
+  let _dp = ui_dropdown_process(ui_mouse_x(), ui_mouse_y(), ui_mouse_clicked())
+  let _tp = ui_tabs_process()
+  let _lp = ui_listbox_process(key)
+  let _spp = ui_spinbox_process()
+  let _spk = ui_spinbox_process_key(key)
+  let _ttp = ui_tooltip_process(ui_mouse_x(), ui_mouse_y())
+  let _secp = ui_section_process()
+
+  // Button: count
+  if ui_button_clicked(btn1) == 1.0
+    let cur = ui_state_get(counter_state)
+    let _sv = ui_state_set(counter_state, cur + 1.0)
+  end
+
+  // Button: reset
+  if ui_button_clicked(btn2) == 1.0
+    let _sv = ui_state_set(counter_state, 0.0)
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+let _c = ui_window_close()
+print("Kitchen sink finished.")

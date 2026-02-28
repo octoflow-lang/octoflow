@@ -1,110 +1,104 @@
 # Permissions
 
-OctoFlow uses a Deno-style permission model. By default, programs have no access to
-the filesystem, network, or process execution. Permissions must be granted explicitly
-via command-line flags.
+OctoFlow uses a Deno-style security model: all I/O is denied by default.
+Scripts cannot read files, access the network, or run shell commands
+unless you explicitly grant permission with flags.
+
+## Default Behavior
+
+With no flags, a script can only:
+- Compute (CPU and GPU)
+- Print to stdout
+- Read from stdin
+
+Everything else is blocked.
 
 ## Permission Flags
 
-| Flag | Grants | Example |
-|------|--------|---------|
-| `--allow-read` | File read access | `--allow-read` or `--allow-read=./data` |
-| `--allow-write` | File write access | `--allow-write` or `--allow-write=./output` |
-| `--allow-net` | Network access | `--allow-net` or `--allow-net=api.example.com` |
-| `--allow-exec` | Process execution | `--allow-exec` or `--allow-exec=/usr/bin/git` |
-
-## Bare vs Scoped
-
-**Bare flag** — grants unrestricted access for that category:
-```bash
-octoflow run app.flow --allow-read --allow-write
-```
-
-**Scoped flag** — restricts access to a specific path or host:
-```bash
-octoflow run app.flow --allow-read=./data --allow-write=./output
-```
-
-With `--allow-read=./data`, the program can read files inside `./data/` but not
-from `./secrets/` or `/etc/`. Attempts to read outside the scope produce error E051.
-
-## Examples
-
-### Read a CSV, write results
+### File Read
 
 ```bash
-octoflow run analysis.flow --allow-read=./data --allow-write=./output
+octoflow run script.flow --allow-read           # read any file
+octoflow run script.flow --allow-read=./data     # read only from ./data/
 ```
 
-```flow
-let csv = csv_read("./data/sales.csv")
-let total = arr_sum(csv_column(csv, "amount"))
-write_file("./output/report.txt", "Total: {total}")
-```
+Grants access to `read_file()`, `read_csv()`, `read_image()`, `file_exists()`,
+`walk_dir()`, and all file-reading builtins.
 
-### Fetch data from an API
+### File Write
 
 ```bash
-octoflow run fetch.flow --allow-net=api.example.com
+octoflow run script.flow --allow-write           # write any file
+octoflow run script.flow --allow-write=./output   # write only to ./output/
 ```
 
-```flow
-let data = http_get_json("https://api.example.com/data")
-print("{data}")
-```
+Grants access to `write_file()`, `write_csv()`, `write_image()`, `append_file()`,
+and all file-writing builtins.
 
-### Run an external tool
+Path traversal is blocked: `--allow-write=./output` rejects writes to
+`./output/../../etc/passwd`. All paths are canonicalized before checking.
+
+### Network
 
 ```bash
-octoflow run deploy.flow --allow-exec=/usr/bin/git --allow-net
+octoflow run script.flow --allow-net             # all network access
 ```
 
-```flow
-let status = run("git status")
-print("{status}")
+Grants access to `http_get()`, `http_post()`, `http_serve()`, `web_search()`,
+`web_read()`, and all network builtins.
+
+**Note:** OctoFlow's built-in HTTP client supports HTTP/1.1 only (no HTTPS).
+The `web_search()` and `web_read()` builtins use curl as a bridge for HTTPS.
+
+### Shell Execution
+
+```bash
+octoflow run script.flow --allow-exec            # run shell commands
 ```
 
-### Multiple scoped permissions
+Grants access to `run_shell()` and `pipe()`. Use with caution — these
+execute arbitrary system commands.
+
+## Combining Flags
 
 ```bash
 octoflow run pipeline.flow \
-  --allow-read=./input \
+  --allow-read=./data \
   --allow-write=./output \
-  --allow-net=api.weather.com \
-  --allow-net=api.stocks.com
+  --allow-net
 ```
 
-## Chat Mode Permissions
+## Chat Mode
 
-Chat-generated code runs in a sandbox by default. To grant permissions:
+Chat-generated code runs in a sandbox with these defaults:
+- File I/O scoped to current working directory
+- Network denied
+- Max 1,000,000 loop iterations
+- No shell execution
+
+Override with the same flags:
 
 ```bash
-octoflow chat --allow-read=./data --allow-net
+octoflow chat --allow-read=./data --allow-write=./output --allow-net
 ```
 
-The sandbox also enforces:
-- Maximum 1,000,000 loop iterations
-- I/O scoped to current working directory (unless explicitly widened)
-- No process execution (unless `--allow-exec` granted)
+## What Happens on Denial
 
-## Error Codes
+When a script tries an operation without permission, OctoFlow returns
+an error with the denied operation and the flag needed to grant it:
 
-| Code | Error | Example |
-|------|-------|---------|
-| E051 | Network permission denied | `web_search()` without `--allow-net` |
-| E052 | File read permission denied | `read_file()` without `--allow-read` |
-| E053 | File write permission denied | `write_file()` without `--allow-write` |
-| E054 | Exec permission denied | `run()` without `--allow-exec` |
-| E055 | Path outside allowed scope | `read_file("/etc/passwd")` with `--allow-read=./data` |
+```
+Error: Permission denied: file read requires --allow-read
+```
 
-## Why Permissions Matter
+The script continues running — denied operations return error values,
+they don't crash the program.
 
-OctoFlow is designed for LLM-generated code. When `octoflow chat` generates and
-runs code, permissions ensure that generated code cannot:
+## Security Model
 
-- Read sensitive files (SSH keys, credentials, system configs)
-- Write to arbitrary locations (overwrite system files)
-- Phone home to unknown servers (exfiltrate data)
-- Execute arbitrary commands (privilege escalation)
-
-Start with minimal permissions. Add more as needed.
+- **Principle of least privilege:** Grant only what the script needs
+- **Path scoping:** `=path` restricts to a directory subtree
+- **No ambient authority:** Environment variables and config files
+  cannot grant permissions — only CLI flags
+- **Canonicalization:** All paths resolved to absolute before checking
+  (blocks `../` traversal)

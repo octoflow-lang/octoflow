@@ -1,0 +1,141 @@
+// test_vector.flow — Tests for db/vector.flow (CPU path only — no GPU required)
+use "vector"
+
+fn approx_eq(a, b, eps)
+  if abs(a - b) < eps
+    return 1.0
+  end
+  return 0.0
+end
+
+fn test_vdb_create_insert()
+  let mut vdb = vdb_create(3.0)
+  let mut vectors = vdb_create_vectors()
+  assert(map_get(vdb, "__vdb_dims") == "3", "dimensions should be 3")
+  assert(map_get(vdb, "__vdb_count") == "0", "initial count should be 0")
+
+  let mut v1 = [1.0, 0.0, 0.0]
+  let c1 = vdb_insert(vdb, vectors, "vec_a", v1, "first vector")
+  assert(c1 == 1.0, "count after first insert should be 1")
+
+  let mut v2 = [0.0, 1.0, 0.0]
+  let c2 = vdb_insert(vdb, vectors, "vec_b", v2, "second vector")
+  assert(c2 == 2.0, "count after second insert should be 2")
+  assert(len(vectors) == 6.0, "flat array should have 6 elements (2 * 3 dims)")
+
+  // Dimension mismatch
+  let mut bad = [1.0, 2.0]
+  let fail = vdb_insert(vdb, vectors, "bad", bad, "wrong dims")
+  assert(fail == 0.0, "dimension mismatch should return 0")
+  assert(map_get(vdb, "__vdb_count") == "2", "count should still be 2")
+
+  print("PASS: test_vdb_create_insert")
+  return 0.0
+end
+
+fn test_vdb_search_cosine()
+  let mut vdb = vdb_create(3.0)
+  let mut vectors = vdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  vdb_insert(vdb, vectors, "x_axis", v1, "along x")
+  let mut v2 = [0.0, 1.0, 0.0]
+  vdb_insert(vdb, vectors, "y_axis", v2, "along y")
+  let mut v3 = [0.7, 0.7, 0.0]
+  vdb_insert(vdb, vectors, "diagonal", v3, "diagonal xy")
+
+  let mut query = [0.9, 0.1, 0.0]
+  vdb_search(vdb, vectors, query, 2.0, "cosine")
+  // Use accessors to read results (stored internally in vdb)
+  let result_count = vdb_result_count(vdb)
+  assert(result_count == 2.0, "should return 2 results")
+
+  let best_id = vdb_result_id(vdb, 0.0)
+  assert(best_id == "x_axis", "closest to [0.9,0.1,0] should be x_axis")
+
+  let best_score = vdb_result_score(vdb, 0.0)
+  assert(approx_eq(best_score, 1.0, 0.05) == 1.0, "cosine with near-x should be ~1.0")
+
+  print("PASS: test_vdb_search_cosine")
+  return 0.0
+end
+
+fn test_vdb_search_identical()
+  let mut vdb = vdb_create(3.0)
+  let mut vectors = vdb_create_vectors()
+  let mut v1 = [1.0, 2.0, 3.0]
+  vdb_insert(vdb, vectors, "orig", v1, "original")
+  let mut v2 = [0.0, 0.0, 1.0]
+  vdb_insert(vdb, vectors, "other", v2, "different")
+
+  let mut query = [1.0, 2.0, 3.0]
+  vdb_search(vdb, vectors, query, 1.0, "cosine")
+  let best_id = vdb_result_id(vdb, 0.0)
+  assert(best_id == "orig", "identical vector should be best match")
+
+  let best_score = vdb_result_score(vdb, 0.0)
+  assert(approx_eq(best_score, 1.0, 0.001) == 1.0, "identical cosine should be 1.0")
+
+  print("PASS: test_vdb_search_identical")
+  return 0.0
+end
+
+fn test_vdb_search_dot()
+  let mut vdb = vdb_create(3.0)
+  let mut vectors = vdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  vdb_insert(vdb, vectors, "unit_x", v1, "unit x")
+  let mut v2 = [3.0, 0.0, 0.0]
+  vdb_insert(vdb, vectors, "scaled_x", v2, "scaled x")
+
+  let mut query = [1.0, 0.0, 0.0]
+  vdb_search(vdb, vectors, query, 2.0, "dot")
+  let best_id = vdb_result_id(vdb, 0.0)
+  assert(best_id == "scaled_x", "dot product should favor larger magnitude")
+
+  let best_score = vdb_result_score(vdb, 0.0)
+  assert(best_score == 3.0, "dot([3,0,0], [1,0,0]) should be 3")
+
+  print("PASS: test_vdb_search_dot")
+  return 0.0
+end
+
+fn test_vdb_normalize()
+  let mut vdb = vdb_create(3.0)
+  let mut vectors = vdb_create_vectors()
+  let mut v1 = [3.0, 4.0, 0.0]
+  vdb_insert(vdb, vectors, "vec1", v1, "3-4-5 triangle")
+
+  let vec_before = vdb_extract_vector(vectors, 3.0, 0.0)
+  let n_before = norm(vec_before)
+  assert(approx_eq(n_before, 5.0, 0.001) == 1.0, "norm before should be 5.0")
+
+  vdb_normalize(vdb, vectors)
+  assert(map_get(vdb, "__vdb_normalized") == "1", "should be marked normalized")
+
+  let vec_after = vdb_extract_vector(vectors, 3.0, 0.0)
+  let n_after = norm(vec_after)
+  assert(approx_eq(n_after, 1.0, 0.001) == 1.0, "norm after should be 1.0")
+
+  print("PASS: test_vdb_normalize")
+  return 0.0
+end
+
+fn test_vdb_search_empty()
+  let mut vdb = vdb_create(3.0)
+  let mut vectors = vdb_create_vectors()
+  let mut query = [1.0, 0.0, 0.0]
+  vdb_search(vdb, vectors, query, 5.0, "cosine")
+  let c = vdb_result_count(vdb)
+  assert(c == 0.0, "empty vdb search should return 0 results")
+  print("PASS: test_vdb_search_empty")
+  return 0.0
+end
+
+// Run tests
+test_vdb_create_insert()
+test_vdb_search_cosine()
+test_vdb_search_identical()
+test_vdb_search_dot()
+test_vdb_normalize()
+test_vdb_search_empty()
+print("All vector DB tests passed.")

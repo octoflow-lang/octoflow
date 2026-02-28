@@ -1,0 +1,73 @@
+// emit_ui_clear.flow — OctoUI Framebuffer Clear Kernel Emitter
+//
+// Clears the entire framebuffer to a solid color.
+// Framebuffer layout: planar RGB in globals (binding 2).
+//   globals[0 .. total-1]         = R channel
+//   globals[total .. 2*total-1]   = G channel
+//   globals[2*total .. 3*total-1] = B channel
+//
+// Push constants (4 floats):
+//   pc[0] = R (red channel, 0.0-1.0)
+//   pc[1] = G (green channel, 0.0-1.0)
+//   pc[2] = B (blue channel, 0.0-1.0)
+//   pc[3] = total_pixels (width * height)
+//
+// VM SSBO layout:
+//   Binding 0: registers (unused)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (framebuffer — write R/G/B)
+//   Binding 3: control   (unused)
+//
+// Dispatch: workgroups = ceil(total_pixels / 256)
+//
+// Run: octoflow run octoui/kernels/emit_ui_clear.flow --allow-read --allow-write
+
+use "../../stdlib/compiler/ir"
+
+fn emit_ui_clear(out_path)
+  ir_new()
+  ir_input_count = 4.0
+
+  let entry = ir_block("entry")
+  let body = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  let gid = ir_load_gid(entry)
+
+  // Push constants: R, G, B, total_pixels
+  let r_color = ir_push_const(entry, 0.0)
+  let g_color = ir_push_const(entry, 1.0)
+  let b_color = ir_push_const(entry, 2.0)
+  let total_f = ir_push_const(entry, 3.0)
+
+  // Bounds check: skip if gid >= total_pixels
+  let total_u = ir_ftou(entry, total_f)
+  let oob = ir_ugte(entry, gid, total_u)
+  let _sm = ir_selection_merge(entry, exit_block)
+  let _br = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // body: write R, G, B to planar framebuffer in globals (binding 2)
+  // R channel: globals[gid]
+  let _s_r = ir_buf_store_f(body, 2.0, gid, r_color)
+
+  // G channel: globals[total + gid]
+  let g_idx = ir_iadd(body, total_u, gid)
+  let _s_g = ir_buf_store_f(body, 2.0, g_idx, g_color)
+
+  // B channel: globals[2*total + gid]
+  let two_u = ir_const_u(body, 2.0)
+  let two_total = ir_imul(body, two_u, total_u)
+  let b_idx = ir_iadd(body, two_total, gid)
+  let _s_b = ir_buf_store_f(body, 2.0, b_idx, b_color)
+
+  let _br2 = ir_term_branch(body, exit_block)
+
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "octoui/kernels/ui_clear.spv"
+let _r = emit_ui_clear(out)
+print("Emitted: {out}")

@@ -1,0 +1,849 @@
+// widgets/input/textarea.flow — Multi-Line Text Area Widget
+//
+// A focusable multi-line text editing area with cursor, scroll,
+// and readonly mode. Supports arrow key navigation, typing, Enter
+// to insert lines, Backspace/Delete across lines, Page Up/Down.
+//
+// Usage:
+//   let ta = ui_textarea(parent, 400.0, 200.0)
+//   let _st = ui_textarea_set_text(ta, "LINE ONE")
+//   // or add lines individually:
+//   let _al = ui_textarea_append_line(ta, "LINE TWO")
+//
+//   // In event loop:
+//   let key = ui_key_down()
+//   let _tp = ui_textarea_process_key(key)
+//   let _tc = ui_textarea_process_click(ta, mx, my, clicked)
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../engine/sdf_font"
+use "../../themes/dark"
+
+// Textarea registry (indexed by textarea sequential index, NOT widget ID)
+let mut _ui_ta_lines = []        // flat array of line strings (all textareas)
+let mut _ui_ta_line_start = []   // per-textarea: first line index in _ui_ta_lines
+let mut _ui_ta_line_count = []   // per-textarea: number of lines
+let mut _ui_ta_cursor_line = []  // cursor line position (0-based)
+let mut _ui_ta_cursor_col = []   // cursor column position (0-based)
+let mut _ui_ta_scroll = []       // vertical scroll offset (first visible line)
+let mut _ui_ta_readonly = []     // 1.0 = readonly
+let mut _ui_ta_widgets = []      // textarea widget IDs (for lookup)
+
+// Create a textarea widget
+// parent: parent widget ID
+// w: width in pixels
+// h: height in pixels
+// Returns: widget ID
+fn ui_textarea(parent, w, h)
+  let id = ui_tree_add(UI_TEXTAREA, parent, w, h, " ")
+  let _sc = ui_tree_set_color_themed(id, UI_COLOR_SURFACE)
+
+  let ta_idx = len(_ui_ta_widgets)
+  push(_ui_ta_widgets, id)
+  push(_ui_ta_line_start, len(_ui_ta_lines))
+  push(_ui_ta_line_count, 1.0)
+  push(_ui_ta_cursor_line, 0.0)
+  push(_ui_ta_cursor_col, 0.0)
+  push(_ui_ta_scroll, 0.0)
+  push(_ui_ta_readonly, 0.0)
+
+  // Start with one empty line
+  push(_ui_ta_lines, " ")
+
+  return id
+end
+
+// Find textarea index from widget ID
+fn ui_ta_find(widget_id)
+  let mut i = 0.0
+  while i < len(_ui_ta_widgets)
+    if _ui_ta_widgets[i] == widget_id
+      return i
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+// Set textarea content (replaces all lines)
+// text: single string, lines split on newline (chr(10))
+fn ui_textarea_set_text(widget_id, text)
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return 0.0
+  end
+
+  // Remove old lines by rebuilding from scratch
+  // Find start position for this textarea
+  let old_start = _ui_ta_line_start[ta_idx]
+  let old_count = _ui_ta_line_count[ta_idx]
+
+  // Split text into lines by scanning for chr(10) = newline
+  let mut new_lines = []
+  let tlen = len(text)
+  let mut line_start = 0.0
+  let mut ti = 0.0
+  while ti < tlen
+    let ch = char_at(text, ti)
+    let ch_code = ord(ch)
+    if ch_code == 10.0
+      // Found newline — extract line
+      if ti > line_start
+        let _sl = ti - line_start
+        let line = substr(text, line_start, _sl)
+        push(new_lines, line)
+      else
+        push(new_lines, " ")
+      end
+      line_start = ti + 1.0
+    end
+    ti = ti + 1.0
+  end
+  // Last line (after last newline or entire text if no newlines)
+  if line_start < tlen
+    let _sl2 = tlen - line_start
+    let last_line = substr(text, line_start, _sl2)
+    push(new_lines, last_line)
+  else
+    push(new_lines, " ")
+  end
+
+  // Now rebuild _ui_ta_lines: remove old entries, insert new ones
+  // For simplicity, rebuild the flat array
+  let mut rebuilt = []
+  let mut ri = 0.0
+  let total_lines = len(_ui_ta_lines)
+  // Copy lines before this textarea
+  while ri < old_start
+    push(rebuilt, _ui_ta_lines[ri])
+    ri = ri + 1.0
+  end
+  // Insert new lines
+  let new_start = len(rebuilt)
+  let new_count = len(new_lines)
+  let mut ni = 0.0
+  while ni < new_count
+    push(rebuilt, new_lines[ni])
+    ni = ni + 1.0
+  end
+  // Copy lines after this textarea
+  let old_end = old_start + old_count
+  let mut ai = old_end
+  while ai < total_lines
+    push(rebuilt, _ui_ta_lines[ai])
+    ai = ai + 1.0
+  end
+
+  // Replace the flat array (pop all, then push from rebuilt)
+  while len(_ui_ta_lines) > 0.0
+    let _pop = pop(_ui_ta_lines)
+  end
+  let mut _ci = 0.0
+  while _ci < len(rebuilt)
+    push(_ui_ta_lines, rebuilt[_ci])
+    _ci = _ci + 1.0
+  end
+
+  // Update this textarea's metadata
+  _ui_ta_line_start[ta_idx] = new_start
+  _ui_ta_line_count[ta_idx] = new_count
+
+  // Adjust start offsets for textareas after this one
+  let diff = new_count - old_count
+  let mut si = ta_idx + 1.0
+  while si < len(_ui_ta_widgets)
+    _ui_ta_line_start[si] = _ui_ta_line_start[si] + diff
+    si = si + 1.0
+  end
+
+  // Reset cursor and scroll
+  _ui_ta_cursor_line[ta_idx] = 0.0
+  _ui_ta_cursor_col[ta_idx] = 0.0
+  _ui_ta_scroll[ta_idx] = 0.0
+
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Append a line to a textarea
+fn ui_textarea_append_line(widget_id, text)
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return 0.0
+  end
+
+  let start = _ui_ta_line_start[ta_idx]
+  let count = _ui_ta_line_count[ta_idx]
+
+  // Check if the only line is empty — replace it
+  if count == 1.0
+    let first_line = _ui_ta_lines[start]
+    if first_line == " "
+      _ui_ta_lines[start] = text
+      let _d = ui_mark_dirty()
+      return 0.0
+    end
+  end
+
+  // Insert at position start + count
+  let insert_pos = start + count
+  let total = len(_ui_ta_lines)
+
+  // Rebuild array with new line inserted
+  let mut rebuilt = []
+  let mut ri = 0.0
+  while ri < insert_pos
+    push(rebuilt, _ui_ta_lines[ri])
+    ri = ri + 1.0
+  end
+  push(rebuilt, text)
+  while ri < total
+    push(rebuilt, _ui_ta_lines[ri])
+    ri = ri + 1.0
+  end
+
+  while len(_ui_ta_lines) > 0.0
+    let _pop = pop(_ui_ta_lines)
+  end
+  let mut _ci = 0.0
+  while _ci < len(rebuilt)
+    push(_ui_ta_lines, rebuilt[_ci])
+    _ci = _ci + 1.0
+  end
+  _ui_ta_line_count[ta_idx] = count + 1.0
+
+  // Adjust start offsets for textareas after this one
+  let mut si = ta_idx + 1.0
+  while si < len(_ui_ta_widgets)
+    _ui_ta_line_start[si] = _ui_ta_line_start[si] + 1.0
+    si = si + 1.0
+  end
+
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Get text content (all lines joined with newline)
+fn ui_textarea_get_text(widget_id)
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return " "
+  end
+
+  let start = _ui_ta_line_start[ta_idx]
+  let count = _ui_ta_line_count[ta_idx]
+  let nl = chr(10.0)
+
+  let mut result = " "
+  let mut first = 1.0
+  let mut li = 0.0
+  while li < count
+    let line = _ui_ta_lines[start + li]
+    if first == 1.0
+      result = line
+      first = 0.0
+    else
+      result = result + nl + line
+    end
+    li = li + 1.0
+  end
+
+  return result
+end
+
+// Get a single line
+fn ui_textarea_get_line(widget_id, line_idx)
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return " "
+  end
+  let start = _ui_ta_line_start[ta_idx]
+  let count = _ui_ta_line_count[ta_idx]
+  if line_idx < 0.0
+    return " "
+  end
+  if line_idx >= count
+    return " "
+  end
+  return _ui_ta_lines[start + line_idx]
+end
+
+// Get line count
+fn ui_textarea_line_count(widget_id)
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return 0.0
+  end
+  return _ui_ta_line_count[ta_idx]
+end
+
+// Set readonly mode
+fn ui_textarea_set_readonly(widget_id, flag)
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return 0.0
+  end
+  _ui_ta_readonly[ta_idx] = flag
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Scroll to a specific line
+fn ui_textarea_scroll_to(widget_id, line)
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return 0.0
+  end
+  let count = _ui_ta_line_count[ta_idx]
+  let mut target = line
+  if target < 0.0
+    target = 0.0
+  end
+  if target >= count
+    target = count - 1.0
+  end
+  _ui_ta_scroll[ta_idx] = target
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Set cursor position
+fn ui_textarea_set_cursor(widget_id, line, col)
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return 0.0
+  end
+  _ui_ta_cursor_line[ta_idx] = line
+  _ui_ta_cursor_col[ta_idx] = col
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Ensure cursor line is visible (adjust scroll)
+fn ui_ta_ensure_visible(ta_idx, widget_id)
+  let cur_line = _ui_ta_cursor_line[ta_idx]
+  let scroll = _ui_ta_scroll[ta_idx]
+  let bh = _ui_h[widget_id]
+  let line_h = 16.0
+  let vis_lines = floor(bh / line_h)
+
+  if cur_line < scroll
+    _ui_ta_scroll[ta_idx] = cur_line
+  end
+  if cur_line >= scroll + vis_lines
+    _ui_ta_scroll[ta_idx] = cur_line - vis_lines + 1.0
+  end
+  return 0.0
+end
+
+// Get line length (handling " " as empty)
+fn ui_ta_line_len(ta_idx, line_idx)
+  let start = _ui_ta_line_start[ta_idx]
+  let line = _ui_ta_lines[start + line_idx]
+  if line == " "
+    return 0.0
+  end
+  return len(line)
+end
+
+// Process click on a textarea (set cursor position from mouse)
+// widget_id: textarea widget ID
+// mx, my: mouse position
+// clicked: 1.0 if just clicked
+fn ui_textarea_process_click(widget_id, mx, my, clicked)
+  if clicked == 0.0
+    return 0.0
+  end
+
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return 0.0
+  end
+
+  // Only process if this textarea is focused
+  if _ui_focus_id != widget_id
+    return 0.0
+  end
+
+  let bx = _ui_x[widget_id]
+  let by = _ui_y[widget_id]
+  let bw = _ui_w[widget_id]
+  let bh = _ui_h[widget_id]
+  let line_h = 16.0
+  let font_size = 16.0
+  let text_pad = 4.0
+
+  // Check if click is inside textarea
+  if mx < bx
+    return 0.0
+  end
+  if mx >= bx + bw
+    return 0.0
+  end
+  if my < by
+    return 0.0
+  end
+  if my >= by + bh
+    return 0.0
+  end
+
+  let scroll = _ui_ta_scroll[ta_idx]
+  let count = _ui_ta_line_count[ta_idx]
+  let start = _ui_ta_line_start[ta_idx]
+
+  // Calculate clicked line
+  let local_y = my - by
+  let mut click_line = scroll + floor(local_y / line_h)
+  if click_line >= count
+    click_line = count - 1.0
+  end
+  if click_line < 0.0
+    click_line = 0.0
+  end
+
+  // Calculate clicked col (proportional: walk chars until past click x)
+  let local_x = mx - bx - text_pad
+  let mut click_col = 0.0
+  if local_x > 0.0
+    let cl_text = _ui_ta_lines[start + click_line]
+    if cl_text != " "
+      let cl_len = len(cl_text)
+      let mut acc_w = 0.0
+      let mut ci = 0.0
+      let mut done = 0.0
+      while ci < cl_len
+        if done == 0.0
+          let ch_adv = ui_glyph_advance(ord(char_at(cl_text, ci))) * font_size
+          if acc_w + ch_adv * 0.5 > local_x
+            click_col = ci
+            done = 1.0
+          else
+            acc_w = acc_w + ch_adv
+            click_col = ci + 1.0
+          end
+        end
+        ci = ci + 1.0
+      end
+    end
+  end
+  let line_len = ui_ta_line_len(ta_idx, click_line)
+  if click_col > line_len
+    click_col = line_len
+  end
+
+  _ui_ta_cursor_line[ta_idx] = click_line
+  _ui_ta_cursor_col[ta_idx] = click_col
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Process keyboard input for focused textarea
+// key: key name from ui_key_down()
+fn ui_textarea_process_key(key)
+  // Find focused textarea
+  if _ui_focus_id < 0.0
+    return 0.0
+  end
+  if _ui_focus_id >= len(_ui_types)
+    return 0.0
+  end
+  if _ui_types[_ui_focus_id] != UI_TEXTAREA
+    return 0.0
+  end
+
+  let widget_id = _ui_focus_id
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return 0.0
+  end
+
+  // Skip if no key pressed
+  if key == " "
+    return 0.0
+  end
+
+  let is_ro = _ui_ta_readonly[ta_idx]
+  let count = _ui_ta_line_count[ta_idx]
+  let start = _ui_ta_line_start[ta_idx]
+  let cur_line = _ui_ta_cursor_line[ta_idx]
+  let cur_col = _ui_ta_cursor_col[ta_idx]
+  let line_len = ui_ta_line_len(ta_idx, cur_line)
+
+  // ── Navigation (works in readonly too) ──
+
+  if key == "left"
+    if cur_col > 0.0
+      _ui_ta_cursor_col[ta_idx] = cur_col - 1.0
+    else
+      // Wrap to end of previous line
+      if cur_line > 0.0
+        _ui_ta_cursor_line[ta_idx] = cur_line - 1.0
+        let prev_len = ui_ta_line_len(ta_idx, cur_line - 1.0)
+        _ui_ta_cursor_col[ta_idx] = prev_len
+      end
+    end
+    let _ev = ui_ta_ensure_visible(ta_idx, widget_id)
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  if key == "right"
+    if cur_col < line_len
+      _ui_ta_cursor_col[ta_idx] = cur_col + 1.0
+    else
+      // Wrap to start of next line
+      if cur_line < count - 1.0
+        _ui_ta_cursor_line[ta_idx] = cur_line + 1.0
+        _ui_ta_cursor_col[ta_idx] = 0.0
+      end
+    end
+    let _ev = ui_ta_ensure_visible(ta_idx, widget_id)
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  if key == "up"
+    if cur_line > 0.0
+      _ui_ta_cursor_line[ta_idx] = cur_line - 1.0
+      let prev_len = ui_ta_line_len(ta_idx, cur_line - 1.0)
+      if cur_col > prev_len
+        _ui_ta_cursor_col[ta_idx] = prev_len
+      end
+    end
+    let _ev = ui_ta_ensure_visible(ta_idx, widget_id)
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  if key == "down"
+    if cur_line < count - 1.0
+      _ui_ta_cursor_line[ta_idx] = cur_line + 1.0
+      let next_len = ui_ta_line_len(ta_idx, cur_line + 1.0)
+      if cur_col > next_len
+        _ui_ta_cursor_col[ta_idx] = next_len
+      end
+    end
+    let _ev = ui_ta_ensure_visible(ta_idx, widget_id)
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  if key == "home"
+    _ui_ta_cursor_col[ta_idx] = 0.0
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  if key == "end"
+    _ui_ta_cursor_col[ta_idx] = line_len
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  if key == "pageup"
+    let bh = _ui_h[widget_id]
+    let vis = floor(bh / 16.0)
+    let mut new_line = cur_line - vis
+    if new_line < 0.0
+      new_line = 0.0
+    end
+    _ui_ta_cursor_line[ta_idx] = new_line
+    let nl2 = ui_ta_line_len(ta_idx, new_line)
+    if cur_col > nl2
+      _ui_ta_cursor_col[ta_idx] = nl2
+    end
+    let _ev = ui_ta_ensure_visible(ta_idx, widget_id)
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  if key == "pagedown"
+    let bh = _ui_h[widget_id]
+    let vis = floor(bh / 16.0)
+    let mut new_line = cur_line + vis
+    if new_line >= count
+      new_line = count - 1.0
+    end
+    _ui_ta_cursor_line[ta_idx] = new_line
+    let nl2 = ui_ta_line_len(ta_idx, new_line)
+    if cur_col > nl2
+      _ui_ta_cursor_col[ta_idx] = nl2
+    end
+    let _ev = ui_ta_ensure_visible(ta_idx, widget_id)
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  // ── Editing (skip if readonly) ──
+  if is_ro == 1.0
+    return 0.0
+  end
+
+  if key == "enter"
+    // Split current line at cursor
+    let current = _ui_ta_lines[start + cur_line]
+    let mut before_text = " "
+    let mut after_text = " "
+    if current != " "
+      if cur_col > 0.0
+        before_text = substr(current, 0.0, cur_col)
+      end
+      if cur_col < len(current)
+        let _sl3 = len(current) - cur_col
+        after_text = substr(current, cur_col, _sl3)
+      end
+    end
+
+    // Update current line with before_text
+    _ui_ta_lines[start + cur_line] = before_text
+
+    // Insert new line after current
+    let insert_pos = start + cur_line + 1.0
+    let total = len(_ui_ta_lines)
+    let mut rebuilt = []
+    let mut ri = 0.0
+    while ri < insert_pos
+      push(rebuilt, _ui_ta_lines[ri])
+      ri = ri + 1.0
+    end
+    push(rebuilt, after_text)
+    while ri < total
+      push(rebuilt, _ui_ta_lines[ri])
+      ri = ri + 1.0
+    end
+    while len(_ui_ta_lines) > 0.0
+      let _pop = pop(_ui_ta_lines)
+    end
+    let mut _ci2 = 0.0
+    while _ci2 < len(rebuilt)
+      push(_ui_ta_lines, rebuilt[_ci2])
+      _ci2 = _ci2 + 1.0
+    end
+    _ui_ta_line_count[ta_idx] = count + 1.0
+
+    // Adjust start offsets for textareas after this one
+    let mut si = ta_idx + 1.0
+    while si < len(_ui_ta_widgets)
+      _ui_ta_line_start[si] = _ui_ta_line_start[si] + 1.0
+      si = si + 1.0
+    end
+
+    // Move cursor to start of new line
+    _ui_ta_cursor_line[ta_idx] = cur_line + 1.0
+    _ui_ta_cursor_col[ta_idx] = 0.0
+    let _ev = ui_ta_ensure_visible(ta_idx, widget_id)
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  if key == "backspace"
+    if cur_col > 0.0
+      // Delete character before cursor on current line
+      let current = _ui_ta_lines[start + cur_line]
+      if current == " "
+        return 0.0
+      end
+      let before = substr(current, 0.0, cur_col - 1.0)
+      let _sl4 = len(current) - cur_col
+      let after = substr(current, cur_col, _sl4)
+      let mut new_text = before + after
+      if len(new_text) == 0.0
+        new_text = " "
+      end
+      _ui_ta_lines[start + cur_line] = new_text
+      _ui_ta_cursor_col[ta_idx] = cur_col - 1.0
+      let _d = ui_mark_dirty()
+    else
+      // At column 0 — merge with previous line
+      if cur_line > 0.0
+        let prev_line = _ui_ta_lines[start + cur_line - 1.0]
+        let this_line = _ui_ta_lines[start + cur_line]
+        let mut prev_len = len(prev_line)
+        if prev_line == " "
+          prev_len = 0.0
+        end
+
+        // Merge lines
+        let mut merged = prev_line
+        if prev_line == " "
+          merged = this_line
+        else
+          if this_line != " "
+            merged = prev_line + this_line
+          end
+        end
+        _ui_ta_lines[start + cur_line - 1.0] = merged
+
+        // Remove current line
+        let remove_pos = start + cur_line
+        let total = len(_ui_ta_lines)
+        let mut rebuilt = []
+        let mut ri = 0.0
+        while ri < total
+          if ri != remove_pos
+            push(rebuilt, _ui_ta_lines[ri])
+          end
+          ri = ri + 1.0
+        end
+        while len(_ui_ta_lines) > 0.0
+          let _pop = pop(_ui_ta_lines)
+        end
+        let mut _ci3 = 0.0
+        while _ci3 < len(rebuilt)
+          push(_ui_ta_lines, rebuilt[_ci3])
+          _ci3 = _ci3 + 1.0
+        end
+        _ui_ta_line_count[ta_idx] = count - 1.0
+
+        // Adjust start offsets for textareas after this one
+        let mut si = ta_idx + 1.0
+        while si < len(_ui_ta_widgets)
+          _ui_ta_line_start[si] = _ui_ta_line_start[si] - 1.0
+          si = si + 1.0
+        end
+
+        // Cursor to end of previous line
+        _ui_ta_cursor_line[ta_idx] = cur_line - 1.0
+        _ui_ta_cursor_col[ta_idx] = prev_len
+        let _ev = ui_ta_ensure_visible(ta_idx, widget_id)
+        let _d = ui_mark_dirty()
+      end
+    end
+    return 0.0
+  end
+
+  if key == "delete"
+    if cur_col < line_len
+      // Delete character at cursor
+      let current = _ui_ta_lines[start + cur_line]
+      let before = substr(current, 0.0, cur_col)
+      let _sl5 = len(current) - cur_col - 1.0
+      let after = substr(current, cur_col + 1.0, _sl5)
+      let mut new_text = before + after
+      if len(new_text) == 0.0
+        new_text = " "
+      end
+      _ui_ta_lines[start + cur_line] = new_text
+      let _d = ui_mark_dirty()
+    else
+      // At end of line — merge with next line
+      if cur_line < count - 1.0
+        let this_line = _ui_ta_lines[start + cur_line]
+        let next_line = _ui_ta_lines[start + cur_line + 1.0]
+
+        // Merge lines
+        let mut merged = this_line
+        if this_line == " "
+          merged = next_line
+        else
+          if next_line != " "
+            merged = this_line + next_line
+          end
+        end
+        _ui_ta_lines[start + cur_line] = merged
+
+        // Remove next line
+        let remove_pos = start + cur_line + 1.0
+        let total = len(_ui_ta_lines)
+        let mut rebuilt = []
+        let mut ri = 0.0
+        while ri < total
+          if ri != remove_pos
+            push(rebuilt, _ui_ta_lines[ri])
+          end
+          ri = ri + 1.0
+        end
+        while len(_ui_ta_lines) > 0.0
+          let _pop = pop(_ui_ta_lines)
+        end
+        let mut _ci4 = 0.0
+        while _ci4 < len(rebuilt)
+          push(_ui_ta_lines, rebuilt[_ci4])
+          _ci4 = _ci4 + 1.0
+        end
+        _ui_ta_line_count[ta_idx] = count - 1.0
+
+        // Adjust start offsets
+        let mut si = ta_idx + 1.0
+        while si < len(_ui_ta_widgets)
+          _ui_ta_line_start[si] = _ui_ta_line_start[si] - 1.0
+          si = si + 1.0
+        end
+        let _d = ui_mark_dirty()
+      end
+    end
+    return 0.0
+  end
+
+  // Space key
+  if key == "space"
+    let current = _ui_ta_lines[start + cur_line]
+    if current == " "
+      _ui_ta_lines[start + cur_line] = "  "
+      _ui_ta_cursor_col[ta_idx] = 1.0
+    else
+      let before = substr(current, 0.0, cur_col)
+      let _sl6 = len(current) - cur_col
+      let after = substr(current, cur_col, _sl6)
+      _ui_ta_lines[start + cur_line] = before + " " + after
+      _ui_ta_cursor_col[ta_idx] = cur_col + 1.0
+    end
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  // Tab key — insert two spaces
+  if key == "tab"
+    let current = _ui_ta_lines[start + cur_line]
+    if current == " "
+      _ui_ta_lines[start + cur_line] = "  "
+      _ui_ta_cursor_col[ta_idx] = 2.0
+    else
+      let before = substr(current, 0.0, cur_col)
+      let _sl7 = len(current) - cur_col
+      let after = substr(current, cur_col, _sl7)
+      _ui_ta_lines[start + cur_line] = before + "  " + after
+      _ui_ta_cursor_col[ta_idx] = cur_col + 2.0
+    end
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  // Single character keys (a-z, 0-9, punctuation)
+  if len(key) == 1.0
+    let current = _ui_ta_lines[start + cur_line]
+    if current == " "
+      _ui_ta_lines[start + cur_line] = key
+      _ui_ta_cursor_col[ta_idx] = 1.0
+    else
+      let before = substr(current, 0.0, cur_col)
+      let _sl8 = len(current) - cur_col
+      let after = substr(current, cur_col, _sl8)
+      _ui_ta_lines[start + cur_line] = before + key + after
+      _ui_ta_cursor_col[ta_idx] = cur_col + 1.0
+    end
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  return 0.0
+end
+
+// Auto-scroll to bottom (for log viewer append pattern)
+fn ui_textarea_scroll_to_bottom(widget_id)
+  let ta_idx = ui_ta_find(widget_id)
+  if ta_idx < 0.0
+    return 0.0
+  end
+  let count = _ui_ta_line_count[ta_idx]
+  let bh = _ui_h[widget_id]
+  let vis = floor(bh / 16.0)
+  let mut target = count - vis
+  if target < 0.0
+    target = 0.0
+  end
+  _ui_ta_scroll[ta_idx] = target
+  let _d = ui_mark_dirty()
+  return 0.0
+end

@@ -1,0 +1,53 @@
+// emit_clear.flow — Fill all pixels with a solid color
+//
+// Push constants:
+//   pc[0] = total (width * height)
+//   pc[1] = r (0.0-255.0)
+//   pc[2] = g
+//   pc[3] = b
+//
+// Output (binding 2 = globals = framebuffer):
+//   globals[gid]           = R channel
+//   globals[gid + total]   = G channel
+//   globals[gid + 2*total] = B channel
+//
+// Dispatch: ceil(total / 256) workgroups
+
+use "../../compiler/ir"
+
+fn emit_clear(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+
+  // Read push constants
+  let total_f = ir_push_const(entry, 0.0)
+  let r = ir_push_const(entry, 1.0)
+  let g = ir_push_const(entry, 2.0)
+  let b = ir_push_const(entry, 3.0)
+
+  // Bounds check: gid < total
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, total_f)
+
+  let merge = ir_block("merge")
+  let body = ir_block("body")
+  ir_selection_merge(entry, merge)
+  ir_term_cond_branch(entry, in_bounds, body, merge)
+
+  // Write R, G, B channels to framebuffer
+  let total_u = ir_ftou(body, total_f)
+  ir_store_output_at(body, gid, r)
+  let g_off = ir_iadd(body, gid, total_u)
+  ir_store_output_at(body, g_off, g)
+  let b_off = ir_iadd(body, g_off, total_u)
+  ir_store_output_at(body, b_off, b)
+
+  ir_term_branch(body, merge)
+  ir_term_return(merge)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

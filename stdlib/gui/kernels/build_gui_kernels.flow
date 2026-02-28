@@ -1,0 +1,38 @@
+// build_gui_kernels.flow — Build all GUI compute shaders
+//
+// Run once: octoflow run stdlib/gui/kernels/build_gui_kernels.flow
+//
+// Emits 7 SPIR-V shader binaries for the Level 2 GPU rendering pipeline.
+
+use "emit_clear"
+use "emit_rect"
+use "emit_rounded_rect"
+use "emit_circle"
+use "emit_line"
+use "emit_blend"
+use "emit_gradient"
+
+let dir = "stdlib/gui/kernels/"
+
+let _c = emit_clear(dir + "clear.spv")
+print("Emitted clear.spv")
+
+let _r = emit_rect(dir + "rect.spv")
+print("Emitted rect.spv")
+
+let _rr = emit_rounded_rect(dir + "rounded_rect.spv")
+print("Emitted rounded_rect.spv")
+
+let _ci = emit_circle(dir + "circle.spv")
+print("Emitted circle.spv")
+
+let _l = emit_line(dir + "line.spv")
+print("Emitted line.spv")
+
+let _b = emit_blend(dir + "blend.spv")
+print("Emitted blend.spv")
+
+let _g = emit_gradient(dir + "gradient.spv")
+print("Emitted gradient.spv")
+
+print("All GUI kernels built.")

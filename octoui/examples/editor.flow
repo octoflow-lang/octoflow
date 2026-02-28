@@ -1,0 +1,155 @@
+// examples/editor.flow — Simple Text Editor
+//
+// Demonstrates the textarea widget with a menubar.
+// Type, navigate, and edit multi-line text.
+//
+// Controls:
+//   Arrow keys     — Move cursor
+//   Home/End       — Start/end of line
+//   Page Up/Down   — Scroll by viewport
+//   Enter          — New line
+//   Backspace      — Delete before cursor (merges lines at col 0)
+//   Delete         — Delete at cursor (merges at end of line)
+//   Tab            — Insert two spaces
+//   Escape         — Quit
+//
+// Run: octoflow run octoui/examples/editor.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/text"
+use "../widgets/input/button"
+use "../widgets/input/textarea"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../widgets/layout/menubar"
+use "../widgets/layout/statusbar"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(560.0, 420.0, "OctoUI Text Editor")
+
+// Root layout
+let root = ui_column(-1.0, 0.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 560.0, 420.0)
+
+// ── Menubar ──
+let bar = ui_menubar(root)
+
+let file_m = ui_menu(bar, "FILE")
+let mi_new = ui_menu_item(file_m, "NEW")
+let mi_save = ui_menu_item(file_m, "SAVE")
+let _sep1 = ui_menu_separator(file_m)
+let mi_exit = ui_menu_item(file_m, "EXIT")
+
+let edit_m = ui_menu(bar, "EDIT")
+let mi_clear = ui_menu_item(edit_m, "CLEAR ALL")
+
+// ── Textarea ──
+let ta = ui_textarea(root, 560.0, 370.0)
+
+// Pre-load sample content using chr(10) for newlines
+let nl = chr(10.0)
+let sample = "// HELLO FROM OCTOUI" + nl + "//" + nl + "// THIS IS A MULTI-LINE TEXT EDITOR" + nl + "// BUILT ENTIRELY IN OCTOFLOW" + nl + "//" + nl + "// TRY:" + nl + "//   - TYPING TEXT" + nl + "//   - ARROW KEYS TO NAVIGATE" + nl + "//   - ENTER TO CREATE NEW LINES" + nl + "//   - BACKSPACE TO DELETE" + nl + "//   - PAGE UP/DOWN TO SCROLL" + nl + " " + nl + "FN MAIN()" + nl + "  LET X = 42.0" + nl + "  PRINT(X)" + nl + "  RETURN 0.0" + nl + "END"
+let _st = ui_textarea_set_text(ta, sample)
+
+// ── Status bar ──
+let sbar = ui_statusbar(root, 560.0)
+let st_text = ui_statusbar_text(sbar, "READY")
+
+// Position status bar at bottom
+_ui_y[sbar] = 398.0
+_ui_x[sbar] = 0.0
+
+// Set focus to textarea
+_ui_focus_id = ta
+
+// Initial layout
+let _l = ui_layout_update()
+
+// Initialize pipeline
+let _pi2 = ui_pipeline_init(560.0, 420.0)
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  let _inp = ui_process_input()
+
+  let mx = ui_mouse_x()
+  let my = ui_mouse_y()
+  let mclicked = ui_mouse_clicked()
+
+  // Process menubar
+  let _mp = ui_menubar_process(mx, my, mclicked)
+
+  // Process textarea click
+  let _tc = ui_textarea_process_click(ta, mx, my, mclicked)
+
+  // Process textarea keyboard
+  let key = ui_key_down()
+  if _ui_mb_open_idx < 0.0
+    let _tp = ui_textarea_process_key(key)
+  end
+
+  // Menu item actions
+  if ui_menu_item_clicked(mi_new) == 1.0
+    let _st2 = ui_textarea_set_text(ta, " ")
+    let _su = ui_statusbar_set_text(st_text, "NEW FILE")
+  end
+  if ui_menu_item_clicked(mi_save) == 1.0
+    let _su = ui_statusbar_set_text(st_text, "FILE SAVED")
+  end
+  if ui_menu_item_clicked(mi_exit) == 1.0
+    running = 0.0
+  end
+  if ui_menu_item_clicked(mi_clear) == 1.0
+    let _st2 = ui_textarea_set_text(ta, " ")
+    let _su = ui_statusbar_set_text(st_text, "CLEARED")
+  end
+
+  // Update status bar with cursor position
+  let ta_idx2 = ui_ta_find(ta)
+  if ta_idx2 >= 0.0
+    let cline = _ui_ta_cursor_line[ta_idx2]
+    let ccol = _ui_ta_cursor_col[ta_idx2]
+    let lcount = _ui_ta_line_count[ta_idx2]
+    let cline1 = cline + 1.0
+    let ccol1 = ccol + 1.0
+    let s_cline = to_str(cline1)
+    let s_ccol = to_str(ccol1)
+    let s_lcount = to_str(lcount)
+    let _su = ui_statusbar_set_text(st_text, "LINE " + s_cline + " COL " + s_ccol + " / " + s_lcount + " LINES")
+    let _l2 = ui_layout_update()
+  end
+
+  // Escape quits (only when no menu is open)
+  if _ui_mb_open_idx < 0.0
+    if ui_key_pressed("escape") == 1.0
+      running = 0.0
+    end
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _ps = ui_pipeline_shutdown()
+let _wc = ui_window_close()
+print("Editor example finished.")

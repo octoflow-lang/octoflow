@@ -1,0 +1,341 @@
+// widgets/input/textinput.flow — Single-Line Text Input Widget
+//
+// A focusable text input box with cursor movement. When focused, keyboard
+// input inserts at cursor position. Left/Right arrows move cursor.
+// Home/End jump to start/end.
+//
+// Visual: surface-color background box, text rendered left-aligned,
+// cursor at insertion point when focused.
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// Per-textinput value tracking (parallel to widget IDs)
+let mut _ui_ti_values = []
+
+// Per-textinput cursor position (character index, 0-based)
+let mut _ui_ti_cursor = []
+
+// Per-frame submission tracking (Enter key)
+let mut _ui_ti_submitted = []
+
+// Placeholder text (shown dimmed when empty and unfocused)
+let mut _ui_ti_placeholder = []
+
+// Readonly mode (1.0 = no editing, no cursor)
+let mut _ui_ti_readonly = []
+
+// Password mode (1.0 = render * instead of characters)
+let mut _ui_ti_password = []
+
+// Create a text input widget
+// parent: parent widget ID
+// w: width in pixels
+// h: height in pixels (typically 28-36)
+// Returns: widget ID
+fn ui_textinput(parent, w, h)
+  let id = ui_tree_add(UI_TEXTINPUT, parent, w, h, " ")
+  let _s = ui_tree_set_color_themed(id, UI_COLOR_SURFACE)
+
+  // Track value, cursor, and modes
+  let needed = id + 1.0
+  while len(_ui_ti_values) < needed
+    push(_ui_ti_values, " ")
+  end
+  while len(_ui_ti_cursor) < needed
+    push(_ui_ti_cursor, 0.0)
+  end
+  while len(_ui_ti_placeholder) < needed
+    push(_ui_ti_placeholder, " ")
+  end
+  while len(_ui_ti_readonly) < needed
+    push(_ui_ti_readonly, 0.0)
+  end
+  while len(_ui_ti_password) < needed
+    push(_ui_ti_password, 0.0)
+  end
+  _ui_ti_values[id] = " "
+  _ui_ti_cursor[id] = 0.0
+  _ui_ti_placeholder[id] = " "
+  _ui_ti_readonly[id] = 0.0
+  _ui_ti_password[id] = 0.0
+
+  return id
+end
+
+// Get current text input value (returns string)
+fn ui_textinput_value(id)
+  if id < len(_ui_ti_values)
+    return _ui_ti_values[id]
+  end
+  return " "
+end
+
+// Get cursor position for a text input
+fn ui_textinput_cursor(id)
+  if id < len(_ui_ti_cursor)
+    return _ui_ti_cursor[id]
+  end
+  return 0.0
+end
+
+// Set text input value (cursor moves to end)
+fn ui_textinput_set(id, text)
+  let needed = id + 1.0
+  while len(_ui_ti_values) < needed
+    push(_ui_ti_values, " ")
+  end
+  while len(_ui_ti_cursor) < needed
+    push(_ui_ti_cursor, 0.0)
+  end
+  _ui_ti_values[id] = text
+  _ui_texts[id] = text
+  // Cursor to end
+  if text == " "
+    _ui_ti_cursor[id] = 0.0
+  else
+    _ui_ti_cursor[id] = len(text)
+  end
+  _ui_dirty[id] = 1.0
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Check if a text input was submitted (Enter pressed) this frame
+fn ui_textinput_submitted(id)
+  if id < len(_ui_ti_submitted)
+    return _ui_ti_submitted[id]
+  end
+  return 0.0
+end
+
+// Clear per-frame submission states (called at start of process_key)
+fn ui_textinput_clear_submitted()
+  let mut i = 0.0
+  while i < len(_ui_ti_submitted)
+    _ui_ti_submitted[i] = 0.0
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Process keyboard input for focused text input
+// Call this each frame after ui_process_input()
+// key: the key name from ui_key_down()
+fn ui_textinput_process_key(key)
+  // Clear per-frame submission states
+  let _cs = ui_textinput_clear_submitted()
+
+  let focus = _ui_focus_id
+  if focus < 0.0
+    return 0.0
+  end
+  // Only process for TEXTINPUT widgets
+  if focus >= len(_ui_types)
+    return 0.0
+  end
+  if _ui_types[focus] != UI_TEXTINPUT
+    return 0.0
+  end
+
+  // Skip editing for readonly inputs (still allow Enter for submit)
+  if focus < len(_ui_ti_readonly)
+    if _ui_ti_readonly[focus] == 1.0
+      if key == "enter"
+        let needed_r = focus + 1.0
+        while len(_ui_ti_submitted) < needed_r
+          push(_ui_ti_submitted, 0.0)
+        end
+        _ui_ti_submitted[focus] = 1.0
+      end
+      return 0.0
+    end
+  end
+
+  // Skip if no key pressed this frame
+  if key == " "
+    return 0.0
+  end
+
+  // Enter key: mark as submitted
+  if key == "enter"
+    let needed = focus + 1.0
+    while len(_ui_ti_submitted) < needed
+      push(_ui_ti_submitted, 0.0)
+    end
+    _ui_ti_submitted[focus] = 1.0
+    return 0.0
+  end
+
+  // Ensure cursor array is big enough
+  let needed2 = focus + 1.0
+  while len(_ui_ti_cursor) < needed2
+    push(_ui_ti_cursor, 0.0)
+  end
+
+  let current = _ui_ti_values[focus]
+  let cur_len = len(current)
+  let cur_pos = _ui_ti_cursor[focus]
+
+  // Arrow keys: move cursor
+  if key == "left"
+    if cur_pos > 0.0
+      _ui_ti_cursor[focus] = cur_pos - 1.0
+      let _d = ui_mark_dirty()
+    end
+    return 0.0
+  end
+  if key == "right"
+    // Don't go past end of text
+    let mut max_pos = cur_len
+    if current == " "
+      max_pos = 0.0
+    end
+    if cur_pos < max_pos
+      _ui_ti_cursor[focus] = cur_pos + 1.0
+      let _d = ui_mark_dirty()
+    end
+    return 0.0
+  end
+  if key == "home"
+    if cur_pos > 0.0
+      _ui_ti_cursor[focus] = 0.0
+      let _d = ui_mark_dirty()
+    end
+    return 0.0
+  end
+  if key == "end"
+    let mut end_pos = cur_len
+    if current == " "
+      end_pos = 0.0
+    end
+    _ui_ti_cursor[focus] = end_pos
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  // Backspace: delete character before cursor
+  if key == "backspace"
+    if current == " "
+      return 0.0
+    end
+    if cur_pos > 0.0
+      // Delete character at cur_pos - 1
+      let before = substr(current, 0.0, cur_pos - 1.0)
+      let _sl = cur_len - cur_pos
+      let after = substr(current, cur_pos, _sl)
+      let mut new_text = before + after
+      if len(new_text) == 0.0
+        new_text = " "
+        _ui_ti_cursor[focus] = 0.0
+      else
+        _ui_ti_cursor[focus] = cur_pos - 1.0
+      end
+      _ui_ti_values[focus] = new_text
+      _ui_texts[focus] = new_text
+      _ui_dirty[focus] = 1.0
+      let _d = ui_mark_dirty()
+    end
+    return 0.0
+  end
+
+  // Delete key: delete character after cursor
+  if key == "delete"
+    if current == " "
+      return 0.0
+    end
+    if cur_pos < cur_len
+      let before = substr(current, 0.0, cur_pos)
+      let _sl2 = cur_len - cur_pos - 1.0
+      let after = substr(current, cur_pos + 1.0, _sl2)
+      let mut new_text = before + after
+      if len(new_text) == 0.0
+        new_text = " "
+        _ui_ti_cursor[focus] = 0.0
+      end
+      _ui_ti_values[focus] = new_text
+      _ui_texts[focus] = new_text
+      _ui_dirty[focus] = 1.0
+      let _d = ui_mark_dirty()
+    end
+    return 0.0
+  end
+
+  // Space key: insert space at cursor position
+  if key == "space"
+    if current == " "
+      // Replace placeholder with space (visible gap)
+      _ui_ti_values[focus] = " "
+      _ui_texts[focus] = " "
+      _ui_ti_cursor[focus] = 1.0
+    else
+      let before = substr(current, 0.0, cur_pos)
+      let _sl3 = cur_len - cur_pos
+      let after = substr(current, cur_pos, _sl3)
+      let new_text = before + " " + after
+      _ui_ti_values[focus] = new_text
+      _ui_texts[focus] = new_text
+      _ui_ti_cursor[focus] = cur_pos + 1.0
+    end
+    _ui_dirty[focus] = 1.0
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  // Single character keys (a-z, 0-9, etc.): insert at cursor position
+  if len(key) == 1.0
+    if current == " "
+      // Replace placeholder
+      _ui_ti_values[focus] = key
+      _ui_texts[focus] = key
+      _ui_ti_cursor[focus] = 1.0
+    else
+      let before = substr(current, 0.0, cur_pos)
+      let _sl4 = cur_len - cur_pos
+      let after = substr(current, cur_pos, _sl4)
+      let new_text = before + key + after
+      _ui_ti_values[focus] = new_text
+      _ui_texts[focus] = new_text
+      _ui_ti_cursor[focus] = cur_pos + 1.0
+    end
+    _ui_dirty[focus] = 1.0
+    let _d = ui_mark_dirty()
+    return 0.0
+  end
+
+  return 0.0
+end
+
+// Set placeholder text (shown dimmed when input is empty and unfocused)
+fn ui_textinput_set_placeholder(id, text)
+  let needed = id + 1.0
+  while len(_ui_ti_placeholder) < needed
+    push(_ui_ti_placeholder, " ")
+  end
+  _ui_ti_placeholder[id] = text
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Set readonly mode (1.0 = readonly, 0.0 = editable)
+fn ui_textinput_set_readonly(id, flag)
+  let needed = id + 1.0
+  while len(_ui_ti_readonly) < needed
+    push(_ui_ti_readonly, 0.0)
+  end
+  _ui_ti_readonly[id] = flag
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Set password mode (1.0 = show *, 0.0 = show text)
+fn ui_textinput_set_password(id, flag)
+  let needed = id + 1.0
+  while len(_ui_ti_password) < needed
+    push(_ui_ti_password, 0.0)
+  end
+  _ui_ti_password[id] = flag
+  let _d = ui_mark_dirty()
+  return 0.0
+end

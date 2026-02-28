@@ -1,0 +1,118 @@
+// emit_gradient.flow — Fill a rectangle with a gradient
+//
+// Push constants:
+//   pc[0] = total (width * height)
+//   pc[1] = win_w (window width)
+//   pc[2] = rect_x
+//   pc[3] = rect_y
+//   pc[4] = rect_w
+//   pc[5] = rect_h
+//   pc[6] = r1 (start color R, 0.0-255.0)
+//   pc[7] = g1 (start color G)
+//   pc[8] = b1 (start color B)
+//   pc[9] = r2 (end color R)
+//   pc[10] = g2 (end color G)
+//   pc[11] = b2 (end color B)
+//   pc[12] = direction (0.0 = vertical, 1.0 = horizontal)
+//
+// Per-thread: t based on direction, lerp start→end color.
+// Dispatch: ceil(total / 256) workgroups
+
+use "../../compiler/ir"
+
+fn emit_gradient(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+
+  // Read push constants
+  let total_f = ir_push_const(entry, 0.0)
+  let win_w_f = ir_push_const(entry, 1.0)
+  let rx_f = ir_push_const(entry, 2.0)
+  let ry_f = ir_push_const(entry, 3.0)
+  let rw_f = ir_push_const(entry, 4.0)
+  let rh_f = ir_push_const(entry, 5.0)
+  let r1 = ir_push_const(entry, 6.0)
+  let g1 = ir_push_const(entry, 7.0)
+  let b1 = ir_push_const(entry, 8.0)
+  let r2 = ir_push_const(entry, 9.0)
+  let g2 = ir_push_const(entry, 10.0)
+  let b2 = ir_push_const(entry, 11.0)
+  let dir_f = ir_push_const(entry, 12.0)
+
+  // Bounds check: gid < total
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, total_f)
+
+  let merge = ir_block("merge")
+  let check = ir_block("check")
+  ir_selection_merge(entry, merge)
+  ir_term_cond_branch(entry, in_bounds, check, merge)
+
+  // Compute pixel coordinates
+  let win_w_u = ir_ftou(check, win_w_f)
+  let px = ir_umod(check, gid, win_w_u)
+  let py = ir_udiv(check, gid, win_w_u)
+  let px_f = ir_utof(check, px)
+  let py_f = ir_utof(check, py)
+
+  // Check inside rect
+  let rx_end = ir_fadd(check, rx_f, rw_f)
+  let ry_end = ir_fadd(check, ry_f, rh_f)
+  let c1 = ir_foge(check, px_f, rx_f)
+  let c2 = ir_folt(check, px_f, rx_end)
+  let c3 = ir_foge(check, py_f, ry_f)
+  let c4 = ir_folt(check, py_f, ry_end)
+  let inside = ir_land(check, ir_land(check, c1, c2), ir_land(check, c3, c4))
+
+  let write = ir_block("write")
+  let skip = ir_block("skip")
+  ir_selection_merge(check, skip)
+  ir_term_cond_branch(check, inside, write, skip)
+
+  // Compute gradient t based on direction, clamped to [0,1]
+  // Vertical (dir=0): t = (py - rect_y) / rect_h
+  // Horizontal (dir=1): t = (px - rect_x) / rect_w
+  let eps = ir_const_f(write, 0.001)
+  let zero_f = ir_const_f(write, 0.0)
+  let one_f = ir_const_f(write, 1.0)
+  let one_dir = ir_const_f(write, 1.0)
+  let is_horiz = ir_foeq(write, dir_f, one_dir)
+
+  // Vertical t
+  let rel_y = ir_fsub(write, py_f, ry_f)
+  let rh_safe = ir_fadd(write, rh_f, eps)
+  let t_vert = ir_fdiv(write, rel_y, rh_safe)
+
+  // Horizontal t
+  let rel_x = ir_fsub(write, px_f, rx_f)
+  let rw_safe = ir_fadd(write, rw_f, eps)
+  let t_horiz = ir_fdiv(write, rel_x, rw_safe)
+
+  // Select based on direction
+  let t_sel = ir_select(write, is_horiz, t_horiz, t_vert)
+  let t = ir_fmin(write, ir_fmax(write, t_sel, zero_f), one_f)
+
+  // Lerp: color = top * (1-t) + bottom * t
+  let inv_t = ir_fsub(write, one_f, t)
+  let out_r = ir_fadd(write, ir_fmul(write, r1, inv_t), ir_fmul(write, r2, t))
+  let out_g = ir_fadd(write, ir_fmul(write, g1, inv_t), ir_fmul(write, g2, t))
+  let out_b = ir_fadd(write, ir_fmul(write, b1, inv_t), ir_fmul(write, b2, t))
+
+  // Write interpolated color
+  let total_u = ir_ftou(write, total_f)
+  ir_store_output_at(write, gid, out_r)
+  let g_off = ir_iadd(write, gid, total_u)
+  ir_store_output_at(write, g_off, out_g)
+  let b_off = ir_iadd(write, g_off, total_u)
+  ir_store_output_at(write, b_off, out_b)
+
+  ir_term_branch(write, skip)
+  ir_term_branch(skip, merge)
+  ir_term_return(merge)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

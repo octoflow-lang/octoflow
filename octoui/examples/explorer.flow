@@ -1,0 +1,196 @@
+// examples/explorer.flow — OctoUI File Explorer Demo
+//
+// Demonstrates the tree view widget with a file-browser-style hierarchy.
+// Shows expand/collapse, keyboard navigation, and selection status.
+//
+// Controls:
+//   TAB          — Cycle focus
+//   UP/DOWN      — Navigate tree
+//   LEFT         — Collapse node or select parent
+//   RIGHT        — Expand node or select first child
+//   SPACE        — Toggle expand/collapse
+//   HOME/END     — First/last visible node
+//   ESCAPE       — Quit
+//   Click        — Select node
+//
+// Run: octoflow run octoui/examples/explorer.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/input/button"
+use "../widgets/data/treeview"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(440.0, 420.0, "OctoUI Explorer")
+
+// Root layout
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 440.0, 420.0)
+
+// Title
+let title = ui_text(root, "PROJECT EXPLORER", UI_COLOR_PRIMARY)
+let sep1 = ui_separator(root, 408.0)
+
+// Tree view: 240px viewport, 20px rows = 12 visible rows
+let tree = ui_treeview(root, 240.0, 20.0)
+
+// Build file tree
+let proj = ui_treeview_node(tree, -1.0, "OCTOUI")
+
+// Engine folder
+let engine = ui_treeview_node(tree, proj, "ENGINE")
+let _f1 = ui_treeview_node(tree, engine, "TREE.FLOW")
+let _f2 = ui_treeview_node(tree, engine, "LAYOUT.FLOW")
+let _f3 = ui_treeview_node(tree, engine, "PIPELINE.FLOW")
+let _f4 = ui_treeview_node(tree, engine, "DIRTY.FLOW")
+let _f5 = ui_treeview_node(tree, engine, "FONT.FLOW")
+
+// Widgets folder
+let widgets = ui_treeview_node(tree, proj, "WIDGETS")
+let wcore = ui_treeview_node(tree, widgets, "CORE")
+let _w1 = ui_treeview_node(tree, wcore, "BOX.FLOW")
+let _w2 = ui_treeview_node(tree, wcore, "TEXT.FLOW")
+let _w3 = ui_treeview_node(tree, wcore, "TOOLTIP.FLOW")
+let _w4 = ui_treeview_node(tree, wcore, "MODAL.FLOW")
+let winput = ui_treeview_node(tree, widgets, "INPUT")
+let _w5 = ui_treeview_node(tree, winput, "BUTTON.FLOW")
+let _w6 = ui_treeview_node(tree, winput, "SLIDER.FLOW")
+let _w7 = ui_treeview_node(tree, winput, "CHECKBOX.FLOW")
+let _w8 = ui_treeview_node(tree, winput, "TEXTINPUT.FLOW")
+let wdata = ui_treeview_node(tree, widgets, "DATA")
+let _w9 = ui_treeview_node(tree, wdata, "TABLE.FLOW")
+let _w10 = ui_treeview_node(tree, wdata, "TREEVIEW.FLOW")
+
+// Examples folder
+let examples = ui_treeview_node(tree, proj, "EXAMPLES")
+let _e1 = ui_treeview_node(tree, examples, "HELLO.FLOW")
+let _e2 = ui_treeview_node(tree, examples, "COUNTER.FLOW")
+let _e3 = ui_treeview_node(tree, examples, "SETTINGS.FLOW")
+let _e4 = ui_treeview_node(tree, examples, "EXPLORER.FLOW")
+
+// Docs folder
+let docs = ui_treeview_node(tree, proj, "DOCS")
+let _d1 = ui_treeview_node(tree, docs, "QUICKSTART.MD")
+let _d2 = ui_treeview_node(tree, docs, "ARCHITECTURE.MD")
+let _d3 = ui_treeview_node(tree, docs, "WIDGETS.MD")
+
+// Tests folder
+let tests = ui_treeview_node(tree, proj, "TESTS")
+let _t1 = ui_treeview_node(tree, tests, "TEST_TREE.FLOW")
+let _t2 = ui_treeview_node(tree, tests, "TEST_KERNELS.FLOW")
+
+let _fin = ui_treeview_finalize(tree)
+
+let sep2 = ui_separator(root, 408.0)
+
+// Status bar
+let status_row = ui_row(root, 8.0)
+let status_label = ui_text(status_row, "SELECTED:", UI_COLOR_TEXT_DIM)
+let status_val = ui_text(status_row, "NONE", UI_COLOR_TEXT)
+
+// Buttons
+let btn_row = ui_row(root, 8.0)
+let btn_collapse = ui_button(btn_row, 120.0, 28.0, "COLLAPSE ALL")
+let btn_expand = ui_button(btn_row, 120.0, 28.0, "EXPAND ALL")
+
+// Initial layout
+let _l = ui_layout_update()
+let _tr = ui_treeview_refresh_all()
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  let key = ui_key_down()
+  let mx = ui_mouse_x()
+  let my = ui_mouse_y()
+  let clicked = ui_mouse_clicked()
+
+  // Tree view interaction
+  let _tp = ui_treeview_process(mx, my, clicked)
+  let _tk = ui_treeview_process_key(key)
+
+  // Button clicks
+  if ui_button_clicked(btn_collapse) == 1.0
+    // Collapse all non-leaf nodes
+    let node_off = _ui_tv_node_off[0]
+    let node_count = _ui_tv_node_count[0]
+    let mut ni = 0.0
+    while ni < node_count
+      let abs_ni = node_off + ni
+      if _ui_tv_leaf[abs_ni] == 0.0
+        _ui_tv_expanded[abs_ni] = 0.0
+      end
+      ni = ni + 1.0
+    end
+    // Keep root expanded
+    _ui_tv_expanded[proj] = 1.0
+    let _cv = ui_tv_compute_visible(0.0)
+    _ui_tv_scroll[0] = 0.0
+    let _r = ui_treeview_refresh(tree)
+    let _d = ui_mark_dirty()
+  end
+
+  if ui_button_clicked(btn_expand) == 1.0
+    // Expand all non-leaf nodes
+    let node_off2 = _ui_tv_node_off[0]
+    let node_count2 = _ui_tv_node_count[0]
+    let mut ni2 = 0.0
+    while ni2 < node_count2
+      let abs_ni2 = node_off2 + ni2
+      if _ui_tv_leaf[abs_ni2] == 0.0
+        _ui_tv_expanded[abs_ni2] = 1.0
+      end
+      ni2 = ni2 + 1.0
+    end
+    let _cv2 = ui_tv_compute_visible(0.0)
+    let _r2 = ui_treeview_refresh(tree)
+    let _d2 = ui_mark_dirty()
+  end
+
+  // Update status text
+  let sel = ui_treeview_selected(tree)
+  if sel < 0.0
+    let _st = ui_tree_set_text(status_val, "NONE")
+  else
+    let sel_label = ui_treeview_label(sel)
+    let _st = ui_tree_set_text(status_val, sel_label)
+    let _lu = ui_layout_update()
+    let _tr2 = ui_treeview_refresh_all()
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Explorer example finished.")

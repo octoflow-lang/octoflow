@@ -1,0 +1,17 @@
+// widgets/core/box.flow — Colored Rectangle Widget
+//
+// Simple colored rectangle. Foundation for all visual widgets.
+
+use "../../engine/tree"
+use "../../themes/dark"
+
+// Create a box widget: colored rectangle
+// parent: parent widget ID (-1 for root)
+// w, h: dimensions
+// color_idx: theme color index (UI_COLOR_*)
+// Returns: widget ID
+fn ui_box(parent, w, h, color_idx)
+  let id = ui_tree_add(UI_BOX, parent, w, h, " ")
+  let _s = ui_tree_set_color_themed(id, color_idx)
+  return id
+end

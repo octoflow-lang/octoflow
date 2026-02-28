@@ -1,10 +1,10 @@
 # OctoFlow
 
-OctoFlow is a general-purpose programming language where the GPU is the primary execution target. Data born on the GPU stays on the GPU. The CPU handles I/O — file reads, network, console — and nothing else. Zero external dependencies. The compiler is written in OctoFlow itself.
+OctoFlow is a general-purpose programming language where the GPU is the primary execution target. Data born on the GPU stays on the GPU. The CPU handles I/O — file reads, network, console — and nothing else. Zero external dependencies.
 
 **CPU on demand, not GPU on demand.**
 
-2.8 MB binary. 246 stdlib modules. 1,200+ tests.
+3.7 MB binary. 246 stdlib modules. 1,209 tests.
 Any GPU vendor. One file download. No CUDA. No Python. No pip.
 
 ## Quickstart
@@ -32,7 +32,7 @@ Download the binary. Unzip. Run. GPU detected automatically.
 | gpu_add | 0.40 ms | 0.46 ms (deferred) | Batched command buffer |
 | gpu_mul | 0.53 ms | 3.27 ms (deferred) | Single fence per chain |
 | 5-step pipeline | 2.57 ms | 75 ms | Upload + compute + reduce |
-| Install size | ~4 GB SDK | **2.8 MB** binary | Zero dependencies |
+| Install size | ~4 GB SDK | **3.7 MB** binary | Zero dependencies |
 
 Deferred dispatch batches chained GPU operations into a single Vulkan command buffer submission. Per-operation overhead drops from ~12ms (synchronous) to ~4ms (batched) as chains grow.
 
@@ -41,10 +41,10 @@ Deferred dispatch batches chained GPU operations into a single Vulkan command bu
 | | CUDA/OpenCL | GLSL/HLSL/WGSL | OctoFlow |
 |---|---|---|---|
 | **Primary target** | CPU (with GPU kernels) | GPU (shaders only) | **GPU (general purpose)** |
-| **Self-hosting** | No | No | **Yes** |
+| **Built-in LLM** | No | No | **Yes** (local GGUF inference) |
 | **External deps** | NVIDIA SDK / vendor SDK | Graphics API | **None** |
 | **GPU VM** | N/A | N/A | **Built-in** (5 SSBOs, indirect dispatch) |
-| **Install** | Multi-GB SDK | Driver-only | **2.8 MB binary** |
+| **Install** | Multi-GB SDK | Driver-only | **3.7 MB binary** |
 
 ## GPU Virtual Machine
 
@@ -71,6 +71,12 @@ let result = loom_read_register(vm, 0.0, 0.0, 8.0)
 - **I/O streaming**: CPU feeds data batches, GPU processes with reusable command buffers
 - **Homeostasis**: GPU self-regulates via maxnorm + regulator kernels
 - **102 compute kernels**: Scale, affine, matvec, reduce, WHERE, delta encode/decode, dictionary lookup
+
+**LoomDB** — GPU-resident computed-data log. Captures pipeline results without I/O. Similarity search (cosine, dot, euclidean) runs entirely in VRAM. Async persistence to OctoDB — your main compute pipeline never touches disk.
+
+**OctoDB** — Embedded database with CRUD, multi-condition queries, indexing, `.odb` persistence. Serves as LoomDB's cold storage tier.
+
+> [Loom Engine Guide](docs/loom-engine.md) — chain dispatch, LoomDB, OctoDB, API reference
 
 ## Language
 
@@ -109,16 +115,16 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 |---|---|---|
 | **ai** | transformer, inference, generate, weight_loader | GGUF model loading, tokenization |
 | **collections** | stack, queue, heap, graph | Data structures |
-| **compiler** | lexer, eval, parser, preflight, codegen, ir | Self-hosted compiler |
+| **compiler** | lexer, eval, parser, preflight, codegen, ir | Compiler modules (written in .flow) |
 | **crypto** | hash, encoding, random | SHA-256, base64, CSPRNG |
 | **data** | csv, io, pipeline, transform, validate | ETL and data processing |
-| **db** | core, query, schema | Database abstractions |
+| **db** | core, engine, vector, persist | OctoDB (CRUD, indexing, .odb) + LoomDB (GPU-resident, vector search) |
 | **devops** | config, fs, log, process, template | System automation |
 | **formats** | gguf, json | GGUF tensor files, JSON |
 | **gpu** | VM, emitters, runtime, kernels | 102 GPU compute kernels |
-| **gui** | widgets, layout, themes, events | Native GUI toolkit |
+| **gui** | widgets, layout, canvas, plot, themes, buffer_view | 16 widget types, 3 layouts, 5 chart types, canvas drawing (Windows) |
 | **llm** | generate, stream, chat, decompose | LLM inference (Qwen3-1.7B) |
-| **media** | image (PNG/JPEG/GIF/BMP), video (AVI/MP4/H.264), audio (WAV) | Native codecs |
+| **media** | image (PNG/JPEG/GIF/BMP), audio (WAV), video (MP4 stills) | Native codecs |
 | **ml** | nn, regression, classify, cluster, tree, linalg | Machine learning primitives |
 | **science** | calculus, physics, signal, matrix, optimize | Scientific computing |
 | **stats** | descriptive, distribution, correlation, risk | Statistical analysis |
@@ -126,6 +132,16 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 | **sys** | args, env, memory, platform, timer | System interfaces |
 | **terminal** | term_image, colors | Kitty/Sixel/halfblock graphics |
 | **web** | http, json_util, url | HTTP client, JSON, URLs |
+
+## Documentation
+
+- [Quickstart](docs/quickstart.md) — five minutes from download to GPU compute
+- [Chat Mode](docs/chat.md) — AI code generation from natural language
+- [MCP Server](docs/mcp.md) — connect to Claude Desktop, Cursor, VS Code
+- [Permissions](docs/permissions.md) — Deno-style security model
+- [Installation](docs/installation.md) — Windows, Linux, macOS setup
+- [Feature Status](docs/features.md) — what's stable, beta, planned
+- [All docs](docs/README.md)
 
 ## Architecture
 
@@ -138,7 +154,7 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 
 Four crates. Zero external Rust dependencies. Only system libraries (vulkan-1, ws2_32).
 
-~202K lines total: ~59K Rust + ~143K .flow (stdlib). Zero external dependencies.
+~252K lines total: ~72K Rust + ~180K .flow (stdlib + examples). Zero external dependencies.
 
 ## License
 

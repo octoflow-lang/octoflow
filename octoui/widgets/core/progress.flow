@@ -1,0 +1,84 @@
+// widgets/core/progress.flow — Progress Bar Widget
+//
+// Displays a horizontal progress bar with a track (border color)
+// and a fill (primary color). Value range: 0.0 to 100.0.
+//
+// The progress bar is composed of two widgets:
+//   - Track: full-width box in border color (background)
+//   - Fill:  variable-width box in primary color (foreground)
+//
+// Bind to a reactive state with ui_bind_progress() so the fill
+// width auto-updates when the state value changes.
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// Progress bar bindings: parallel arrays mapping fill_widget_id → (state_id, track_width)
+let mut _ui_prog_fill = []
+let mut _ui_prog_state = []
+let mut _ui_prog_width = []
+
+// Create a progress bar
+// parent: parent widget ID
+// w: total width in pixels
+// h: height in pixels (typically 8-16)
+// Returns: track widget ID (use this for binding)
+fn ui_progress(parent, w, h)
+  // Track (background)
+  let track = ui_tree_add(UI_BOX, parent, w, h, " ")
+  let _tc = ui_tree_set_color_themed(track, UI_COLOR_BORDER)
+
+  // Fill (foreground) — starts at 0 width
+  let fill = ui_tree_add(UI_BOX, track, 0.0, h, " ")
+  let _fc = ui_tree_set_color_themed(fill, UI_COLOR_PRIMARY)
+
+  return track
+end
+
+// Bind progress bar fill to a reactive state (value 0.0 - 100.0)
+// track_id: the widget ID returned by ui_progress()
+// state_id: reactive state ID (value should be 0.0 to 100.0)
+fn ui_bind_progress(track_id, state_id)
+  // Fill widget is always track_id + 1 (created right after track)
+  let fill_id = track_id + 1.0
+  let track_w = _ui_w[track_id]
+  push(_ui_prog_fill, fill_id)
+  push(_ui_prog_state, state_id)
+  push(_ui_prog_width, track_w)
+  return 0.0
+end
+
+// Update all progress bar fills from their bound states
+// Call this each frame before render to sync fill width and position
+fn ui_progress_update()
+  let n = len(_ui_prog_fill)
+  let mut i = 0.0
+  while i < n
+    let fill_id = _ui_prog_fill[i]
+    let state_id = _ui_prog_state[i]
+    let track_w = _ui_prog_width[i]
+    let val = _ui_state_vals[state_id]
+    // Clamp to 0-100
+    let mut pct = val
+    if pct < 0.0
+      pct = 0.0
+    end
+    if pct > 100.0
+      pct = 100.0
+    end
+    let fill_w = floor(track_w * pct / 100.0)
+    let old_w = _ui_w[fill_id]
+    if fill_w != old_w
+      _ui_w[fill_id] = fill_w
+      _ui_dirty[fill_id] = 1.0
+      let _d = ui_mark_dirty()
+    end
+    // Sync fill position to track position (BOX children are not auto-laid-out)
+    let track_id = fill_id - 1.0
+    _ui_x[fill_id] = _ui_x[track_id]
+    _ui_y[fill_id] = _ui_y[track_id]
+    i = i + 1.0
+  end
+  return 0.0
+end

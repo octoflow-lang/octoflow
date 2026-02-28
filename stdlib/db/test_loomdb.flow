@@ -1,0 +1,443 @@
+// test_loomdb.flow — Tests for db/loomdb.flow
+// 18 tests: 7 original + 11 edge case/robustness tests
+use "loomdb"
+
+fn approx_eq(a, b, eps)
+  if abs(a - b) < eps
+    return 1.0
+  end
+  return 0.0
+end
+
+// ─── Original tests (1-7) ───
+
+fn test_loomdb_create()
+  let mut ldb = loomdb_create(4.0, 10.0)
+  assert(map_get(ldb, "__ldb_dims") == "4", "dimensions should be 4")
+  assert(map_get(ldb, "__ldb_count") == "0", "initial count should be 0")
+  assert(map_get(ldb, "__ldb_capacity") == "10", "capacity should be 10")
+  assert(map_get(ldb, "__ldb_flush_count") == "0", "flush count should be 0")
+  assert(map_get(ldb, "__ldb_needs_flush") == "0", "needs_flush should be 0")
+  assert(map_get(ldb, "__ldb_normalized") == "0", "normalized should be 0")
+  assert(map_get(ldb, "__ldb_ids") == "", "ids should be empty")
+  // Zero capacity means manual flush only
+  let mut ldb2 = loomdb_create(3.0, 0.0)
+  assert(map_get(ldb2, "__ldb_capacity") == "0", "zero capacity is valid")
+  // Negative dims gets clamped to 1 (P2 Fix 12)
+  let mut ldb3 = loomdb_create(0.0, 0.0)
+  assert(map_get(ldb3, "__ldb_dims") == "1", "zero dims should clamp to 1")
+  let mut ldb4 = loomdb_create(0.0 - 5.0, 0.0)
+  assert(map_get(ldb4, "__ldb_dims") == "1", "negative dims should clamp to 1")
+  print("PASS: test_loomdb_create")
+  return 0.0
+end
+
+fn test_loomdb_capture()
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  let c1 = loomdb_capture(ldb, vectors, "vec_a", v1, "first")
+  assert(c1 == 1.0, "count after first capture should be 1")
+  let mut v2 = [0.0, 1.0, 0.0]
+  let c2 = loomdb_capture(ldb, vectors, "vec_b", v2, "second")
+  assert(c2 == 2.0, "count after second capture should be 2")
+  let mut v3 = [0.0, 0.0, 1.0]
+  let c3 = loomdb_capture(ldb, vectors, "vec_c", v3, "third")
+  assert(c3 == 3.0, "count after third capture should be 3")
+  let mut v4 = [1.0, 1.0, 0.0]
+  let c4 = loomdb_capture(ldb, vectors, "vec_d", v4, "fourth")
+  assert(c4 == 4.0, "count after fourth capture should be 4")
+  let mut v5 = [0.5, 0.5, 0.5]
+  let c5 = loomdb_capture(ldb, vectors, "vec_e", v5, "fifth")
+  assert(c5 == 5.0, "count after fifth capture should be 5")
+  assert(len(vectors) == 15.0, "flat array should have 15 elements (5 * 3 dims)")
+  assert(map_get(ldb, "__ldb_ids") == "vec_a,vec_b,vec_c,vec_d,vec_e", "ids should track all 5")
+  print("PASS: test_loomdb_capture")
+  return 0.0
+end
+
+fn test_loomdb_search_cosine()
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  loomdb_capture(ldb, vectors, "x_axis", v1, "along x")
+  let mut v2 = [0.0, 1.0, 0.0]
+  loomdb_capture(ldb, vectors, "y_axis", v2, "along y")
+  let mut v3 = [0.7, 0.7, 0.0]
+  loomdb_capture(ldb, vectors, "diagonal", v3, "diagonal xy")
+
+  let mut query = [0.9, 0.1, 0.0]
+  loomdb_search(ldb, vectors, query, 2.0, "cosine")
+  let result_count = loomdb_result_count(ldb)
+  assert(result_count == 2.0, "should return 2 results")
+
+  let best_id = loomdb_result_id(ldb, 0.0)
+  assert(best_id == "x_axis", "closest to [0.9,0.1,0] should be x_axis")
+
+  let best_score = loomdb_result_score(ldb, 0.0)
+  assert(approx_eq(best_score, 1.0, 0.05) == 1.0, "cosine with near-x should be ~1.0")
+
+  let best_meta = loomdb_result_meta(ldb, 0.0)
+  assert(best_meta == "along x", "metadata should be preserved")
+
+  print("PASS: test_loomdb_search_cosine")
+  return 0.0
+end
+
+fn test_loomdb_needs_flush()
+  // Capacity of 3 — after 3 captures, needs_flush should be 1
+  let mut ldb = loomdb_create(2.0, 3.0)
+  let mut vectors = loomdb_create_vectors()
+
+  assert(loomdb_needs_flush(ldb) == 0.0, "should not need flush initially")
+
+  let mut v1 = [1.0, 0.0]
+  loomdb_capture(ldb, vectors, "a", v1, "m1")
+  assert(loomdb_needs_flush(ldb) == 0.0, "should not need flush at count 1")
+
+  let mut v2 = [0.0, 1.0]
+  loomdb_capture(ldb, vectors, "b", v2, "m2")
+  assert(loomdb_needs_flush(ldb) == 0.0, "should not need flush at count 2")
+
+  let mut v3 = [1.0, 1.0]
+  loomdb_capture(ldb, vectors, "c", v3, "m3")
+  assert(loomdb_needs_flush(ldb) == 1.0, "should need flush at capacity (count 3)")
+
+  // Zero capacity should never trigger auto-flush
+  let mut ldb2 = loomdb_create(2.0, 0.0)
+  let mut vectors2 = loomdb_create_vectors()
+  let mut va = [1.0, 0.0]
+  loomdb_capture(ldb2, vectors2, "x", va, "mx")
+  let mut vb = [0.0, 1.0]
+  loomdb_capture(ldb2, vectors2, "y", vb, "my")
+  let mut vc = [1.0, 1.0]
+  loomdb_capture(ldb2, vectors2, "z", vc, "mz")
+  assert(loomdb_needs_flush(ldb2) == 0.0, "zero capacity should never auto-flush")
+
+  print("PASS: test_loomdb_needs_flush")
+  return 0.0
+end
+
+fn test_loomdb_flush_restore()
+  // Create, capture, flush to disk, then restore and verify
+  let mut ldb = loomdb_create(3.0, 5.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [1.0, 2.0, 3.0]
+  loomdb_capture(ldb, vectors, "alpha", v1, "first entry")
+  let mut v2 = [4.0, 5.0, 6.0]
+  loomdb_capture(ldb, vectors, "beta", v2, "second entry")
+
+  let path = "stdlib/db/__test_loomdb_roundtrip"
+  let ok = loomdb_flush(ldb, vectors, path)
+  assert(ok == 1.0, "flush should return 1")
+  assert(loomdb_needs_flush(ldb) == 0.0, "needs_flush should be reset after flush")
+  assert(map_get(ldb, "__ldb_flush_count") == "1", "flush_count should be 1")
+
+  // Restore metadata
+  let mut restored = loomdb_restore_meta(path)
+  assert(map_get(restored, "__ldb_dims") == "3", "restored dims should be 3")
+  assert(map_get(restored, "__ldb_count") == "2", "restored count should be 2")
+  assert(map_get(restored, "__ldb_capacity") == "5", "restored capacity should be 5")
+  assert(map_get(restored, "__ldb_flush_count") == "1", "restored flush_count should be 1")
+  assert(map_get(restored, "__ldb_ids") == "alpha,beta", "restored ids should match")
+  assert(map_get(restored, "__ldb_meta_alpha") == "first entry", "alpha metadata should match")
+  assert(map_get(restored, "__ldb_meta_beta") == "second entry", "beta metadata should match")
+
+  // Restore vectors and verify search
+  let mut rvecs = loomdb_restore_vectors(path)
+  assert(len(rvecs) == 6.0, "restored vectors should have 6 elements")
+
+  let mut query = [1.0, 2.0, 3.0]
+  loomdb_search(restored, rvecs, query, 1.0, "cosine")
+  let best_id = loomdb_result_id(restored, 0.0)
+  assert(best_id == "alpha", "search on restored DB should find alpha")
+
+  // Clean up
+  write_file(path + ".ldb", "")
+  write_file(path + ".meta", "")
+
+  print("PASS: test_loomdb_flush_restore")
+  return 0.0
+end
+
+fn test_loomdb_capture_dim_mismatch()
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+
+  // Wrong dimension (2 instead of 3)
+  let mut bad = [1.0, 2.0]
+  let fail = loomdb_capture(ldb, vectors, "bad", bad, "wrong dims")
+  assert(fail == 0.0, "dimension mismatch should return 0")
+  assert(map_get(ldb, "__ldb_count") == "0", "count should still be 0")
+  assert(len(vectors) == 0.0, "vectors array should be empty")
+
+  // Too many dimensions (4 instead of 3)
+  let mut big = [1.0, 2.0, 3.0, 4.0]
+  let fail2 = loomdb_capture(ldb, vectors, "big", big, "too many dims")
+  assert(fail2 == 0.0, "too many dims should return 0")
+
+  // Correct dimension works after mismatch
+  let mut good = [1.0, 2.0, 3.0]
+  let ok = loomdb_capture(ldb, vectors, "good", good, "correct")
+  assert(ok == 1.0, "correct dims should return 1")
+
+  print("PASS: test_loomdb_capture_dim_mismatch")
+  return 0.0
+end
+
+fn test_loomdb_normalize()
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [3.0, 4.0, 0.0]
+  loomdb_capture(ldb, vectors, "vec1", v1, "3-4-5 triangle")
+
+  let vec_before = loomdb_extract_vector(vectors, 3.0, 0.0)
+  let n_before = norm(vec_before)
+  assert(approx_eq(n_before, 5.0, 0.001) == 1.0, "norm before should be 5.0")
+
+  loomdb_normalize(ldb, vectors)
+  assert(map_get(ldb, "__ldb_normalized") == "1", "should be marked normalized")
+
+  let vec_after = loomdb_extract_vector(vectors, 3.0, 0.0)
+  let n_after = norm(vec_after)
+  assert(approx_eq(n_after, 1.0, 0.001) == 1.0, "norm after should be 1.0")
+
+  print("PASS: test_loomdb_normalize")
+  return 0.0
+end
+
+// ─── Edge case tests (8-18) ───
+
+fn test_search_k_exceeds_count()
+  // Test 8: k > count — should return all available vectors
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  loomdb_capture(ldb, vectors, "a", v1, "ma")
+  let mut v2 = [0.0, 1.0, 0.0]
+  loomdb_capture(ldb, vectors, "b", v2, "mb")
+  let mut v3 = [0.0, 0.0, 1.0]
+  loomdb_capture(ldb, vectors, "c", v3, "mc")
+
+  let mut query = [1.0, 0.0, 0.0]
+  loomdb_search(ldb, vectors, query, 10.0, "cosine")
+  let rc = loomdb_result_count(ldb)
+  assert(rc == 3.0, "k=10 with 3 vectors should return 3 results")
+  print("PASS: test_search_k_exceeds_count")
+  return 0.0
+end
+
+fn test_search_k_zero()
+  // Test 9: k=0 — should return 0 results
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  loomdb_capture(ldb, vectors, "a", v1, "ma")
+
+  let mut query = [1.0, 0.0, 0.0]
+  loomdb_search(ldb, vectors, query, 0.0, "cosine")
+  let rc = loomdb_result_count(ldb)
+  assert(rc == 0.0, "k=0 should return 0 results")
+  print("PASS: test_search_k_zero")
+  return 0.0
+end
+
+fn test_search_empty_db()
+  // Test 10: Search on empty LoomDB
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut query = [1.0, 0.0, 0.0]
+  loomdb_search(ldb, vectors, query, 5.0, "cosine")
+  let rc = loomdb_result_count(ldb)
+  assert(rc == 0.0, "empty DB search should return 0 results")
+  print("PASS: test_search_empty_db")
+  return 0.0
+end
+
+fn test_duplicate_id_capture()
+  // Test 11: Duplicate ID capture — second capture rejected, count stays same
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  let c1 = loomdb_capture(ldb, vectors, "dup", v1, "first")
+  assert(c1 == 1.0, "first capture should succeed")
+
+  let mut v2 = [0.0, 1.0, 0.0]
+  let c2 = loomdb_capture(ldb, vectors, "dup", v2, "second")
+  assert(c2 == 1.0, "duplicate should return current count (1)")
+  assert(map_get(ldb, "__ldb_count") == "1", "count should still be 1")
+  assert(len(vectors) == 3.0, "vectors should only have first embedding (3 elements)")
+  assert(map_get(ldb, "__ldb_meta_dup") == "first", "metadata should be from first capture")
+  print("PASS: test_duplicate_id_capture")
+  return 0.0
+end
+
+fn test_search_dot_metric()
+  // Test 12: Dot product metric — should favor larger magnitude
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  loomdb_capture(ldb, vectors, "unit_x", v1, "unit")
+  let mut v2 = [3.0, 0.0, 0.0]
+  loomdb_capture(ldb, vectors, "scaled_x", v2, "scaled")
+
+  let mut query = [1.0, 0.0, 0.0]
+  loomdb_search(ldb, vectors, query, 2.0, "dot")
+  let best_id = loomdb_result_id(ldb, 0.0)
+  assert(best_id == "scaled_x", "dot should favor larger magnitude")
+  let best_score = loomdb_result_score(ldb, 0.0)
+  assert(best_score == 3.0, "dot([3,0,0], [1,0,0]) should be 3")
+  print("PASS: test_search_dot_metric")
+  return 0.0
+end
+
+fn test_search_euclidean_metric()
+  // Test 13: Euclidean metric — verify nearest by distance
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  loomdb_capture(ldb, vectors, "near", v1, "near")
+  let mut v2 = [10.0, 10.0, 10.0]
+  loomdb_capture(ldb, vectors, "far", v2, "far")
+
+  let mut query = [1.1, 0.0, 0.0]
+  loomdb_search(ldb, vectors, query, 2.0, "euclidean")
+  let best_id = loomdb_result_id(ldb, 0.0)
+  assert(best_id == "near", "euclidean should find nearest point")
+  // Euclidean score is negative distance (higher = closer)
+  let best_score = loomdb_result_score(ldb, 0.0)
+  assert(best_score < 0.0, "euclidean score should be negative")
+  assert(approx_eq(best_score, 0.0 - 0.1, 0.01) == 1.0, "distance to near should be ~0.1")
+  print("PASS: test_search_euclidean_metric")
+  return 0.0
+end
+
+fn test_search_unknown_metric()
+  // Test 14: Unknown metric — should return 0 results
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  loomdb_capture(ldb, vectors, "a", v1, "m")
+
+  let mut query = [1.0, 0.0, 0.0]
+  loomdb_search(ldb, vectors, query, 1.0, "manhattan")
+  let rc = loomdb_result_count(ldb)
+  assert(rc == 0.0, "unknown metric should return 0 results")
+  print("PASS: test_search_unknown_metric")
+  return 0.0
+end
+
+fn test_restore_nonexistent()
+  // Test 15: Restore from nonexistent path — no crash, returns empty
+  let mut ldb = loomdb_restore_meta("stdlib/db/__nonexistent_loomdb_path")
+  assert(map_get(ldb, "__ldb_dims") == "0", "nonexistent restore dims should be 0")
+  assert(map_get(ldb, "__ldb_count") == "0", "nonexistent restore count should be 0")
+  assert(map_get(ldb, "__ldb_ids") == "", "nonexistent restore ids should be empty")
+
+  let mut vecs = loomdb_restore_vectors("stdlib/db/__nonexistent_loomdb_path")
+  assert(len(vecs) == 0.0, "nonexistent restore vectors should be empty")
+  print("PASS: test_restore_nonexistent")
+  return 0.0
+end
+
+fn test_flush_empty_roundtrip()
+  // Test 16: Flush empty DB + restore — no phantom entries
+  let mut ldb = loomdb_create(4.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+
+  let path = "stdlib/db/__test_loomdb_empty"
+  loomdb_flush(ldb, vectors, path)
+
+  let mut restored = loomdb_restore_meta(path)
+  assert(map_get(restored, "__ldb_count") == "0", "empty restore count should be 0")
+  assert(map_get(restored, "__ldb_dims") == "4", "empty restore dims should be 4")
+  assert(map_get(restored, "__ldb_ids") == "", "empty restore ids should be empty string")
+
+  let mut rvecs = loomdb_restore_vectors(path)
+  assert(len(rvecs) == 0.0, "empty restore vectors should be empty")
+
+  // Search on restored empty DB should not crash
+  let mut query = [1.0, 0.0, 0.0, 0.0]
+  loomdb_search(restored, rvecs, query, 5.0, "cosine")
+  let rc = loomdb_result_count(restored)
+  assert(rc == 0.0, "search on restored empty DB should return 0")
+
+  // Clean up
+  write_file(path + ".ldb", "")
+  write_file(path + ".meta", "")
+
+  print("PASS: test_flush_empty_roundtrip")
+  return 0.0
+end
+
+fn test_normalize_then_search()
+  // Test 17: Normalize DB then search with unnormalized query
+  // Before fix: cosine after normalize used raw dot product, giving wrong results
+  // After fix: query is normalized too, so cosine is correct
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [1.0, 0.0, 0.0]
+  loomdb_capture(ldb, vectors, "x_axis", v1, "x")
+  let mut v2 = [0.0, 1.0, 0.0]
+  loomdb_capture(ldb, vectors, "y_axis", v2, "y")
+
+  loomdb_normalize(ldb, vectors)
+  assert(map_get(ldb, "__ldb_normalized") == "1", "should be normalized")
+
+  // Query with unnormalized vector — cosine should still work correctly
+  let mut query = [10.0, 0.0, 0.0]
+  loomdb_search(ldb, vectors, query, 1.0, "cosine")
+  let best_id = loomdb_result_id(ldb, 0.0)
+  assert(best_id == "x_axis", "cosine after normalize should still find x_axis")
+  let best_score = loomdb_result_score(ldb, 0.0)
+  assert(approx_eq(best_score, 1.0, 0.001) == 1.0, "cosine should be ~1.0 regardless of query magnitude")
+
+  print("PASS: test_normalize_then_search")
+  return 0.0
+end
+
+fn test_capture_after_normalize()
+  // Test 18: Capture after normalize resets normalized flag
+  let mut ldb = loomdb_create(3.0, 0.0)
+  let mut vectors = loomdb_create_vectors()
+  let mut v1 = [3.0, 4.0, 0.0]
+  loomdb_capture(ldb, vectors, "first", v1, "m1")
+
+  loomdb_normalize(ldb, vectors)
+  assert(map_get(ldb, "__ldb_normalized") == "1", "should be normalized after normalize")
+
+  // New capture should reset the normalized flag
+  let mut v2 = [0.0, 0.0, 5.0]
+  loomdb_capture(ldb, vectors, "second", v2, "m2")
+  assert(map_get(ldb, "__ldb_normalized") == "0", "normalized flag should reset after capture")
+
+  // Double normalize should be a no-op
+  loomdb_normalize(ldb, vectors)
+  assert(map_get(ldb, "__ldb_normalized") == "1", "first normalize should work")
+  loomdb_normalize(ldb, vectors)
+  assert(map_get(ldb, "__ldb_normalized") == "1", "double normalize should be no-op")
+
+  print("PASS: test_capture_after_normalize")
+  return 0.0
+end
+
+// Run all tests
+test_loomdb_create()
+test_loomdb_capture()
+test_loomdb_search_cosine()
+test_loomdb_needs_flush()
+test_loomdb_flush_restore()
+test_loomdb_capture_dim_mismatch()
+test_loomdb_normalize()
+test_search_k_exceeds_count()
+test_search_k_zero()
+test_search_empty_db()
+test_duplicate_id_capture()
+test_search_dot_metric()
+test_search_euclidean_metric()
+test_search_unknown_metric()
+test_restore_nonexistent()
+test_flush_empty_roundtrip()
+test_normalize_then_search()
+test_capture_after_normalize()
+print("All LoomDB tests passed (18/18).")

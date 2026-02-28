@@ -1,0 +1,17 @@
+// widgets/core/separator.flow — Horizontal Separator
+//
+// A thin horizontal line for visual grouping between widgets.
+// Rendered as a 2px tall box in the border color.
+
+use "../../engine/tree"
+use "../../themes/dark"
+
+// Create a horizontal separator
+// parent: parent widget ID
+// w: width in pixels (use parent width or a fixed value)
+// Returns: widget ID
+fn ui_separator(parent, w)
+  let id = ui_tree_add(UI_BOX, parent, w, 2.0, " ")
+  let _s = ui_tree_set_color_themed(id, UI_COLOR_BORDER)
+  return id
+end

@@ -20,23 +20,30 @@
 
 ## 1. Values & Types
 
-OctoFlow has three value types:
+OctoFlow has six value types:
 
 | Type | Description | Example |
 |------|-------------|---------|
+| **int** | 64-bit integer | `42`, `-1`, `0` |
 | **float** | 32-bit floating point | `42.0`, `3.14`, `-1.0` |
 | **string** | UTF-8 text | `"hello"`, `"OctoFlow"` |
+| **array** | Ordered collection | `[1, 2, 3]`, `["a", "b"]` |
 | **map** | Key-value pairs | `map()` |
+| **none** | Absence of value | `none` |
 
 Booleans are floats: `1.0` = true, `0.0` = false.
 
-Arrays are ordered collections that can hold floats, strings, or both.
+**Auto-promotion:** `int + float = float`. Integer literals (no decimal point) are `int`; decimal literals are `float`.
+
+**Type conversions:** `int(x)`, `float(x)`, `type_of(x)`, `is_none(x)`.
 
 ```
-let x = 42.0
+let count = 42
+let pi = 3.14
 let name = "OctoFlow"
 let items = [1, 2, 3, 4, 5]
 let mut config = map()
+let empty = none
 ```
 
 ## 2. Variables
@@ -283,7 +290,7 @@ print("{v3.x}, {v3.y}, {v3.z}")
 
 ```
 use csv
-use timeseries
+use "stats/timeseries"
 
 let data = read_csv("prices.csv")
 let closes = csv_column(data, "close")

@@ -1,0 +1,202 @@
+// stdlib/db/persist.flow — Multi-table database persistence (OctoDB)
+//
+// OctoDB files use the .odb extension by convention.
+// Example: db_save_all_start(db, "mydata.odb")
+//
+// Saves/loads an entire database (multiple tables) to/from a single file.
+// Uses OCTOFLOW_DB_V2 format with table separators.
+//
+// Save API (append-based, avoids nested maps):
+//   db_save_all_start(db, path) — write V2 header with table names
+//   db_save_all_add(table, name, path) — append one table section
+//
+// Load API (flat bundle):
+//   db_load_all(path) — returns flat bundle map with prefixed keys
+//   db_load_table(bundle, name) — extract a standard table map from bundle
+//   db_load_db(bundle) — extract the db metadata map from bundle
+
+fn db_save_all_start(db, path)
+  // Write V2 header with table names list
+  // Call this first, then db_save_all_add for each table
+  let list = map_get(db, "__tables")
+  if len(list) == 0.0
+    write_file(path, "OCTOFLOW_DB_V2\nTABLES:\n")
+    return 0.0
+  end
+  let mut content = "OCTOFLOW_DB_V2\n"
+  content = content + "TABLES:" + list + "\n"
+  write_file(path, content)
+  let names = split(list, ",")
+  return len(names)
+end
+
+fn db_save_all_add(table, name, path)
+  // Append one table section to a V2 file
+  // Call after db_save_all_start, once per table
+  let cols_str = map_get(table, "__columns")
+  let count = float(map_get(table, "__count"))
+  let cols = split(cols_str, ",")
+
+  let mut content = "---TABLE:" + name + "---\n"
+  content = content + cols_str + "\n"
+
+  // Count non-deleted rows for accurate count
+  let mut live_count = 0.0
+  let mut row_data = ""
+  let mut i = 0.0
+  while i < count
+    if map_has(table, "__del_" + str(i)) == 0.0
+      let mut row_parts = []
+      for col in cols
+        let key = "__col_" + col + "_" + str(i)
+        if map_has(table, key)
+          push(row_parts, map_get(table, key))
+        else
+          push(row_parts, "")
+        end
+      end
+      row_data = row_data + join(row_parts, "\t") + "\n"
+      live_count = live_count + 1.0
+    end
+    i = i + 1.0
+  end
+
+  content = content + str(live_count) + "\n" + row_data
+  append_file(path, content)
+  return live_count
+end
+
+fn db_load_all(path)
+  // Load entire database from a V2 file into a flat bundle map
+  // Bundle keys:
+  //   __db_tables = "name1,name2,..."
+  //   __{name}___columns = "col1,col2,..."
+  //   __{name}___count = "N"
+  //   __{name}___col_{col}_{idx} = value
+  let mut bundle = map()
+
+  if file_exists(path) == 0.0
+    map_set(bundle, "__db_tables", "")
+    return bundle
+  end
+
+  let content = read_file(path)
+  let lines = split(content, "\n")
+  if len(lines) < 2.0
+    map_set(bundle, "__db_tables", "")
+    return bundle
+  end
+
+  let header = trim(lines[0])
+  if header != "OCTOFLOW_DB_V2"
+    map_set(bundle, "__db_tables", "")
+    return bundle
+  end
+
+  // Parse TABLES line
+  let tables_line = trim(lines[1])
+  let table_names_str = substr(tables_line, 7.0, len(tables_line) - 7.0)
+  map_set(bundle, "__db_tables", table_names_str)
+
+  // Parse table sections
+  let mut line_idx = 2.0
+  while line_idx < len(lines)
+    let line = trim(lines[line_idx])
+
+    // Check for table separator: ---TABLE:name---
+    if starts_with(line, "---TABLE:") && ends_with(line, "---")
+      let name_part = substr(line, 9.0, len(line) - 12.0)
+      let prefix = "__" + name_part + "_"
+
+      // Next line is columns
+      line_idx = line_idx + 1.0
+      if line_idx >= len(lines)
+        break
+      end
+      let cols_str = trim(lines[line_idx])
+      let cols = split(cols_str, ",")
+      map_set(bundle, prefix + "_columns", cols_str)
+
+      // Next line is row count
+      line_idx = line_idx + 1.0
+      if line_idx >= len(lines)
+        break
+      end
+      let count = float(trim(lines[line_idx]))
+      map_set(bundle, prefix + "_count", str(count))
+
+      // Read rows
+      let mut row_idx = 0.0
+      while row_idx < count
+        line_idx = line_idx + 1.0
+        if line_idx >= len(lines)
+          break
+        end
+        let row_line = lines[line_idx]
+        if len(trim(row_line)) > 0.0
+          let vals = split(row_line, "\t")
+          let mut ci = 0.0
+          while ci < len(cols) && ci < len(vals)
+            let key = prefix + "_col_" + cols[ci] + "_" + str(row_idx)
+            map_set(bundle, key, vals[ci])
+            ci = ci + 1.0
+          end
+        end
+        row_idx = row_idx + 1.0
+      end
+    end
+    line_idx = line_idx + 1.0
+  end
+
+  return bundle
+end
+
+fn db_load_table(bundle, name)
+  // Extract a standard table map from a loaded bundle
+  // Returns a table compatible with all db functions
+  let prefix = "__" + name + "_"
+  let mut table = map()
+
+  let cols_key = prefix + "_columns"
+  if map_has(bundle, cols_key) == 0.0
+    map_set(table, "__columns", "")
+    map_set(table, "__count", "0")
+    return table
+  end
+
+  let cols_str = map_get(bundle, cols_key)
+  let count_str = map_get(bundle, prefix + "_count")
+  map_set(table, "__columns", cols_str)
+  map_set(table, "__count", count_str)
+
+  let count = float(count_str)
+  let cols = split(cols_str, ",")
+
+  let mut i = 0.0
+  while i < count
+    for col in cols
+      let src_key = prefix + "_col_" + col + "_" + str(i)
+      let dst_key = "__col_" + col + "_" + str(i)
+      if map_has(bundle, src_key)
+        map_set(table, dst_key, map_get(bundle, src_key))
+      end
+    end
+    i = i + 1.0
+  end
+
+  return table
+end
+
+fn db_load_db(bundle)
+  // Extract the db metadata map from a loaded bundle
+  let mut db = map()
+  let tables_str = map_get(bundle, "__db_tables")
+  map_set(db, "__tables", tables_str)
+  if len(tables_str) > 0.0
+    let names = split(tables_str, ",")
+    for tname in names
+      map_set(db, "__tbl_" + tname, "1")
+    end
+  end
+  return db
+end

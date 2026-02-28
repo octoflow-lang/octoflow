@@ -1,0 +1,48 @@
+// widgets/layout/statusbar.flow — Status Bar Widget
+//
+// A horizontal bar at the bottom of the window for status text segments.
+//
+// Usage:
+//   let sbar = ui_statusbar(root, 480.0)
+//   let st1 = ui_statusbar_text(sbar, "READY")
+//   // Later:
+//   let _u = ui_statusbar_set_text(st1, "FILE SAVED")
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../engine/sdf_font"
+use "../../themes/dark"
+
+// Create a status bar (horizontal row, surface background)
+// parent: parent widget ID
+// w: width in pixels (typically matches window width)
+// Returns: status bar row widget ID
+fn ui_statusbar(parent, w)
+  let bar = ui_tree_add(UI_ROW, parent, w, 22.0, " ")
+  let _sc = ui_tree_set_color_themed(bar, UI_COLOR_SURFACE)
+  let _sp = ui_tree_set_spacing(bar, 12.0)
+  let _pp = ui_tree_set_padding(bar, 6.0)
+  return bar
+end
+
+// Add a text segment to the status bar
+// bar_id: status bar ID from ui_statusbar()
+// text: initial text
+// Returns: text widget ID
+fn ui_statusbar_text(bar_id, text)
+  let tw = ui_text_width(text, 14.0)
+  let txt = ui_tree_add(UI_TEXT, bar_id, tw, 14.0, text)
+  let _tc = ui_tree_set_color_themed(txt, UI_COLOR_TEXT_DIM)
+  return txt
+end
+
+// Update status bar text segment
+// text_id: widget ID from ui_statusbar_text()
+// new_text: replacement text
+fn ui_statusbar_set_text(text_id, new_text)
+  _ui_texts[text_id] = new_text
+  _ui_w[text_id] = ui_text_width(new_text, 14.0)
+  _ui_dirty[text_id] = 1.0
+  let _d = ui_mark_dirty()
+  return 0.0
+end

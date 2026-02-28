@@ -1,7 +1,8 @@
 // canvas.flow — GUI Canvas Drawing API
 //
 // Provides canvas widget creation and drawing commands (line, rect,
-// fill, circle, pixel) that are rendered during the GUI update cycle.
+// fill, circle, pixel, text, polygon, arc, gradient, rounded rect)
+// that are rendered during the GUI update cycle.
 //
 // Usage:
 //   use "gui"
@@ -10,8 +11,10 @@
 
 use "gui_core"
 
+// H-21 Fix: Each canvas gets its own fresh command array start
 fn gui_canvas(x, y, w, h)
   let id = _gui_add_widget(GUI_CANVAS, x, y, w, h, " ")
+  // Set start to current end of command buffer — fresh region
   _gui_list_start[int(id)] = len(_gui_canvas_cmds)
   _gui_list_count[int(id)] = 0.0
   return id
@@ -25,7 +28,14 @@ fn gui_canvas_clear(id)
   return 0.0
 end
 
+// Command types: 1=line, 2=rect, 3=fill, 4=circle, 5=fill_circle,
+//   6=pixel, 7=text, 8=polygon, 9=arc, 10=gradient_rect, 11=rounded_rect
+
 fn gui_canvas_line(id, x1, y1, x2, y2, cr, cg, cb)
+  return gui_canvas_line_w(id, x1, y1, x2, y2, cr, cg, cb, 1.0)
+end
+
+fn gui_canvas_line_w(id, x1, y1, x2, y2, cr, cg, cb, width)
   push(_gui_canvas_cmds, 1.0)
   push(_gui_canvas_cmds, x1)
   push(_gui_canvas_cmds, y1)
@@ -34,6 +44,7 @@ fn gui_canvas_line(id, x1, y1, x2, y2, cr, cg, cb)
   push(_gui_canvas_cmds, cr)
   push(_gui_canvas_cmds, cg)
   push(_gui_canvas_cmds, cb)
+  push(_gui_canvas_cmds, width)
   _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
   _gs[9] = 1.0
   return 0.0
@@ -48,6 +59,7 @@ fn gui_canvas_rect(id, rx, ry, rw, rh, cr, cg, cb)
   push(_gui_canvas_cmds, cr)
   push(_gui_canvas_cmds, cg)
   push(_gui_canvas_cmds, cb)
+  push(_gui_canvas_cmds, 0.0)
   _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
   _gs[9] = 1.0
   return 0.0
@@ -62,6 +74,7 @@ fn gui_canvas_fill(id, rx, ry, rw, rh, cr, cg, cb)
   push(_gui_canvas_cmds, cr)
   push(_gui_canvas_cmds, cg)
   push(_gui_canvas_cmds, cb)
+  push(_gui_canvas_cmds, 0.0)
   _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
   _gs[9] = 1.0
   return 0.0
@@ -76,6 +89,7 @@ fn gui_canvas_circle(id, ccx, ccy, radius, cr, cg, cb)
   push(_gui_canvas_cmds, cr)
   push(_gui_canvas_cmds, cg)
   push(_gui_canvas_cmds, cb)
+  push(_gui_canvas_cmds, 0.0)
   _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
   _gs[9] = 1.0
   return 0.0
@@ -90,6 +104,7 @@ fn gui_canvas_fill_circle(id, ccx, ccy, radius, cr, cg, cb)
   push(_gui_canvas_cmds, cr)
   push(_gui_canvas_cmds, cg)
   push(_gui_canvas_cmds, cb)
+  push(_gui_canvas_cmds, 0.0)
   _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
   _gs[9] = 1.0
   return 0.0
@@ -104,7 +119,354 @@ fn gui_canvas_pixel(id, px, py, cr, cg, cb)
   push(_gui_canvas_cmds, cr)
   push(_gui_canvas_cmds, cg)
   push(_gui_canvas_cmds, cb)
+  push(_gui_canvas_cmds, 0.0)
   _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
   _gs[9] = 1.0
+  return 0.0
+end
+
+// H-30: Canvas text — draws text using bitmap font at canvas position
+// Encodes as type=7, p1=x, p2=y, p3=size(scale), p4=0, p5-p7=rgb
+// Text stored separately in _gui_canvas_text_buf
+let mut _gui_canvas_text_buf = []
+let mut _gui_canvas_text_idx = []
+
+fn gui_canvas_text(id, x, y, text, size)
+  let text_id = len(_gui_canvas_text_buf)
+  push(_gui_canvas_text_buf, text)
+  push(_gui_canvas_cmds, 7.0)
+  push(_gui_canvas_cmds, x)
+  push(_gui_canvas_cmds, y)
+  push(_gui_canvas_cmds, size)
+  push(_gui_canvas_cmds, text_id)
+  push(_gui_canvas_cmds, 220.0)
+  push(_gui_canvas_cmds, 222.0)
+  push(_gui_canvas_cmds, 228.0)
+  push(_gui_canvas_cmds, 0.0)
+  _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_canvas_text_colored(id, x, y, text, size, cr, cg, cb)
+  let text_id = len(_gui_canvas_text_buf)
+  push(_gui_canvas_text_buf, text)
+  push(_gui_canvas_cmds, 7.0)
+  push(_gui_canvas_cmds, x)
+  push(_gui_canvas_cmds, y)
+  push(_gui_canvas_cmds, size)
+  push(_gui_canvas_cmds, text_id)
+  push(_gui_canvas_cmds, cr)
+  push(_gui_canvas_cmds, cg)
+  push(_gui_canvas_cmds, cb)
+  push(_gui_canvas_cmds, 0.0)
+  _gui_list_count[int(id)] = _gui_list_count[int(id)] + 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// H-30: Canvas polygon — filled polygon from point array [x1,y1,x2,y2,...]
+// Renders as horizontal scan lines (simplified fill)
+fn gui_canvas_polygon(cvs, points, r, g, b)
+  // Draw as connected filled triangles from centroid
+  let n = len(points)
+  if n < 6.0
+    return 0.0
+  end
+  let npts = floor(n / 2.0)
+  // Calculate centroid
+  let mut cx = 0.0
+  let mut cy = 0.0
+  let mut pi = 0.0
+  while pi < npts
+    cx = cx + points[int(pi * 2.0)]
+    cy = cy + points[int(pi * 2.0 + 1.0)]
+    pi = pi + 1.0
+  end
+  if npts <= 0.0
+    return 0.0
+  end
+  cx = cx / npts
+  cy = cy / npts
+  // Draw edges as lines (outline polygon)
+  pi = 0.0
+  while pi < npts
+    let ni = pi + 1.0
+    let mut next = ni
+    if next >= npts
+      next = 0.0
+    end
+    let x1 = points[int(pi * 2.0)]
+    let y1 = points[int(pi * 2.0 + 1.0)]
+    let x2 = points[int(next * 2.0)]
+    let y2 = points[int(next * 2.0 + 1.0)]
+    let _l = gui_canvas_line(cvs, x1, y1, x2, y2, r, g, b)
+    pi = pi + 1.0
+  end
+  return 0.0
+end
+
+// P-06: Filled polygon via triangle fan from centroid
+fn gui_canvas_fill_polygon(cvs, points, r, g, b)
+  let n = len(points)
+  if n < 6.0
+    return 0.0
+  end
+  let npts = floor(n / 2.0)
+  if npts <= 0.0
+    return 0.0
+  end
+  // Calculate centroid
+  let mut cx = 0.0
+  let mut cy = 0.0
+  let mut pi = 0.0
+  while pi < npts
+    cx = cx + points[int(pi * 2.0)]
+    cy = cy + points[int(pi * 2.0 + 1.0)]
+    pi = pi + 1.0
+  end
+  cx = cx / npts
+  cy = cy / npts
+  // Triangle fan: centroid → edge[i] → edge[i+1]
+  let mut ti = 0.0
+  while ti < npts
+    let mut ni = ti + 1.0
+    if ni >= npts
+      ni = 0.0
+    end
+    let x1 = points[int(ti * 2.0)]
+    let y1 = points[int(ti * 2.0 + 1.0)]
+    let x2 = points[int(ni * 2.0)]
+    let y2 = points[int(ni * 2.0 + 1.0)]
+    let _t = _canvas_fill_triangle(cvs, cx, cy, x1, y1, x2, y2, r, g, b)
+    ti = ti + 1.0
+  end
+  return 0.0
+end
+
+fn _canvas_fill_triangle(cvs, ax, ay, bx, by, cx, cy, r, g, b)
+  // Bounding box + barycentric test
+  let mut minx = ax
+  if bx < minx
+    minx = bx
+  end
+  if cx < minx
+    minx = cx
+  end
+  let mut maxx = ax
+  if bx > maxx
+    maxx = bx
+  end
+  if cx > maxx
+    maxx = cx
+  end
+  let mut miny = ay
+  if by < miny
+    miny = by
+  end
+  if cy < miny
+    miny = cy
+  end
+  let mut maxy = ay
+  if by > maxy
+    maxy = by
+  end
+  if cy > maxy
+    maxy = cy
+  end
+  let mut sy = floor(miny)
+  while sy <= maxy
+    let mut sx = floor(minx)
+    while sx <= maxx
+      let d1 = (sx - bx) * (ay - by) - (ax - bx) * (sy - by)
+      let d2 = (sx - cx) * (by - cy) - (bx - cx) * (sy - cy)
+      let d3 = (sx - ax) * (cy - ay) - (cx - ax) * (sy - ay)
+      // Inside if all same sign (all >= 0 or all <= 0)
+      let mut inside = 0.0
+      if d1 >= 0.0
+        if d2 >= 0.0
+          if d3 >= 0.0
+            inside = 1.0
+          end
+        end
+      end
+      if d1 <= 0.0
+        if d2 <= 0.0
+          if d3 <= 0.0
+            inside = 1.0
+          end
+        end
+      end
+      if inside == 1.0
+        let _p = gui_canvas_fill(cvs, sx, sy, 1.0, 1.0, r, g, b)
+      end
+      sx = sx + 1.0
+    end
+    sy = sy + 1.0
+  end
+  return 0.0
+end
+
+// H-30: Canvas arc — draws arc outline from start_angle to end_angle (radians)
+fn gui_canvas_arc(cvs, cx, cy, radius, start_angle, end_angle, r, g, b)
+  let steps = floor(radius * 2.0)
+  let mut step_count = steps
+  if step_count < 8.0
+    step_count = 8.0
+  end
+  if step_count > 200.0
+    step_count = 200.0
+  end
+  let angle_range = end_angle - start_angle
+  let step_size = angle_range / step_count
+  let mut si = 0.0
+  while si < step_count
+    let a1 = start_angle + si * step_size
+    let a2 = start_angle + (si + 1.0) * step_size
+    let x1 = cx + radius * cos(a1)
+    let y1 = cy + radius * sin(a1)
+    let x2 = cx + radius * cos(a2)
+    let y2 = cy + radius * sin(a2)
+    let _l = gui_canvas_line(cvs, x1, y1, x2, y2, r, g, b)
+    si = si + 1.0
+  end
+  return 0.0
+end
+
+// H-30: Gradient rectangle — linear gradient fill
+// direction: 0.0 = horizontal (left-to-right), 1.0 = vertical (top-to-bottom)
+fn gui_canvas_gradient_rect(cvs, x, y, w, h, r1, g1, b1, r2, g2, b2, direction)
+  // Approximate gradient with 20 strips
+  let strips = 20.0
+  if direction == 1.0
+    // Vertical gradient
+    let strip_h = h / strips
+    let mut si = 0.0
+    while si < strips
+      let mut t = 0.0
+      if strips > 1.0
+        t = si / (strips - 1.0)
+      end
+      let cr = r1 + (r2 - r1) * t
+      let cg = g1 + (g2 - g1) * t
+      let cb = b1 + (b2 - b1) * t
+      let _f = gui_canvas_fill(cvs, x, y + si * strip_h, w, strip_h + 1.0, cr, cg, cb)
+      si = si + 1.0
+    end
+  else
+    // Horizontal gradient
+    let strip_w = w / strips
+    let mut si = 0.0
+    while si < strips
+      let mut t = 0.0
+      if strips > 1.0
+        t = si / (strips - 1.0)
+      end
+      let cr = r1 + (r2 - r1) * t
+      let cg = g1 + (g2 - g1) * t
+      let cb = b1 + (b2 - b1) * t
+      let _f = gui_canvas_fill(cvs, x + si * strip_w, y, strip_w + 1.0, h, cr, cg, cb)
+      si = si + 1.0
+    end
+  end
+  return 0.0
+end
+
+// H-30: Rounded rectangle — filled rectangle with rounded corners
+fn gui_canvas_rounded_rect(cvs, x, y, w, h, radius, r, g, b)
+  let mut rad = radius
+  if rad > w / 2.0
+    rad = w / 2.0
+  end
+  if rad > h / 2.0
+    rad = h / 2.0
+  end
+  // Center fill
+  let _f1 = gui_canvas_fill(cvs, x + rad, y, w - 2.0 * rad, h, r, g, b)
+  // Left fill
+  let _f2 = gui_canvas_fill(cvs, x, y + rad, rad, h - 2.0 * rad, r, g, b)
+  // Right fill
+  let _f3 = gui_canvas_fill(cvs, x + w - rad, y + rad, rad, h - 2.0 * rad, r, g, b)
+  // Corner arcs (approximated as filled quarter circles)
+  let _c1 = gui_canvas_fill_circle(cvs, x + rad, y + rad, rad, r, g, b)
+  let _c2 = gui_canvas_fill_circle(cvs, x + w - rad, y + rad, rad, r, g, b)
+  let _c3 = gui_canvas_fill_circle(cvs, x + rad, y + h - rad, rad, r, g, b)
+  let _c4 = gui_canvas_fill_circle(cvs, x + w - rad, y + h - rad, rad, r, g, b)
+  return 0.0
+end
+
+// ── Canvas V2: GPU Shader-Accelerated Drawing ───────────────────────
+// These functions dispatch custom compute shaders via the Level 2 renderer.
+// Canvas coordinates are relative to widget position — converted to absolute.
+
+fn _canvas_clamp(val, max_val)
+  if val < 0.0
+    return 0.0
+  end
+  if val > max_val
+    return max_val
+  end
+  return val
+end
+
+fn gui_canvas_line_v2(canvas_id, x0, y0, x1, y1, r, g, b)
+  return gui_canvas_line_v2_w(canvas_id, x0, y0, x1, y1, r, g, b, 1.0)
+end
+
+fn gui_canvas_line_v2_w(canvas_id, x0, y0, x1, y1, r, g, b, width)
+  let ci = int(canvas_id)
+  let abs_x0 = _canvas_clamp(_gui_x[ci] + x0, _gvm[2])
+  let abs_y0 = _canvas_clamp(_gui_y[ci] + y0, _gvm[3])
+  let abs_x1 = _canvas_clamp(_gui_x[ci] + x1, _gvm[2])
+  let abs_y1 = _canvas_clamp(_gui_y[ci] + y1, _gvm[3])
+  let _d = _gui_dispatch_line(abs_x0, abs_y0, abs_x1, abs_y1, r, g, b, width)
+  return 0.0
+end
+
+fn gui_canvas_circle_v2(canvas_id, cx, cy, radius, r, g, b)
+  let ci = int(canvas_id)
+  let abs_cx = _canvas_clamp(_gui_x[ci] + cx, _gvm[2])
+  let abs_cy = _canvas_clamp(_gui_y[ci] + cy, _gvm[3])
+  let _d = _gui_dispatch_circle(abs_cx, abs_cy, radius, r, g, b)
+  return 0.0
+end
+
+fn gui_canvas_rect_v2(canvas_id, x, y, w, h, r, g, b)
+  let ci = int(canvas_id)
+  let abs_x = _canvas_clamp(_gui_x[ci] + x, _gvm[2])
+  let abs_y = _canvas_clamp(_gui_y[ci] + y, _gvm[3])
+  let _d = _gui_dispatch_rect(abs_x, abs_y, w, h, r, g, b)
+  return 0.0
+end
+
+fn gui_canvas_gradient_v2(canvas_id, x, y, w, h, r1, g1, b1, r2, g2, b2)
+  return gui_canvas_gradient_v2_dir(canvas_id, x, y, w, h, r1, g1, b1, r2, g2, b2, 0.0)
+end
+
+fn gui_canvas_gradient_h_v2(canvas_id, x, y, w, h, r1, g1, b1, r2, g2, b2)
+  return gui_canvas_gradient_v2_dir(canvas_id, x, y, w, h, r1, g1, b1, r2, g2, b2, 1.0)
+end
+
+fn gui_canvas_gradient_v2_dir(canvas_id, x, y, w, h, r1, g1, b1, r2, g2, b2, direction)
+  let ci = int(canvas_id)
+  let abs_x = _canvas_clamp(_gui_x[ci] + x, _gvm[2])
+  let abs_y = _canvas_clamp(_gui_y[ci] + y, _gvm[3])
+  let _d = _gui_dispatch_gradient_dir(abs_x, abs_y, w, h, r1, g1, b1, r2, g2, b2, direction)
+  return 0.0
+end
+
+fn gui_canvas_rounded_rect_v2(canvas_id, x, y, w, h, r, g, b, radius)
+  let ci = int(canvas_id)
+  let abs_x = _canvas_clamp(_gui_x[ci] + x, _gvm[2])
+  let abs_y = _canvas_clamp(_gui_y[ci] + y, _gvm[3])
+  let _d = _gui_dispatch_rounded_rect(abs_x, abs_y, w, h, r, g, b, radius)
+  return 0.0
+end
+
+fn gui_canvas_blend_v2(canvas_id, x, y, w, h, r, g, b, alpha)
+  let ci = int(canvas_id)
+  let abs_x = _canvas_clamp(_gui_x[ci] + x, _gvm[2])
+  let abs_y = _canvas_clamp(_gui_y[ci] + y, _gvm[3])
+  let _d = _gui_dispatch_blend(abs_x, abs_y, w, h, r, g, b, alpha)
   return 0.0
 end

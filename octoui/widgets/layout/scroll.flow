@@ -1,0 +1,457 @@
+// widgets/layout/scroll.flow — Scroll Container Widget
+//
+// A vertically-scrolling container that clips children to a fixed viewport.
+// Children are laid out as a column with configurable spacing.
+// Keyboard scrolling: Up/Down arrows, Page Up/Down when focused.
+//
+// Usage:
+//   let panel = ui_scroll(parent, 300.0, 200.0, 8.0)
+//   // Add children to panel...
+//   let _b1 = ui_box(panel, 280.0, 60.0, UI_COLOR_SURFACE)
+//   let _b2 = ui_box(panel, 280.0, 60.0, UI_COLOR_PRIMARY)
+//
+//   // After layout, update scroll positions:
+//   let _su = ui_scroll_update_all()
+//
+//   // Scroll control:
+//   let _s = ui_scroll_by(panel, 20.0)   // scroll down 20px
+//   let _s = ui_scroll_to(panel, 0.0)    // scroll to top
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// UI_SCROLL defined in tree.flow
+// Scrollbar dimensions
+let UI_SCROLL_BAR_W = 8.0
+let UI_SCROLL_MIN_THUMB = 16.0
+let UI_SCROLL_STEP = 20.0
+
+// Scroll state (indexed by scroll registry index)
+let mut _ui_scroll_ids = []        // scroll container widget IDs
+let mut _ui_scroll_offset = []     // current scroll offset (pixels)
+let mut _ui_scroll_content_h = []  // total content height
+let mut _ui_scroll_spacing = []    // spacing between children
+let mut _ui_scroll_bar = []        // scrollbar track widget ID
+let mut _ui_scroll_thumb = []      // scrollbar thumb widget ID
+
+// Mouse drag state: [0]=active_scroll_idx (-1=none), [1]=drag_start_my, [2]=drag_start_offset
+let mut _ui_scroll_drag = [-1.0, 0.0, 0.0]
+
+// Original heights for clipped children (indexed by widget ID)
+let mut _ui_scroll_orig_h = []
+
+// Create a scroll container
+// parent: parent widget ID (-1.0 for root)
+// w: viewport width
+// h: viewport height
+// spacing: vertical spacing between children
+// Returns: container widget ID (use as parent for children)
+fn ui_scroll(parent, w, h, spacing)
+  // Create the scroll container
+  let container = ui_tree_add(UI_SCROLL, parent, w, h, " ")
+  let _sc = ui_tree_set_color_themed(container, UI_COLOR_SURFACE)
+
+  // Scrollbar track (right edge, thin box)
+  let bar = ui_tree_add(UI_BOX, container, UI_SCROLL_BAR_W, h, " ")
+  let _bc = ui_tree_set_color_themed(bar, UI_COLOR_BORDER)
+
+  // Scrollbar thumb (draggable indicator)
+  let thumb = ui_tree_add(UI_BOX, container, UI_SCROLL_BAR_W, UI_SCROLL_MIN_THUMB, " ")
+  let _tc = ui_tree_set_color_themed(thumb, UI_COLOR_TEXT_DIM)
+
+  // Register
+  push(_ui_scroll_ids, container)
+  push(_ui_scroll_offset, 0.0)
+  push(_ui_scroll_content_h, 0.0)
+  push(_ui_scroll_spacing, spacing)
+  push(_ui_scroll_bar, bar)
+  push(_ui_scroll_thumb, thumb)
+
+  return container
+end
+
+// Scroll by delta pixels (positive = down, negative = up)
+fn ui_scroll_by(container, delta)
+  let n = len(_ui_scroll_ids)
+  let mut si = 0.0
+  while si < n
+    if _ui_scroll_ids[si] == container
+      let cur = _ui_scroll_offset[si]
+      let _s = ui_scroll_set_offset(si, cur + delta)
+      return 0.0
+    end
+    si = si + 1.0
+  end
+  return 0.0
+end
+
+// Scroll to absolute offset
+fn ui_scroll_to(container, offset)
+  let n = len(_ui_scroll_ids)
+  let mut si = 0.0
+  while si < n
+    if _ui_scroll_ids[si] == container
+      let _s = ui_scroll_set_offset(si, offset)
+      return 0.0
+    end
+    si = si + 1.0
+  end
+  return 0.0
+end
+
+// Internal: set offset with clamping
+fn ui_scroll_set_offset(scroll_idx, offset)
+  let container = _ui_scroll_ids[scroll_idx]
+  let content_h = _ui_scroll_content_h[scroll_idx]
+  let viewport_h = _ui_h[container]
+
+  let max_scroll = content_h - viewport_h
+  let mut clamped = offset
+  if clamped < 0.0
+    clamped = 0.0
+  end
+  if max_scroll > 0.0
+    if clamped > max_scroll
+      clamped = max_scroll
+    end
+  else
+    clamped = 0.0
+  end
+
+  _ui_scroll_offset[scroll_idx] = clamped
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Update all scroll containers after layout
+// Computes content height, positions children, updates scrollbar
+fn ui_scroll_update_all()
+  let n = len(_ui_scroll_ids)
+  let mut si = 0.0
+  while si < n
+    let container = _ui_scroll_ids[si]
+    let cx = _ui_x[container]
+    let cy = _ui_y[container]
+    let cw = _ui_w[container]
+    let ch = _ui_h[container]
+    let spacing = _ui_scroll_spacing[si]
+    let offset = _ui_scroll_offset[si]
+    let bar_id = _ui_scroll_bar[si]
+    let thumb_id = _ui_scroll_thumb[si]
+
+    // Phase 1: Position children as a column with scroll offset
+    let widget_count = ui_tree_count()
+    let mut content_h = 0.0
+    let mut child_count = 0.0
+    let mut cur_y = cy - offset
+
+    let mut wi = 0.0
+    while wi < widget_count
+      if _ui_parent[wi] == container
+        // Skip scrollbar widgets (they are children but not content)
+        let mut is_scrollbar = 0.0
+        if wi == bar_id
+          is_scrollbar = 1.0
+        end
+        if wi == thumb_id
+          is_scrollbar = 1.0
+        end
+        if is_scrollbar == 0.0
+          // Ensure orig_h tracking array is large enough
+          let needed_oh = wi + 1.0
+          while len(_ui_scroll_orig_h) < needed_oh
+            push(_ui_scroll_orig_h, 0.0)
+          end
+
+          // Restore original height if previously clipped
+          if _ui_scroll_orig_h[wi] > 0.0
+            _ui_h[wi] = _ui_scroll_orig_h[wi]
+          end
+
+          let orig_h = _ui_h[wi]
+          _ui_scroll_orig_h[wi] = orig_h
+
+          // Accumulate content height (before clipping)
+          content_h = content_h + orig_h
+          child_count = child_count + 1.0
+
+          // Position child
+          _ui_x[wi] = cx
+          _ui_y[wi] = cur_y
+
+          // Viewport bounds
+          let child_bottom = cur_y + orig_h
+          let view_top = cy
+          let view_bottom = cy + ch
+
+          // Visibility: hide if fully outside viewport
+          let mut vis = 1.0
+          if child_bottom <= view_top
+            vis = 0.0
+          end
+          if cur_y >= view_bottom
+            vis = 0.0
+          end
+
+          // CPU clipping: adjust y and h for partially visible children
+          if vis == 1.0
+            // Clip top edge
+            if cur_y < view_top
+              let clip_top = view_top - cur_y
+              _ui_y[wi] = view_top
+              _ui_h[wi] = orig_h - clip_top
+            end
+            // Clip bottom edge
+            if child_bottom > view_bottom
+              let clip_bottom = child_bottom - view_bottom
+              _ui_h[wi] = _ui_h[wi] - clip_bottom
+            end
+            // If clipped to zero or negative, hide
+            if _ui_h[wi] <= 0.0
+              vis = 0.0
+              _ui_h[wi] = orig_h
+            end
+          end
+
+          _ui_visible[wi] = vis
+
+          cur_y = cur_y + orig_h + spacing
+        end
+      end
+      wi = wi + 1.0
+    end
+
+    // Add spacing to content height
+    if child_count > 1.0
+      content_h = content_h + spacing * (child_count - 1.0)
+    end
+    _ui_scroll_content_h[si] = content_h
+
+    // Phase 2: Position and size scrollbar
+    let bar_x = cx + cw - UI_SCROLL_BAR_W
+    _ui_x[bar_id] = bar_x
+    _ui_y[bar_id] = cy
+    _ui_h[bar_id] = ch
+
+    if content_h > ch
+      // Content overflows: show scrollbar
+      _ui_visible[bar_id] = 1.0
+      _ui_visible[thumb_id] = 1.0
+
+      let ratio = ch / content_h
+      let mut thumb_h = floor(ch * ratio)
+      if thumb_h < UI_SCROLL_MIN_THUMB
+        thumb_h = UI_SCROLL_MIN_THUMB
+      end
+
+      let max_scroll = content_h - ch
+      let mut scroll_ratio = 0.0
+      if max_scroll > 0.0
+        scroll_ratio = offset / max_scroll
+      end
+      let thumb_range = ch - thumb_h
+      let thumb_y = cy + floor(scroll_ratio * thumb_range)
+
+      _ui_x[thumb_id] = bar_x
+      _ui_y[thumb_id] = thumb_y
+      _ui_w[thumb_id] = UI_SCROLL_BAR_W
+      _ui_h[thumb_id] = thumb_h
+    else
+      // Content fits: hide scrollbar
+      _ui_visible[bar_id] = 0.0
+      _ui_visible[thumb_id] = 0.0
+    end
+
+    si = si + 1.0
+  end
+  return 0.0
+end
+
+// Process mouse interaction with scrollbar (drag thumb + click track)
+// mx, my: mouse position
+// mdown: mouse button state (1.0 = down)
+// clicked: 1.0 if mouse was just pressed this frame
+fn ui_scroll_process_mouse(mx, my, mdown, clicked)
+  // Continue active drag
+  if _ui_scroll_drag[0] >= 0.0
+    if mdown == 1.0
+      // Dragging: compute scroll from mouse Y delta
+      let si = _ui_scroll_drag[0]
+      let container = _ui_scroll_ids[si]
+      let cy = _ui_y[container]
+      let ch = _ui_h[container]
+      let content_h = _ui_scroll_content_h[si]
+      let max_scroll = content_h - ch
+
+      if max_scroll > 0.0
+        let ratio = ch / content_h
+        let mut thumb_h = floor(ch * ratio)
+        if thumb_h < UI_SCROLL_MIN_THUMB
+          thumb_h = UI_SCROLL_MIN_THUMB
+        end
+        let thumb_range = ch - thumb_h
+
+        if thumb_range > 0.0
+          // Convert mouse delta to scroll delta
+          let drag_start_y = _ui_scroll_drag[1]
+          let drag_start_off = _ui_scroll_drag[2]
+          let mouse_delta = my - drag_start_y
+          let scroll_per_pixel = max_scroll / thumb_range
+          let new_offset = drag_start_off + mouse_delta * scroll_per_pixel
+          let _s = ui_scroll_set_offset(si, new_offset)
+          let _u = ui_scroll_update_all()
+        end
+      end
+      return 0.0
+    else
+      // Mouse released: end drag
+      _ui_scroll_drag[0] = -1.0
+      return 0.0
+    end
+  end
+
+  // Check for new click on scrollbar
+  if clicked == 1.0
+    let n = len(_ui_scroll_ids)
+    let mut si = 0.0
+    while si < n
+      let container = _ui_scroll_ids[si]
+      let content_h = _ui_scroll_content_h[si]
+      let ch = _ui_h[container]
+
+      // Only if content overflows (scrollbar visible)
+      if content_h > ch
+        let bar_id = _ui_scroll_bar[si]
+        let thumb_id = _ui_scroll_thumb[si]
+
+        // Check thumb hit (drag start)
+        let thumb_hit = ui_hit_test(mx, my, _ui_x[thumb_id], _ui_y[thumb_id], _ui_w[thumb_id], _ui_h[thumb_id])
+        if thumb_hit == 1.0
+          _ui_scroll_drag[0] = si
+          _ui_scroll_drag[1] = my
+          _ui_scroll_drag[2] = _ui_scroll_offset[si]
+          return 0.0
+        end
+
+        // Check track hit (page jump)
+        let track_hit = ui_hit_test(mx, my, _ui_x[bar_id], _ui_y[bar_id], _ui_w[bar_id], _ui_h[bar_id])
+        if track_hit == 1.0
+          // Compute scroll position from click location on track
+          let cy = _ui_y[container]
+          let max_scroll = content_h - ch
+          let track_pos = my - cy
+          let track_ratio = track_pos / ch
+          let target_offset = track_ratio * max_scroll
+          let _s = ui_scroll_set_offset(si, target_offset)
+          let _u = ui_scroll_update_all()
+          return 0.0
+        end
+      end
+      si = si + 1.0
+    end
+  end
+
+  return 0.0
+end
+
+// Process keyboard scrolling for focused scroll container
+// key: the key string from ui_key_down()
+fn ui_scroll_process(key)
+  if _ui_focus_id < 0.0
+    return 0.0
+  end
+
+  // Check if focused widget is inside a scroll container
+  let n = len(_ui_scroll_ids)
+  let mut si = 0.0
+  while si < n
+    let container = _ui_scroll_ids[si]
+    // Check if focus is the scroll container itself or a descendant
+    if _ui_focus_id == container
+      let _k = ui_scroll_handle_key(si, key)
+      return 0.0
+    end
+    if ui_tree_is_descendant(_ui_focus_id, container) == 1.0
+      let _k = ui_scroll_handle_key(si, key)
+      return 0.0
+    end
+    si = si + 1.0
+  end
+  return 0.0
+end
+
+// Internal: handle key for a specific scroll container
+fn ui_scroll_handle_key(scroll_idx, key)
+  let container = _ui_scroll_ids[scroll_idx]
+  let viewport_h = _ui_h[container]
+
+  if key == "up"
+    let _s = ui_scroll_by(container, 0.0 - UI_SCROLL_STEP)
+    let _u = ui_scroll_update_all()
+  end
+  if key == "down"
+    let _s = ui_scroll_by(container, UI_SCROLL_STEP)
+    let _u = ui_scroll_update_all()
+  end
+  if key == "pageup"
+    let _s = ui_scroll_by(container, 0.0 - viewport_h)
+    let _u = ui_scroll_update_all()
+  end
+  if key == "pagedown"
+    let _s = ui_scroll_by(container, viewport_h)
+    let _u = ui_scroll_update_all()
+  end
+  if key == "home"
+    let _s = ui_scroll_to(container, 0.0)
+    let _u = ui_scroll_update_all()
+  end
+  if key == "end"
+    let content = _ui_scroll_content_h[scroll_idx]
+    let _s = ui_scroll_to(container, content)
+    let _u = ui_scroll_update_all()
+  end
+  return 0.0
+end
+
+// Get current scroll offset for a container
+fn ui_scroll_get_offset(container)
+  let n = len(_ui_scroll_ids)
+  let mut si = 0.0
+  while si < n
+    if _ui_scroll_ids[si] == container
+      return _ui_scroll_offset[si]
+    end
+    si = si + 1.0
+  end
+  return 0.0
+end
+
+// Get content height for a container
+fn ui_scroll_content_height(container)
+  let n = len(_ui_scroll_ids)
+  let mut si = 0.0
+  while si < n
+    if _ui_scroll_ids[si] == container
+      return _ui_scroll_content_h[si]
+    end
+    si = si + 1.0
+  end
+  return 0.0
+end
+
+// Check if content overflows viewport
+fn ui_scroll_can_scroll(container)
+  let n = len(_ui_scroll_ids)
+  let mut si = 0.0
+  while si < n
+    if _ui_scroll_ids[si] == container
+      if _ui_scroll_content_h[si] > _ui_h[container]
+        return 1.0
+      end
+      return 0.0
+    end
+    si = si + 1.0
+  end
+  return 0.0
+end

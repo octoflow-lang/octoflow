@@ -1,0 +1,75 @@
+// scrollbar.flow — Vertical Scrollbar Widget + Scrollable Containers
+//
+// Provides scrollbar widget and scroll panel helper.
+//
+// Usage:
+//   use "gui"
+//   use "scrollbar"
+//   let sb = gui_scrollbar_v(780.0, 10.0, 400.0, 1200.0, 400.0)
+//   // In update loop:
+//   let offset = gui_scrollbar_value(sb)
+
+use "gui_core"
+use "widgets"
+
+// Scrollbar state (parallel arrays indexed by scrollbar count)
+let mut _sb_content_h = []
+let mut _sb_visible_h = []
+let mut _sb_value = []
+let mut _sb_widget_id = []
+let mut _sb_dragging = -1.0
+
+fn gui_scrollbar_v(x, y, h, content_h, visible_h)
+  let sb_w = 16.0
+  let id = _gui_add_widget(GUI_PANEL, x, y, sb_w, h, " ")
+  let sb_idx = len(_sb_widget_id)
+  push(_sb_widget_id, id)
+  push(_sb_content_h, content_h)
+  push(_sb_visible_h, visible_h)
+  push(_sb_value, 0.0)
+  return id
+end
+
+fn gui_scrollbar_value(id)
+  // Find scrollbar by widget id
+  let n = len(_sb_widget_id)
+  let mut si = 0.0
+  while si < n
+    if _sb_widget_id[int(si)] == id
+      return _sb_value[int(si)]
+    end
+    si = si + 1.0
+  end
+  return 0.0
+end
+
+fn gui_scrollbar_set(id, val)
+  let n = len(_sb_widget_id)
+  let mut si = 0.0
+  while si < n
+    if _sb_widget_id[int(si)] == id
+      let sii = int(si)
+      let max_scroll = _sb_content_h[sii] - _sb_visible_h[sii]
+      let mut v = val
+      if v < 0.0
+        v = 0.0
+      end
+      if v > max_scroll
+        v = max_scroll
+      end
+      _sb_value[sii] = v
+      _gs[9] = 1.0
+      return 1.0
+    end
+    si = si + 1.0
+  end
+  return 0.0
+end
+
+// Scroll panel: creates a panel + vertical scrollbar
+// Returns panel widget id (use gui_scrollbar_value on sb_id for offset)
+fn gui_scroll_panel(x, y, w, h, content_h)
+  let panel_id = gui_panel(x, y, w - 16.0, h)
+  let sb_id = gui_scrollbar_v(x + w - 16.0, y, h, content_h, h)
+  return panel_id
+end

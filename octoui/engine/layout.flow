@@ -1,0 +1,160 @@
+// layout.flow — OctoUI CPU Iterative Layout Engine
+//
+// Two-pass layout supporting multi-level nesting.
+// NOT recursive — uses flat iterative loops over the parallel arrays.
+//
+// Pass 1 (bottom-up, REVERSE order): Compute container sizes from children.
+//   Iterates highest-ID first so inner containers are sized before outer ones.
+//   - UI_COLUMN: width = max(child widths) + 2*padding
+//                height = sum(child heights) + spacing*(n-1) + 2*padding
+//   - UI_ROW:    height = max(child heights) + 2*padding
+//                width = sum(child widths) + spacing*(n-1) + 2*padding
+//
+// Pass 2 (top-down, FORWARD order): Position children inside their parent.
+//   Iterates lowest-ID first so parents are positioned before children.
+//   - UI_COLUMN: stack children vertically (top to bottom)
+//   - UI_ROW:    stack children horizontally (left to right)
+//
+// Depends on tree.flow for widget parallel arrays.
+// Depends on dirty.flow for marking frames dirty after layout changes.
+
+use "tree"
+use "dirty"
+
+// -- Layout Engine ----------------------------------------------------------
+
+fn ui_layout_update()
+  let count = len(_ui_types)
+
+  // Early out: nothing to lay out
+  if count == 0.0
+    return 0.0
+  end
+
+  // ---- Pass 1: Bottom-up container sizing (REVERSE order) -----------------
+  // Iterate highest-ID first: children always have higher IDs than parents
+  // (because ui_tree_add appends via push), so reverse order ensures inner
+  // containers are sized before outer ones read their dimensions.
+  let mut ci = count - 1.0
+  while ci >= 0.0
+    let ctype = _ui_types[int(ci)]
+    let mut do_size = 0.0
+    if ctype == UI_COLUMN
+      do_size = 1.0
+    end
+    if ctype == UI_ROW
+      do_size = 1.0
+    end
+
+    if do_size == 1.0
+      let pad = _ui_padding[int(ci)]
+      let gap = _ui_spacing[int(ci)]
+
+      // Accumulate child metrics
+      let mut child_count = 0.0
+      let mut sum_w = 0.0
+      let mut sum_h = 0.0
+      let mut max_w = 0.0
+      let mut max_h = 0.0
+
+      let mut ki = 0.0
+      while ki < count
+        if _ui_parent[int(ki)] == ci
+          if _ui_visible[int(ki)] == 1.0
+            let cw = _ui_w[int(ki)]
+            let ch = _ui_h[int(ki)]
+            child_count = child_count + 1.0
+            sum_w = sum_w + cw
+            sum_h = sum_h + ch
+            if cw > max_w
+              max_w = cw
+            end
+            if ch > max_h
+              max_h = ch
+            end
+          end
+        end
+        ki = ki + 1.0
+      end
+
+      // Compute gaps between children (n-1 gaps for n children)
+      let mut total_gap = 0.0
+      if child_count > 1.0
+        total_gap = gap * (child_count - 1.0)
+      end
+
+      // Apply sizing based on container type
+      if ctype == UI_COLUMN
+        // Column: children stacked vertically
+        let new_w = max_w + 2.0 * pad
+        let new_h = sum_h + total_gap + 2.0 * pad
+        _ui_w[int(ci)] = new_w
+        _ui_h[int(ci)] = new_h
+      end
+      if ctype == UI_ROW
+        // Row: children placed horizontally
+        let new_w2 = sum_w + total_gap + 2.0 * pad
+        let new_h2 = max_h + 2.0 * pad
+        _ui_w[int(ci)] = new_w2
+        _ui_h[int(ci)] = new_h2
+      end
+    end
+
+    ci = ci - 1.0
+  end
+
+  // ---- Pass 2: Top-down child positioning ---------------------------------
+  // For each container, position its children sequentially.
+  let mut pi = 0.0
+  while pi < count
+    let ptype = _ui_types[int(pi)]
+    let mut do_pos = 0.0
+    if ptype == UI_COLUMN
+      do_pos = 1.0
+    end
+    if ptype == UI_ROW
+      do_pos = 1.0
+    end
+
+    if do_pos == 1.0
+      let px = _ui_x[int(pi)]
+      let py = _ui_y[int(pi)]
+      let pad2 = _ui_padding[int(pi)]
+      let gap2 = _ui_spacing[int(pi)]
+
+      // Cursor starts at container origin + padding
+      let mut cur_x = px + pad2
+      let mut cur_y = py + pad2
+
+      // Iterate all widgets, position those parented to this container.
+      // Children are laid out in the order they appear in the arrays
+      // (i.e., the order they were added via ui_tree_add).
+      let mut ji = 0.0
+      while ji < count
+        if _ui_parent[int(ji)] == pi
+          if _ui_visible[int(ji)] == 1.0
+            _ui_x[int(ji)] = cur_x
+            _ui_y[int(ji)] = cur_y
+
+            if ptype == UI_COLUMN
+              // Advance cursor downward
+              cur_y = cur_y + _ui_h[int(ji)] + gap2
+            end
+            if ptype == UI_ROW
+              // Advance cursor rightward
+              cur_x = cur_x + _ui_w[int(ji)] + gap2
+            end
+          end
+        end
+        ji = ji + 1.0
+      end
+    end
+
+    pi = pi + 1.0
+  end
+
+  // Mark the frame dirty so the renderer picks up position changes
+  let _d = ui_mark_dirty()
+
+  return 0.0
+end

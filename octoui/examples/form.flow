@@ -1,0 +1,147 @@
+// examples/form.flow — OctoUI Form Demo
+//
+// Demonstrates input widgets: text input, checkbox, slider.
+// Full keyboard accessibility: Tab, Space, Enter, arrow keys.
+//
+// Controls:
+//   TAB    — Cycle focus
+//   SPACE  — Toggle checkbox, click button
+//   ENTER  — Submit text input, click button
+//   LEFT/RIGHT — Adjust focused slider
+//   ESCAPE — Quit
+//
+// Run: octoflow run octoui/examples/form.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/input/button"
+use "../widgets/input/checkbox"
+use "../widgets/input/textinput"
+use "../widgets/input/slider"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../state/reactive"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(440.0, 380.0, "OctoUI Form")
+
+// Reactive state for slider display
+let slider_state = ui_state(50.0)
+
+// Root layout
+let root = ui_column(-1.0, 10.0)
+let _sp = ui_tree_set_padding(root, 20.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 440.0, 380.0)
+
+// Title
+let title = ui_text(root, "SETTINGS", UI_COLOR_PRIMARY)
+
+// Separator
+let sep1 = ui_separator(root, 400.0)
+
+// Name input
+let name_label = ui_text(root, "NAME", UI_COLOR_TEXT_DIM)
+let name_input = ui_textinput(root, 300.0, 28.0)
+
+// Separator
+let sep2 = ui_separator(root, 400.0)
+
+// Checkboxes
+let chk_sound = ui_checkbox(root, "ENABLE SOUND")
+let chk_notify = ui_checkbox(root, "NOTIFICATIONS")
+let chk_dark = ui_checkbox(root, "DARK MODE")
+// Set dark mode checked by default
+let _sd = ui_checkbox_set(chk_dark, 1.0)
+
+// Separator
+let sep3 = ui_separator(root, 400.0)
+
+// Slider
+let slider_label = ui_text(root, "VOLUME", UI_COLOR_TEXT_DIM)
+let vol_slider = ui_slider(root, 300.0, 16.0, 0.0, 100.0, 50.0)
+let vol_display = ui_text(root, "50", UI_COLOR_TEXT)
+let _bv = ui_bind_text(vol_display, slider_state)
+
+// Separator
+let sep4 = ui_separator(root, 400.0)
+
+// Button row
+let btn_row = ui_row(root, 12.0)
+let btn_save = ui_button(btn_row, 100.0, 32.0, "SAVE")
+let btn_cancel = ui_button(btn_row, 100.0, 32.0, "CANCEL")
+
+// Status
+let status = ui_text(root, "READY", UI_COLOR_TEXT_DIM)
+
+// Initial layout
+let _l = ui_layout_update()
+
+// Position slider handles after layout
+let _su = ui_slider_update_all()
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  // Process text input for focused widget
+  let key = ui_key_down()
+  let _tk = ui_textinput_process_key(key)
+
+  // Process slider drag + keyboard
+  let _sd2 = ui_slider_process(ui_mouse_x(), ui_mouse_y(), ui_mouse_down())
+  let _sk = ui_slider_process_key(key)
+
+  // Update slider display value
+  let vol = ui_slider_value(vol_slider)
+  let vol_int = floor(vol)
+  let _sv = ui_state_set(slider_state, vol_int)
+
+  // Enter key submits text input
+  if ui_textinput_submitted(name_input) == 1.0
+    let name = ui_textinput_value(name_input)
+    let _st = ui_tree_set_text(status, "HELLO " + name)
+    let _d = ui_mark_dirty()
+  end
+
+  // Button clicks (mouse or keyboard)
+  if ui_button_clicked(btn_save) == 1.0
+    let _st = ui_tree_set_text(status, "SAVED!")
+    let _d = ui_mark_dirty()
+  end
+  if ui_button_clicked(btn_cancel) == 1.0
+    let _st = ui_tree_set_text(status, "CANCELLED")
+    let _d = ui_mark_dirty()
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Form example finished.")

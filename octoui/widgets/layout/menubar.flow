@@ -1,0 +1,327 @@
+// widgets/layout/menubar.flow — Menubar Widget
+//
+// A horizontal menu bar with trigger buttons that open dropdown columns.
+// Only one menu can be open at a time. Hover-to-switch when a menu is open.
+//
+// Usage:
+//   let bar = ui_menubar(root)
+//   let file_m = ui_menu(bar, "FILE")
+//   let _i1 = ui_menu_item(file_m, "NEW")
+//   let _i2 = ui_menu_item(file_m, "OPEN")
+//   let _sep = ui_menu_separator(file_m)
+//   let _i3 = ui_menu_item(file_m, "EXIT")
+//
+//   // In event loop (after ui_process_input):
+//   let _mp = ui_menubar_process(mx, my, clicked)
+//
+//   // Check item clicks:
+//   if ui_menu_item_clicked(_i1) == 1.0
+//     // handle NEW
+//   end
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../engine/sdf_font"
+use "../../themes/dark"
+use "../../widgets/input/button"
+
+// Menubar registry
+let mut _ui_mb_triggers = []     // trigger button IDs
+let mut _ui_mb_cols = []         // dropdown column IDs (one per trigger)
+let mut _ui_mb_items = []        // flat array of menu item button IDs
+let mut _ui_mb_item_menu = []    // which menu index owns each item
+let mut _ui_mb_item_start = []   // per-menu: first item index in _ui_mb_items
+let mut _ui_mb_item_count = []   // per-menu: number of items
+let mut _ui_mb_sep_flags = []    // 1.0 = separator (disabled, visual only)
+
+// Global state
+let mut _ui_mb_open_idx = -1.0   // which menu is open (-1 = none)
+let mut _ui_mb_clicked_item = -1.0  // last clicked menu item ID (-1 = none)
+let mut _ui_mb_bar_id = -1.0     // the menubar ROW widget ID
+
+// Create a menubar (horizontal row of trigger buttons)
+// parent: parent widget ID
+// Returns: bar row widget ID
+fn ui_menubar(parent)
+  let bar = ui_tree_add(UI_ROW, parent, 0.0, 24.0, " ")
+  let _sc = ui_tree_set_color_themed(bar, UI_COLOR_SURFACE)
+  _ui_mb_bar_id = bar
+  return bar
+end
+
+// Add a menu to the menubar
+// bar_id: menubar row ID from ui_menubar()
+// label: menu trigger text (e.g. "FILE")
+// Returns: menu index (used for ui_menu_item)
+fn ui_menu(bar_id, label)
+  // Create trigger button in the menubar row
+  let label_w = ui_text_width(label, 16.0) + 20.0
+  let trigger = ui_button(bar_id, label_w, 24.0, label)
+
+  // Create hidden column for menu items (root-level, positioned later)
+  let col = ui_tree_add(UI_COLUMN, -1.0, 140.0, 0.0, " ")
+  _ui_visible[col] = 0.0
+  let _cc = ui_tree_set_color_themed(col, UI_COLOR_SURFACE)
+
+  // Register this menu
+  let menu_idx = len(_ui_mb_triggers)
+  push(_ui_mb_triggers, trigger)
+  push(_ui_mb_cols, col)
+  push(_ui_mb_item_start, len(_ui_mb_items))
+  push(_ui_mb_item_count, 0.0)
+
+  return menu_idx
+end
+
+// Add an item to a menu
+// menu_idx: menu index from ui_menu()
+// label: item text
+// Returns: item button widget ID
+fn ui_menu_item(menu_idx, label)
+  let col = _ui_mb_cols[menu_idx]
+  let item_w = 140.0
+  let item_h = 24.0
+
+  // Create button in the hidden column
+  let item = ui_button(col, item_w, item_h, label)
+  _ui_visible[item] = 0.0
+
+  // Register
+  push(_ui_mb_items, item)
+  push(_ui_mb_item_menu, menu_idx)
+  push(_ui_mb_sep_flags, 0.0)
+  _ui_mb_item_count[menu_idx] = _ui_mb_item_count[menu_idx] + 1.0
+
+  return item
+end
+
+// Add a separator to a menu (disabled thin line)
+// menu_idx: menu index from ui_menu()
+fn ui_menu_separator(menu_idx)
+  let col = _ui_mb_cols[menu_idx]
+  let sep = ui_tree_add(UI_BOX, col, 140.0, 2.0, " ")
+  let _sc = ui_tree_set_color_themed(sep, UI_COLOR_BORDER)
+  _ui_visible[sep] = 0.0
+  let _se = ui_tree_set_enabled(sep, 0.0)
+
+  // Register as item (but flagged as separator)
+  push(_ui_mb_items, sep)
+  push(_ui_mb_item_menu, menu_idx)
+  push(_ui_mb_sep_flags, 1.0)
+  _ui_mb_item_count[menu_idx] = _ui_mb_item_count[menu_idx] + 1.0
+
+  return 0.0
+end
+
+// Check if a menu item was clicked this frame
+// item_id: widget ID returned by ui_menu_item()
+// Returns: 1.0 if clicked, 0.0 otherwise
+fn ui_menu_item_clicked(item_id)
+  if _ui_mb_clicked_item == item_id
+    return 1.0
+  end
+  return 0.0
+end
+
+// Open a menu (position column below trigger, show items)
+fn ui_mb_open(menu_idx)
+  // Close any currently open menu first
+  if _ui_mb_open_idx >= 0.0
+    let _c = ui_mb_close(_ui_mb_open_idx)
+  end
+
+  let trigger = _ui_mb_triggers[menu_idx]
+  let col = _ui_mb_cols[menu_idx]
+  let count = _ui_mb_item_count[menu_idx]
+  let start = _ui_mb_item_start[menu_idx]
+
+  // Position column below trigger
+  let tx = _ui_x[trigger]
+  let ty = _ui_y[trigger]
+  let th = _ui_h[trigger]
+
+  _ui_x[col] = tx
+  _ui_y[col] = ty + th
+
+  // Calculate column height and position each item
+  let mut total_h = 0.0
+  let mut ii = 0.0
+  while ii < count
+    let item_idx = start + ii
+    let item_id = _ui_mb_items[item_idx]
+    let ih = _ui_h[item_id]
+    _ui_x[item_id] = tx
+    _ui_y[item_id] = ty + th + total_h
+    _ui_w[item_id] = 140.0
+    _ui_visible[item_id] = 1.0
+    total_h = total_h + ih
+    ii = ii + 1.0
+  end
+
+  _ui_w[col] = 140.0
+  _ui_h[col] = total_h
+  _ui_visible[col] = 1.0
+
+  _ui_mb_open_idx = menu_idx
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Close a menu (hide column and items)
+fn ui_mb_close(menu_idx)
+  let col = _ui_mb_cols[menu_idx]
+  let count = _ui_mb_item_count[menu_idx]
+  let start = _ui_mb_item_start[menu_idx]
+
+  _ui_visible[col] = 0.0
+
+  let mut ii = 0.0
+  while ii < count
+    let item_idx = start + ii
+    let item_id = _ui_mb_items[item_idx]
+    _ui_visible[item_id] = 0.0
+    ii = ii + 1.0
+  end
+
+  _ui_mb_open_idx = -1.0
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Point-in-rect hit test helper
+fn ui_mb_hit(mx, my, wid)
+  let wx = _ui_x[wid]
+  let wy = _ui_y[wid]
+  let ww = _ui_w[wid]
+  let wh = _ui_h[wid]
+  if mx >= wx
+    if mx < wx + ww
+      if my >= wy
+        if my < wy + wh
+          return 1.0
+        end
+      end
+    end
+  end
+  return 0.0
+end
+
+// Process menubar interactions each frame
+// Call after ui_process_input() in the event loop.
+// mx, my: mouse position
+// clicked: 1.0 if mouse just clicked this frame
+fn ui_menubar_process(mx, my, clicked)
+  // Clear last clicked item
+  _ui_mb_clicked_item = -1.0
+
+  let menu_count = len(_ui_mb_triggers)
+
+  // Escape key closes open menu
+  if _ui_mb_open_idx >= 0.0
+    if _ui_key_down == "escape"
+      let _c = ui_mb_close(_ui_mb_open_idx)
+      return 0.0
+    end
+  end
+
+  // Check trigger button clicks
+  let mut mi = 0.0
+  while mi < menu_count
+    let trigger = _ui_mb_triggers[mi]
+
+    if ui_button_clicked(trigger) == 1.0
+      if _ui_mb_open_idx == mi
+        // Toggle close
+        let _c = ui_mb_close(mi)
+      else
+        // Open this menu
+        let _o = ui_mb_open(mi)
+      end
+      return 0.0
+    end
+
+    mi = mi + 1.0
+  end
+
+  // Hover-to-switch: if a menu is open and mouse hovers a different trigger
+  if _ui_mb_open_idx >= 0.0
+    let mut hi = 0.0
+    while hi < menu_count
+      if hi != _ui_mb_open_idx
+        let htrig = _ui_mb_triggers[hi]
+        if ui_mb_hit(mx, my, htrig) == 1.0
+          // Switch to this menu
+          let _o = ui_mb_open(hi)
+          return 0.0
+        end
+      end
+      hi = hi + 1.0
+    end
+  end
+
+  // Check item clicks in open menu
+  if _ui_mb_open_idx >= 0.0
+    let oi = _ui_mb_open_idx
+    let start = _ui_mb_item_start[oi]
+    let count = _ui_mb_item_count[oi]
+
+    let mut ii = 0.0
+    while ii < count
+      let item_idx = start + ii
+      let item_id = _ui_mb_items[item_idx]
+      let is_sep = _ui_mb_sep_flags[item_idx]
+
+      // Skip separators
+      if is_sep == 0.0
+        if ui_button_clicked(item_id) == 1.0
+          _ui_mb_clicked_item = item_id
+          let _c = ui_mb_close(oi)
+          return 0.0
+        end
+      end
+
+      ii = ii + 1.0
+    end
+
+    // Click outside: close menu
+    if clicked == 1.0
+      // Check if click was on any trigger
+      let mut on_trigger = 0.0
+      let mut ci = 0.0
+      while ci < menu_count
+        if ui_mb_hit(mx, my, _ui_mb_triggers[ci]) == 1.0
+          on_trigger = 1.0
+        end
+        ci = ci + 1.0
+      end
+
+      // Check if click was on any item in open menu
+      let mut on_item = 0.0
+      let mut ji = 0.0
+      while ji < count
+        let jidx = start + ji
+        let jid = _ui_mb_items[jidx]
+        if ui_mb_hit(mx, my, jid) == 1.0
+          on_item = 1.0
+        end
+        ji = ji + 1.0
+      end
+
+      if on_trigger == 0.0
+        if on_item == 0.0
+          let _c = ui_mb_close(oi)
+        end
+      end
+    end
+  end
+
+  return 0.0
+end
+
+// Close any open menubar menu (used by context menu for mutual exclusion)
+fn ui_menubar_close_all()
+  if _ui_mb_open_idx >= 0.0
+    let _c = ui_mb_close(_ui_mb_open_idx)
+  end
+  return 0.0
+end

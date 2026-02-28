@@ -1,0 +1,60 @@
+// image_widget.flow — Image Display Widget
+//
+// Displays an image (from read_image() result) as a GUI widget.
+// Scales to fit while maintaining aspect ratio using nearest-neighbor.
+//
+// Usage:
+//   use "gui"
+//   use "image_widget"
+//   let img = read_image("photo.png")
+//   let iw = gui_image(10.0, 10.0, 200.0, 200.0, img_r, img_g, img_b, img_w, img_h)
+
+use "gui_core"
+use "widgets"
+
+// Image widget state (parallel arrays)
+let mut _img_widget_id = []
+let mut _img_r = []
+let mut _img_g = []
+let mut _img_b = []
+let mut _img_w = []
+let mut _img_h = []
+
+fn gui_image(x, y, w, h, r_arr, g_arr, b_arr, img_w, img_h)
+  let id = _gui_add_widget(GUI_PANEL, x, y, w, h, " ")
+  let idx = len(_img_widget_id)
+  push(_img_widget_id, id)
+  push(_img_r, r_arr)
+  push(_img_g, g_arr)
+  push(_img_b, b_arr)
+  push(_img_w, img_w)
+  push(_img_h, img_h)
+  return id
+end
+
+fn _img_find(id)
+  let n = len(_img_widget_id)
+  let mut i = 0.0
+  while i < n
+    if _img_widget_id[int(i)] == id
+      return i
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+fn gui_image_update(id, r_arr, g_arr, b_arr, img_w, img_h)
+  let idx = _img_find(id)
+  if idx < 0.0
+    return 0.0
+  end
+  let ii = int(idx)
+  _img_r[ii] = r_arr
+  _img_g[ii] = g_arr
+  _img_b[ii] = b_arr
+  _img_w[ii] = img_w
+  _img_h[ii] = img_h
+  _gs[9] = 1.0
+  return 1.0
+end

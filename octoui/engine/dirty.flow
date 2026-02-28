@@ -1,0 +1,30 @@
+// dirty.flow — OctoUI Global Dirty Flag
+//
+// Frame-level dirty tracking for the OctoUI rendering engine.
+// When dirty, the next frame must be re-rendered. When clean,
+// the engine can skip rendering (no visual changes).
+//
+// The flag starts dirty (1.0) so the first frame always renders.
+// After rendering, the frame loop calls ui_clear_dirty().
+// Any mutation (widget add, color change, layout, input) calls
+// ui_mark_dirty() to schedule a re-render.
+
+// -- State ------------------------------------------------------------------
+// Stored in a 1-element array so it propagates across function boundaries.
+let mut _ui_dirty_flag = [1.0]
+
+// -- Functions --------------------------------------------------------------
+
+fn ui_mark_dirty()
+  _ui_dirty_flag[0] = 1.0
+  return 0.0
+end
+
+fn ui_is_dirty()
+  return _ui_dirty_flag[0]
+end
+
+fn ui_clear_dirty()
+  _ui_dirty_flag[0] = 0.0
+  return 0.0
+end

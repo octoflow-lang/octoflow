@@ -1,0 +1,115 @@
+# Changelog
+
+## v0.1.0 (unreleased)
+
+### Fixed
+- **Dead framebuffer array removal (6-27x speedup)**: Removed `_ui_fb_r/g/b` arrays (120K elements each, 360K total) that were allocated but never read — `vm_present` handles download in Rust. OctoFlow's snapshot semantics cloned these on every function call (~23MB/frame of wasted memcpy). Test suite: dialog 3.8s→0.6s (6x), dropdown 30s→1.1s (27x), scrollview 17.6s→0.9s (20x). Counter app: buttons now respond instantly to rapid clicking.
+- **Async present infrastructure**: `ui_pipeline_present()` and `ui_pipeline_shutdown()` support deferred GPU work via `vm_wait` + `vm_present` on pending progs (`_ui_vm[5]`). Render path remains synchronous for zero-latency frame delivery. Async pipeline ready for future event loop restructuring (present in idle branch).
+- **Critical stability fix**: `vm_build()` leaked a `VmProgram` (VkCommandBuffer + all pipelines) every frame — VM_PROGRAMS hashmap grew unbounded causing progressive lag and eventual GPU resource exhaustion. Fixed by adding `vm_free_prog(prog_id)` builtin that drops the VmProgram after `vm_execute()` in `engine/pipeline.flow`.
+- **Critical performance fix**: `vm_build_program` compiled SPIR-V to GPU-native pipelines fresh on every call — creating 50-200 pipeline objects per frame (each ~10-15ms). Added `VM_PIPELINE_CACHE` keyed by `(device, spirv_hash, binding_count, pc_size)` so each unique shader compiles only once (first frame). Subsequent frames get instant cache hits. OctoUI uses 3 SPIR-V kernels — cold start compiles them once, all frames thereafter are cache hits.
+- **Frame overhead fix**: `VkCommandPool`, `VkFence`, and `VkDescriptorPool` were created and destroyed every frame (3 Vulkan driver calls/frame even after pipeline caching). Added `VM_FRAME_POOL` that caches these resources per device and resets them O(1) with `vkResetCommandPool` + `vkResetFences` + `vkResetDescriptorPool`. First frame allocates with headroom, all subsequent frames do zero Vulkan allocations.
+- **First-frame stall fix**: Pipeline warm-up — all 3 SPIR-V kernels are compiled during `ui_pipeline_init()` (before event loop starts) so first render frame gets instant cache hits. Eliminates the 30-45ms main-thread block that triggered the Windows "loading" cursor.
+- **Framebuffer download fix**: `vm_present(vm, total)` batches all 3 channel downloads (R/G/B, contiguous in globals) into a single `vkCmdCopyBuffer` + single `vkQueueSubmit` + single `vkWaitForFences`. Replaces 3 separate `vm_read_globals` calls (3 staging submissions, 3 fence waits).
+- **Shutdown crash fix**: `WM_CLOSE` no longer calls `DestroyWindow(hwnd)` immediately. The .flow loop body may still call `vm_present`/`window_draw` after poll returns `alive=0.0` (alive is checked at loop top, not immediately). Window stays valid until process exit. `window_draw_impl` also guards with `WIN_ALIVE` check.
+- **Textarea/textinput crash fix**: `substring()` was used throughout `textarea.flow` (14 calls) and `textinput.flow` (8 calls) but is not a valid builtin — only `substr(s, start, length)` exists. Fixed all 22 calls with correct `substr()` semantics (third arg is length, not end index). Also fixed `to_string()` → `to_str()` in `table.flow`.
+- **Textarea array reassignment fix**: `_ui_ta_lines = rebuilt` used in 5 places (set_text, append_line, enter, backspace-merge, delete-merge) failed because OctoFlow's `Statement::Assign` only handles scalars, not arrays. Replaced with pop-all + push-from-rebuilt pattern using existing `pop()`/`push()` builtins.
+
+### Added
+- GPU kernel emitters: ui_clear, ui_rect, ui_text
+- Widget tree with parallel array storage
+- Dark theme (8 semantic colors)
+- Dirty flag system (frame-level render skipping)
+- Render pipeline (VM dispatch chain — single vkQueueSubmit per frame)
+- CPU layout engine (column, row containers with spacing/padding)
+- Widgets: box, text, button, row, column
+- Win32 platform layer with DWM dark mode and rounded corners
+- Teal octopus window icon (16x16 pixel art)
+- Reactive state management (value-binding with auto text updates)
+- Press-to-click buttons (fires on mouse-down for instant response)
+- Smart sleep (only when idle — zero latency on interaction frames)
+- Separator widget (2px horizontal line in border color)
+- Progress bar widget (track + fill, bind to reactive state)
+- Checkbox widget (toggle with label, click or programmatic)
+- Text input widget (single-line, keyboard input, cursor, focus system)
+- Slider widget (horizontal drag, configurable min/max, value display)
+- Focus system (click-to-focus, shared state in tree.flow)
+- Keyboard input support (ui_key_pressed, ui_key_down)
+- Mouse state queries (ui_mouse_x, ui_mouse_y, ui_mouse_down)
+- Multi-level layout nesting (reverse-order Pass 1 for correct sizing)
+- Text width auto-update on reactive state change (re-runs layout)
+- Hit test helper function (ui_hit_test)
+- Radio button group widget (mutually exclusive selection)
+- Label widget (dimmed label + colored value pair)
+- Tab key navigation (cycles focus through all focusable widgets)
+- Focus border highlight (2px primary-color border on focused widget)
+- Space/Enter keyboard activation for focused buttons
+- Space key toggles focused checkboxes and radio buttons
+- Enter key submission for text inputs (ui_textinput_submitted)
+- Arrow key control for focused sliders (Left/Right adjusts value)
+- Dropdown select widget (trigger + option list, click-outside-to-close)
+- Dynamic visibility toggle (ui_tree_set_visible, layout-aware)
+- Mouse click detection helper (ui_mouse_clicked)
+- Toggle switch widget (on/off with sliding knob, click or Space to toggle)
+- Text input cursor movement (Left/Right, Home/End, insert/delete at position)
+- Escape key closes open dropdown
+- Tab container widget (clickable tab buttons with switchable content panels)
+- Listbox widget (selectable list with Up/Down keyboard navigation and scroll viewport)
+- Spinbox widget (numeric +/- with arrow key control)
+- Tooltip system (hover-delayed floating text popups, Z-ordered overlay)
+- Light theme (bright palette for all 8 semantic colors)
+- Runtime theme switching (ui_theme_load_light, ui_theme_load_dark, ui_theme_apply_all)
+- Semantic color tracking per widget (_ui_color_idx[], ui_tree_set_color_themed)
+- Notification toast system (queued pop-ups, auto-dismiss after 3 seconds)
+- Modal dialog widget (overlay with title bar, close button, dim background, ESC dismiss)
+- Modal input blocking (only modal descendants receive input when modal is open)
+- Ancestor traversal helper (ui_tree_is_descendant, up to 4 levels)
+- Scroll container widget (vertical scrolling, visibility clipping, scrollbar track+thumb)
+- Keyboard scroll navigation (Up/Down/PageUp/PageDown/Home/End)
+- Scrollbar mouse interaction (thumb drag + track click-to-page)
+- CPU viewport clipping (partial children clipped at scroll container boundary)
+- Slider fill track (colored fill from left edge to handle position)
+- Data table widget (virtual-list, fixed header, scrollable body, row selection)
+- Cell-by-cell row construction (auto-wraps at column count)
+- Alternating row colors (BG/SURFACE striping)
+- Table keyboard navigation (Up/Down/Home/End/PageUp/PageDown)
+- Tree view widget (hierarchical expand/collapse, virtual list, depth indentation)
+- Tree view keyboard navigation (Up/Down/Left/Right/Space/Home/End)
+- Widget disabled state (ui_tree_set_enabled — dimmed rendering, no input, no focus)
+- Disabled widgets blend 60% toward background color (rect) and use TEXT_DIM (text)
+- Tab navigation skips disabled widgets
+- Focus border hidden for disabled widgets
+- Collapsible section widget (accordion — clickable header with expand/collapse content)
+- Programmatic section expand/collapse (ui_section_expand, ui_section_collapse)
+- Menubar widget (trigger buttons + dropdown columns, hover-to-switch, Escape to close)
+- Status bar widget (horizontal text segments at bottom, surface-colored)
+- Right-click context menu (widget-registered popup menus at cursor position)
+- Right-click mouse detection (ui_right_down, ui_right_clicked)
+- Left/right mouse button discrimination in input.flow
+- Multi-line text area widget (cursor, scroll, line splitting, readonly mode)
+- Text area keyboard: arrow nav, Home/End, Page Up/Down, Enter/Backspace/Delete across lines, Tab indent
+- Text area click-to-position cursor
+- Text area readonly mode (navigation only, for log viewers and code displays)
+- Text area auto-scroll-to-bottom (for log append pattern)
+- Menubar/context menu mutual exclusion (only one open at a time)
+- Widget type constants centralized in tree.flow (all 17 types — fixes pipeline test coverage)
+- Text input placeholder text (dimmed hint shown when empty and unfocused)
+- Text input password masking (renders * instead of characters)
+- Text input readonly mode (no editing, no cursor, still accepts Enter for submit)
+- 20 widget types: box, text, button, row, column, checkbox, textinput, slider, radio, label, dropdown, toggle, tabs, listbox, spinbox, tooltip, scroll, table, treeview, textarea
+- ListView widget (virtual rendering — allocates only disp_rows display widgets regardless of item count)
+- ListView virtual scroll (remap data→display on scroll offset change)
+- ListView keyboard navigation (Up/Down/PageUp/PageDown/Home/End/click-to-select)
+- ListView auto-scroll (set_selected ensures item is visible, scrolls viewport if needed)
+- ListView alternating row colors (BG/SURFACE striping, PRIMARY for selected)
+- Full keyboard accessibility (Tab + Space + Enter + arrows + Home/End + Up/Down + PageUp/PageDown)
+- Composite widgets: dropdown, tabs, spinbox, modal, progress, label, separator, tooltip, notification, section, menubar, statusbar, contextmenu (all built from primitives)
+- Examples: hello, counter, dashboard, timer, form, settings, panel, tabs, kitchen, themes, dialog, table, explorer, disabled, login, menubar, contextmenu, editor, logviewer, long_list
+- Documentation: quickstart, architecture, widgets (complete reference)
+- Terminal theme (green-on-black phosphor palette — ui_theme_load_terminal)
+- OctoUI Studio app (WYSIWYG visual builder — three-panel layout, live widget placement)
+  - Widget palette (ListView, 16 types)
+  - Canvas (scroll container — placed buttons are real OctoUI tree nodes)
+  - Property panel (label TextInput, width/height Spinbox)
+  - Add / Remove / Clear / Gen Code toolbar actions
+  - Code generation prints valid .flow widget calls to terminal
+- Tests: 82/82 passing (12 tree + 6 kernel + 5 pipeline + 11 dialog + 12 tabs + 13 dropdown + 12 scrollview + 11 theming)

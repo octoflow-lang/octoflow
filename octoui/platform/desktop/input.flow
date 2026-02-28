@@ -1,0 +1,534 @@
+// platform/desktop/input.flow — Input Event Processing
+//
+// Polls window events via window_poll(), performs hit testing,
+// updates widget hover/press/click states, manages focus.
+//
+// Window API:
+//   window_poll() -> "none"|"close"|"key_down"|"key_up"|"mouse_move"|"mouse_down"|"mouse_up"|"resize"
+//   window_event_x() -> last event x coordinate
+//   window_event_y() -> last event y coordinate
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../widgets/input/button"
+use "../../widgets/input/checkbox"
+use "../../widgets/input/textinput"
+use "../../widgets/input/slider"
+use "../../widgets/input/radio"
+use "../../widgets/input/toggle"
+use "../../widgets/input/listbox"
+use "../../widgets/input/tabs"
+use "../../widgets/input/spinbox"
+use "../../widgets/core/modal"
+use "../../widgets/layout/scroll"
+use "../../widgets/data/table"
+use "../../widgets/data/treeview"
+
+// Mouse state: [0]=mouse_x [1]=mouse_y [2]=mouse_down [3]=prev_mouse_down
+//              [4]=right_down [5]=prev_right_down
+let mut _ui_input = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+// Keyboard state: last key event
+let mut _ui_key_down = " "
+let mut _ui_key_up = " "
+
+// Focus state: _ui_focus_id is defined in tree.flow (shared)
+
+// Poll all pending window events and update mouse state
+// Returns 1.0 if window is still open, 0.0 if close requested
+fn ui_poll_events()
+  let mut alive = 1.0
+
+  // Save previous mouse-down state for click detection
+  _ui_input[3] = _ui_input[2]
+  _ui_input[5] = _ui_input[4]
+
+  // Clear per-frame key events
+  _ui_key_down = " "
+  _ui_key_up = " "
+
+  // Drain the event queue
+  let mut evt = window_poll()
+  while evt != "none"
+    if evt == "mouse_move"
+      _ui_input[0] = window_event_x()
+      _ui_input[1] = window_event_y()
+    end
+    if evt == "mouse_down"
+      _ui_input[0] = window_event_x()
+      _ui_input[1] = window_event_y()
+      let btn = window_event_key()
+      if btn == "left"
+        _ui_input[2] = 1.0
+      end
+      if btn == "right"
+        _ui_input[4] = 1.0
+      end
+    end
+    if evt == "mouse_up"
+      _ui_input[0] = window_event_x()
+      _ui_input[1] = window_event_y()
+      let btn2 = window_event_key()
+      if btn2 == "left"
+        _ui_input[2] = 0.0
+      end
+      if btn2 == "right"
+        _ui_input[4] = 0.0
+      end
+    end
+    if evt == "key_down"
+      _ui_key_down = window_event_key()
+    end
+    if evt == "key_up"
+      _ui_key_up = window_event_key()
+    end
+    if evt == "close"
+      alive = 0.0
+    end
+    evt = window_poll()
+  end
+
+  return alive
+end
+
+// Point-in-rect hit test helper
+fn ui_hit_test(mx, my, wx, wy, ww, wh)
+  if mx >= wx
+    if mx < wx + ww
+      if my >= wy
+        if my < wy + wh
+          return 1.0
+        end
+      end
+    end
+  end
+  return 0.0
+end
+
+// Process input: hit testing and widget state updates
+// Call after ui_poll_events() each frame
+fn ui_process_input()
+  let mx = _ui_input[0]
+  let my = _ui_input[1]
+  let mdown = _ui_input[2]
+  let prev_down = _ui_input[3]
+
+  // Detect click: mouse just pressed (press-to-click for responsiveness)
+  let mut clicked = 0.0
+  if mdown == 1.0
+    if prev_down == 0.0
+      clicked = 1.0
+    end
+  end
+
+  // Clear per-frame click states
+  let _c = ui_button_clear_clicks()
+
+  // Track if any widget was clicked (for focus management)
+  let mut clicked_widget = -1.0
+
+  // Modal input: ESC closes active modal
+  let modal_cid = ui_modal_container()
+  if modal_cid >= 0.0
+    if _ui_key_down == "escape"
+      let _mc = ui_modal_close(ui_modal_active())
+      return 0.0
+    end
+  end
+
+  // Hit test all widgets
+  let n = ui_tree_count()
+  let mut i = 0.0
+  while i < n
+    if _ui_visible[i] == 1.0
+      // Skip disabled widgets and modal-external widgets
+      let mut process_widget = 1.0
+      if _ui_enabled[i] == 0.0
+        process_widget = 0.0
+      end
+      if modal_cid >= 0.0
+        if ui_tree_is_descendant(i, modal_cid) == 0.0
+          process_widget = 0.0
+        end
+      end
+      if process_widget == 1.0
+        let wtype = _ui_types[i]
+
+        // ── Buttons ──
+        if wtype == UI_BUTTON
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+          let old_state = _ui_state[i]
+
+          let mut new_state = 0.0
+          if hit == 1.0
+            if mdown == 1.0
+              new_state = 2.0
+            else
+              new_state = 1.0
+            end
+            if clicked == 1.0
+              let needed = i + 1.0
+              while len(_ui_btn_clicked) < needed
+                push(_ui_btn_clicked, 0.0)
+              end
+              _ui_btn_clicked[i] = 1.0
+              clicked_widget = i
+            end
+          end
+
+          if new_state != old_state
+            _ui_state[i] = new_state
+            let _v = ui_button_update_visual(i)
+            let _d = ui_mark_dirty()
+          end
+        end
+
+        // ── Checkboxes ──
+        if wtype == UI_CHECKBOX
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if clicked == 1.0
+              let _t = ui_checkbox_toggle(i)
+              clicked_widget = i
+            end
+          end
+        end
+
+        // ── Text inputs ──
+        if wtype == UI_TEXTINPUT
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if clicked == 1.0
+              clicked_widget = i
+            end
+          end
+        end
+
+        // ── Sliders ──
+        if wtype == UI_SLIDER
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if mdown == 1.0
+              clicked_widget = i
+            end
+          end
+        end
+
+        // ── Radio buttons ──
+        if wtype == UI_RADIO
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if clicked == 1.0
+              let _rc = ui_radio_click(i)
+              clicked_widget = i
+            end
+          end
+        end
+
+        // ── Toggle switches ──
+        if wtype == UI_TOGGLE
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if clicked == 1.0
+              let _tt = ui_toggle_toggle(i)
+              clicked_widget = i
+            end
+          end
+        end
+
+        // ── Spinbox display ──
+        if wtype == UI_SPINBOX
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if clicked == 1.0
+              clicked_widget = i
+            end
+          end
+        end
+
+        // ── Listbox ──
+        if wtype == UI_LISTBOX
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if clicked == 1.0
+              clicked_widget = i
+              // Calculate which row was clicked
+              let local_y = my - _ui_y[i]
+              let row = floor(local_y / UI_LISTBOX_ROW_H)
+              let scroll = _ui_lb_scroll[i]
+              let item_idx = scroll + row
+              let total_items = _ui_lb_item_count[i]
+              if item_idx < total_items
+                let _ls = ui_listbox_set(i, item_idx)
+              end
+            end
+          end
+        end
+
+        // ── Scroll containers ──
+        if wtype == UI_SCROLL
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if clicked == 1.0
+              clicked_widget = i
+            end
+          end
+        end
+
+        // ── Data tables ──
+        if wtype == UI_TABLE
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if clicked == 1.0
+              clicked_widget = i
+            end
+          end
+        end
+
+        // ── Tree views ──
+        if wtype == UI_TREEVIEW
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if clicked == 1.0
+              clicked_widget = i
+            end
+          end
+        end
+
+        // ── Text areas ──
+        if wtype == UI_TEXTAREA
+          let hit = ui_hit_test(mx, my, _ui_x[i], _ui_y[i], _ui_w[i], _ui_h[i])
+
+          if hit == 1.0
+            if clicked == 1.0
+              clicked_widget = i
+            end
+          end
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Update focus if a widget was clicked
+  if clicked == 1.0
+    if clicked_widget != _ui_focus_id
+      _ui_focus_id = clicked_widget
+      let _d = ui_mark_dirty()
+    end
+  end
+
+  // Tab navigation: cycle focus through focusable widgets
+  if _ui_key_down == "tab"
+    let _tf = ui_tab_focus()
+  end
+
+  // Keyboard activation: Space/Enter on focused widget (skip disabled)
+  if _ui_focus_id >= 0.0
+    if _ui_focus_id < n
+      if _ui_enabled[_ui_focus_id] == 0.0
+        return 0.0
+      end
+      let ftype = _ui_types[_ui_focus_id]
+
+      // Space or Enter activates focused button
+      if _ui_key_down == "space"
+        if ftype == UI_BUTTON
+          let needed2 = _ui_focus_id + 1.0
+          while len(_ui_btn_clicked) < needed2
+            push(_ui_btn_clicked, 0.0)
+          end
+          _ui_btn_clicked[_ui_focus_id] = 1.0
+          _ui_state[_ui_focus_id] = 2.0
+          let _v = ui_button_update_visual(_ui_focus_id)
+          let _d = ui_mark_dirty()
+        end
+        if ftype == UI_CHECKBOX
+          let _t = ui_checkbox_toggle(_ui_focus_id)
+        end
+        if ftype == UI_RADIO
+          let _rc = ui_radio_click(_ui_focus_id)
+        end
+        if ftype == UI_TOGGLE
+          let _tt = ui_toggle_toggle(_ui_focus_id)
+        end
+      end
+      if _ui_key_down == "enter"
+        if ftype == UI_BUTTON
+          let needed3 = _ui_focus_id + 1.0
+          while len(_ui_btn_clicked) < needed3
+            push(_ui_btn_clicked, 0.0)
+          end
+          _ui_btn_clicked[_ui_focus_id] = 1.0
+          _ui_state[_ui_focus_id] = 2.0
+          let _v2 = ui_button_update_visual(_ui_focus_id)
+          let _d2 = ui_mark_dirty()
+        end
+      end
+    end
+  end
+
+  return 0.0
+end
+
+// Check if a widget type is focusable (type-level only, does not check enabled)
+fn ui_is_focusable(wtype)
+  if wtype == UI_BUTTON
+    return 1.0
+  end
+  if wtype == UI_CHECKBOX
+    return 1.0
+  end
+  if wtype == UI_TEXTINPUT
+    return 1.0
+  end
+  if wtype == UI_SLIDER
+    return 1.0
+  end
+  if wtype == UI_RADIO
+    return 1.0
+  end
+  if wtype == UI_TOGGLE
+    return 1.0
+  end
+  if wtype == UI_LISTBOX
+    return 1.0
+  end
+  if wtype == UI_SPINBOX
+    return 1.0
+  end
+  if wtype == UI_SCROLL
+    return 1.0
+  end
+  if wtype == UI_TABLE
+    return 1.0
+  end
+  if wtype == UI_TREEVIEW
+    return 1.0
+  end
+  if wtype == UI_TEXTAREA
+    return 1.0
+  end
+  return 0.0
+end
+
+// Cycle focus to next focusable widget
+fn ui_tab_focus()
+  let n = ui_tree_count()
+  let cur = _ui_focus_id
+
+  // Find the next focusable widget after current focus
+  let mut start = cur + 1.0
+  if start < 0.0
+    start = 0.0
+  end
+
+  // Search from start to end
+  let mut i = start
+  while i < n
+    if _ui_visible[i] == 1.0
+      if _ui_enabled[i] == 1.0
+        if ui_is_focusable(_ui_types[i]) == 1.0
+          _ui_focus_id = i
+          let _d = ui_mark_dirty()
+          return 0.0
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Wrap around: search from 0 to start
+  let mut j = 0.0
+  while j < start
+    if j < n
+      if _ui_visible[j] == 1.0
+        if _ui_enabled[j] == 1.0
+          if ui_is_focusable(_ui_types[j]) == 1.0
+            _ui_focus_id = j
+            let _d = ui_mark_dirty()
+            return 0.0
+          end
+        end
+      end
+    end
+    j = j + 1.0
+  end
+
+  return 0.0
+end
+
+// Get current focused widget ID (-1 if none)
+fn ui_get_focus()
+  return _ui_focus_id
+end
+
+// Set focus to a specific widget
+fn ui_set_focus(widget_id)
+  _ui_focus_id = widget_id
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Check if a specific key was pressed this frame
+// key: key name string ("escape", "space", "enter", "a"-"z", "0"-"9", etc.)
+fn ui_key_pressed(key)
+  if _ui_key_down == key
+    return 1.0
+  end
+  return 0.0
+end
+
+// Get the last key pressed this frame (" " if none)
+fn ui_key_down()
+  return _ui_key_down
+end
+
+// Get mouse position
+fn ui_mouse_x()
+  return _ui_input[0]
+end
+
+fn ui_mouse_y()
+  return _ui_input[1]
+end
+
+// Check if mouse button is currently down
+fn ui_mouse_down()
+  return _ui_input[2]
+end
+
+// Check if mouse was just clicked this frame (transition from up to down)
+fn ui_mouse_clicked()
+  if _ui_input[2] == 1.0
+    if _ui_input[3] == 0.0
+      return 1.0
+    end
+  end
+  return 0.0
+end
+
+// Check if right mouse button is currently down
+fn ui_right_down()
+  return _ui_input[4]
+end
+
+// Check if right mouse was just clicked this frame
+fn ui_right_clicked()
+  if _ui_input[4] == 1.0
+    if _ui_input[5] == 0.0
+      return 1.0
+    end
+  end
+  return 0.0
+end

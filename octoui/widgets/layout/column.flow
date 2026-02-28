@@ -1,0 +1,15 @@
+// widgets/layout/column.flow — Vertical Container
+//
+// Arranges children vertically with configurable spacing.
+
+use "../../engine/tree"
+
+// Create a column container
+// parent: parent widget ID (-1 for root)
+// spacing: gap between children in pixels
+// Returns: widget ID
+fn ui_column(parent, spacing)
+  let id = ui_tree_add(UI_COLUMN, parent, 0.0, 0.0, " ")
+  let _s = ui_tree_set_spacing(id, spacing)
+  return id
+end

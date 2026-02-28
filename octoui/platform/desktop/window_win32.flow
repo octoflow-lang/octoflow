@@ -1,0 +1,42 @@
+// platform/desktop/window_win32.flow — Win32 Window Management
+//
+// Wraps OctoFlow's window_open/window_alive/window_close builtins
+// with OctoUI pipeline initialization.
+
+use "../../engine/pipeline"
+
+// Window state array: [0]=width [1]=height [2]=opened
+let mut _ui_win = [0.0, 0.0, 0.0]
+
+// Open a window and initialize the render pipeline
+fn ui_window_open(w, h, title)
+  _ui_win[0] = w
+  _ui_win[1] = h
+  _ui_win[2] = 1.0
+  let _w = window_open(w, h, title)
+  let _p = ui_pipeline_init(w, h)
+  return 0.0
+end
+
+// Check if window is still alive
+fn ui_window_alive()
+  return window_alive()
+end
+
+// Get window width
+fn ui_window_width()
+  return _ui_win[0]
+end
+
+// Get window height
+fn ui_window_height()
+  return _ui_win[1]
+end
+
+// Close window and shut down pipeline
+fn ui_window_close()
+  let _p = ui_pipeline_shutdown()
+  let _w = window_close()
+  _ui_win[2] = 0.0
+  return 0.0
+end

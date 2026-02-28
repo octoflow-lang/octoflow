@@ -1,0 +1,138 @@
+// emit_text_blit.flow — SPIR-V emitter for alpha-blend text blit kernel
+//
+// Reads alpha values from heap (binding 4), blends with text color
+// onto framebuffer (binding 2, planar RGB).
+//
+// Build: octoflow run octoui/kernels/emit_text_blit.flow --allow-read --allow-write --max-iters 1000000
+//
+// Push constants (10 floats):
+//   [0] dest_x       [1] dest_y       [2] tex_w        [3] tex_h
+//   [4] color_r      [5] color_g      [6] color_b      (0-255 range)
+//   [7] screen_w     [8] total_pixels  [9] atlas_offset
+
+use "../../stdlib/compiler/ir"
+
+fn emit_text_blit(out_path)
+  let _n = ir_new()
+  ir_input_count = 5.0
+
+  // ── Blocks ──
+  // Nested structure: entry → body → clip_ok → do_blend
+  // Merge chain: merge_clip → merge_body → exit_blk
+  let entry = ir_block("entry")
+  let body = ir_block("body")
+  let clip_ok = ir_block("clip_ok")
+  let do_blend = ir_block("do_blend")
+  let merge_clip = ir_block("merge_clip")
+  let merge_body = ir_block("merge_body")
+  let exit_blk = ir_block("exit")
+
+  // ── Entry: load GID + push constants ──
+  let gid = ir_load_gid(entry)
+
+  let dest_x = ir_push_const(entry, 0.0)
+  let dest_y = ir_push_const(entry, 1.0)
+  let tex_w = ir_push_const(entry, 2.0)
+  let tex_h = ir_push_const(entry, 3.0)
+  let color_r = ir_push_const(entry, 4.0)
+  let color_g = ir_push_const(entry, 5.0)
+  let color_b = ir_push_const(entry, 6.0)
+  let screen_w = ir_push_const(entry, 7.0)
+  let total_px = ir_push_const(entry, 8.0)
+  let atlas_off = ir_push_const(entry, 9.0)
+
+  // Constants
+  let c0_f = ir_const_f(entry, 0.0)
+  let c1_f = ir_const_f(entry, 1.0)
+  let c255_f = ir_const_f(entry, 255.0)
+
+  // Total threads = tex_w * tex_h
+  let tex_w_u = ir_ftou(entry, tex_w)
+  let tex_h_u = ir_ftou(entry, tex_h)
+  let total_threads = ir_imul(entry, tex_w_u, tex_h_u)
+
+  // Bounds check: gid >= total_threads → exit
+  let oob = ir_ugte(entry, gid, total_threads)
+  let _sm1 = ir_selection_merge(entry, exit_blk)
+  let _br1 = ir_term_cond_branch(entry, oob, exit_blk, body)
+
+  // ── Body: decompose gid → (tx, ty) → (sx, sy) ──
+  let tx = ir_umod(body, gid, tex_w_u)
+  let ty = ir_udiv(body, gid, tex_w_u)
+
+  let tx_f = ir_utof(body, tx)
+  let ty_f = ir_utof(body, ty)
+
+  // Screen position
+  let sx_f = ir_fadd(body, dest_x, tx_f)
+  let sy_f = ir_fadd(body, dest_y, ty_f)
+
+  // Clip check: sx < 0 || sy < 0 || sx >= screen_w || sy >= screen_h
+  let screen_h = ir_fdiv(body, total_px, screen_w)
+  let neg_sx = ir_folt(body, sx_f, c0_f)
+  let neg_sy = ir_folt(body, sy_f, c0_f)
+  let over_x = ir_foge(body, sx_f, screen_w)
+  let over_y = ir_foge(body, sy_f, screen_h)
+  let oob_a = ir_lor(body, neg_sx, neg_sy)
+  let oob_b = ir_lor(body, over_x, over_y)
+  let oob_screen = ir_lor(body, oob_a, oob_b)
+
+  let _sm2 = ir_selection_merge(body, merge_body)
+  let _br2 = ir_term_cond_branch(body, oob_screen, merge_body, clip_ok)
+
+  // ── Clip OK: load alpha from heap, check if non-zero ──
+  let atlas_off_u = ir_ftou(clip_ok, atlas_off)
+  let alpha_idx = ir_iadd(clip_ok, atlas_off_u, gid)
+  let alpha_raw = ir_load_input_at(clip_ok, 4.0, alpha_idx)
+
+  // Skip blend if alpha is zero (transparent)
+  let alpha_zero = ir_fole(clip_ok, alpha_raw, c0_f)
+  let _sm3 = ir_selection_merge(clip_ok, merge_clip)
+  let _br3 = ir_term_cond_branch(clip_ok, alpha_zero, merge_clip, do_blend)
+
+  // ── Do blend: alpha-blend text color onto framebuffer ──
+  let alpha = ir_fdiv(do_blend, alpha_raw, c255_f)
+  let one_minus_a = ir_fsub(do_blend, c1_f, alpha)
+
+  // Framebuffer index
+  let sx_u = ir_ftou(do_blend, sx_f)
+  let sy_u = ir_ftou(do_blend, sy_f)
+  let screen_w_u = ir_ftou(do_blend, screen_w)
+  let fb_idx = ir_iadd(do_blend, ir_imul(do_blend, sy_u, screen_w_u), sx_u)
+
+  // Channel offsets (planar RGB in globals, binding 2)
+  let total_u = ir_ftou(do_blend, total_px)
+  let g_off = ir_iadd(do_blend, total_u, fb_idx)
+  let total2_u = ir_iadd(do_blend, total_u, total_u)
+  let b_off = ir_iadd(do_blend, total2_u, fb_idx)
+
+  // Read existing framebuffer
+  let exist_r = ir_load_input_at(do_blend, 2.0, fb_idx)
+  let exist_g = ir_load_input_at(do_blend, 2.0, g_off)
+  let exist_b = ir_load_input_at(do_blend, 2.0, b_off)
+
+  // Blend: out = exist * (1 - alpha) + color * alpha
+  let blend_r = ir_fadd(do_blend, ir_fmul(do_blend, exist_r, one_minus_a), ir_fmul(do_blend, color_r, alpha))
+  let blend_g = ir_fadd(do_blend, ir_fmul(do_blend, exist_g, one_minus_a), ir_fmul(do_blend, color_g, alpha))
+  let blend_b = ir_fadd(do_blend, ir_fmul(do_blend, exist_b, one_minus_a), ir_fmul(do_blend, color_b, alpha))
+
+  // Write blended values
+  let _sr = ir_buf_store_f(do_blend, 2.0, fb_idx, blend_r)
+  let _sg = ir_buf_store_f(do_blend, 2.0, g_off, blend_g)
+  let _sb = ir_buf_store_f(do_blend, 2.0, b_off, blend_b)
+
+  let _br4 = ir_term_branch(do_blend, merge_clip)
+
+  // ── Merge chain: inner → outer → exit ──
+  let _br5 = ir_term_branch(merge_clip, merge_body)
+  let _br6 = ir_term_branch(merge_body, exit_blk)
+
+  // ── Exit ──
+  let _ret = ir_term_return(exit_blk)
+
+  let _e = ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let _r = emit_text_blit("octoui/kernels/ui_text_blit.spv")
+print("Emitted ui_text_blit.spv")

@@ -1,0 +1,286 @@
+// examples/studio.flow — OctoUI Visual Builder
+//
+// A WYSIWYG-style UI builder demonstrating runtime widget creation.
+// Three-panel layout: widget palette (left), canvas (center), properties (right).
+// Placed widgets are real OctoUI buttons — interactive, not sprites.
+//
+// Controls:
+//   Left panel:  Click widget type to select it
+//   Right panel: Edit label, width, height
+//   ADD:         Place selected type on canvas with current properties
+//   REMOVE:      Remove selected canvas widget
+//   CLEAR:       Remove all canvas widgets
+//   GEN CODE:    Print generated .flow code to terminal
+//   Canvas:      Click a placed widget to select it
+//   Escape:      Quit
+//
+// Run: octoflow run octoui/examples/studio.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/input/button"
+use "../widgets/input/textinput"
+use "../widgets/input/spinbox"
+use "../widgets/data/listview"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../widgets/layout/scroll"
+use "../widgets/layout/statusbar"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// ── Window ──
+let _w = ui_window_open(720.0, 520.0, "OctoUI Studio")
+
+// ── Root ──
+let root = ui_column(-1.0, 0.0)
+let _rp = ui_tree_set_padding(root, 0.0)
+let _rs = ui_tree_set_pos(root, 0.0, 0.0)
+let _rz = ui_tree_set_size(root, 720.0, 520.0)
+
+// ── Toolbar ──
+let toolbar = ui_row(root, 6.0)
+let _tbp = ui_tree_set_padding(toolbar, 4.0)
+let btn_add    = ui_button(toolbar, 80.0, 28.0, "ADD")
+let btn_remove = ui_button(toolbar, 90.0, 28.0, "REMOVE")
+let btn_clear  = ui_button(toolbar, 80.0, 28.0, "CLEAR")
+let btn_gen    = ui_button(toolbar, 120.0, 28.0, "GEN CODE")
+let _sep_tb    = ui_separator(toolbar, 4.0)
+
+// ── Three-panel row ──
+let panels = ui_row(root, 0.0)
+
+// Left panel — Widget palette (160px)
+let left_col = ui_column(panels, 4.0)
+let _lp_pad  = ui_tree_set_padding(left_col, 4.0)
+let _lp_hdr  = ui_text(left_col, "PALETTE", UI_COLOR_PRIMARY)
+let palette  = ui_listview(left_col, 152.0, 17.0, 22.0)
+
+let _pal0  = ui_listview_add(palette, "box")
+let _pal1  = ui_listview_add(palette, "text")
+let _pal2  = ui_listview_add(palette, "button")
+let _pal3  = ui_listview_add(palette, "checkbox")
+let _pal4  = ui_listview_add(palette, "textinput")
+let _pal5  = ui_listview_add(palette, "slider")
+let _pal6  = ui_listview_add(palette, "radio")
+let _pal7  = ui_listview_add(palette, "label")
+let _pal8  = ui_listview_add(palette, "dropdown")
+let _pal9  = ui_listview_add(palette, "toggle")
+let _pal10 = ui_listview_add(palette, "tabs")
+let _pal11 = ui_listview_add(palette, "listbox")
+let _pal12 = ui_listview_add(palette, "spinbox")
+let _pal13 = ui_listview_add(palette, "progress")
+let _pal14 = ui_listview_add(palette, "separator")
+let _pal15 = ui_listview_add(palette, "textarea")
+let _palf  = ui_listview_finalize(palette)
+
+// Center panel — Canvas (370px scroll container)
+let mid_col  = ui_column(panels, 4.0)
+let _mp_pad  = ui_tree_set_padding(mid_col, 4.0)
+let _mp_hdr  = ui_text(mid_col, "CANVAS", UI_COLOR_PRIMARY)
+let canvas   = ui_scroll(mid_col, 370.0, 420.0, 4.0)
+
+// Right panel — Properties (172px)
+let right_col = ui_column(panels, 6.0)
+let _rp2_pad  = ui_tree_set_padding(right_col, 6.0)
+let _rp_hdr   = ui_text(right_col, "PROPERTIES", UI_COLOR_PRIMARY)
+
+let _rp_lt = ui_text(right_col, "TYPE:", UI_COLOR_TEXT_DIM)
+let prop_type_lbl = ui_text(right_col, "button", UI_COLOR_TEXT)
+
+let _rp_ll = ui_text(right_col, "LABEL:", UI_COLOR_TEXT_DIM)
+let prop_label = ui_textinput(right_col, 160.0, 28.0)
+
+let _rp_lw = ui_text(right_col, "WIDTH:", UI_COLOR_TEXT_DIM)
+let prop_w = ui_spinbox(right_col, 160.0, 28.0, 120.0, 20.0, 360.0, 4.0)
+
+let _rp_lh = ui_text(right_col, "HEIGHT:", UI_COLOR_TEXT_DIM)
+let prop_h = ui_spinbox(right_col, 160.0, 28.0, 28.0, 8.0, 200.0, 4.0)
+
+// Status bar
+let sbar       = ui_statusbar(root, 720.0)
+let st_sel     = ui_statusbar_text(sbar, "SELECTED: NONE")
+let st_count   = ui_statusbar_text(sbar, "| 0 WIDGETS")
+let st_status  = ui_statusbar_text(sbar, "| READY")
+
+// ── Studio state (all in arrays — scalar snapshot semantics) ──
+let mut _s_ids     = []        // placed button widget IDs
+let mut _s_types   = []        // type name string for each placed widget
+let mut _s_count   = [0.0]     // total placed widget count
+let mut _s_sel     = [-1.0]    // selected placed index (-1 = none)
+let mut _s_last_pa = [-1.0]    // last palette selection (for change detection)
+
+// ── Initial layout ──
+let _l0   = ui_layout_update()
+let _su0  = ui_scroll_update_all()
+let _lv0  = ui_listview_refresh(palette)
+let _d0   = ui_mark_dirty()
+
+// ── Event loop ──
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _inp  = ui_process_input()
+  let mx    = ui_mouse_x()
+  let my    = ui_mouse_y()
+  let clicked = ui_mouse_clicked()
+  let key   = ui_key_down()
+
+  // Process palette ListView
+  let _lpa  = ui_listview_process(palette, mx, my, clicked, key)
+  let pa_sel = ui_listview_selected(palette)
+
+  // Update type label when palette selection changes
+  if pa_sel != _s_last_pa[0]
+    if pa_sel >= 0.0
+      let type_name = ui_listview_label(palette, pa_sel)
+      let _tu = ui_tree_set_text(prop_type_lbl, type_name)
+      _s_last_pa[0] = pa_sel
+      let _d = ui_mark_dirty()
+    end
+  end
+
+  // ── ADD button ──
+  if ui_button_clicked(btn_add) == 1.0
+    if pa_sel >= 0.0
+      let type_name = ui_listview_label(palette, pa_sel)
+      let lbl_val   = ui_textinput_value(prop_label)
+      let w_val     = ui_spinbox_value(prop_w)
+      let h_val     = ui_spinbox_value(prop_h)
+
+      // Place a button on the canvas (represents the widget visually)
+      let canvas_btn = ui_button(canvas, w_val, h_val, type_name + ": " + lbl_val)
+      push(_s_ids,   canvas_btn)
+      push(_s_types, type_name)
+      _s_count[0] = _s_count[0] + 1.0
+
+      // Select the new widget
+      _s_sel[0] = _s_count[0] - 1.0
+
+      let n_str = str(_s_count[0])
+      let _su_c = ui_statusbar_set_text(st_count,  "| " + n_str + " WIDGETS")
+      let _su_s = ui_statusbar_set_text(st_sel,    "SELECTED: " + type_name + " #" + n_str)
+      let _su_t = ui_statusbar_set_text(st_status, "| ADDED " + type_name)
+
+      let _l   = ui_layout_update()
+      let _scu = ui_scroll_update_all()
+      let _lv  = ui_listview_refresh(palette)
+      let _d   = ui_mark_dirty()
+    end
+  end
+
+  // ── REMOVE button ──
+  if ui_button_clicked(btn_remove) == 1.0
+    if _s_sel[0] >= 0.0
+      let si = int(_s_sel[0])
+      let rem_id = _s_ids[si]
+      let _hid  = ui_tree_set_visible(rem_id, 0.0)
+      _s_count[0] = _s_count[0] - 1.0
+      _s_sel[0]   = -1.0
+
+      let n_str = str(_s_count[0])
+      let _su_s = ui_statusbar_set_text(st_sel,    "SELECTED: NONE")
+      let _su_c = ui_statusbar_set_text(st_count,  "| " + n_str + " WIDGETS")
+      let _su_t = ui_statusbar_set_text(st_status, "| REMOVED")
+
+      let _l   = ui_layout_update()
+      let _scu = ui_scroll_update_all()
+      let _d   = ui_mark_dirty()
+    end
+  end
+
+  // ── CLEAR button ──
+  if ui_button_clicked(btn_clear) == 1.0
+    let n = len(_s_ids)
+    let mut ci = 0.0
+    while ci < n
+      let cid = _s_ids[ci]
+      let _hid = ui_tree_set_visible(cid, 0.0)
+      ci = ci + 1.0
+    end
+    _s_count[0] = 0.0
+    _s_sel[0]   = -1.0
+
+    let _su_s = ui_statusbar_set_text(st_sel,    "SELECTED: NONE")
+    let _su_c = ui_statusbar_set_text(st_count,  "| 0 WIDGETS")
+    let _su_t = ui_statusbar_set_text(st_status, "| CANVAS CLEARED")
+
+    let _l   = ui_layout_update()
+    let _scu = ui_scroll_update_all()
+    let _d   = ui_mark_dirty()
+  end
+
+  // ── GEN CODE button ──
+  if ui_button_clicked(btn_gen) == 1.0
+    print(" ")
+    print("// --- OctoUI Studio Generated Code ---")
+    print("// add: use widgets/layout/column and your widget imports")
+    print("let root = ui_column(parent, 8.0)")
+    let n = len(_s_ids)
+    let mut gi = 0.0
+    while gi < n
+      if _ui_visible[_s_ids[gi]] == 1.0
+        let type_nm = _s_types[gi]
+        let bw = _ui_w[_s_ids[gi]]
+        let bh = _ui_h[_s_ids[gi]]
+        let gi_s  = str(gi)
+        let bw_s  = str(bw)
+        let bh_s  = str(bh)
+        let pline = "let _w" + gi_s + " = ui_" + type_nm + "(root, " + bw_s + ".0, " + bh_s + ".0)"
+        print("{pline}")
+      end
+      gi = gi + 1.0
+    end
+    print("// --- end generated code ---")
+    let _su_t = ui_statusbar_set_text(st_status, "| CODE PRINTED TO TERMINAL")
+    let _d    = ui_mark_dirty()
+  end
+
+  // ── Canvas click: check each placed button ──
+  if clicked == 1.0
+    let n = len(_s_ids)
+    let mut bi = 0.0
+    while bi < n
+      let bid = _s_ids[bi]
+      if _ui_visible[bid] == 1.0
+        if ui_button_clicked(bid) == 1.0
+          _s_sel[0] = bi
+          let type_nm = _s_types[bi]
+          let sel_str = str(bi + 1.0)
+          let _su_s = ui_statusbar_set_text(st_sel, "SELECTED: " + type_nm + " #" + sel_str)
+          let _d = ui_mark_dirty()
+        end
+      end
+      bi = bi + 1.0
+    end
+  end
+
+  // ── Render if dirty ──
+  if ui_is_dirty() == 1.0
+    let _l   = ui_layout_update()
+    let _scu = ui_scroll_update_all()
+    let _lv  = ui_listview_refresh(palette)
+    let _r   = ui_pipeline_render()
+    let _cd  = ui_clear_dirty()
+  else
+    let _p   = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _wc = ui_window_close()
+print("OctoUI Studio closed.")

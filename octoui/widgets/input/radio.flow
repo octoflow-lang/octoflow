@@ -1,0 +1,149 @@
+// widgets/input/radio.flow — Radio Button Group Widget
+//
+// Mutually exclusive selection within a group. Each radio button is a
+// small box (filled when selected) with a text label.
+//
+// Usage:
+//   let group = ui_radio_group(parent)
+//   let _r1 = ui_radio(group, "OPTION A")
+//   let _r2 = ui_radio(group, "OPTION B")
+//   let _r3 = ui_radio(group, "OPTION C")
+//   let selected = ui_radio_selected(group)  // 0, 1, or 2
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// Radio group data: parallel arrays indexed by group column ID
+let mut _ui_radio_group_id = []
+let mut _ui_radio_selected = []
+let mut _ui_radio_count = []
+
+// Radio button IDs within each group
+let mut _ui_radio_btns = []
+let mut _ui_radio_btn_group = []
+let mut _ui_radio_btn_index = []
+
+// Create a radio group container (column layout)
+// parent: parent widget ID
+// Returns: group widget ID (a column container)
+fn ui_radio_group(parent)
+  let group = ui_tree_add(UI_COLUMN, parent, 0.0, 0.0, " ")
+  let _gs = ui_tree_set_spacing(group, 6.0)
+
+  // Track group
+  let needed = group + 1.0
+  while len(_ui_radio_group_id) < needed
+    push(_ui_radio_group_id, -1.0)
+    push(_ui_radio_selected, 0.0)
+    push(_ui_radio_count, 0.0)
+  end
+  _ui_radio_group_id[group] = group
+  _ui_radio_selected[group] = 0.0
+  _ui_radio_count[group] = 0.0
+
+  return group
+end
+
+// Add a radio button to a group
+// group: group widget ID from ui_radio_group()
+// label: text label
+// Returns: row widget ID for this radio option
+fn ui_radio(group, label)
+  // Create row: radio dot + label
+  let row = ui_tree_add(UI_ROW, group, 0.0, 18.0, " ")
+  let _rs = ui_tree_set_spacing(row, 8.0)
+
+  // Radio dot (12x12 box)
+  let dot = ui_tree_add(UI_RADIO, row, 12.0, 12.0, " ")
+
+  // Get this button's index within the group
+  let needed_g = group + 1.0
+  while len(_ui_radio_count) < needed_g
+    push(_ui_radio_group_id, -1.0)
+    push(_ui_radio_selected, 0.0)
+    push(_ui_radio_count, 0.0)
+  end
+  let btn_idx = _ui_radio_count[group]
+  _ui_radio_count[group] = btn_idx + 1.0
+
+  // Track this button
+  push(_ui_radio_btns, dot)
+  push(_ui_radio_btn_group, group)
+  push(_ui_radio_btn_index, btn_idx)
+
+  // Set initial visual
+  if btn_idx == 0.0
+    // First button is selected by default
+    let _sc = ui_tree_set_color_themed(dot, UI_COLOR_PRIMARY)
+  else
+    let _sc = ui_tree_set_color_themed(dot, UI_COLOR_BORDER)
+  end
+
+  // Label text
+  let lbl = ui_tree_add(UI_TEXT, row, ui_text_width(label, 16.0), 16.0, label)
+  let _tc = ui_tree_set_color_themed(lbl, UI_COLOR_TEXT)
+
+  return row
+end
+
+// Get currently selected index in a radio group (0-based)
+fn ui_radio_selected(group)
+  if group < len(_ui_radio_selected)
+    return _ui_radio_selected[group]
+  end
+  return 0.0
+end
+
+// Set selected radio button by index
+fn ui_radio_set(group, index)
+  let needed = group + 1.0
+  while len(_ui_radio_selected) < needed
+    push(_ui_radio_group_id, -1.0)
+    push(_ui_radio_selected, 0.0)
+    push(_ui_radio_count, 0.0)
+  end
+  _ui_radio_selected[group] = index
+  let _u = ui_radio_update_visuals(group)
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Handle click on a radio dot — select it and deselect others in group
+fn ui_radio_click(dot_id)
+  // Find which button was clicked
+  let n = len(_ui_radio_btns)
+  let mut i = 0.0
+  while i < n
+    if _ui_radio_btns[i] == dot_id
+      let group = _ui_radio_btn_group[i]
+      let index = _ui_radio_btn_index[i]
+      _ui_radio_selected[group] = index
+      let _u = ui_radio_update_visuals(group)
+      let _d = ui_mark_dirty()
+      return 0.0
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Update all radio button visuals in a group
+fn ui_radio_update_visuals(group)
+  let selected = _ui_radio_selected[group]
+  let n = len(_ui_radio_btns)
+  let mut i = 0.0
+  while i < n
+    if _ui_radio_btn_group[i] == group
+      let dot = _ui_radio_btns[i]
+      let idx = _ui_radio_btn_index[i]
+      if idx == selected
+        let _sc = ui_tree_set_color_themed(dot, UI_COLOR_PRIMARY)
+      else
+        let _sc = ui_tree_set_color_themed(dot, UI_COLOR_BORDER)
+      end
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end

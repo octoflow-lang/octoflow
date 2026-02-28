@@ -1,0 +1,160 @@
+// gui_image_viewer.flow — Image viewer with zoom and info panel
+//
+// Demonstrates: canvas, buffer_view, slider zoom control, mouse
+// interaction, dynamic label updates, panel layout.
+//
+// Since file dialogs are not yet available, this generates a procedural
+// image (gradient + shapes) and displays it with zoom controls.
+//
+// Run: octoflow run gui_image_viewer.flow
+
+use "gui/gui"
+use "gui/canvas"
+use "gui/buffer_view"
+use "gui/layout"
+
+gui_init(700, 500, "Image Viewer")
+
+// Toolbar
+let h = hstack(10, 10, 10)
+let zoom_lbl = hstack_label(h, "Zoom:")
+let zoom_sld = hstack_slider(h, 200, 10, 200, 100)
+let zoom_val = hstack_label(h, "100%")
+
+// Main canvas
+let cvs = gui_canvas(10, 50, 480, 430)
+
+// Info panel
+let info_panel = gui_panel(500, 50, 190, 430)
+let _il1 = gui_label(510, 60, "Image Info")
+let _sep = gui_separator(510, 80, 170)
+let dim_lbl  = gui_label(510, 95, "Size: 64x64")
+let zoom_info = gui_label(510, 115, "Zoom: 100%")
+let pixel_lbl = gui_label(510, 135, "Pixel: --")
+let mode_lbl = gui_label(510, 165, "Mode: Gradient")
+
+// Mode selector
+let mode_dd = gui_dropdown(510, 195, 170)
+let _m1 = gui_dropdown_add(mode_dd, "Gradient")
+let _m2 = gui_dropdown_add(mode_dd, "Circles")
+let _m3 = gui_dropdown_add(mode_dd, "Checker")
+
+// Generate procedural image (64x64)
+let img_w = 64.0
+let img_h = 64.0
+let mut img_r = []
+let mut img_g = []
+let mut img_b = []
+
+fn generate_gradient()
+  let mut y = 0.0
+  while y < 64.0
+    let mut x = 0.0
+    while x < 64.0
+      let idx = int(y * 64.0 + x)
+      img_r[idx] = x * 4.0
+      img_g[idx] = y * 4.0
+      img_b[idx] = 128.0
+      x = x + 1.0
+    end
+    y = y + 1.0
+  end
+  return 0.0
+end
+
+fn generate_circles()
+  let mut y = 0.0
+  while y < 64.0
+    let mut x = 0.0
+    while x < 64.0
+      let idx = int(y * 64.0 + x)
+      let dx = x - 32.0
+      let dy = y - 32.0
+      let dist = sqrt(dx * dx + dy * dy)
+      if dist < 15.0
+        img_r[idx] = 255.0
+        img_g[idx] = 80.0
+        img_b[idx] = 80.0
+      elif dist < 25.0
+        img_r[idx] = 80.0
+        img_g[idx] = 200.0
+        img_b[idx] = 80.0
+      else
+        img_r[idx] = 40.0
+        img_g[idx] = 40.0
+        img_b[idx] = 60.0
+      end
+      x = x + 1.0
+    end
+    y = y + 1.0
+  end
+  return 0.0
+end
+
+fn generate_checker()
+  let mut y = 0.0
+  while y < 64.0
+    let mut x = 0.0
+    while x < 64.0
+      let idx = int(y * 64.0 + x)
+      let cx = floor(x / 8.0) % 2.0
+      let cy = floor(y / 8.0) % 2.0
+      if cx == cy
+        img_r[idx] = 220.0
+        img_g[idx] = 220.0
+        img_b[idx] = 220.0
+      else
+        img_r[idx] = 40.0
+        img_g[idx] = 40.0
+        img_b[idx] = 40.0
+      end
+      x = x + 1.0
+    end
+    y = y + 1.0
+  end
+  return 0.0
+end
+
+// Allocate image arrays
+let mut pi = 0.0
+while pi < 64.0 * 64.0
+  push(img_r, 0.0)
+  push(img_g, 0.0)
+  push(img_b, 0.0)
+  pi = pi + 1.0
+end
+
+// Initial gradient
+let _gen = generate_gradient()
+let _draw = buffer_view_image(cvs, img_r, img_g, img_b, img_w, img_h)
+
+let mut current_mode = 0.0
+
+while gui_running() == 1.0
+  gui_update()
+
+  // Mode change
+  if gui_clicked(mode_dd) == 1.0
+    let sel = gui_dropdown_selected(mode_dd)
+    if sel != current_mode
+      current_mode = sel
+      if sel == 0.0
+        let _g = generate_gradient()
+        gui_set_text(mode_lbl, "Mode: Gradient")
+      elif sel == 1.0
+        let _g = generate_circles()
+        gui_set_text(mode_lbl, "Mode: Circles")
+      elif sel == 2.0
+        let _g = generate_checker()
+        gui_set_text(mode_lbl, "Mode: Checker")
+      end
+      let _d = buffer_view_image(cvs, img_r, img_g, img_b, img_w, img_h)
+    end
+  end
+
+  // Zoom display update
+  let zoom = gui_slider_value(zoom_sld)
+  let zoom_pct = floor(zoom)
+  gui_set_text(zoom_val, str(zoom_pct) + "%")
+  gui_set_text(zoom_info, "Zoom: " + str(zoom_pct) + "%")
+end

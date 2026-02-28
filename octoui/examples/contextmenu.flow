@@ -1,0 +1,154 @@
+// examples/contextmenu.flow — Right-Click Context Menu Demo
+//
+// Three colored boxes, each with a different context menu.
+// Right-click a box to see its menu. Left-click an item to act.
+//
+// Controls:
+//   Right-click  — Open context menu on a box
+//   Left-click   — Select menu item or click outside to close
+//   Escape       — Close context menu / Quit
+//
+// Run: octoflow run octoui/examples/contextmenu.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/input/button"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../widgets/layout/menubar"
+use "../widgets/layout/statusbar"
+use "../widgets/input/contextmenu"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(480.0, 360.0, "OctoUI Context Menu Demo")
+
+// Root layout
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 20.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 480.0, 360.0)
+
+// Title
+let title = ui_text(root, "RIGHT-CLICK A BOX", UI_COLOR_PRIMARY)
+
+// Box row
+let box_row = ui_row(root, 16.0)
+
+// Three colored boxes
+let box1 = ui_box(box_row, 120.0, 80.0, UI_COLOR_PRIMARY)
+let box2 = ui_box(box_row, 120.0, 80.0, UI_COLOR_HOVER)
+let box3 = ui_box(box_row, 120.0, 80.0, UI_COLOR_ACTIVE)
+
+// Action display
+let action_text = ui_text(root, "ACTION: NONE", UI_COLOR_TEXT)
+
+// Status bar
+let sbar = ui_statusbar(root, 480.0)
+let st = ui_statusbar_text(sbar, "RIGHT-CLICK A BOX")
+
+// Create context menus
+let ctx1 = ui_contextmenu()
+let ci_color = ui_contextmenu_item(ctx1, "CHANGE COLOR")
+let ci_delete = ui_contextmenu_item(ctx1, "DELETE")
+
+let ctx2 = ui_contextmenu()
+let ci_resize = ui_contextmenu_item(ctx2, "RESIZE")
+let ci_dup = ui_contextmenu_item(ctx2, "DUPLICATE")
+
+let ctx3 = ui_contextmenu()
+let ci_props = ui_contextmenu_item(ctx3, "PROPERTIES")
+let ci_help = ui_contextmenu_item(ctx3, "HELP")
+
+// Register context menus on boxes
+let _r1 = ui_contextmenu_register(box1, ctx1)
+let _r2 = ui_contextmenu_register(box2, ctx2)
+let _r3 = ui_contextmenu_register(box3, ctx3)
+
+// Initial layout
+let _l = ui_layout_update()
+
+// Position status bar at bottom
+_ui_y[sbar] = 338.0
+_ui_x[sbar] = 0.0
+
+// Initialize pipeline
+let _pi2 = ui_pipeline_init(480.0, 360.0)
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  let _inp = ui_process_input()
+
+  let mx = ui_mouse_x()
+  let my = ui_mouse_y()
+  let lclicked = ui_mouse_clicked()
+  let rclicked = ui_right_clicked()
+
+  // Process context menus
+  let _cp = ui_contextmenu_process(mx, my, rclicked, lclicked)
+
+  // Check context menu item clicks
+  if ui_ctx_item_clicked(ci_color) == 1.0
+    let _at = ui_tree_set_text(action_text, "ACTION: CHANGE COLOR (BOX 1)")
+    let _st2 = ui_statusbar_set_text(st, "COLOR CHANGED")
+    let _l2 = ui_layout_update()
+  end
+  if ui_ctx_item_clicked(ci_delete) == 1.0
+    let _at = ui_tree_set_text(action_text, "ACTION: DELETE (BOX 1)")
+    let _st2 = ui_statusbar_set_text(st, "DELETED")
+    let _l2 = ui_layout_update()
+  end
+  if ui_ctx_item_clicked(ci_resize) == 1.0
+    let _at = ui_tree_set_text(action_text, "ACTION: RESIZE (BOX 2)")
+    let _st2 = ui_statusbar_set_text(st, "RESIZED")
+    let _l2 = ui_layout_update()
+  end
+  if ui_ctx_item_clicked(ci_dup) == 1.0
+    let _at = ui_tree_set_text(action_text, "ACTION: DUPLICATE (BOX 2)")
+    let _st2 = ui_statusbar_set_text(st, "DUPLICATED")
+    let _l2 = ui_layout_update()
+  end
+  if ui_ctx_item_clicked(ci_props) == 1.0
+    let _at = ui_tree_set_text(action_text, "ACTION: PROPERTIES (BOX 3)")
+    let _st2 = ui_statusbar_set_text(st, "SHOWING PROPERTIES")
+    let _l2 = ui_layout_update()
+  end
+  if ui_ctx_item_clicked(ci_help) == 1.0
+    let _at = ui_tree_set_text(action_text, "ACTION: HELP (BOX 3)")
+    let _st2 = ui_statusbar_set_text(st, "HELP OPENED")
+    let _l2 = ui_layout_update()
+  end
+
+  // Escape quits (only when no context menu is open)
+  if _ui_ctx_open_idx < 0.0
+    if ui_key_pressed("escape") == 1.0
+      running = 0.0
+    end
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _ps = ui_pipeline_shutdown()
+let _wc = ui_window_close()
+print("Context menu example finished.")

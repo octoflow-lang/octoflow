@@ -1,0 +1,483 @@
+// widgets/data/table.flow — Data Table Widget
+//
+// A virtual-list data table with fixed header and scrollable body.
+// Columns are defined one at a time, rows are added cell by cell.
+// Only visible rows have render widgets (virtual list pattern).
+//
+// Usage:
+//   let tbl = ui_table(parent, 200.0, 24.0)
+//   let _c1 = ui_table_column(tbl, "NAME", 120.0)
+//   let _c2 = ui_table_column(tbl, "AGE", 60.0)
+//   let _fin = ui_table_finalize(tbl)
+//
+//   let _c = ui_table_cell(tbl, "Alice")
+//   let _c = ui_table_cell(tbl, "30")    // row 0 complete
+//   let _c = ui_table_cell(tbl, "Bob")
+//   let _c = ui_table_cell(tbl, "25")    // row 1 complete
+//
+//   // After layout:  let _r = ui_table_refresh_all()
+//   // In event loop: let _p = ui_table_process(mx, my, clicked)
+//   // Selected row:  let sel = ui_table_selected_row(tbl)
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// UI_TABLE defined in tree.flow
+// --- Registry arrays (one entry per table) ---
+let mut _ui_tbl_ids = []
+let mut _ui_tbl_ncols = []
+let mut _ui_tbl_nrows = []
+let mut _ui_tbl_selected = []
+let mut _ui_tbl_scroll = []
+let mut _ui_tbl_row_h = []
+let mut _ui_tbl_body_h = []
+let mut _ui_tbl_vis_count = []
+let mut _ui_tbl_pending = []
+let mut _ui_tbl_hdr = []
+
+// --- Column widths (flat, all tables share) ---
+let mut _ui_tbl_col_w = []
+let mut _ui_tbl_col_off = []
+
+// --- Header text widget IDs (flat, shares col_off) ---
+let mut _ui_tbl_hdr_txt = []
+
+// --- Cell data strings (flat, all tables share) ---
+let mut _ui_tbl_data = []
+let mut _ui_tbl_data_off = []
+
+// --- Display row BG widget IDs (flat) ---
+let mut _ui_tbl_disp_bg = []
+let mut _ui_tbl_disp_off = []
+
+// --- Display cell TEXT widget IDs (flat, vis_count * ncols per table) ---
+let mut _ui_tbl_disp_txt = []
+let mut _ui_tbl_dtxt_off = []
+
+// --- Find table index from container widget ID ---
+fn ui_tbl_find(table_id)
+  let n = len(_ui_tbl_ids)
+  let mut i = 0.0
+  while i < n
+    if _ui_tbl_ids[i] == table_id
+      return i
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+// --- Create a data table ---
+// parent: parent widget ID
+// body_h: height of scrollable body area in pixels
+// row_h: height of each row (header and data rows)
+// Returns: table container widget ID
+fn ui_table(parent, body_h, row_h)
+  let total_h = row_h + body_h
+  let container = ui_tree_add(UI_TABLE, parent, 0.0, total_h, " ")
+  let _c = ui_tree_set_color_themed(container, UI_COLOR_BORDER)
+
+  // Header background
+  let hdr = ui_tree_add(UI_BOX, container, 0.0, row_h, " ")
+  let _hc = ui_tree_set_color_themed(hdr, UI_COLOR_SURFACE)
+
+  // Register
+  push(_ui_tbl_ids, container)
+  push(_ui_tbl_ncols, 0.0)
+  push(_ui_tbl_nrows, 0.0)
+  push(_ui_tbl_selected, -1.0)
+  push(_ui_tbl_scroll, 0.0)
+  push(_ui_tbl_row_h, row_h)
+  push(_ui_tbl_body_h, body_h)
+  push(_ui_tbl_vis_count, floor(body_h / row_h))
+  push(_ui_tbl_pending, 0.0)
+  push(_ui_tbl_hdr, hdr)
+  push(_ui_tbl_col_off, len(_ui_tbl_col_w))
+  push(_ui_tbl_data_off, len(_ui_tbl_data))
+  push(_ui_tbl_disp_off, len(_ui_tbl_disp_bg))
+  push(_ui_tbl_dtxt_off, len(_ui_tbl_disp_txt))
+
+  return container
+end
+
+// --- Add a column to the table ---
+// table_id: container widget ID from ui_table()
+// label: column header text
+// width: column width in pixels
+fn ui_table_column(table_id, label, width)
+  let ti = ui_tbl_find(table_id)
+  if ti < 0.0
+    return -1.0
+  end
+
+  // Record width
+  push(_ui_tbl_col_w, width)
+  _ui_tbl_ncols[ti] = _ui_tbl_ncols[ti] + 1.0
+
+  // Create header text widget (child of container, positioned in refresh)
+  let row_h = _ui_tbl_row_h[ti]
+  let txt = ui_tree_add(UI_TEXT, table_id, width, row_h, label)
+  let _tc = ui_tree_set_color_themed(txt, UI_COLOR_TEXT)
+  push(_ui_tbl_hdr_txt, txt)
+
+  return 0.0
+end
+
+// --- Finalize table: compute width, create display rows ---
+// Call after adding all columns, before adding cell data.
+fn ui_table_finalize(table_id)
+  let ti = ui_tbl_find(table_id)
+  if ti < 0.0
+    return -1.0
+  end
+
+  let ncols = _ui_tbl_ncols[ti]
+  let vis = _ui_tbl_vis_count[ti]
+  let row_h = _ui_tbl_row_h[ti]
+  let col_off = _ui_tbl_col_off[ti]
+
+  // Compute total width
+  let mut total_w = 0.0
+  let mut ci = 0.0
+  while ci < ncols
+    total_w = total_w + _ui_tbl_col_w[col_off + ci]
+    ci = ci + 1.0
+  end
+
+  // Set container and header width
+  _ui_w[table_id] = total_w
+  let hdr = _ui_tbl_hdr[ti]
+  _ui_w[hdr] = total_w
+
+  // Create display rows (virtual list)
+  let mut ri = 0.0
+  while ri < vis
+    // Row background box
+    let bg = ui_tree_add(UI_BOX, table_id, total_w, row_h, " ")
+    let _bc = ui_tree_set_color_themed(bg, UI_COLOR_BG)
+    _ui_visible[bg] = 0.0
+    push(_ui_tbl_disp_bg, bg)
+
+    // Cell text widgets for this row
+    let mut cj = 0.0
+    while cj < ncols
+      let cw = _ui_tbl_col_w[col_off + cj]
+      let cell = ui_tree_add(UI_TEXT, table_id, cw, row_h, " ")
+      let _cc = ui_tree_set_color_themed(cell, UI_COLOR_TEXT)
+      _ui_visible[cell] = 0.0
+      push(_ui_tbl_disp_txt, cell)
+      cj = cj + 1.0
+    end
+
+    ri = ri + 1.0
+  end
+
+  return 0.0
+end
+
+// --- Add a cell value ---
+// Cells are added left-to-right, top-to-bottom.
+// When ncols cells are added, a row is complete automatically.
+fn ui_table_cell(table_id, text)
+  let ti = ui_tbl_find(table_id)
+  if ti < 0.0
+    return -1.0
+  end
+
+  push(_ui_tbl_data, text)
+  let col = _ui_tbl_pending[ti]
+  let ncols = _ui_tbl_ncols[ti]
+  let next_col = col + 1.0
+
+  if next_col >= ncols
+    // Row complete
+    _ui_tbl_nrows[ti] = _ui_tbl_nrows[ti] + 1.0
+    _ui_tbl_pending[ti] = 0.0
+  else
+    _ui_tbl_pending[ti] = next_col
+  end
+
+  return 0.0
+end
+
+// --- Refresh display rows for one table ---
+// Positions all internal widgets based on container position and scroll.
+fn ui_table_refresh(table_id)
+  let ti = ui_tbl_find(table_id)
+  if ti < 0.0
+    return -1.0
+  end
+
+  let cx = _ui_x[table_id]
+  let cy = _ui_y[table_id]
+  let ncols = _ui_tbl_ncols[ti]
+  let nrows = _ui_tbl_nrows[ti]
+  let row_h = _ui_tbl_row_h[ti]
+  let vis = _ui_tbl_vis_count[ti]
+  let scroll = _ui_tbl_scroll[ti]
+  let selected = _ui_tbl_selected[ti]
+  let col_off = _ui_tbl_col_off[ti]
+  let data_off = _ui_tbl_data_off[ti]
+  let disp_off = _ui_tbl_disp_off[ti]
+  let dtxt_off = _ui_tbl_dtxt_off[ti]
+
+  // Position header background
+  let hdr = _ui_tbl_hdr[ti]
+  _ui_x[hdr] = cx
+  _ui_y[hdr] = cy
+  _ui_dirty[hdr] = 1.0
+
+  // Position header text cells at cumulative x offsets
+  let mut hx = cx
+  let mut ci = 0.0
+  while ci < ncols
+    let htxt = _ui_tbl_hdr_txt[col_off + ci]
+    _ui_x[htxt] = hx + 4.0
+    _ui_y[htxt] = cy + 2.0
+    _ui_dirty[htxt] = 1.0
+    hx = hx + _ui_tbl_col_w[col_off + ci]
+    ci = ci + 1.0
+  end
+
+  // Position display rows
+  let body_y = cy + row_h
+  let mut ri = 0.0
+  while ri < vis
+    let logical_row = scroll + ri
+    let bg = _ui_tbl_disp_bg[disp_off + ri]
+
+    if logical_row < nrows
+      // Show this display row
+      _ui_visible[bg] = 1.0
+      _ui_x[bg] = cx
+      _ui_y[bg] = body_y + ri * row_h
+      _ui_dirty[bg] = 1.0
+
+      // Background color: selected=PRIMARY, else alternating BG/SURFACE
+      if logical_row == selected
+        let _sc = ui_tree_set_color_themed(bg, UI_COLOR_PRIMARY)
+      else
+        let row_mod = logical_row - floor(logical_row / 2.0) * 2.0
+        if row_mod == 0.0
+          let _sc = ui_tree_set_color_themed(bg, UI_COLOR_BG)
+        else
+          let _sc = ui_tree_set_color_themed(bg, UI_COLOR_SURFACE)
+        end
+      end
+
+      // Position and update cell texts
+      let mut tx = cx
+      let mut cj = 0.0
+      while cj < ncols
+        let cell_idx = dtxt_off + ri * ncols + cj
+        let cell = _ui_tbl_disp_txt[cell_idx]
+        _ui_visible[cell] = 1.0
+        _ui_x[cell] = tx + 4.0
+        _ui_y[cell] = body_y + ri * row_h + 2.0
+        _ui_dirty[cell] = 1.0
+
+        // Set text content from data
+        let data_idx = data_off + logical_row * ncols + cj
+        if data_idx < len(_ui_tbl_data)
+          _ui_texts[cell] = _ui_tbl_data[data_idx]
+          // Update text width from content length
+          let content = _ui_tbl_data[data_idx]
+          _ui_w[cell] = ui_text_width(content, 16.0)
+        end
+
+        tx = tx + _ui_tbl_col_w[col_off + cj]
+        cj = cj + 1.0
+      end
+    else
+      // No data for this display row — hide it
+      _ui_visible[bg] = 0.0
+
+      let mut cj = 0.0
+      while cj < ncols
+        let cell_idx = dtxt_off + ri * ncols + cj
+        let cell = _ui_tbl_disp_txt[cell_idx]
+        _ui_visible[cell] = 0.0
+        cj = cj + 1.0
+      end
+    end
+
+    ri = ri + 1.0
+  end
+
+  return 0.0
+end
+
+// --- Refresh all tables ---
+// Call after layout pass.
+fn ui_table_refresh_all()
+  let n = len(_ui_tbl_ids)
+  let mut i = 0.0
+  while i < n
+    let _r = ui_table_refresh(_ui_tbl_ids[i])
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// --- Get selected row index ---
+// Returns -1.0 if no row is selected.
+fn ui_table_selected_row(table_id)
+  let ti = ui_tbl_find(table_id)
+  if ti < 0.0
+    return -1.0
+  end
+  return _ui_tbl_selected[ti]
+end
+
+// --- Process mouse clicks on table rows ---
+fn ui_table_process(mx, my, clicked)
+  if clicked != 1.0
+    return 0.0
+  end
+
+  let n = len(_ui_tbl_ids)
+  let mut i = 0.0
+  while i < n
+    let table_id = _ui_tbl_ids[i]
+    let vis = _ui_tbl_vis_count[i]
+    let disp_off = _ui_tbl_disp_off[i]
+    let scroll = _ui_tbl_scroll[i]
+    let nrows = _ui_tbl_nrows[i]
+
+    let mut ri = 0.0
+    while ri < vis
+      let logical_row = scroll + ri
+      if logical_row < nrows
+        let bg = _ui_tbl_disp_bg[disp_off + ri]
+        if _ui_visible[bg] == 1.0
+          // Hit test
+          let mut hit = 0.0
+          if mx >= _ui_x[bg]
+            if mx < _ui_x[bg] + _ui_w[bg]
+              if my >= _ui_y[bg]
+                if my < _ui_y[bg] + _ui_h[bg]
+                  hit = 1.0
+                end
+              end
+            end
+          end
+          if hit == 1.0
+            if _ui_tbl_selected[i] == logical_row
+              _ui_tbl_selected[i] = -1.0
+            else
+              _ui_tbl_selected[i] = logical_row
+            end
+            let _r = ui_table_refresh(table_id)
+            let _d = ui_mark_dirty()
+            return 0.0
+          end
+        end
+      end
+      ri = ri + 1.0
+    end
+
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// --- Ensure a row is visible (scroll if needed) ---
+fn ui_tbl_ensure_visible(ti, row)
+  let scroll = _ui_tbl_scroll[ti]
+  let vis = _ui_tbl_vis_count[ti]
+
+  if row < scroll
+    _ui_tbl_scroll[ti] = row
+  end
+  if row >= scroll + vis
+    _ui_tbl_scroll[ti] = row - vis + 1.0
+  end
+  return 0.0
+end
+
+// --- Keyboard navigation for focused table ---
+// Call from event loop after key detection.
+fn ui_table_process_key(key)
+  let focus = _ui_focus_id
+  if focus < 0.0
+    return 0.0
+  end
+
+  let ti = ui_tbl_find(focus)
+  if ti < 0.0
+    return 0.0
+  end
+
+  let nrows = _ui_tbl_nrows[ti]
+  if nrows == 0.0
+    return 0.0
+  end
+
+  let selected = _ui_tbl_selected[ti]
+  let vis = _ui_tbl_vis_count[ti]
+  let table_id = _ui_tbl_ids[ti]
+
+  if key == "down"
+    let mut next = selected + 1.0
+    if selected < 0.0
+      next = 0.0
+    end
+    if next >= nrows
+      next = nrows - 1.0
+    end
+    _ui_tbl_selected[ti] = next
+    let _s = ui_tbl_ensure_visible(ti, next)
+    let _r = ui_table_refresh(table_id)
+    let _d = ui_mark_dirty()
+  end
+
+  if key == "up"
+    let mut prev = selected - 1.0
+    if prev < 0.0
+      prev = 0.0
+    end
+    _ui_tbl_selected[ti] = prev
+    let _s = ui_tbl_ensure_visible(ti, prev)
+    let _r = ui_table_refresh(table_id)
+    let _d = ui_mark_dirty()
+  end
+
+  if key == "home"
+    _ui_tbl_selected[ti] = 0.0
+    _ui_tbl_scroll[ti] = 0.0
+    let _r = ui_table_refresh(table_id)
+    let _d = ui_mark_dirty()
+  end
+
+  if key == "end"
+    _ui_tbl_selected[ti] = nrows - 1.0
+    let _s = ui_tbl_ensure_visible(ti, nrows - 1.0)
+    let _r = ui_table_refresh(table_id)
+    let _d = ui_mark_dirty()
+  end
+
+  if key == "pagedown"
+    let mut next = selected + vis
+    if next >= nrows
+      next = nrows - 1.0
+    end
+    _ui_tbl_selected[ti] = next
+    let _s = ui_tbl_ensure_visible(ti, next)
+    let _r = ui_table_refresh(table_id)
+    let _d = ui_mark_dirty()
+  end
+
+  if key == "pageup"
+    let mut prev = selected - vis
+    if prev < 0.0
+      prev = 0.0
+    end
+    _ui_tbl_selected[ti] = prev
+    let _s = ui_tbl_ensure_visible(ti, prev)
+    let _r = ui_table_refresh(table_id)
+    let _d = ui_mark_dirty()
+  end
+
+  return 0.0
+end

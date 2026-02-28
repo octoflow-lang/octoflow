@@ -1,0 +1,42 @@
+// test_string.flow — Tests for stdlib/string/string.flow
+use "string"
+
+fn test_str_count()
+  let r = str_count("hello", "l")
+  assert(r == 2.0, "str_count('hello','l') should be 2")
+  assert(str_count("aaa", "a") == 3.0, "str_count('aaa','a') should be 3")
+  assert(str_count("", "x") == 0.0, "str_count('','x') should be 0")
+  assert(str_count("abc", "") == 0.0, "str_count with empty sub should be 0")
+  assert(str_count("ab", "abc") == 0.0, "str_count where sub > s should be 0")
+  print("PASS: test_str_count")
+  return 0.0
+end
+
+fn test_str_lstrip()
+  assert(str_lstrip("  hi") == "hi", "str_lstrip should remove leading spaces")
+  assert(str_lstrip("hello") == "hello", "str_lstrip no-op on no leading space")
+  print("PASS: test_str_lstrip")
+  return 0.0
+end
+
+fn test_str_reverse()
+  assert(str_reverse("abc") == "cba", "str_reverse('abc') should be 'cba'")
+  assert(str_reverse("a") == "a", "str_reverse single char")
+  assert(str_reverse("") == "", "str_reverse empty string")
+  print("PASS: test_str_reverse")
+  return 0.0
+end
+
+fn test_str_title()
+  assert(str_title("hello world") == "Hello World", "str_title basic")
+  assert(str_title("foo bar baz") == "Foo Bar Baz", "str_title multi word")
+  print("PASS: test_str_title")
+  return 0.0
+end
+
+// Run tests
+test_str_count()
+test_str_lstrip()
+test_str_reverse()
+test_str_title()
+print("All string tests passed.")

@@ -1,0 +1,242 @@
+// widgets/input/slider.flow — Horizontal Slider Widget
+//
+// A draggable slider for numeric input. The slider has a track (border color)
+// and a handle (primary color) that moves with the value.
+//
+// Value range is customizable (min to max).
+// While mouse is held down on the slider, the value follows the mouse x position.
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// Slider data: parallel arrays indexed by slider widget ID
+let mut _ui_slider_min = []
+let mut _ui_slider_max = []
+let mut _ui_slider_val = []
+let mut _ui_slider_handle = []
+let mut _ui_slider_fill = []
+
+// Handle width in pixels
+let UI_SLIDER_HANDLE_W = 12.0
+
+// Create a slider widget
+// parent: parent widget ID
+// w: total width in pixels
+// h: height in pixels (typically 16-24)
+// min_val: minimum value
+// max_val: maximum value
+// initial: initial value
+// Returns: track widget ID
+fn ui_slider(parent, w, h, min_val, max_val, initial)
+  // Track
+  let track = ui_tree_add(UI_SLIDER, parent, w, h, " ")
+  let _tc = ui_tree_set_color_themed(track, UI_COLOR_BORDER)
+
+  // Fill rect (shows filled portion from left to handle)
+  let fill = ui_tree_add(UI_BOX, track, 0.0, h, " ")
+  let _fc = ui_tree_set_color_themed(fill, UI_COLOR_PRIMARY)
+
+  // Handle
+  let handle = ui_tree_add(UI_BOX, track, UI_SLIDER_HANDLE_W, h, " ")
+  let _hc = ui_tree_set_color_themed(handle, UI_COLOR_ACTIVE)
+
+  // Store slider data
+  let needed = track + 1.0
+  while len(_ui_slider_min) < needed
+    push(_ui_slider_min, 0.0)
+    push(_ui_slider_max, 1.0)
+    push(_ui_slider_val, 0.0)
+    push(_ui_slider_handle, 0.0)
+    push(_ui_slider_fill, 0.0)
+  end
+  _ui_slider_min[track] = min_val
+  _ui_slider_max[track] = max_val
+  _ui_slider_val[track] = initial
+  _ui_slider_handle[track] = handle
+  _ui_slider_fill[track] = fill
+
+  return track
+end
+
+// Get current slider value
+fn ui_slider_value(track_id)
+  if track_id < len(_ui_slider_val)
+    return _ui_slider_val[track_id]
+  end
+  return 0.0
+end
+
+// Set slider value programmatically
+fn ui_slider_set(track_id, val)
+  let needed = track_id + 1.0
+  while len(_ui_slider_val) < needed
+    push(_ui_slider_min, 0.0)
+    push(_ui_slider_max, 1.0)
+    push(_ui_slider_val, 0.0)
+    push(_ui_slider_handle, 0.0)
+    push(_ui_slider_fill, 0.0)
+  end
+  // Clamp
+  let mn = _ui_slider_min[track_id]
+  let mx = _ui_slider_max[track_id]
+  let mut clamped = val
+  if clamped < mn
+    clamped = mn
+  end
+  if clamped > mx
+    clamped = mx
+  end
+  _ui_slider_val[track_id] = clamped
+  let _u = ui_slider_update_handle(track_id)
+  return 0.0
+end
+
+// Process mouse drag for all sliders
+// Call each frame after ui_process_input()
+fn ui_slider_process(mouse_x, mouse_y, mouse_down)
+  let n = ui_tree_count()
+  let mut i = 0.0
+  while i < n
+    if _ui_types[i] == UI_SLIDER
+      if mouse_down == 1.0
+        // Check if mouse is over this slider
+        let sx = _ui_x[i]
+        let sy = _ui_y[i]
+        let sw = _ui_w[i]
+        let sh = _ui_h[i]
+        let mut over = 0.0
+        if mouse_x >= sx
+          if mouse_x < sx + sw
+            if mouse_y >= sy
+              if mouse_y < sy + sh
+                over = 1.0
+              end
+            end
+          end
+        end
+        if over == 1.0
+          // Map mouse x to value
+          let mn = _ui_slider_min[i]
+          let mx = _ui_slider_max[i]
+          let usable_w = sw - UI_SLIDER_HANDLE_W
+          let rel_x = mouse_x - sx - UI_SLIDER_HANDLE_W / 2.0
+          let mut pct = rel_x / usable_w
+          if pct < 0.0
+            pct = 0.0
+          end
+          if pct > 1.0
+            pct = 1.0
+          end
+          let new_val = mn + pct * (mx - mn)
+          let old_val = _ui_slider_val[i]
+          // Round to 1 decimal
+          let rounded = floor(new_val * 10.0 + 0.5) / 10.0
+          if rounded != old_val
+            _ui_slider_val[i] = rounded
+            let _u = ui_slider_update_handle(i)
+            let _d = ui_mark_dirty()
+          end
+        end
+      end
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Update handle and fill rect positions based on current value
+fn ui_slider_update_handle(track_id)
+  let handle_id = _ui_slider_handle[track_id]
+  let sx = _ui_x[track_id]
+  let sy = _ui_y[track_id]
+  let sw = _ui_w[track_id]
+  let sh = _ui_h[track_id]
+  let mn = _ui_slider_min[track_id]
+  let mx = _ui_slider_max[track_id]
+  let val = _ui_slider_val[track_id]
+
+  let usable_w = sw - UI_SLIDER_HANDLE_W
+  let mut pct = 0.0
+  if mx > mn
+    pct = (val - mn) / (mx - mn)
+  end
+  if pct < 0.0
+    pct = 0.0
+  end
+  if pct > 1.0
+    pct = 1.0
+  end
+
+  let handle_x = sx + pct * usable_w
+  _ui_x[handle_id] = handle_x
+  _ui_y[handle_id] = sy
+  _ui_dirty[handle_id] = 1.0
+
+  // Update fill rect (left edge to handle position)
+  if track_id < len(_ui_slider_fill)
+    let fill_id = _ui_slider_fill[track_id]
+    if fill_id > 0.0
+      let fill_w = handle_x - sx + UI_SLIDER_HANDLE_W / 2.0
+      if fill_w < 0.0
+        fill_w = 0.0
+      end
+      _ui_x[fill_id] = sx
+      _ui_y[fill_id] = sy
+      _ui_w[fill_id] = fill_w
+      _ui_h[fill_id] = sh
+      _ui_dirty[fill_id] = 1.0
+    end
+  end
+
+  return 0.0
+end
+
+// Update all slider handles (call after layout)
+fn ui_slider_update_all()
+  let n = ui_tree_count()
+  let mut i = 0.0
+  while i < n
+    if _ui_types[i] == UI_SLIDER
+      if i < len(_ui_slider_val)
+        let _u = ui_slider_update_handle(i)
+      end
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Process arrow key input for focused slider
+// key: key name from ui_key_down()
+// Left/Right arrows adjust value by 5% of range
+fn ui_slider_process_key(key)
+  let focus = _ui_focus_id
+  if focus < 0.0
+    return 0.0
+  end
+  if focus >= len(_ui_types)
+    return 0.0
+  end
+  if _ui_types[focus] != UI_SLIDER
+    return 0.0
+  end
+  if focus >= len(_ui_slider_val)
+    return 0.0
+  end
+
+  let mn = _ui_slider_min[focus]
+  let mx = _ui_slider_max[focus]
+  let step = (mx - mn) / 20.0
+  let val = _ui_slider_val[focus]
+
+  if key == "left"
+    let _s = ui_slider_set(focus, val - step)
+    let _d = ui_mark_dirty()
+  end
+  if key == "right"
+    let _s = ui_slider_set(focus, val + step)
+    let _d = ui_mark_dirty()
+  end
+  return 0.0
+end

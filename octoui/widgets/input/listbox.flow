@@ -1,0 +1,318 @@
+// widgets/input/listbox.flow — Listbox Widget
+//
+// A scrollable list of selectable text items. Shows a fixed number
+// of visible rows. Up/Down arrow keys navigate when focused.
+// Click an item to select it.
+//
+// Usage:
+//   let lb = ui_listbox(parent, 200.0, 5.0)  // 200px wide, 5 visible rows
+//   let _o1 = ui_listbox_add(lb, "ITEM ONE")
+//   let _o2 = ui_listbox_add(lb, "ITEM TWO")
+//   let _o3 = ui_listbox_add(lb, "ITEM THREE")
+//   // ... add more items
+//   let _fin = ui_listbox_finalize(lb)
+//
+//   // In event loop:
+//   let _lp = ui_listbox_process(key)
+//
+//   // Get selected index:
+//   let sel = ui_listbox_selected(lb)  // 0-based
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// UI_LISTBOX defined in tree.flow
+// Row height for listbox items
+let UI_LISTBOX_ROW_H = 22.0
+
+// Listbox state (indexed by container ID)
+let mut _ui_lb_container = []     // container widget ID
+let mut _ui_lb_selected = []      // selected item index (0-based)
+let mut _ui_lb_scroll = []        // scroll offset (first visible item index)
+let mut _ui_lb_visible_rows = []  // number of visible rows
+let mut _ui_lb_width = []         // width in pixels
+
+// Items: flat arrays with start/count per listbox
+let mut _ui_lb_items = []         // all item strings (flat)
+let mut _ui_lb_item_owner = []    // which listbox owns each item
+let mut _ui_lb_item_count = []    // total item count per listbox
+
+// Display row widget IDs (the visible text widgets)
+let mut _ui_lb_rows = []          // row widget IDs (flat)
+let mut _ui_lb_row_owner = []     // which listbox owns each row
+let mut _ui_lb_row_bg = []        // background box IDs for highlight
+
+// Create a listbox
+// parent: parent widget ID
+// w: width in pixels
+// visible_rows: number of visible rows (items shown at once)
+// Returns: container widget ID
+fn ui_listbox(parent, w, visible_rows)
+  let h = visible_rows * UI_LISTBOX_ROW_H
+  let container = ui_tree_add(UI_LISTBOX, parent, w, h, " ")
+
+  // Set surface color background
+  let _sc = ui_tree_set_color_themed(container, UI_COLOR_SURFACE)
+
+  // Register listbox
+  let needed = container + 1.0
+  while len(_ui_lb_container) < needed
+    push(_ui_lb_container, -1.0)
+    push(_ui_lb_selected, 0.0)
+    push(_ui_lb_scroll, 0.0)
+    push(_ui_lb_visible_rows, 0.0)
+    push(_ui_lb_width, 0.0)
+    push(_ui_lb_item_count, 0.0)
+  end
+  _ui_lb_container[container] = container
+  _ui_lb_selected[container] = 0.0
+  _ui_lb_scroll[container] = 0.0
+  _ui_lb_visible_rows[container] = visible_rows
+  _ui_lb_width[container] = w
+  _ui_lb_item_count[container] = 0.0
+
+  // Create visible row widgets (background box + text per row)
+  let mut ri = 0.0
+  while ri < visible_rows
+    // Background box (for selection highlight)
+    let row_bg = ui_tree_add(UI_BOX, container, w, UI_LISTBOX_ROW_H, " ")
+    let _rc = ui_tree_set_color_themed(row_bg, UI_COLOR_SURFACE)
+
+    // Text label (overlaid on background)
+    let row_txt = ui_tree_add(UI_TEXT, container, w, 16.0, " ")
+    let _tc = ui_tree_set_color_themed(row_txt, UI_COLOR_TEXT)
+
+    push(_ui_lb_rows, row_txt)
+    push(_ui_lb_row_owner, container)
+    push(_ui_lb_row_bg, row_bg)
+
+    ri = ri + 1.0
+  end
+
+  return container
+end
+
+// Add an item to the listbox
+// lb_id: listbox container ID from ui_listbox()
+// text: item text
+fn ui_listbox_add(lb_id, text)
+  push(_ui_lb_items, text)
+  push(_ui_lb_item_owner, lb_id)
+
+  let needed = lb_id + 1.0
+  while len(_ui_lb_item_count) < needed
+    push(_ui_lb_container, -1.0)
+    push(_ui_lb_selected, 0.0)
+    push(_ui_lb_scroll, 0.0)
+    push(_ui_lb_visible_rows, 0.0)
+    push(_ui_lb_width, 0.0)
+    push(_ui_lb_item_count, 0.0)
+  end
+  _ui_lb_item_count[lb_id] = _ui_lb_item_count[lb_id] + 1.0
+  return 0.0
+end
+
+// Finalize listbox (update display with initial items)
+fn ui_listbox_finalize(lb_id)
+  let _u = ui_listbox_refresh(lb_id)
+  return 0.0
+end
+
+// Get selected item index (0-based)
+fn ui_listbox_selected(lb_id)
+  if lb_id < len(_ui_lb_selected)
+    return _ui_lb_selected[lb_id]
+  end
+  return 0.0
+end
+
+// Get selected item text
+fn ui_listbox_selected_text(lb_id)
+  let sel = ui_listbox_selected(lb_id)
+  // Find the sel-th item owned by this listbox
+  let n = len(_ui_lb_items)
+  let mut idx = 0.0
+  let mut i = 0.0
+  while i < n
+    if _ui_lb_item_owner[i] == lb_id
+      if idx == sel
+        return _ui_lb_items[i]
+      end
+      idx = idx + 1.0
+    end
+    i = i + 1.0
+  end
+  return " "
+end
+
+// Set selected item programmatically
+fn ui_listbox_set(lb_id, index)
+  if lb_id >= len(_ui_lb_selected)
+    return 0.0
+  end
+  let count = _ui_lb_item_count[lb_id]
+  if index < 0.0
+    return 0.0
+  end
+  if index >= count
+    return 0.0
+  end
+  _ui_lb_selected[lb_id] = index
+
+  // Ensure selected item is visible (adjust scroll)
+  let scroll = _ui_lb_scroll[lb_id]
+  let vis = _ui_lb_visible_rows[lb_id]
+  if index < scroll
+    _ui_lb_scroll[lb_id] = index
+  end
+  if index >= scroll + vis
+    _ui_lb_scroll[lb_id] = index - vis + 1.0
+  end
+
+  let _u = ui_listbox_refresh(lb_id)
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Refresh display rows from current scroll position and items
+fn ui_listbox_refresh(lb_id)
+  if lb_id >= len(_ui_lb_container)
+    return 0.0
+  end
+
+  let scroll = _ui_lb_scroll[lb_id]
+  let vis = _ui_lb_visible_rows[lb_id]
+  let selected = _ui_lb_selected[lb_id]
+  let total = _ui_lb_item_count[lb_id]
+
+  // Collect items for this listbox
+  // Build a flat index of items owned by this lb
+  let n_items = len(_ui_lb_items)
+
+  // Find display rows for this listbox
+  let n_rows = len(_ui_lb_rows)
+  let mut row_idx = 0.0
+  let mut ri = 0.0
+  while ri < n_rows
+    if _ui_lb_row_owner[ri] == lb_id
+      let item_idx = scroll + row_idx
+
+      // Find the actual item at item_idx position
+      let mut actual_item_pos = 0.0
+      let mut found_text = " "
+      let mut found = 0.0
+      let mut ii = 0.0
+      while ii < n_items
+        if _ui_lb_item_owner[ii] == lb_id
+          if actual_item_pos == item_idx
+            found_text = _ui_lb_items[ii]
+            found = 1.0
+          end
+          actual_item_pos = actual_item_pos + 1.0
+        end
+        ii = ii + 1.0
+      end
+
+      let row_widget = _ui_lb_rows[ri]
+      let row_bg_widget = _ui_lb_row_bg[ri]
+
+      if found == 1.0
+        // Show item text
+        _ui_texts[row_widget] = found_text
+        _ui_w[row_widget] = ui_text_width(found_text, 16.0)
+        _ui_visible[row_widget] = 1.0
+        _ui_visible[row_bg_widget] = 1.0
+
+        // Highlight selected item
+        if item_idx == selected
+          let _hc = ui_tree_set_color_themed(row_bg_widget, UI_COLOR_PRIMARY)
+        else
+          let _sc = ui_tree_set_color_themed(row_bg_widget, UI_COLOR_SURFACE)
+        end
+      else
+        // No item for this row — hide it
+        _ui_texts[row_widget] = " "
+        _ui_visible[row_widget] = 0.0
+        _ui_visible[row_bg_widget] = 0.0
+      end
+
+      row_idx = row_idx + 1.0
+    end
+    ri = ri + 1.0
+  end
+
+  return 0.0
+end
+
+// Process keyboard input for focused listbox
+// key: the key string from ui_key_down()
+fn ui_listbox_process(key)
+  // Only process if a listbox is focused
+  if _ui_focus_id < 0.0
+    return 0.0
+  end
+  if _ui_focus_id >= len(_ui_lb_container)
+    return 0.0
+  end
+  if _ui_lb_container[_ui_focus_id] < 0.0
+    return 0.0
+  end
+
+  let lb_id = _ui_focus_id
+  let selected = _ui_lb_selected[lb_id]
+  let total = _ui_lb_item_count[lb_id]
+
+  if key == "up"
+    if selected > 0.0
+      let _s = ui_listbox_set(lb_id, selected - 1.0)
+    end
+  end
+
+  if key == "down"
+    if selected < total - 1.0
+      let _s = ui_listbox_set(lb_id, selected + 1.0)
+    end
+  end
+
+  return 0.0
+end
+
+// Position display rows after layout (manual positioning inside container)
+fn ui_listbox_update_all()
+  let n = len(_ui_lb_container)
+  let mut ci = 0.0
+  while ci < n
+    if _ui_lb_container[ci] >= 0.0
+      let cx = _ui_x[ci]
+      let cy = _ui_y[ci]
+      let w = _ui_lb_width[ci]
+
+      // Position each display row
+      let mut row_idx = 0.0
+      let n_rows = len(_ui_lb_rows)
+      let mut ri = 0.0
+      while ri < n_rows
+        if _ui_lb_row_owner[ri] == ci
+          let row_widget = _ui_lb_rows[ri]
+          let row_bg = _ui_lb_row_bg[ri]
+
+          // Background fills full width
+          _ui_x[row_bg] = cx
+          _ui_y[row_bg] = cy + row_idx * UI_LISTBOX_ROW_H
+          _ui_w[row_bg] = w
+          _ui_h[row_bg] = UI_LISTBOX_ROW_H
+
+          // Text with small left padding
+          _ui_x[row_widget] = cx + 6.0
+          _ui_y[row_widget] = cy + row_idx * UI_LISTBOX_ROW_H + 3.0
+
+          row_idx = row_idx + 1.0
+        end
+        ri = ri + 1.0
+      end
+    end
+    ci = ci + 1.0
+  end
+  return 0.0
+end

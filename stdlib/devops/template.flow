@@ -1,9 +1,10 @@
 // stdlib/devops/template.flow — Simple template rendering
 //
-// Functions: render, load_template, render_file
+// Functions: render, load_template, render_file, escape_html
 
+// WARNING: render() does NO HTML/SQL escaping. Use escape_html() on user input before rendering.
 fn render(template, vars)
-  // Replace {key} with values from vars map
+  // Replace {key} with values from vars map — NO escaping applied
   let mut result = template
   let keys = split(map_keys(vars), ",")
   for key in keys
@@ -21,4 +22,12 @@ end
 fn render_file(template_path, vars)
   let tmpl = read_file(template_path)
   return render(tmpl, vars)
+end
+
+fn escape_html(s)
+  let mut result = replace(s, "&", "&amp;")
+  result = replace(result, "<", "&lt;")
+  result = replace(result, ">", "&gt;")
+  result = replace(result, "\"", "&quot;")
+  return result
 end

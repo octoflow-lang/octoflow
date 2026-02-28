@@ -1,0 +1,172 @@
+// widgets/input/spinbox.flow — Spinbox Widget (Numeric Up/Down)
+//
+// A numeric input with [-] and [+] buttons and value display.
+// Configurable min, max, and step. Up/Down arrow keys adjust
+// when the spinbox container is focused.
+//
+// Usage:
+//   let spin = ui_spinbox(parent, 120.0, 26.0, 0.0, 100.0, 1.0, 50.0)
+//   //                                         min  max   step initial
+//
+//   // In event loop:
+//   let _sp = ui_spinbox_process()
+//   let _sk = ui_spinbox_process_key(key)
+//
+//   // Get value:
+//   let val = ui_spinbox_value(spin)
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+use "../../widgets/input/button"
+
+// UI_SPINBOX defined in tree.flow
+// Spinbox state (indexed by row widget ID)
+let mut _ui_spin_container = []  // container widget ID
+let mut _ui_spin_minus = []      // minus button widget ID
+let mut _ui_spin_plus = []       // plus button widget ID
+let mut _ui_spin_display = []    // value display text widget ID
+let mut _ui_spin_value = []      // current value
+let mut _ui_spin_min = []        // minimum value
+let mut _ui_spin_max = []        // maximum value
+let mut _ui_spin_step = []       // step increment
+
+// Create a spinbox
+// parent: parent widget ID
+// w: total width (buttons + display)
+// h: height
+// min_val: minimum value
+// max_val: maximum value
+// step: increment per click/keypress
+// initial: starting value
+// Returns: container widget ID (row)
+fn ui_spinbox(parent, w, h, min_val, max_val, step, initial)
+  // Row container: [-] [VALUE] [+]
+  let row = ui_tree_add(UI_ROW, parent, w, h, " ")
+  let _rs = ui_tree_set_spacing(row, 0.0)
+
+  // [-] button
+  let btn_w = 30.0
+  let minus = ui_button(row, btn_w, h, "-")
+
+  // Value display (center)
+  let disp_w = w - btn_w * 2.0
+  let display = ui_tree_add(UI_SPINBOX, row, disp_w, h, " ")
+  let _sc = ui_tree_set_color_themed(display, UI_COLOR_SURFACE)
+
+  // [+] button
+  let plus = ui_button(row, btn_w, h, "+")
+
+  // Register spinbox
+  let needed = row + 1.0
+  while len(_ui_spin_container) < needed
+    push(_ui_spin_container, -1.0)
+    push(_ui_spin_minus, -1.0)
+    push(_ui_spin_plus, -1.0)
+    push(_ui_spin_display, -1.0)
+    push(_ui_spin_value, 0.0)
+    push(_ui_spin_min, 0.0)
+    push(_ui_spin_max, 100.0)
+    push(_ui_spin_step, 1.0)
+  end
+  _ui_spin_container[row] = row
+  _ui_spin_minus[row] = minus
+  _ui_spin_plus[row] = plus
+  _ui_spin_display[row] = display
+  _ui_spin_value[row] = initial
+  _ui_spin_min[row] = min_val
+  _ui_spin_max[row] = max_val
+  _ui_spin_step[row] = step
+
+  // Set initial display text
+  let val_text = str(floor(initial))
+  _ui_texts[display] = val_text
+
+  return row
+end
+
+// Get current spinbox value
+fn ui_spinbox_value(spin_id)
+  if spin_id < len(_ui_spin_value)
+    return _ui_spin_value[spin_id]
+  end
+  return 0.0
+end
+
+// Set spinbox value programmatically
+fn ui_spinbox_set(spin_id, val)
+  if spin_id >= len(_ui_spin_container)
+    return 0.0
+  end
+  let min_v = _ui_spin_min[spin_id]
+  let max_v = _ui_spin_max[spin_id]
+
+  // Clamp to range
+  let mut clamped = val
+  if clamped < min_v
+    clamped = min_v
+  end
+  if clamped > max_v
+    clamped = max_v
+  end
+
+  _ui_spin_value[spin_id] = clamped
+  let display = _ui_spin_display[spin_id]
+  _ui_texts[display] = str(floor(clamped))
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Process spinbox button clicks each frame
+// Call after ui_process_input()
+fn ui_spinbox_process()
+  let n = len(_ui_spin_container)
+  let mut i = 0.0
+  while i < n
+    if _ui_spin_container[i] >= 0.0
+      let minus = _ui_spin_minus[i]
+      let plus = _ui_spin_plus[i]
+      let step = _ui_spin_step[i]
+      let val = _ui_spin_value[i]
+
+      if ui_button_clicked(minus) == 1.0
+        let _s = ui_spinbox_set(i, val - step)
+      end
+      if ui_button_clicked(plus) == 1.0
+        let _s = ui_spinbox_set(i, val + step)
+      end
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Process keyboard input for focused spinbox
+// key: key string from ui_key_down()
+fn ui_spinbox_process_key(key)
+  if _ui_focus_id < 0.0
+    return 0.0
+  end
+
+  // Check if the focused widget is a spinbox display
+  let n = len(_ui_spin_container)
+  let mut i = 0.0
+  while i < n
+    if _ui_spin_container[i] >= 0.0
+      let display = _ui_spin_display[i]
+      if display == _ui_focus_id
+        let val = _ui_spin_value[i]
+        let step = _ui_spin_step[i]
+
+        if key == "up"
+          let _s = ui_spinbox_set(i, val + step)
+        end
+        if key == "down"
+          let _s = ui_spinbox_set(i, val - step)
+        end
+      end
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end

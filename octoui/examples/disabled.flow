@@ -1,0 +1,246 @@
+// examples/disabled.flow — OctoUI Disabled State Demo
+//
+// Demonstrates enabling and disabling widgets at runtime.
+// Toggle switches control whether groups of widgets are active.
+// Disabled widgets render dimmed and do not accept input or focus.
+//
+// Controls:
+//   TAB          — Cycle focus (skips disabled widgets)
+//   SPACE        — Toggle switch / click button / toggle checkbox
+//   ENTER        — Click focused button
+//   LEFT/RIGHT   — Adjust focused slider
+//   ESCAPE       — Quit
+//
+// Run: octoflow run octoui/examples/disabled.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/input/button"
+use "../widgets/input/checkbox"
+use "../widgets/input/textinput"
+use "../widgets/input/slider"
+use "../widgets/input/toggle"
+use "../widgets/input/radio"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(440.0, 480.0, "OctoUI Disabled Demo")
+
+// Root layout
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 440.0, 480.0)
+
+// Title
+let title = ui_text(root, "WIDGET ENABLE/DISABLE", UI_COLOR_PRIMARY)
+let sep1 = ui_separator(root, 408.0)
+
+// ── Section 1: Buttons ──
+let row1 = ui_row(root, 12.0)
+let tog_btn = ui_toggle(row1, "BUTTONS")
+let _ts1 = ui_toggle_set(tog_btn, 1.0)
+let btn_a = ui_button(row1, 80.0, 28.0, "SAVE")
+let btn_b = ui_button(row1, 80.0, 28.0, "LOAD")
+let btn_c = ui_button(row1, 80.0, 28.0, "DELETE")
+
+let sep2 = ui_separator(root, 408.0)
+
+// ── Section 2: Checkboxes ──
+let row2 = ui_row(root, 12.0)
+let tog_chk = ui_toggle(row2, "CHECKBOXES")
+let _ts2 = ui_toggle_set(tog_chk, 1.0)
+
+let chk_a = ui_checkbox(root, "ENABLE SOUND")
+let chk_b = ui_checkbox(root, "ENABLE LOGGING")
+let chk_c = ui_checkbox(root, "AUTO SAVE")
+
+let sep3 = ui_separator(root, 408.0)
+
+// ── Section 3: Text input ──
+let row3 = ui_row(root, 12.0)
+let tog_txt = ui_toggle(row3, "TEXT INPUT")
+let _ts3 = ui_toggle_set(tog_txt, 1.0)
+
+let input_label = ui_text(root, "USERNAME", UI_COLOR_TEXT_DIM)
+let input_field = ui_textinput(root, 300.0, 28.0)
+
+let sep4 = ui_separator(root, 408.0)
+
+// ── Section 4: Slider ──
+let row4 = ui_row(root, 12.0)
+let tog_sld = ui_toggle(row4, "SLIDER")
+let _ts4 = ui_toggle_set(tog_sld, 1.0)
+
+let slider_label = ui_text(root, "BRIGHTNESS", UI_COLOR_TEXT_DIM)
+let bright_slider = ui_slider(root, 300.0, 16.0, 0.0, 100.0, 75.0)
+
+let sep5 = ui_separator(root, 408.0)
+
+// ── Section 5: Radio ──
+let row5 = ui_row(root, 12.0)
+let tog_rad = ui_toggle(row5, "RADIO")
+let _ts5 = ui_toggle_set(tog_rad, 1.0)
+
+let rad_a = ui_radio(root, "OPTION A")
+let rad_b = ui_radio(root, "OPTION B")
+let rad_c = ui_radio(root, "OPTION C")
+
+let sep6 = ui_separator(root, 408.0)
+
+// Status
+let status = ui_text(root, "ALL WIDGETS ENABLED", UI_COLOR_TEXT_DIM)
+
+// Initial layout
+let _l = ui_layout_update()
+let _su = ui_slider_update_all()
+
+// Track previous toggle states to detect changes
+let mut prev_btn = 1.0
+let mut prev_chk = 1.0
+let mut prev_txt = 1.0
+let mut prev_sld = 1.0
+let mut prev_rad = 1.0
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  let key = ui_key_down()
+  let mx = ui_mouse_x()
+  let my = ui_mouse_y()
+  let mdown = ui_mouse_down()
+
+  // Process text input
+  let _tk = ui_textinput_process_key(key)
+
+  // Process slider
+  let _sd = ui_slider_process(mx, my, mdown)
+  let _sk = ui_slider_process_key(key)
+
+  // Check toggle states and enable/disable widget groups
+  let cur_btn = ui_toggle_value(tog_btn)
+  if cur_btn != prev_btn
+    let _e1 = ui_tree_set_enabled(btn_a, cur_btn)
+    let _e2 = ui_tree_set_enabled(btn_b, cur_btn)
+    let _e3 = ui_tree_set_enabled(btn_c, cur_btn)
+    prev_btn = cur_btn
+  end
+
+  let cur_chk = ui_toggle_value(tog_chk)
+  if cur_chk != prev_chk
+    let _e4 = ui_tree_set_enabled(chk_a, cur_chk)
+    let _e5 = ui_tree_set_enabled(chk_b, cur_chk)
+    let _e6 = ui_tree_set_enabled(chk_c, cur_chk)
+    prev_chk = cur_chk
+  end
+
+  let cur_txt = ui_toggle_value(tog_txt)
+  if cur_txt != prev_txt
+    let _e7 = ui_tree_set_enabled(input_label, cur_txt)
+    let _e8 = ui_tree_set_enabled(input_field, cur_txt)
+    prev_txt = cur_txt
+  end
+
+  let cur_sld = ui_toggle_value(tog_sld)
+  if cur_sld != prev_sld
+    let _e9 = ui_tree_set_enabled(slider_label, cur_sld)
+    let _e10 = ui_tree_set_enabled(bright_slider, cur_sld)
+    prev_sld = cur_sld
+  end
+
+  let cur_rad = ui_toggle_value(tog_rad)
+  if cur_rad != prev_rad
+    let _e11 = ui_tree_set_enabled(rad_a, cur_rad)
+    let _e12 = ui_tree_set_enabled(rad_b, cur_rad)
+    let _e13 = ui_tree_set_enabled(rad_c, cur_rad)
+    prev_rad = cur_rad
+  end
+
+  // Count enabled sections
+  let mut enabled_count = 0.0
+  if cur_btn == 1.0
+    enabled_count = enabled_count + 1.0
+  end
+  if cur_chk == 1.0
+    enabled_count = enabled_count + 1.0
+  end
+  if cur_txt == 1.0
+    enabled_count = enabled_count + 1.0
+  end
+  if cur_sld == 1.0
+    enabled_count = enabled_count + 1.0
+  end
+  if cur_rad == 1.0
+    enabled_count = enabled_count + 1.0
+  end
+
+  let mut status_text = " "
+  if enabled_count == 5.0
+    status_text = "ALL WIDGETS ENABLED"
+  end
+  if enabled_count == 0.0
+    status_text = "ALL WIDGETS DISABLED"
+  end
+  if enabled_count == 1.0
+    status_text = "1 SECTION ENABLED"
+  end
+  if enabled_count == 2.0
+    status_text = "2 SECTIONS ENABLED"
+  end
+  if enabled_count == 3.0
+    status_text = "3 SECTIONS ENABLED"
+  end
+  if enabled_count == 4.0
+    status_text = "4 SECTIONS ENABLED"
+  end
+  let _st = ui_tree_set_text(status, status_text)
+  let _lu = ui_layout_update()
+  let _su2 = ui_slider_update_all()
+
+  // Button click feedback
+  if ui_button_clicked(btn_a) == 1.0
+    let _st2 = ui_tree_set_text(status, "SAVE CLICKED")
+    let _d = ui_mark_dirty()
+  end
+  if ui_button_clicked(btn_b) == 1.0
+    let _st3 = ui_tree_set_text(status, "LOAD CLICKED")
+    let _d2 = ui_mark_dirty()
+  end
+  if ui_button_clicked(btn_c) == 1.0
+    let _st4 = ui_tree_set_text(status, "DELETE CLICKED")
+    let _d3 = ui_mark_dirty()
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Disabled demo finished.")

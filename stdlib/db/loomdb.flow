@@ -1,0 +1,639 @@
+// stdlib/db/loomdb.flow — LoomDB: GPU-resident computed-data log with I/O isolation
+//
+// Architecture: Main Loom does ZERO I/O. LoomDB owns the full I/O boundary.
+//
+//   Main Loom (zero I/O)
+//       │ capture()        ▲ search()
+//       │ (GPU→GPU)        │ (GPU→GPU)
+//       ▼                  │
+//   LoomDB Loom (owns ALL I/O)
+//       │ flush()          ▲ restore()
+//       │ (async)          │ (startup)
+//       ▼                  │
+//   OctoDB (.odb on disk)
+//
+// Design: LDB is split into two objects that must be passed together:
+//   ldb     = map (metadata: dims, count, capacity, IDs, per-vector metadata)
+//   vectors = flat array (all embeddings concatenated, dims floats per vector)
+//
+// Hot path (zero I/O):
+//   loomdb_create, loomdb_create_vectors, loomdb_capture, loomdb_search,
+//   loomdb_gpu_search, loomdb_normalize, loomdb_needs_flush,
+//   loomdb_extract_vector, loomdb_result_count/id/score/meta
+//
+// I/O boundary (LoomDB Loom only):
+//   loomdb_flush, loomdb_restore_meta, loomdb_restore_vectors
+//
+// NOTE: loom_stream_save/load are defined in vector.flow.
+// Import vector.flow if you need Loom stream persistence alongside LoomDB.
+
+fn loomdb_create(dims, capacity)
+  // Create LoomDB metadata map
+  //   dims     = embedding dimensions (clamped to >= 1)
+  //   capacity = auto-flush threshold (0 = manual flush only)
+  let mut actual_dims = dims
+  if actual_dims <= 0.0
+    actual_dims = 1.0
+  end
+  let mut ldb = map()
+  map_set(ldb, "__ldb_dims", str(actual_dims))
+  map_set(ldb, "__ldb_count", "0")
+  map_set(ldb, "__ldb_ids", "")
+  map_set(ldb, "__ldb_normalized", "0")
+  map_set(ldb, "__ldb_capacity", str(capacity))
+  map_set(ldb, "__ldb_flush_count", "0")
+  map_set(ldb, "__ldb_needs_flush", "0")
+  return ldb
+end
+
+fn loomdb_create_vectors()
+  // Create the companion flat vectors array
+  let mut vectors = []
+  return vectors
+end
+
+fn loomdb_capture(ldb, vectors, id, embedding, metadata)
+  // Capture an embedding into GPU memory — the hot path
+  // This function does ZERO I/O. Called from Main Loom.
+  // Returns updated count, or 0.0 on dimension mismatch / invalid ID / duplicate.
+  // Sets __ldb_needs_flush = "1" when capacity is reached.
+  let dims = float(map_get(ldb, "__ldb_dims"))
+  if len(embedding) != dims
+    return 0.0
+  end
+  // Reject IDs containing delimiters (commas break ID list, tabs/newlines break flush)
+  let id_comma_parts = split(id, ",")
+  if len(id_comma_parts) > 1.0
+    return 0.0
+  end
+  let id_tab_parts = split(id, "\t")
+  if len(id_tab_parts) > 1.0
+    return 0.0
+  end
+  let id_nl_parts = split(id, "\n")
+  if len(id_nl_parts) > 1.0
+    return 0.0
+  end
+  // Reject duplicate IDs (second capture would corrupt vector-to-metadata mapping)
+  if map_has(ldb, "__ldb_meta_" + id) == 1.0
+    return float(map_get(ldb, "__ldb_count"))
+  end
+  // Sanitize metadata — tabs and newlines would break flush/restore format
+  let meta_str = "" + metadata
+  let mut meta_tab_parts = split(meta_str, "\t")
+  let mut clean_meta = join(meta_tab_parts, " ")
+  let mut meta_nl_parts = split(clean_meta, "\n")
+  clean_meta = join(meta_nl_parts, " ")
+  // Append embedding to flat vectors array
+  let mut i = 0.0
+  while i < dims
+    push(vectors, embedding[i])
+    i = i + 1.0
+  end
+  // Track ID
+  let ids_str = map_get(ldb, "__ldb_ids")
+  if len(ids_str) > 0.0
+    map_set(ldb, "__ldb_ids", ids_str + "," + id)
+  else
+    map_set(ldb, "__ldb_ids", id)
+  end
+  // Store sanitized metadata
+  map_set(ldb, "__ldb_meta_" + id, clean_meta)
+  // Increment count
+  let count = float(map_get(ldb, "__ldb_count"))
+  let new_count = count + 1.0
+  map_set(ldb, "__ldb_count", str(new_count))
+  map_set(ldb, "__ldb_normalized", "0")
+  // Check capacity for auto-flush signal
+  let capacity = float(map_get(ldb, "__ldb_capacity"))
+  if capacity > 0.0 && new_count >= capacity
+    map_set(ldb, "__ldb_needs_flush", "1")
+  end
+  return new_count
+end
+
+fn loomdb_needs_flush(ldb)
+  // Check if LoomDB has reached capacity and needs flushing
+  // The LoomDB Loom polls this to decide when to flush
+  // Cheap check — just reads one map key
+  let flag = map_get(ldb, "__ldb_needs_flush")
+  if flag == "1"
+    return 1.0
+  end
+  return 0.0
+end
+
+fn loomdb_extract_vector(vectors, dims, vec_idx)
+  // Extract a single vector from the flat array by index
+  // Returns empty array on out-of-bounds
+  if vec_idx < 0.0
+    let mut empty = []
+    return empty
+  end
+  let offset = vec_idx * dims
+  if offset + dims > len(vectors)
+    let mut empty = []
+    return empty
+  end
+  let mut result = []
+  let mut i = 0.0
+  while i < dims
+    push(result, vectors[offset + i])
+    i = i + 1.0
+  end
+  return result
+end
+
+fn loomdb_cosine_sim(a, b)
+  // Cosine similarity = dot(a,b) / (norm(a) * norm(b))
+  let d = dot(a, b)
+  let na = norm(a)
+  let nb = norm(b)
+  if na == 0.0 || nb == 0.0
+    return 0.0
+  end
+  return d / (na * nb)
+end
+
+fn loomdb_euclidean_dist(a, b)
+  // Negative euclidean distance (higher = more similar for top-K)
+  let mut n = len(a)
+  if len(b) < n
+    n = len(b)
+  end
+  let mut sum_sq = 0.0
+  let mut i = 0.0
+  while i < n
+    let diff = a[i] - b[i]
+    sum_sq = sum_sq + diff * diff
+    i = i + 1.0
+  end
+  return 0.0 - sqrt(sum_sq)
+end
+
+fn loomdb_search(ldb, vectors, query_embedding, k, metric)
+  // CPU similarity search — stores top-K results in ldb map
+  // metric: "cosine", "dot", "euclidean"
+  // Results stored as: __count, __id_N, __score_N, __meta_N in ldb
+  let count = float(map_get(ldb, "__ldb_count"))
+  let dims = float(map_get(ldb, "__ldb_dims"))
+
+  if count == 0.0 || len(query_embedding) != dims
+    map_set(ldb, "__count", "0")
+    return 0.0
+  end
+
+  // Clamp negative/zero k
+  let mut actual_k = k
+  if actual_k <= 0.0
+    map_set(ldb, "__count", "0")
+    return 0.0
+  end
+  if actual_k > count
+    actual_k = count
+  end
+
+  // Validate metric
+  let mut valid_metric = 0.0
+  if metric == "cosine"
+    valid_metric = 1.0
+  end
+  if metric == "dot"
+    valid_metric = 1.0
+  end
+  if metric == "euclidean"
+    valid_metric = 1.0
+  end
+  if valid_metric == 0.0
+    map_set(ldb, "__count", "0")
+    return 0.0
+  end
+
+  let ids_str = map_get(ldb, "__ldb_ids")
+  let ids = split(ids_str, ",")
+  let normalized = map_get(ldb, "__ldb_normalized")
+
+  // Pre-compute query norm factor for cosine with normalized DB
+  // When DB is normalized, dot(vec, q) = cosine * norm(q)
+  // Divide by norm(q) to get true cosine similarity
+  let mut q_norm_factor = 1.0
+  if metric == "cosine"
+    if normalized == "1"
+      let qn = norm(query_embedding)
+      if qn > 0.0
+        q_norm_factor = qn
+      end
+    end
+  end
+
+  // Top-K: simple selection (k is typically small 5-20)
+  let mut top_scores = []
+  let mut top_indices = []
+
+  let mut vi = 0.0
+  while vi < count
+    let vec = loomdb_extract_vector(vectors, dims, vi)
+
+    // Compute similarity score
+    let mut score = 0.0
+    if metric == "cosine"
+      if normalized == "1"
+        score = dot(vec, query_embedding) / q_norm_factor
+      else
+        score = loomdb_cosine_sim(vec, query_embedding)
+      end
+    elif metric == "dot"
+      score = dot(vec, query_embedding)
+    elif metric == "euclidean"
+      score = loomdb_euclidean_dist(vec, query_embedding)
+    end
+
+    // Insert into top-K
+    let filled = len(top_scores)
+    if filled < actual_k
+      // Still filling — find insertion position
+      let mut pos = filled
+      let mut j = 0.0
+      while j < filled
+        if score > top_scores[j]
+          pos = j
+          break
+        end
+        j = j + 1.0
+      end
+      // Shift right from end
+      push(top_scores, 0.0)
+      push(top_indices, 0.0)
+      let mut s = filled
+      while s > pos
+        top_scores[s] = top_scores[s - 1.0]
+        top_indices[s] = top_indices[s - 1.0]
+        s = s - 1.0
+      end
+      top_scores[pos] = score
+      top_indices[pos] = vi
+    elif score > top_scores[len(top_scores) - 1.0]
+      // Better than worst — find insertion position
+      let mut pos = len(top_scores) - 1.0
+      let mut j = 0.0
+      while j < len(top_scores) - 1.0
+        if score > top_scores[j]
+          pos = j
+          break
+        end
+        j = j + 1.0
+      end
+      // Shift right, dropping last
+      let mut s = len(top_scores) - 1.0
+      while s > pos
+        top_scores[s] = top_scores[s - 1.0]
+        top_indices[s] = top_indices[s - 1.0]
+        s = s - 1.0
+      end
+      top_scores[pos] = score
+      top_indices[pos] = vi
+    end
+
+    vi = vi + 1.0
+  end
+
+  // Store results in ldb map
+  let final_k = len(top_scores)
+  map_set(ldb, "__count", str(final_k))
+  let mut ri = 0.0
+  while ri < final_k
+    let idx = top_indices[ri]
+    let id = ids[idx]
+    map_set(ldb, "__id_" + str(ri), id)
+    map_set(ldb, "__score_" + str(ri), str(top_scores[ri]))
+    map_set(ldb, "__meta_" + str(ri), map_get(ldb, "__ldb_meta_" + id))
+    ri = ri + 1.0
+  end
+  return final_k
+end
+
+fn loomdb_gpu_search(ldb, vectors, query_embedding, k)
+  // GPU-accelerated cosine similarity search via gpu_matmul
+  // For large vector databases (1000+ vectors)
+  let count = float(map_get(ldb, "__ldb_count"))
+  let dims = float(map_get(ldb, "__ldb_dims"))
+
+  if count == 0.0 || len(query_embedding) != dims
+    map_set(ldb, "__count", "0")
+    return 0.0
+  end
+
+  // Clamp negative/zero k
+  let mut actual_k = k
+  if actual_k <= 0.0
+    map_set(ldb, "__count", "0")
+    return 0.0
+  end
+  if actual_k > count
+    actual_k = count
+  end
+
+  let ids_str = map_get(ldb, "__ldb_ids")
+  let ids = split(ids_str, ",")
+  let normalized = map_get(ldb, "__ldb_normalized")
+
+  // gpu_matmul(A, B, m, n, k): A=m×k, B=k×n → m×n
+  // vectors=count×dims, query=dims×1 → count×1 dot products
+  let scores = gpu_matmul(vectors, query_embedding, count, 1.0, dims)
+
+  // Normalize for cosine similarity
+  let qnorm = norm(query_embedding)
+  let mut normed_scores = []
+  let mut vi = 0.0
+  while vi < count
+    if normalized == "1"
+      // Vectors are unit norm — skip per-vector norm computation
+      if qnorm > 0.0
+        push(normed_scores, scores[vi] / qnorm)
+      else
+        push(normed_scores, 0.0)
+      end
+    else
+      let vec = loomdb_extract_vector(vectors, dims, vi)
+      let vnorm = norm(vec)
+      if vnorm > 0.0 && qnorm > 0.0
+        push(normed_scores, scores[vi] / (vnorm * qnorm))
+      else
+        push(normed_scores, 0.0)
+      end
+    end
+    vi = vi + 1.0
+  end
+
+  // CPU top-K scan
+  let mut top_scores = []
+  let mut top_indices = []
+
+  let mut si = 0.0
+  while si < count
+    let score = normed_scores[si]
+    let filled = len(top_scores)
+
+    if filled < actual_k
+      push(top_scores, score)
+      push(top_indices, si)
+      // Bubble into position
+      let mut j = len(top_scores) - 1.0
+      while j > 0.0
+        if top_scores[j] > top_scores[j - 1.0]
+          let tmp_s = top_scores[j]
+          let tmp_i = top_indices[j]
+          top_scores[j] = top_scores[j - 1.0]
+          top_indices[j] = top_indices[j - 1.0]
+          top_scores[j - 1.0] = tmp_s
+          top_indices[j - 1.0] = tmp_i
+        end
+        j = j - 1.0
+      end
+    elif score > top_scores[len(top_scores) - 1.0]
+      top_scores[len(top_scores) - 1.0] = score
+      top_indices[len(top_indices) - 1.0] = si
+      let mut j = len(top_scores) - 1.0
+      while j > 0.0
+        if top_scores[j] > top_scores[j - 1.0]
+          let tmp_s = top_scores[j]
+          let tmp_i = top_indices[j]
+          top_scores[j] = top_scores[j - 1.0]
+          top_indices[j] = top_indices[j - 1.0]
+          top_scores[j - 1.0] = tmp_s
+          top_indices[j - 1.0] = tmp_i
+        end
+        j = j - 1.0
+      end
+    end
+    si = si + 1.0
+  end
+
+  // Store results in ldb map
+  let final_k = len(top_scores)
+  map_set(ldb, "__count", str(final_k))
+  let mut ri = 0.0
+  while ri < final_k
+    let idx = top_indices[ri]
+    let id = ids[idx]
+    map_set(ldb, "__id_" + str(ri), id)
+    map_set(ldb, "__score_" + str(ri), str(top_scores[ri]))
+    map_set(ldb, "__meta_" + str(ri), map_get(ldb, "__ldb_meta_" + id))
+    ri = ri + 1.0
+  end
+  return final_k
+end
+
+fn loomdb_normalize(ldb, vectors)
+  // Pre-normalize all vectors to unit length
+  // After this, cosine similarity = dot product (faster search)
+  // Guard against double normalization (would shrink already-unit vectors)
+  if map_get(ldb, "__ldb_normalized") == "1"
+    return 1.0
+  end
+  let count = float(map_get(ldb, "__ldb_count"))
+  let dims = float(map_get(ldb, "__ldb_dims"))
+  let mut vi = 0.0
+  while vi < count
+    let offset = vi * dims
+    let vec = loomdb_extract_vector(vectors, dims, vi)
+    let n = norm(vec)
+    if n > 0.0
+      let mut di = 0.0
+      while di < dims
+        vectors[offset + di] = vectors[offset + di] / n
+        di = di + 1.0
+      end
+    end
+    vi = vi + 1.0
+  end
+  map_set(ldb, "__ldb_normalized", "1")
+  return 1.0
+end
+
+// ─── I/O BOUNDARY — These run in the LoomDB Loom, never in the Main Loom ───
+
+fn loomdb_flush(ldb, vectors, path)
+  // Persist LoomDB to OctoDB on disk — the ONLY function that does I/O
+  // Runs in the LoomDB Loom, never in the Main Loom
+  //
+  // Writes:
+  //   path.vectors  — binary float array (GPU-native f32)
+  //   path.ldb      — LOOMDB_V1 index header
+  //   path.meta     — tab-separated metadata table
+  //
+  // After flush: resets needs_flush, increments flush_count
+  let count = float(map_get(ldb, "__ldb_count"))
+  let dims = float(map_get(ldb, "__ldb_dims"))
+  let ids_str = map_get(ldb, "__ldb_ids")
+  let normalized = map_get(ldb, "__ldb_normalized")
+  let capacity = map_get(ldb, "__ldb_capacity")
+  let flush_count = float(map_get(ldb, "__ldb_flush_count"))
+  let new_fc = flush_count + 1.0
+
+  // Handle empty DB flush — write minimal valid files (skip gpu_save_binary for empty)
+  if count == 0.0
+    let mut header = "LOOMDB_V1\n"
+    header = header + "dims:" + str(dims) + "\n"
+    header = header + "count:0\n"
+    header = header + "normalized:" + normalized + "\n"
+    header = header + "capacity:" + capacity + "\n"
+    header = header + "flush_count:" + str(new_fc) + "\n"
+    header = header + "ids:"
+    write_file(path + ".ldb", header)
+    write_file(path + ".meta", "LOOMDB_META_V1\nid,metadata\n0")
+    // Skip .vectors file for empty DB — restore_vectors handles missing file
+    map_set(ldb, "__ldb_needs_flush", "0")
+    map_set(ldb, "__ldb_flush_count", str(new_fc))
+    return 1.0
+  end
+
+  // Binary vectors
+  gpu_save_binary(vectors, path + ".vectors")
+
+  // LOOMDB_V1 index header (key:value format)
+  let mut header = "LOOMDB_V1\n"
+  header = header + "dims:" + str(dims) + "\n"
+  header = header + "count:" + str(count) + "\n"
+  header = header + "normalized:" + normalized + "\n"
+  header = header + "capacity:" + capacity + "\n"
+  header = header + "flush_count:" + str(new_fc) + "\n"
+  header = header + "ids:" + ids_str
+  write_file(path + ".ldb", header)
+
+  // Metadata as tab-separated
+  let ids = split(ids_str, ",")
+  let mut meta_lines = []
+  push(meta_lines, "LOOMDB_META_V1")
+  push(meta_lines, "id,metadata")
+  push(meta_lines, str(count))
+  let mut i = 0.0
+  while i < count
+    let id = ids[i]
+    let meta = map_get(ldb, "__ldb_meta_" + id)
+    push(meta_lines, id + "\t" + meta)
+    i = i + 1.0
+  end
+  write_file(path + ".meta", join(meta_lines, "\n"))
+
+  // Update flush state
+  map_set(ldb, "__ldb_needs_flush", "0")
+  map_set(ldb, "__ldb_flush_count", str(new_fc))
+  return 1.0
+end
+
+fn loomdb_restore_meta(path)
+  // Load LoomDB metadata from cached files (part of restore)
+  // Returns the ldb metadata map — call loomdb_restore_vectors for the array
+  // Called by LoomDB Loom at startup, never by Main Loom
+  let mut ldb = map()
+  if file_exists(path + ".ldb") == 0.0
+    map_set(ldb, "__ldb_dims", "0")
+    map_set(ldb, "__ldb_count", "0")
+    map_set(ldb, "__ldb_ids", "")
+    map_set(ldb, "__ldb_normalized", "0")
+    map_set(ldb, "__ldb_capacity", "0")
+    map_set(ldb, "__ldb_flush_count", "0")
+    map_set(ldb, "__ldb_needs_flush", "0")
+    return ldb
+  end
+
+  let header = read_file(path + ".ldb")
+  let lines = split(header, "\n")
+
+  // Guard against malformed/truncated .ldb files
+  if len(lines) < 7.0
+    map_set(ldb, "__ldb_dims", "0")
+    map_set(ldb, "__ldb_count", "0")
+    map_set(ldb, "__ldb_ids", "")
+    map_set(ldb, "__ldb_normalized", "0")
+    map_set(ldb, "__ldb_capacity", "0")
+    map_set(ldb, "__ldb_flush_count", "0")
+    map_set(ldb, "__ldb_needs_flush", "0")
+    return ldb
+  end
+
+  // Validate header magic
+  if trim(lines[0]) != "LOOMDB_V1"
+    map_set(ldb, "__ldb_dims", "0")
+    map_set(ldb, "__ldb_count", "0")
+    map_set(ldb, "__ldb_ids", "")
+    map_set(ldb, "__ldb_normalized", "0")
+    map_set(ldb, "__ldb_capacity", "0")
+    map_set(ldb, "__ldb_flush_count", "0")
+    map_set(ldb, "__ldb_needs_flush", "0")
+    return ldb
+  end
+
+  // Parse LOOMDB_V1 key:value header
+  // Line 0: LOOMDB_V1
+  // Line 1: dims:{dims}
+  // Line 2: count:{count}
+  // Line 3: normalized:{0|1}
+  // Line 4: capacity:{capacity}
+  // Line 5: flush_count:{flush_count}
+  // Line 6: ids:{ids_str}
+  let dims_parts = split(trim(lines[1]), ":")
+  let count_parts = split(trim(lines[2]), ":")
+  let norm_parts = split(trim(lines[3]), ":")
+  let cap_parts = split(trim(lines[4]), ":")
+  let flush_parts = split(trim(lines[5]), ":")
+  let ids_line = trim(lines[6])
+  let ids_str = substr(ids_line, 4.0, len(ids_line) - 4.0)
+
+  map_set(ldb, "__ldb_dims", dims_parts[1])
+  map_set(ldb, "__ldb_count", count_parts[1])
+  map_set(ldb, "__ldb_normalized", norm_parts[1])
+  map_set(ldb, "__ldb_capacity", cap_parts[1])
+  map_set(ldb, "__ldb_flush_count", flush_parts[1])
+  map_set(ldb, "__ldb_ids", ids_str)
+  map_set(ldb, "__ldb_needs_flush", "0")
+
+  // Load per-vector metadata (only if IDs exist)
+  if len(ids_str) > 0.0 && file_exists(path + ".meta")
+    let meta_content = read_file(path + ".meta")
+    let meta_lines = split(meta_content, "\n")
+    let mut i = 3.0
+    while i < len(meta_lines)
+      let line = trim(meta_lines[i])
+      if len(line) > 0.0
+        let parts = split(line, "\t")
+        if len(parts) >= 2.0
+          map_set(ldb, "__ldb_meta_" + parts[0], parts[1])
+        end
+      end
+      i = i + 1.0
+    end
+  end
+  return ldb
+end
+
+fn loomdb_restore_vectors(path)
+  // Load the binary vectors array from cached file (part of restore)
+  // Called by LoomDB Loom at startup, never by Main Loom
+  // Returns empty array if file does not exist or is empty
+  if file_exists(path + ".vectors") == 0.0
+    let mut empty = []
+    return empty
+  end
+  let mut vectors = gpu_load_binary(path + ".vectors")
+  return vectors
+end
+
+// ─── Result Accessors ─── read loomdb_search/loomdb_gpu_search results
+
+fn loomdb_result_count(result)
+  return float(map_get(result, "__count"))
+end
+
+fn loomdb_result_id(result, idx)
+  return map_get(result, "__id_" + str(idx))
+end
+
+fn loomdb_result_score(result, idx)
+  return float(map_get(result, "__score_" + str(idx)))
+end
+
+fn loomdb_result_meta(result, idx)
+  return map_get(result, "__meta_" + str(idx))
+end

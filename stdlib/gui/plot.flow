@@ -14,12 +14,99 @@
 use "gui_core"
 use "canvas"
 
+// ── Theme Color Helpers (fallback if _tc not loaded) ────────────────
+
+fn _plot_text_r()
+  if len(_tc) > 17.0
+    return _tc[15]
+  end
+  return 220.0
+end
+
+fn _plot_text_g()
+  if len(_tc) > 17.0
+    return _tc[16]
+  end
+  return 222.0
+end
+
+fn _plot_text_b()
+  if len(_tc) > 17.0
+    return _tc[17]
+  end
+  return 228.0
+end
+
+fn _plot_accent_r()
+  if len(_tc) > 20.0
+    return _tc[18]
+  end
+  return 99.0
+end
+
+fn _plot_accent_g()
+  if len(_tc) > 20.0
+    return _tc[19]
+  end
+  return 130.0
+end
+
+fn _plot_accent_b()
+  if len(_tc) > 20.0
+    return _tc[20]
+  end
+  return 237.0
+end
+
+fn _plot_panel_r()
+  if len(_tc) > 5.0
+    return _tc[3]
+  end
+  return 30.0
+end
+
+fn _plot_panel_g()
+  if len(_tc) > 5.0
+    return _tc[4]
+  end
+  return 31.0
+end
+
+fn _plot_panel_b()
+  if len(_tc) > 5.0
+    return _tc[5]
+  end
+  return 40.0
+end
+
+fn _plot_border_r()
+  if len(_tc) > 23.0
+    return _tc[21]
+  end
+  return 44.0
+end
+
+fn _plot_border_g()
+  if len(_tc) > 23.0
+    return _tc[22]
+  end
+  return 46.0
+end
+
+fn _plot_border_b()
+  if len(_tc) > 23.0
+    return _tc[23]
+  end
+  return 58.0
+end
+
 // ── Chart Type Constants ────────────────────────────────────────────
 let PLOT_LINE = 1.0
 let PLOT_SCATTER = 2.0
 let PLOT_BAR = 3.0
 let PLOT_HEATMAP = 4.0
 let PLOT_CANDLE = 5.0
+let PLOT_AREA = 6.0
 
 // ── Plot Registry (parallel arrays, one per plot) ───────────────────
 let mut _plot_canvas = []
@@ -153,6 +240,30 @@ fn plot_series_line(plot_id, x_arr, y_arr, r, g, b)
   end
   push(_pseries_plot, plot_id)
   push(_pseries_type, PLOT_LINE)
+  push(_pseries_start, start)
+  push(_pseries_count, n)
+  push(_pseries_r, r)
+  push(_pseries_g, g)
+  push(_pseries_b, b)
+  push(_pseries_extra, 0.0)
+  return sid
+end
+
+// ── Series: Area ────────────────────────────────────────────────────
+
+fn plot_series_area(plot_id, x_arr, y_arr, r, g, b)
+  let sid = len(_pseries_plot)
+  let start = len(_pseries_x)
+  let n = len(x_arr)
+  let mut i = 0.0
+  while i < n
+    let ii = int(i)
+    push(_pseries_x, x_arr[ii])
+    push(_pseries_y, y_arr[ii])
+    i = i + 1.0
+  end
+  push(_pseries_plot, plot_id)
+  push(_pseries_type, PLOT_AREA)
   push(_pseries_start, start)
   push(_pseries_count, n)
   push(_pseries_r, r)
@@ -407,6 +518,48 @@ fn plot_grid(plot_id, x_ticks, y_ticks)
   return 0.0
 end
 
+// ── Axis Tick Labels ────────────────────────────────────────────────
+// Render numeric tick labels along grid lines
+
+fn plot_grid_labels(plot_id, x_ticks, y_ticks)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let ch = _gui_h[cid]
+  let xmin = _plot_x_min[ii]
+  let xmax = _plot_x_max[ii]
+  let ymin = _plot_y_min[ii]
+  let ymax = _plot_y_max[ii]
+  let pl = _plot_pad_left[ii]
+  let pb = _plot_pad_bottom[ii]
+  // Y-axis tick labels
+  if y_ticks > 0.0
+    let yrange = ymax - ymin
+    let ystep = yrange / y_ticks
+    let mut yk = 0.0
+    while yk <= y_ticks
+      let yval = ymin + yk * ystep
+      let ypos = _plot_map_y(plot_id, yval)
+      let label = str(floor(yval * 10.0) / 10.0)
+      let _t = gui_canvas_text_colored(cid, pl - 30.0, ypos - 3.0, label, 1.0, _plot_text_r(), _plot_text_g(), _plot_text_b())
+      yk = yk + 1.0
+    end
+  end
+  // X-axis tick labels
+  if x_ticks > 0.0
+    let xrange = xmax - xmin
+    let xstep = xrange / x_ticks
+    let mut xk = 0.0
+    while xk <= x_ticks
+      let xval = xmin + xk * xstep
+      let xpos = _plot_map_x(plot_id, xval)
+      let label = str(floor(xval * 10.0) / 10.0)
+      let _t = gui_canvas_text_colored(cid, xpos - 8.0, ch - pb + 4.0, label, 1.0, _plot_text_r(), _plot_text_g(), _plot_text_b())
+      xk = xk + 1.0
+    end
+  end
+  return 0.0
+end
+
 // ── Crosshair ───────────────────────────────────────────────────────
 // Draw crosshair at mouse position (canvas-relative coordinates)
 
@@ -588,6 +741,55 @@ fn _plot_draw_candle_series(plot_id, sid)
   return 0.0
 end
 
+// ── Area Chart ──────────────────────────────────────────────────────
+// Line chart with filled region below the line to the x-axis baseline.
+
+fn _plot_draw_area_series(plot_id, sid)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let si = int(sid)
+  let start = int(_pseries_start[si])
+  let count = _pseries_count[si]
+  let r = _pseries_r[si]
+  let g = _pseries_g[si]
+  let b = _pseries_b[si]
+  if count < 2.0
+    return 0.0
+  end
+  // Dimmed fill color (40% brightness)
+  let fill_r = r * 0.4
+  let fill_g = g * 0.4
+  let fill_b = b * 0.4
+  // Baseline Y position (data y=0 mapped to canvas)
+  let baseline = _plot_map_y(plot_id, 0.0)
+  // Draw filled vertical strips between consecutive points
+  let mut j = 0.0
+  while j < count - 1.0
+    let j1 = start + int(j)
+    let j2 = j1 + 1
+    let x1 = _plot_map_x(plot_id, _pseries_x[j1])
+    let y1 = _plot_map_y(plot_id, _pseries_y[j1])
+    let x2 = _plot_map_x(plot_id, _pseries_x[j2])
+    let y2 = _plot_map_y(plot_id, _pseries_y[j2])
+    let strip_w = x2 - x1
+    if strip_w > 0.0
+      // Top of fill = min(y1, y2)
+      let mut fill_y = y1
+      if y2 < fill_y
+        fill_y = y2
+      end
+      let fill_h = baseline - fill_y
+      if fill_h > 0.0
+        let _f = gui_canvas_fill(cid, x1, fill_y, strip_w, fill_h, fill_r, fill_g, fill_b)
+      end
+    end
+    j = j + 1.0
+  end
+  // Draw line on top
+  let _l = _plot_draw_line_series(plot_id, sid)
+  return 0.0
+end
+
 // ── Main Draw ───────────────────────────────────────────────────────
 
 fn plot_draw(plot_id)
@@ -610,11 +812,175 @@ fn plot_draw(plot_id)
         let _d = _plot_draw_bar_series(plot_id, s)
       elif stype == PLOT_CANDLE
         let _d = _plot_draw_candle_series(plot_id, s)
+      elif stype == PLOT_HEATMAP
+        let _d = _plot_draw_heatmap_series(plot_id, s)
+      elif stype == PLOT_AREA
+        let _d = _plot_draw_area_series(plot_id, s)
       end
     end
     s = s + 1.0
   end
   _gs[9] = 1.0
+  return 0.0
+end
+
+// ── Heatmap Renderer ──────────────────────────────────────────────
+
+fn _plot_draw_heatmap_series(plot_id, sid)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let si = int(sid)
+  let start = int(_pseries_start[si])
+  let count = _pseries_count[si]
+  // Heatmap uses y values as intensity (0.0-1.0 range)
+  // Color mapping: blue(0) -> green(0.5) -> red(1)
+  let mut j = 0.0
+  while j < count
+    let ji = start + int(j)
+    let px = _plot_map_x(plot_id, _pseries_x[ji])
+    let py = _plot_map_y(plot_id, _pseries_y[ji])
+    let mut intensity = _pseries_y[ji]
+    if intensity < 0.0
+      intensity = 0.0
+    end
+    if intensity > 1.0
+      intensity = 1.0
+    end
+    // Map intensity to color
+    let mut cr = 0.0
+    let mut cg = 0.0
+    let mut cb = 0.0
+    if intensity < 0.5
+      // Blue to green
+      let t = intensity * 2.0
+      cb = (1.0 - t) * 255.0
+      cg = t * 255.0
+    else
+      // Green to red
+      let t = (intensity - 0.5) * 2.0
+      cg = (1.0 - t) * 255.0
+      cr = t * 255.0
+    end
+    // Draw a 5x5 heat cell
+    let _f = gui_canvas_fill(cid, px - 2.0, py - 2.0, 5.0, 5.0, cr, cg, cb)
+    j = j + 1.0
+  end
+  return 0.0
+end
+
+// ── Axis Labels, Title, Legend ──────────────────────────────────────
+
+// Plot title — centered above the plot area
+fn plot_title(plot_id, title)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let cw = _gui_w[int(cid)]
+  let pl = _plot_pad_left[ii]
+  let pr = _plot_pad_right[ii]
+  let pt = _plot_pad_top[ii]
+  let plot_w = cw - pl - pr
+  let tw = len(title) * 10.0
+  let tx = pl + (plot_w - tw) / 2.0
+  let ty = 4.0
+  let _t = gui_canvas_text_colored(cid, tx, ty, title, 2.0, _plot_text_r(), _plot_text_g(), _plot_text_b())
+  return 0.0
+end
+
+// X-axis label — centered below the plot area
+fn plot_x_label(plot_id, label)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let cw = _gui_w[int(cid)]
+  let ch = _gui_h[int(cid)]
+  let pl = _plot_pad_left[ii]
+  let pr = _plot_pad_right[ii]
+  let pb = _plot_pad_bottom[ii]
+  let plot_w = cw - pl - pr
+  let tw = len(label) * 10.0
+  let tx = pl + (plot_w - tw) / 2.0
+  let ty = ch - 14.0
+  let _t = gui_canvas_text_colored(cid, tx, ty, label, 2.0, _plot_accent_r(), _plot_accent_g(), _plot_accent_b())
+  return 0.0
+end
+
+// Y-axis label — placed at top-left of plot area (horizontal)
+fn plot_y_label(plot_id, label)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let pt = _plot_pad_top[ii]
+  let tx = 4.0
+  let ty = pt + 4.0
+  let _t = gui_canvas_text_colored(cid, tx, ty, label, 2.0, _plot_accent_r(), _plot_accent_g(), _plot_accent_b())
+  return 0.0
+end
+
+// Legend — shows series names and colors in a box
+// Series names stored in _pseries_extra_name
+let mut _pseries_name = []
+
+fn plot_series_name(series_id, name)
+  // Ensure name array is large enough
+  while len(_pseries_name) <= series_id
+    push(_pseries_name, "")
+  end
+  _pseries_name[int(series_id)] = name
+  return 0.0
+end
+
+fn plot_legend(plot_id)
+  let ii = int(plot_id)
+  let cid = int(_plot_canvas[ii])
+  let cw = _gui_w[int(cid)]
+  let pt = _plot_pad_top[ii]
+  let pr = _plot_pad_right[ii]
+  // Draw legend box in top-right
+  let nseries = len(_pseries_plot)
+  let mut legend_count = 0.0
+  let mut s = 0.0
+  while s < nseries
+    let si = int(s)
+    if _pseries_plot[si] == plot_id
+      if _pseries_count[si] > 0.0
+        legend_count = legend_count + 1.0
+      end
+    end
+    s = s + 1.0
+  end
+  if legend_count == 0.0
+    return 0.0
+  end
+  let row_h = 16.0
+  let leg_h = legend_count * row_h + 8.0
+  let leg_w = 100.0
+  let leg_x = cw - pr - leg_w - 4.0
+  let leg_y = pt + 4.0
+  // Background
+  let _lbg = gui_canvas_fill(cid, leg_x, leg_y, leg_w, leg_h, _plot_panel_r(), _plot_panel_g(), _plot_panel_b())
+  let _lbd = gui_canvas_rect(cid, leg_x, leg_y, leg_w, leg_h, _plot_border_r(), _plot_border_g(), _plot_border_b())
+  // Entries
+  let mut row = 0.0
+  s = 0.0
+  while s < nseries
+    let si = int(s)
+    if _pseries_plot[si] == plot_id
+      if _pseries_count[si] > 0.0
+        let ry = leg_y + 4.0 + row * row_h
+        // Color swatch
+        let _sw = gui_canvas_fill(cid, leg_x + 4.0, ry + 2.0, 10.0, 10.0, _pseries_r[si], _pseries_g[si], _pseries_b[si])
+        // Name
+        let mut sname = "Series " + str(s)
+        if int(s) < len(_pseries_name)
+          let named = _pseries_name[int(s)]
+          if len(named) > 0.0
+            sname = named
+          end
+        end
+        let _sn = gui_canvas_text_colored(cid, leg_x + 18.0, ry + 1.0, sname, 1.0, _plot_text_r(), _plot_text_g(), _plot_text_b())
+        row = row + 1.0
+      end
+    end
+    s = s + 1.0
+  end
   return 0.0
 end
 

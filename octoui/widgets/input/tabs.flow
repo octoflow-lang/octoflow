@@ -1,0 +1,273 @@
+// widgets/input/tabs.flow — Tab Container Widget
+//
+// A row of clickable tab buttons with switchable content panels.
+// Only the active tab's panel is visible. Click a tab button (or
+// use Space/Enter when focused) to switch panels.
+//
+// Usage:
+//   let tabs = ui_tabs(parent, 400.0)
+//   let _t1 = ui_tab(tabs, "GENERAL")
+//   let _t2 = ui_tab(tabs, "ADVANCED")
+//   let _t3 = ui_tab(tabs, "ABOUT")
+//   let _fin = ui_tabs_finalize(tabs)
+//
+//   // Add widgets to each tab's content panel:
+//   let p1 = ui_tab_panel(tabs, 0.0)
+//   let _w1 = ui_text(p1, "GENERAL CONTENT", UI_COLOR_TEXT)
+//
+//   let p2 = ui_tab_panel(tabs, 1.0)
+//   let _w2 = ui_text(p2, "ADVANCED CONTENT", UI_COLOR_TEXT)
+//
+//   // After layout + ui_tabs_finalize:
+//   let _tu = ui_tabs_update_all()
+//
+//   // In event loop (after ui_process_input):
+//   let _tp = ui_tabs_process()
+//
+//   // Get selected tab:
+//   let sel = ui_tabs_selected(tabs)  // 0-based
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+use "../../widgets/input/button"
+
+// Tab container state (indexed by container column ID)
+let mut _ui_tabs_container = []   // container widget ID (column)
+let mut _ui_tabs_bar = []         // tab bar widget ID (row)
+let mut _ui_tabs_selected = []    // selected tab index (0-based)
+let mut _ui_tabs_count = []       // number of tabs
+let mut _ui_tabs_width = []       // content width
+
+// Per-tab tracking (flat arrays, linear scan by container)
+let mut _ui_tab_btns = []         // tab button widget IDs
+let mut _ui_tab_panels = []       // tab panel widget IDs
+let mut _ui_tab_owner = []        // which container owns this tab
+
+// Create a tab container
+// parent: parent widget ID
+// w: total width of the tab container
+// Returns: container widget ID
+fn ui_tabs(parent, w)
+  // Outer column: tab bar on top, content below
+  let container = ui_tree_add(UI_COLUMN, parent, w, 0.0, " ")
+
+  // Tab bar row
+  let bar = ui_tree_add(UI_ROW, container, w, 30.0, " ")
+  let _bs = ui_tree_set_spacing(bar, 0.0)
+
+  // Register tab container
+  let needed = container + 1.0
+  while len(_ui_tabs_container) < needed
+    push(_ui_tabs_container, -1.0)
+    push(_ui_tabs_bar, -1.0)
+    push(_ui_tabs_selected, 0.0)
+    push(_ui_tabs_count, 0.0)
+    push(_ui_tabs_width, 0.0)
+  end
+  _ui_tabs_container[container] = container
+  _ui_tabs_bar[container] = bar
+  _ui_tabs_selected[container] = 0.0
+  _ui_tabs_count[container] = 0.0
+  _ui_tabs_width[container] = w
+
+  return container
+end
+
+// Add a tab (button + content panel)
+// tabs_id: container widget ID from ui_tabs()
+// label: tab button text
+// Returns: panel widget ID (add content widgets to this)
+fn ui_tab(tabs_id, label)
+  if tabs_id >= len(_ui_tabs_container)
+    return -1.0
+  end
+  let bar = _ui_tabs_bar[tabs_id]
+  let count = _ui_tabs_count[tabs_id]
+  let w = _ui_tabs_width[tabs_id]
+
+  // Create tab button in the bar
+  let btn = ui_button(bar, 100.0, 30.0, label)
+
+  // Create content panel (column) as child of the container
+  let panel = ui_tree_add(UI_COLUMN, tabs_id, w, 0.0, " ")
+  let _ps = ui_tree_set_spacing(panel, 8.0)
+  let _pp = ui_tree_set_padding(panel, 12.0)
+
+  // Hide all panels except the first
+  if count > 0.0
+    _ui_visible[panel] = 0.0
+  end
+
+  // First tab button gets active color
+  if count == 0.0
+    let _sc = ui_tree_set_color_themed(btn, UI_COLOR_PRIMARY)
+  end
+
+  // Track this tab
+  push(_ui_tab_btns, btn)
+  push(_ui_tab_panels, panel)
+  push(_ui_tab_owner, tabs_id)
+
+  _ui_tabs_count[tabs_id] = count + 1.0
+  return panel
+end
+
+// Finalize tabs (call after adding all tabs)
+fn ui_tabs_finalize(tabs_id)
+  return 0.0
+end
+
+// Get the content panel ID for a tab by index
+fn ui_tab_panel(tabs_id, index)
+  let n = len(_ui_tab_owner)
+  let mut tab_idx = 0.0
+  let mut i = 0.0
+  while i < n
+    if _ui_tab_owner[i] == tabs_id
+      if tab_idx == index
+        return _ui_tab_panels[i]
+      end
+      tab_idx = tab_idx + 1.0
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+// Get selected tab index (0-based)
+fn ui_tabs_selected(tabs_id)
+  if tabs_id < len(_ui_tabs_selected)
+    return _ui_tabs_selected[tabs_id]
+  end
+  return 0.0
+end
+
+// Set selected tab programmatically
+fn ui_tabs_set(tabs_id, index)
+  if tabs_id >= len(_ui_tabs_count)
+    return 0.0
+  end
+  let count = _ui_tabs_count[tabs_id]
+  if index < 0.0
+    return 0.0
+  end
+  if index >= count
+    return 0.0
+  end
+
+  let old_sel = _ui_tabs_selected[tabs_id]
+  if old_sel == index
+    return 0.0
+  end
+  _ui_tabs_selected[tabs_id] = index
+
+  // Find button and panel IDs for old and new selection
+  let n = len(_ui_tab_owner)
+  let mut tab_idx = 0.0
+  let mut i = 0.0
+  while i < n
+    if _ui_tab_owner[i] == tabs_id
+      if tab_idx == old_sel
+        // Hide old panel
+        let old_panel = _ui_tab_panels[i]
+        _ui_visible[old_panel] = 0.0
+        // Old tab button: surface color
+        let old_btn = _ui_tab_btns[i]
+        let _sc1 = ui_tree_set_color_themed(old_btn, UI_COLOR_SURFACE)
+      end
+      if tab_idx == index
+        // Show new panel
+        let new_panel = _ui_tab_panels[i]
+        _ui_visible[new_panel] = 1.0
+        // New tab button: primary color
+        let new_btn = _ui_tab_btns[i]
+        let _sc2 = ui_tree_set_color_themed(new_btn, UI_COLOR_PRIMARY)
+      end
+      tab_idx = tab_idx + 1.0
+    end
+    i = i + 1.0
+  end
+
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Process tab clicks each frame
+// Call in event loop after ui_process_input()
+fn ui_tabs_process()
+  let n = len(_ui_tab_owner)
+  let mut i = 0.0
+  while i < n
+    let btn_id = _ui_tab_btns[i]
+    if ui_button_clicked(btn_id) == 1.0
+      let owner = _ui_tab_owner[i]
+      // Find this tab's index within its container
+      let mut tab_idx = 0.0
+      let mut j = 0.0
+      while j < i
+        if _ui_tab_owner[j] == owner
+          tab_idx = tab_idx + 1.0
+        end
+        j = j + 1.0
+      end
+      let _s = ui_tabs_set(owner, tab_idx)
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Position content panels correctly after layout
+// All panels share the same position (only one visible at a time)
+fn ui_tabs_update_all()
+  let n_containers = len(_ui_tabs_container)
+  let mut ci = 0.0
+  while ci < n_containers
+    if _ui_tabs_container[ci] >= 0.0
+      let count = _ui_tabs_count[ci]
+      let selected = _ui_tabs_selected[ci]
+
+      if count > 1.0
+        // Find the active panel's position
+        let mut active_x = 0.0
+        let mut active_y = 0.0
+        let mut found_active = 0.0
+
+        let n = len(_ui_tab_owner)
+        let mut tab_idx = 0.0
+        let mut i = 0.0
+        while i < n
+          if _ui_tab_owner[i] == ci
+            if tab_idx == selected
+              active_x = _ui_x[_ui_tab_panels[i]]
+              active_y = _ui_y[_ui_tab_panels[i]]
+              found_active = 1.0
+            end
+            tab_idx = tab_idx + 1.0
+          end
+          i = i + 1.0
+        end
+
+        // Position all hidden panels at the active panel's location
+        if found_active == 1.0
+          let mut tab_idx2 = 0.0
+          let mut i2 = 0.0
+          while i2 < n
+            if _ui_tab_owner[i2] == ci
+              if tab_idx2 != selected
+                let panel = _ui_tab_panels[i2]
+                _ui_x[panel] = active_x
+                _ui_y[panel] = active_y
+              end
+              tab_idx2 = tab_idx2 + 1.0
+            end
+            i2 = i2 + 1.0
+          end
+        end
+      end
+    end
+    ci = ci + 1.0
+  end
+  return 0.0
+end

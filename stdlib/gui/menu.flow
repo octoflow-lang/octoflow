@@ -1,0 +1,60 @@
+// menu.flow — Right-Click Context Menu
+//
+// Provides a floating context menu shown at mouse position on right-click.
+// Items are shown as a vertical list. Separator items use "---".
+//
+// Usage:
+//   use "gui"
+//   use "menu"
+//   let items = ["Cut", "Copy", "Paste", "---", "Delete"]
+//   // In event loop, call gui_context_menu_show(items) on right-click
+
+use "gui_core"
+use "widgets"
+
+// Context menu state
+let mut _menu_items = []
+let mut _menu_count = 0.0
+let mut _menu_visible = 0.0
+let mut _menu_x = 0.0
+let mut _menu_y = 0.0
+let mut _menu_selected = -1.0
+let mut _menu_w = 120.0
+let mut _menu_item_h = 22.0
+
+fn gui_context_menu_show(items, x, y)
+  let mut _menu_items = items
+  let mut _menu_count = len(items)
+  let mut _menu_visible = 1.0
+  let mut _menu_x = x
+  let mut _menu_y = y
+  let mut _menu_selected = -1.0
+  // Calculate width from longest item
+  let mut max_w = 80.0
+  let mut mi = 0.0
+  while mi < _menu_count
+    let iw = len(items[int(mi)]) * 10.0 + 20.0
+    if iw > max_w
+      max_w = iw
+    end
+    mi = mi + 1.0
+  end
+  _menu_w = max_w
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_context_menu_hide()
+  _menu_visible = 0.0
+  _menu_selected = -1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+fn gui_context_menu_selected()
+  return _menu_selected
+end
+
+fn gui_context_menu_is_open()
+  return _menu_visible
+end

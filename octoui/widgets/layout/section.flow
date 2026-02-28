@@ -1,0 +1,133 @@
+// widgets/layout/section.flow — Collapsible Section (Accordion)
+//
+// A section with a clickable header that expands/collapses its content.
+// Composed of a button (header) + column (content body).
+//
+// Usage:
+//   let body = ui_section(parent, "SETTINGS")
+//   let _w = ui_checkbox(body, "OPTION A")
+//   let _x = ui_slider(body, 200.0, 16.0, 0.0, 100.0, 50.0)
+//
+// The header button shows "V TITLE" when expanded or "> TITLE" when collapsed.
+// Click the header to toggle. Call ui_section_process() each frame.
+
+use "../../engine/tree"
+use "../../engine/layout"
+use "../../engine/dirty"
+use "../../engine/sdf_font"
+use "../../themes/dark"
+use "../input/button"
+
+// Section registry: parallel arrays
+let mut _ui_sec_header = []
+let mut _ui_sec_body = []
+let mut _ui_sec_expanded = []
+let mut _ui_sec_title = []
+
+// Create a collapsible section
+// parent: parent widget ID
+// title: section header text
+// Returns: body column ID (add child widgets to this)
+fn ui_section(parent, title)
+  // Header button with expand icon
+  let header_text = "V " + title
+  let header_w = ui_text_width(header_text, 16.0) + 20.0
+  let header = ui_button(parent, header_w, 24.0, header_text)
+
+  // Content body column
+  let body = ui_tree_add(UI_COLUMN, parent, 0.0, 0.0, " ")
+  let _bs = ui_tree_set_spacing(body, 6.0)
+  let _bp = ui_tree_set_padding(body, 4.0)
+
+  // Register section
+  push(_ui_sec_header, header)
+  push(_ui_sec_body, body)
+  push(_ui_sec_expanded, 1.0)
+  push(_ui_sec_title, title)
+
+  return body
+end
+
+// Process section header clicks — call once per frame
+fn ui_section_process()
+  let n = len(_ui_sec_header)
+  let mut i = 0.0
+  while i < n
+    let header = _ui_sec_header[i]
+    if ui_button_clicked(header) == 1.0
+      if _ui_sec_expanded[i] == 1.0
+        // Collapse
+        _ui_sec_expanded[i] = 0.0
+        let _v = ui_tree_set_visible(_ui_sec_body[i], 0.0)
+        let title = _ui_sec_title[i]
+        let _t = ui_tree_set_text(header, "> " + title)
+      else
+        // Expand
+        _ui_sec_expanded[i] = 1.0
+        let _v = ui_tree_set_visible(_ui_sec_body[i], 1.0)
+        let title = _ui_sec_title[i]
+        let _t = ui_tree_set_text(header, "V " + title)
+      end
+      let _l = ui_layout_update()
+      let _d = ui_mark_dirty()
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Check if a section is expanded
+// body_id: the ID returned by ui_section()
+fn ui_section_is_expanded(body_id)
+  let n = len(_ui_sec_body)
+  let mut i = 0.0
+  while i < n
+    if _ui_sec_body[i] == body_id
+      return _ui_sec_expanded[i]
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Programmatically expand a section
+fn ui_section_expand(body_id)
+  let n = len(_ui_sec_body)
+  let mut i = 0.0
+  while i < n
+    if _ui_sec_body[i] == body_id
+      if _ui_sec_expanded[i] == 0.0
+        _ui_sec_expanded[i] = 1.0
+        let _v = ui_tree_set_visible(body_id, 1.0)
+        let header = _ui_sec_header[i]
+        let title = _ui_sec_title[i]
+        let _t = ui_tree_set_text(header, "V " + title)
+        let _l = ui_layout_update()
+        let _d = ui_mark_dirty()
+      end
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Programmatically collapse a section
+fn ui_section_collapse(body_id)
+  let n = len(_ui_sec_body)
+  let mut i = 0.0
+  while i < n
+    if _ui_sec_body[i] == body_id
+      if _ui_sec_expanded[i] == 1.0
+        _ui_sec_expanded[i] = 0.0
+        let _v = ui_tree_set_visible(body_id, 0.0)
+        let header = _ui_sec_header[i]
+        let title = _ui_sec_title[i]
+        let _t = ui_tree_set_text(header, "> " + title)
+        let _l = ui_layout_update()
+        let _d = ui_mark_dirty()
+      end
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end

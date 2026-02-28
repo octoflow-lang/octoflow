@@ -1,0 +1,143 @@
+// examples/login.flow — OctoUI Login Form Demo
+//
+// Demonstrates text input enhancements: placeholder text,
+// password masking, and readonly mode.
+//
+// Controls:
+//   TAB    — Cycle focus between inputs
+//   ENTER  — Submit form
+//   ESCAPE — Quit
+//
+// Run: octoflow run octoui/examples/login.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/input/button"
+use "../widgets/input/textinput"
+use "../widgets/input/checkbox"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(400.0, 380.0, "OctoUI Login")
+
+// Root layout
+let root = ui_column(-1.0, 10.0)
+let _sp = ui_tree_set_padding(root, 24.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 400.0, 380.0)
+
+// Title
+let title = ui_text(root, "SIGN IN", UI_COLOR_PRIMARY)
+let sep1 = ui_separator(root, 352.0)
+
+// Username field with placeholder
+let user_lbl = ui_text(root, "USERNAME", UI_COLOR_TEXT_DIM)
+let user_input = ui_textinput(root, 300.0, 28.0)
+let _up = ui_textinput_set_placeholder(user_input, "ENTER USERNAME")
+
+// Password field with masking
+let pass_lbl = ui_text(root, "PASSWORD", UI_COLOR_TEXT_DIM)
+let pass_input = ui_textinput(root, 300.0, 28.0)
+let _pp = ui_textinput_set_placeholder(pass_input, "ENTER PASSWORD")
+let _pm = ui_textinput_set_password(pass_input, 1.0)
+
+// Remember me checkbox
+let remember = ui_checkbox(root, "REMEMBER ME")
+
+let sep2 = ui_separator(root, 352.0)
+
+// Server field (readonly — pre-filled, not editable)
+let server_lbl = ui_text(root, "SERVER (READONLY)", UI_COLOR_TEXT_DIM)
+let server_input = ui_textinput(root, 300.0, 28.0)
+let _sv = ui_textinput_set(server_input, "PROD.EXAMPLE.COM")
+let _sr2 = ui_textinput_set_readonly(server_input, 1.0)
+
+let sep3 = ui_separator(root, 352.0)
+
+// Buttons
+let btn_row = ui_row(root, 12.0)
+let btn_login = ui_button(btn_row, 120.0, 32.0, "LOGIN")
+let btn_clear = ui_button(btn_row, 120.0, 32.0, "CLEAR")
+
+// Status
+let status = ui_text(root, "ENTER CREDENTIALS", UI_COLOR_TEXT_DIM)
+
+// Initial layout
+let _l = ui_layout_update()
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  let key = ui_key_down()
+  let _tk = ui_textinput_process_key(key)
+
+  // Login button or Enter on password field
+  let mut do_login = 0.0
+  if ui_button_clicked(btn_login) == 1.0
+    do_login = 1.0
+  end
+  if ui_textinput_submitted(pass_input) == 1.0
+    do_login = 1.0
+  end
+  if ui_textinput_submitted(user_input) == 1.0
+    do_login = 1.0
+  end
+
+  if do_login == 1.0
+    let user = ui_textinput_value(user_input)
+    if user == " "
+      let _st = ui_tree_set_text(status, "USERNAME REQUIRED")
+    else
+      let pass = ui_textinput_value(pass_input)
+      if pass == " "
+        let _st = ui_tree_set_text(status, "PASSWORD REQUIRED")
+      else
+        let _st = ui_tree_set_text(status, "WELCOME " + user)
+      end
+    end
+    let _lu = ui_layout_update()
+    let _d = ui_mark_dirty()
+  end
+
+  // Clear button
+  if ui_button_clicked(btn_clear) == 1.0
+    let _cu = ui_textinput_set(user_input, " ")
+    let _cp = ui_textinput_set(pass_input, " ")
+    let _st = ui_tree_set_text(status, "ENTER CREDENTIALS")
+    let _lu = ui_layout_update()
+    let _d = ui_mark_dirty()
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Login demo finished.")

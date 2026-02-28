@@ -1,0 +1,714 @@
+// gpu_render.flow — GPU-Accelerated Rendering Pipeline
+//
+// Replaces CPU pixel loops with GPU batch operations:
+//   gpu_fill  → clear buffer (1 call, not 480K pixel writes)
+//   gpu_where → masked rect fills (batched by color)
+//   gpu_scale + gpu_add → alpha blending
+//   gpu_scatter → text/sprite blitting
+//
+// Uses global mutable arrays for pixel buffers (avoids cross-module
+// array return issues). Data stays GPU-resident between ops.
+//
+// IMPORTANT: OctoFlow runtime limitation — Statement::Assign does not
+// dispatch to eval_array_fn. Use `let x = gpu_builtin(...)` not
+// `x = gpu_builtin(...)` for ALL array-returning GPU builtins.
+//
+// Usage:
+//   use "gui"
+//   use "gpu_render"
+//   // GPU path is auto-selected if GPU available
+
+use "gui_core"
+
+// ── GPU State ───────────────────────────────────────────────────────
+// Global pixel buffers — hold GPU-resident arrays during rendering
+let mut _gpu_px_r = []
+let mut _gpu_px_g = []
+let mut _gpu_px_b = []
+
+// GPU availability stored as array element (propagates across function
+// boundaries, unlike mutable scalars which are local-only).
+// Module import only processes declarations, not push() — use ArrayDecl.
+let mut _gpu_flag = [0.0]
+
+// ── 1F: CPU Fallback Detection ──────────────────────────────────────
+
+fn gpu_render_init()
+  // Check if GPU is available via gpu_info()
+  let info = gpu_info()
+  // gpu_info returns a map — if it has entries, GPU is ready
+  let keys = map_keys(info)
+  if len(keys) > 0.0
+    _gpu_flag[0] = 1.0
+  end
+  return _gpu_flag[0]
+end
+
+// ── 1A: GPU Buffer Clear ────────────────────────────────────────────
+// Replaces the 480K-pixel CPU loop with 3 gpu_fill kernel dispatches.
+// gpu_fill(value, count) — creates flat array of `count` elements.
+// NOTE: Must use `let` (LetDecl), not `=` (Assign), for gpu builtins.
+
+fn _gpu_render_clear(total, bg_r, bg_g, bg_b)
+  let _gpu_px_r = gpu_fill(bg_r, total)
+  let _gpu_px_g = gpu_fill(bg_g, total)
+  let _gpu_px_b = gpu_fill(bg_b, total)
+  return 0.0
+end
+
+// ── 1B: GPU Rect Fill via Mask + Where ──────────────────────────────
+// Build a binary mask (1.0 at rect pixels, 0.0 elsewhere) via
+// gpu_scatter, then apply color with gpu_where in one GPU call.
+
+fn _gpu_build_rect_indices(x, y, w, h, win_w, win_h)
+  // Build flat index array for all pixels inside the rect.
+  // Returns indices array. Companion values array is all 1.0.
+  // Clamps to window bounds.
+  let mut indices = []
+  let mut sy = y
+  if sy < 0.0
+    sy = 0.0
+  end
+  let mut ey = y + h
+  if ey > win_h
+    ey = win_h
+  end
+  let mut sx = x
+  if sx < 0.0
+    sx = 0.0
+  end
+  let mut ex = x + w
+  if ex > win_w
+    ex = win_w
+  end
+  let mut ry = sy
+  while ry < ey
+    let row_base = ry * win_w
+    let mut rx = sx
+    while rx < ex
+      push(indices, row_base + rx)
+      rx = rx + 1.0
+    end
+    ry = ry + 1.0
+  end
+  return indices
+end
+
+fn _gpu_rect_mask(x, y, w, h, win_w, win_h, total)
+  // Build a binary mask: 1.0 where rect is, 0.0 elsewhere
+  // Result stored in GPU_ARRAYS as "_gpu_mask_out" — callers reference
+  // this name directly (GPU arrays can't be returned from functions).
+  let indices = _gpu_build_rect_indices(x, y, w, h, win_w, win_h)
+  let px_count = len(indices)
+  if px_count == 0.0
+    let _gpu_mask_out = gpu_fill(0.0, total)
+    return 0.0
+  end
+  // gpu_scatter(values, indices, dest_size) — creates zero-filled array,
+  // writes values[i] at position indices[i]
+  let ones = gpu_fill(1.0, px_count)
+  let _gpu_mask_out = gpu_scatter(ones, indices, total)
+  return 0.0
+end
+
+fn _gpu_apply_rect_mask(x, y, w, h, cr, cg, cb, win_w, win_h, total)
+  // Build mask + apply color in one function (avoids returning GPU arrays)
+  let _mk = _gpu_rect_mask(x, y, w, h, win_w, win_h, total)
+  let fg_r = gpu_fill(cr, total)
+  let fg_g = gpu_fill(cg, total)
+  let fg_b = gpu_fill(cb, total)
+  // _gpu_mask_out was set by _gpu_rect_mask
+  let _gpu_px_r = gpu_where(_gpu_mask_out, fg_r, _gpu_px_r)
+  let _gpu_px_g = gpu_where(_gpu_mask_out, fg_g, _gpu_px_g)
+  let _gpu_px_b = gpu_where(_gpu_mask_out, fg_b, _gpu_px_b)
+  return 0.0
+end
+
+fn _gpu_apply_rect(mask_name_unused, cr, cg, cb, total)
+  // Apply rect color using _gpu_mask_out (set by prior _gpu_rect_mask call)
+  let fg_r = gpu_fill(cr, total)
+  let fg_g = gpu_fill(cg, total)
+  let fg_b = gpu_fill(cb, total)
+  let _gpu_px_r = gpu_where(_gpu_mask_out, fg_r, _gpu_px_r)
+  let _gpu_px_g = gpu_where(_gpu_mask_out, fg_g, _gpu_px_g)
+  let _gpu_px_b = gpu_where(_gpu_mask_out, fg_b, _gpu_px_b)
+  return 0.0
+end
+
+// ── 1C: Batched Widget Rendering ────────────────────────────────────
+// Group widgets by color, merge masks with gpu_add, apply once.
+
+fn _gpu_render_widgets(win_w, win_h)
+  let total = win_w * win_h
+  let wcount = len(_gui_types)
+
+  // Phase 1: Panel fills — _tc[3-5]
+  let mut i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      if _gui_types[ii] == GUI_PANEL
+        let _mk = _gpu_apply_rect_mask(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[3], _tc[4], _tc[5], win_w, win_h, total)
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Phase 2: Widget backgrounds (normal) — _tc[6-8]
+  i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      let wtype = _gui_types[ii]
+      if wtype == GUI_BUTTON || wtype == GUI_CHECKBOX || wtype == GUI_SLIDER || wtype == GUI_TEXTINPUT || wtype == GUI_SPINBOX || wtype == GUI_DROPDOWN || wtype == GUI_LISTBOX || wtype == GUI_TREEVIEW
+        if _gui_hovered[ii] == 0.0
+          if _gui_pressed[ii] == 0.0
+            let _mk = _gpu_apply_rect_mask(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[6], _tc[7], _tc[8], win_w, win_h, total)
+          end
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Phase 3: Hovered widgets — _tc[9-11]
+  i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      if _gui_hovered[ii] == 1.0
+        if _gui_pressed[ii] == 0.0
+          let wtype = _gui_types[ii]
+          if wtype == GUI_BUTTON || wtype == GUI_CHECKBOX || wtype == GUI_SLIDER || wtype == GUI_TEXTINPUT || wtype == GUI_SPINBOX || wtype == GUI_DROPDOWN || wtype == GUI_LISTBOX
+            let _mk = _gpu_apply_rect_mask(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[9], _tc[10], _tc[11], win_w, win_h, total)
+          end
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Phase 4: Pressed/active widgets — _tc[12-14]
+  i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      if _gui_pressed[ii] == 1.0
+        let _mk = _gpu_apply_rect_mask(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[12], _tc[13], _tc[14], win_w, win_h, total)
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Phase 5: Borders — draw 1px borders around all bordered widgets
+  i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      let wtype = _gui_types[ii]
+      if wtype > 0.0
+        if wtype != GUI_LABEL
+          if wtype != GUI_SEPARATOR
+            if wtype != GUI_TOOLTIP
+              let _bd = _gpu_draw_border(_gui_x[ii], _gui_y[ii], _gui_w[ii], _gui_h[ii], _tc[21], _tc[22], _tc[23], win_w, win_h, total)
+            end
+          end
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Phase 6: Checkbox check marks + radio dots
+  i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      let wtype = _gui_types[ii]
+      if wtype == GUI_CHECKBOX
+        if _gui_checked[ii] == 1.0
+          let _ck = _gpu_apply_rect_mask(_gui_x[ii] + 4.0, _gui_y[ii] + 5.0, 10.0, 10.0, _tc[24], _tc[25], _tc[26], win_w, win_h, total)
+        end
+      elif wtype == GUI_RADIO
+        if _gui_checked[ii] == 1.0
+          let _rd = _gpu_apply_rect_mask(_gui_x[ii] + 5.0, _gui_y[ii] + 6.0, 8.0, 8.0, _tc[24], _tc[25], _tc[26], win_w, win_h, total)
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Phase 7: Slider fills + progress bars
+  i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      let wtype = _gui_types[ii]
+      if wtype == GUI_SLIDER
+        let smin = _gui_slider_min[ii]
+        let smax = _gui_slider_max[ii]
+        let sval = _gui_slider_val[ii]
+        let range = smax - smin
+        let mut frac = 0.0
+        if range > 0.0
+          frac = (sval - smin) / range
+        end
+        if frac < 0.0
+          frac = 0.0
+        end
+        if frac > 1.0
+          frac = 1.0
+        end
+        let fill_w = frac * _gui_w[ii]
+        if fill_w > 0.0
+          let track_y = _gui_y[ii] + (_gui_h[ii] - 6.0) / 2.0
+          let _sf = _gpu_apply_rect_mask(_gui_x[ii], track_y, fill_w, 6.0, _tc[27], _tc[28], _tc[29], win_w, win_h, total)
+        end
+      elif wtype == GUI_PROGRESS
+        let pval = _gui_slider_val[ii]
+        let mut pfrac = pval / 100.0
+        if pfrac < 0.0
+          pfrac = 0.0
+        end
+        if pfrac > 1.0
+          pfrac = 1.0
+        end
+        let pfill = pfrac * (_gui_w[ii] - 2.0)
+        if pfill > 0.0
+          let pt_y = _gui_y[ii] + (_gui_h[ii] - 14.0) / 2.0
+          let _pf = _gpu_apply_rect_mask(_gui_x[ii] + 1.0, pt_y + 1.0, pfill, 12.0, _tc[27], _tc[28], _tc[29], win_w, win_h, total)
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  // Phase 8: Separator lines
+  i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      if _gui_types[ii] == GUI_SEPARATOR
+        let _sep = _gpu_apply_rect_mask(_gui_x[ii], _gui_y[ii], _gui_w[ii], 1.0, _tc[21], _tc[22], _tc[23], win_w, win_h, total)
+      end
+    end
+    i = i + 1.0
+  end
+
+  return 0.0
+end
+
+// ── GPU Border Drawing ──────────────────────────────────────────────
+// Draw 1px border around a rectangle using 4 edge masks merged
+
+fn _gpu_draw_border(x, y, w, h, cr, cg, cb, win_w, win_h, total)
+  if h <= 0.0
+    return 0.0
+  end
+  if w <= 0.0
+    return 0.0
+  end
+  // Top edge
+  let mut border_indices = []
+  let mut bx = x
+  while bx < x + w
+    if bx >= 0.0
+      if bx < win_w
+        if y >= 0.0
+          if y < win_h
+            push(border_indices, y * win_w + bx)
+          end
+        end
+        // Bottom edge
+        let by = y + h - 1.0
+        if by >= 0.0
+          if by < win_h
+            push(border_indices, by * win_w + bx)
+          end
+        end
+      end
+    end
+    bx = bx + 1.0
+  end
+  // Left and right edges (exclude corners already drawn)
+  let mut by2 = y + 1.0
+  while by2 < y + h - 1.0
+    if by2 >= 0.0
+      if by2 < win_h
+        // Left
+        if x >= 0.0
+          if x < win_w
+            push(border_indices, by2 * win_w + x)
+          end
+        end
+        // Right
+        let rx = x + w - 1.0
+        if rx >= 0.0
+          if rx < win_w
+            push(border_indices, by2 * win_w + rx)
+          end
+        end
+      end
+    end
+    by2 = by2 + 1.0
+  end
+  let bi_count = len(border_indices)
+  if bi_count > 0.0
+    let b_vals = gpu_fill(1.0, bi_count)
+    let _gpu_mask_out = gpu_scatter(b_vals, border_indices, total)
+    let _ab = _gpu_apply_rect(0.0, cr, cg, cb, total)
+  end
+  return 0.0
+end
+
+// ── GPU Text Rendering ──────────────────────────────────────────────
+// Render all widget text labels using bitmap font + gpu_scatter
+
+fn _gpu_render_text(win_w, win_h)
+  let total = win_w * win_h
+  let wcount = len(_gui_types)
+  let scale = 2.0
+  let mut i = 0.0
+  while i < wcount
+    let ii = int(i)
+    if _gui_visible[ii] == 1.0
+      let wtype = _gui_types[ii]
+      if wtype > 0.0
+        let text = _gui_texts[ii]
+        let wx = _gui_x[ii]
+        let wy = _gui_y[ii]
+        let ww2 = _gui_w[ii]
+        let wh2 = _gui_h[ii]
+        if wtype == GUI_LABEL
+          let _t = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, text, wx, wy + 2.0, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+        elif wtype == GUI_BUTTON
+          let tlen = len(text)
+          let tw = tlen * 5.0 * scale
+          let tx = wx + (ww2 - tw) / 2.0
+          let ty = wy + (wh2 - 6.0 * scale) / 2.0
+          let _t = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, text, tx, ty, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+        elif wtype == GUI_CHECKBOX || wtype == GUI_RADIO
+          let _t = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, text, wx + 24.0, wy + 3.0, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+        elif wtype == GUI_TEXTINPUT
+          let inp_text = _gui_input_text[ii]
+          let _t = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, inp_text, wx + 6.0, wy + 8.0, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+        elif wtype == GUI_PROGRESS
+          let pval = _gui_slider_val[ii]
+          let pct_i = floor(pval)
+          let pct_txt = str(pct_i) + "%"
+          let ptw = len(pct_txt) * 5.0 * scale
+          let ptx = wx + (ww2 - ptw) / 2.0
+          let pt_y = wy + (_gui_h[ii] - 14.0) / 2.0
+          let _t = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, pct_txt, ptx, pt_y + 1.0, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+        elif wtype == GUI_SPINBOX
+          let sval = _gui_slider_val[ii]
+          let val_text = str(sval)
+          let btn_w = 30.0
+          let val_w = ww2 - btn_w * 2.0
+          let vtw = len(val_text) * 5.0 * scale
+          let vtx = wx + btn_w + (val_w - vtw) / 2.0
+          let _t = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, val_text, vtx, wy + 7.0, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+          let _tm = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, "-", wx + 10.0, wy + 7.0, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+          let _tp = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, "+", wx + ww2 - 20.0, wy + 7.0, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+        elif wtype == GUI_DROPDOWN
+          let dd_sel = _gui_list_selected[ii]
+          let mut dd_text = " "
+          if dd_sel >= 0.0
+            let dd_s = _gui_list_start[ii]
+            let dd_actual = int(dd_s + dd_sel)
+            if dd_actual >= 0.0
+              if dd_actual < len(_gui_list_items)
+                dd_text = _gui_list_items[dd_actual]
+              end
+            end
+          end
+          let _t = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, dd_text, wx + 8.0, wy + 8.0, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+          let _ta = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, "V", wx + ww2 - 18.0, wy + 8.0, scale, _tc[18], _tc[19], _tc[20], win_w, win_h)
+        elif wtype == GUI_LISTBOX
+          let row_h = 20.0
+          let vis_rows = floor((wh2 - 4.0) / row_h)
+          let lstart = _gui_list_start[ii]
+          let lcount = _gui_list_count[ii]
+          let lscroll = _gui_list_scroll[ii]
+          let lsel = _gui_list_selected[ii]
+          let mut ri = 0.0
+          while ri < vis_rows
+            let item_idx = ri + lscroll
+            if item_idx < lcount
+              let ry = wy + 2.0 + ri * row_h
+              // Selection highlight
+              if item_idx == lsel
+                let _hl = _gpu_apply_rect_mask(wx + 1.0, ry, ww2 - 2.0, row_h, _tc[12], _tc[13], _tc[14], win_w, win_h, total)
+              end
+              let li_actual = int(lstart + item_idx)
+              if li_actual >= 0.0
+                if li_actual < len(_gui_list_items)
+                  let item_text = _gui_list_items[li_actual]
+                  let _it = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, item_text, wx + 6.0, ry + 3.0, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+                end
+              end
+            end
+            ri = ri + 1.0
+          end
+        elif wtype == GUI_TABS
+          let tab_hh = 30.0
+          let tcount = _gui_list_count[ii]
+          let tstart = _gui_list_start[ii]
+          let active_tab = _gui_slider_val[ii]
+          if tcount > 0.0
+            let tab_tw = ww2 / tcount
+            let mut ti = 0.0
+            while ti < tcount
+              let tx = wx + ti * tab_tw
+              // Active tab highlight
+              if ti == active_tab
+                let _at = _gpu_apply_rect_mask(tx, wy, tab_tw, tab_hh, _tc[3], _tc[4], _tc[5], win_w, win_h, total)
+              end
+              let tab_actual = int(tstart + ti)
+              let mut tlabel = " "
+              if tab_actual >= 0.0
+                if tab_actual < len(_gui_list_items)
+                  tlabel = _gui_list_items[tab_actual]
+                end
+              end
+              let tlw = len(tlabel) * 5.0 * scale
+              let tlx = tx + (tab_tw - tlw) / 2.0
+              let mut ttr = _tc[15]
+              let mut ttg = _tc[16]
+              let mut ttb = _tc[17]
+              if ti != active_tab
+                ttr = _tc[18]
+                ttg = _tc[19]
+                ttb = _tc[20]
+              end
+              let _tlt = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, tlabel, tlx, wy + 8.0, scale, ttr, ttg, ttb, win_w, win_h)
+              ti = ti + 1.0
+            end
+          end
+          // Tab content area
+          let _cnt = _gpu_apply_rect_mask(wx, wy + tab_hh, ww2, wh2 - tab_hh, _tc[3], _tc[4], _tc[5], win_w, win_h, total)
+        end
+      end
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// ── 1D: GPU Alpha Blending ──────────────────────────────────────────
+// dst = dst * (1-alpha) + src * alpha — all GPU-resident operations
+
+fn _gpu_blend_onto(src_r, src_g, src_b, alpha, total)
+  // Blend source arrays onto global pixel buffers with alpha
+  let inv = 1.0 - alpha
+  // Scale destination by (1-alpha) — gpu_scale is broken, use gpu_mul instead
+  let inv_fill = gpu_fill(inv, total)
+  let d_r = gpu_mul(_gpu_px_r, inv_fill)
+  let d_g = gpu_mul(_gpu_px_g, inv_fill)
+  let d_b = gpu_mul(_gpu_px_b, inv_fill)
+  // Scale source by alpha
+  let alpha_fill = gpu_fill(alpha, total)
+  let s_r = gpu_mul(src_r, alpha_fill)
+  let s_g = gpu_mul(src_g, alpha_fill)
+  let s_b = gpu_mul(src_b, alpha_fill)
+  // Combine — use `let` for array-returning gpu_add
+  let _gpu_px_r = gpu_add(d_r, s_r)
+  let _gpu_px_g = gpu_add(d_g, s_g)
+  let _gpu_px_b = gpu_add(d_b, s_b)
+  return 0.0
+end
+
+fn _gpu_blend_rect(x, y, w, h, cr, cg, cb, alpha, win_w, win_h, total)
+  // Alpha-blend a colored rectangle onto the buffer
+  // Build mask for rect area
+  let _mk = _gpu_rect_mask(x, y, w, h, win_w, win_h, total)
+  // Create source color arrays
+  let fg_r = gpu_fill(cr, total)
+  let fg_g = gpu_fill(cg, total)
+  let fg_b = gpu_fill(cb, total)
+  // Compute blended values: dst*(1-alpha) + src*alpha
+  // Must break into separate steps — extract_array_arg only accepts Ref
+  let inv = 1.0 - alpha
+  let inv_fill = gpu_fill(inv, total)
+  let dr = gpu_mul(_gpu_px_r, inv_fill)
+  let dg = gpu_mul(_gpu_px_g, inv_fill)
+  let db = gpu_mul(_gpu_px_b, inv_fill)
+  let alpha_fill = gpu_fill(alpha, total)
+  let sr = gpu_mul(fg_r, alpha_fill)
+  let sg = gpu_mul(fg_g, alpha_fill)
+  let sb = gpu_mul(fg_b, alpha_fill)
+  let blend_r = gpu_add(dr, sr)
+  let blend_g = gpu_add(dg, sg)
+  let blend_b = gpu_add(db, sb)
+  // Apply only where mask is 1.0 — use `let` for gpu_where
+  let _gpu_px_r = gpu_where(_gpu_mask_out, blend_r, _gpu_px_r)
+  let _gpu_px_g = gpu_where(_gpu_mask_out, blend_g, _gpu_px_g)
+  let _gpu_px_b = gpu_where(_gpu_mask_out, blend_b, _gpu_px_b)
+  return 0.0
+end
+
+// ── 1E: GDI Text Blit via GPU ───────────────────────────────────────
+// Uses GDI ClearType rendering + gpu_scatter for production text
+
+fn _gpu_blit_text(text, size, x, y, cr, cg, cb, win_w, win_h, total)
+  // Render text via GDI at specified size
+  gdi_text_begin()
+  let idx = gdi_text_add(text, size)
+  let tw = gdi_text_w(idx)
+  let th = gdi_text_h(idx)
+  let atlas = gdi_text_atlas()
+  let atlas_len = len(atlas)
+  if atlas_len == 0.0
+    return 0.0
+  end
+  // Build scatter arrays: indices + blended color values
+  let mut indices = []
+  let mut vals_r = []
+  let mut vals_g = []
+  let mut vals_b = []
+  let mut sy = 0.0
+  while sy < th
+    let dy = y + sy
+    if dy >= 0.0
+      if dy < win_h
+        let mut sx = 0.0
+        while sx < tw
+          let dx = x + sx
+          if dx >= 0.0
+            if dx < win_w
+              let si = int(sy * tw + sx)
+              if si < atlas_len
+                let a = atlas[si] / 255.0
+                if a > 0.01
+                  let di = int(dy * win_w + dx)
+                  push(indices, di)
+                  push(vals_r, cr * a)
+                  push(vals_g, cg * a)
+                  push(vals_b, cb * a)
+                end
+              end
+            end
+          end
+          sx = sx + 1.0
+        end
+      end
+    end
+    sy = sy + 1.0
+  end
+  // Scatter text pixels onto buffer
+  let idx_count = len(indices)
+  if idx_count > 0.0
+    let text_r = gpu_scatter(vals_r, indices, total)
+    let text_g = gpu_scatter(vals_g, indices, total)
+    let text_b = gpu_scatter(vals_b, indices, total)
+    // Build presence mask
+    let mask_vals = gpu_fill(1.0, idx_count)
+    let text_mask = gpu_scatter(mask_vals, indices, total)
+    // Apply: where text exists, use text color; otherwise keep existing
+    let _gpu_px_r = gpu_where(text_mask, text_r, _gpu_px_r)
+    let _gpu_px_g = gpu_where(text_mask, text_g, _gpu_px_g)
+    let _gpu_px_b = gpu_where(text_mask, text_b, _gpu_px_b)
+  end
+  return 0.0
+end
+
+// ── GPU Dropdown Overlay ────────────────────────────────────────────
+// Render dropdown overlay with alpha blending
+
+fn _gpu_render_dropdown(win_w, win_h)
+  let total = win_w * win_h
+  let scale = 2.0
+  if _gs[11] < 0.0
+    return 0.0
+  end
+  let ov_id = int(_gs[11])
+  let wcount = len(_gui_types)
+  if ov_id >= wcount
+    return 0.0
+  end
+  if _gui_visible[ov_id] == 0.0
+    return 0.0
+  end
+  let ov_x = _gui_x[ov_id]
+  let ov_y = _gui_y[ov_id] + _gui_h[ov_id]
+  let ov_w = _gui_w[ov_id]
+  let ov_count = _gui_list_count[ov_id]
+  let ov_row_h = 22.0
+  let ov_h = ov_count * ov_row_h
+  let ov_sel = _gui_list_selected[ov_id]
+  let ov_start = _gui_list_start[ov_id]
+  // Background (semi-transparent via alpha blend)
+  let _bg = _gpu_blend_rect(ov_x, ov_y, ov_w, ov_h, _tc[3], _tc[4], _tc[5], 0.95, win_w, win_h, total)
+  // Border
+  let _bd = _gpu_draw_border(ov_x, ov_y, ov_w, ov_h, _tc[21], _tc[22], _tc[23], win_w, win_h, total)
+  // Items
+  let mut oi = 0.0
+  while oi < ov_count
+    let oiy = ov_y + oi * ov_row_h
+    if oi == ov_sel
+      let _sm = _gpu_apply_rect_mask(ov_x + 1.0, oiy, ov_w - 2.0, ov_row_h, _tc[12], _tc[13], _tc[14], win_w, win_h, total)
+    end
+    let oi_actual = int(ov_start + oi)
+    if oi_actual >= 0.0
+      if oi_actual < len(_gui_list_items)
+        let oi_text = _gui_list_items[oi_actual]
+        let _ot = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, oi_text, ov_x + 8.0, oiy + 4.0, scale, _tc[15], _tc[16], _tc[17], win_w, win_h)
+      end
+    end
+    oi = oi + 1.0
+  end
+  return 0.0
+end
+
+// ── Full GPU Render Pipeline ────────────────────────────────────────
+// Called from window.flow _gui_render() when _gpu_flag[0] == 1.0
+
+fn _gui_render_gpu()
+  let ww = _gs[1]
+  let wh = _gs[2]
+  let total = ww * wh
+  if total <= 0.0
+    return 0.0
+  end
+
+  // Step 1: GPU clear (3 calls, not 480K pixel writes)
+  let _c = _gpu_render_clear(total, _tc[0], _tc[1], _tc[2])
+
+  // Step 2: Draw widget backgrounds using GPU batch operations
+  let _w = _gpu_render_widgets(ww, wh)
+
+  // Step 3: Text rendering (uses bitmap font writing to GPU pixel arrays)
+  let _t = _gpu_render_text(ww, wh)
+
+  // Step 4: Dropdown overlay with alpha blending
+  let _d = _gpu_render_dropdown(ww, wh)
+
+  // Step 5: Tooltips
+  let tt_wcount = len(_gui_types)
+  let mut tt_i = 0.0
+  while tt_i < tt_wcount
+    let tt_ii = int(tt_i)
+    if _gui_types[tt_ii] == GUI_TOOLTIP
+      let tt_target = int(_gui_parent[tt_ii])
+      if tt_target >= 0.0
+        if tt_target < tt_wcount
+          if _gui_hovered[tt_target] == 1.0
+            let tt_text = _gui_texts[tt_ii]
+            let tt_w = _gui_w[tt_ii]
+            let tt_h = _gui_h[tt_ii]
+            let tt_x = _gs[3] + 12.0
+            let tt_y = _gs[4] - 24.0
+            let _tbg = _gpu_blend_rect(tt_x, tt_y, tt_w, tt_h, 50.0, 50.0, 55.0, 0.9, ww, wh, total)
+            let _tbd = _gpu_draw_border(tt_x, tt_y, tt_w, tt_h, _tc[21], _tc[22], _tc[23], ww, wh, total)
+            let _ttt = _gui_draw_text(_gpu_px_r, _gpu_px_g, _gpu_px_b, tt_text, tt_x + 4.0, tt_y + 3.0, 2.0, 240.0, 240.0, 240.0, ww, wh)
+          end
+        end
+      end
+    end
+    tt_i = tt_i + 1.0
+  end
+
+  // Step 6: Display
+  window_draw(_gpu_px_r, _gpu_px_g, _gpu_px_b)
+  return 0.0
+end

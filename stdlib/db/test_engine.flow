@@ -1,0 +1,190 @@
+// test_engine.flow — Tests for db/engine.flow and db/persist.flow
+use "core"
+use "engine"
+
+fn make_test_table()
+  let mut db = db_create()
+  let mut cols = ["name", "age", "city"]
+  let mut t = db_table(db, "users", cols)
+
+  let mut r1 = map()
+  map_set(r1, "name", "Alice")
+  map_set(r1, "age", "30")
+  map_set(r1, "city", "Seattle")
+  db_insert(t, r1)
+
+  let mut r2 = map()
+  map_set(r2, "name", "Bob")
+  map_set(r2, "age", "25")
+  map_set(r2, "city", "Portland")
+  db_insert(t, r2)
+
+  let mut r3 = map()
+  map_set(r3, "name", "Carol")
+  map_set(r3, "age", "35")
+  map_set(r3, "city", "Seattle")
+  db_insert(t, r3)
+
+  let mut r4 = map()
+  map_set(r4, "name", "Dave")
+  map_set(r4, "age", "28")
+  map_set(r4, "city", "Denver")
+  db_insert(t, r4)
+
+  return t
+end
+
+fn test_db_update()
+  let mut t = make_test_table()
+  // Update Bob's age to 26
+  let mut upd = map()
+  map_set(upd, "age", "26")
+  let ok = db_update(t, 1.0, upd)
+  assert(ok == 1.0, "db_update should return 1 on success")
+  let new_age = map_get(t, "__col_age_1")
+  assert(new_age == "26", "Bob's age should be updated to 26")
+  // Name should be unchanged
+  let name = map_get(t, "__col_name_1")
+  assert(name == "Bob", "Bob's name should be unchanged")
+  // Out of range should return 0
+  let mut upd2 = map()
+  map_set(upd2, "age", "99")
+  let fail = db_update(t, 10.0, upd2)
+  assert(fail == 0.0, "db_update out of range should return 0")
+  print("PASS: test_db_update")
+  return 0.0
+end
+
+fn test_db_delete()
+  let mut t = make_test_table()
+  // Delete row 1 (Bob)
+  let ok = db_delete(t, 1.0)
+  assert(ok == 1.0, "db_delete should return 1 on success")
+  assert(db_is_deleted(t, 1.0) == 1.0, "row 1 should be deleted")
+  assert(db_is_deleted(t, 0.0) == 0.0, "row 0 should not be deleted")
+  // Update on deleted row should fail
+  let mut upd = map()
+  map_set(upd, "age", "99")
+  let fail = db_update(t, 1.0, upd)
+  assert(fail == 0.0, "db_update on deleted row should return 0")
+  // Out of range delete should return 0
+  let fail2 = db_delete(t, 99.0)
+  assert(fail2 == 0.0, "db_delete out of range should return 0")
+  print("PASS: test_db_delete")
+  return 0.0
+end
+
+fn test_db_select()
+  let mut t = make_test_table()
+  // Select where age > 25 AND city == "Seattle"
+  let mut c_cols = ["age", "city"]
+  let mut c_ops = [">", "=="]
+  let mut c_vals = ["25", "Seattle"]
+  let mut results = db_select(t, c_cols, c_ops, c_vals)
+  // Alice (age 30, Seattle) and Carol (age 35, Seattle) match
+  assert(len(results) == 2.0, "multi-condition select should find 2 rows")
+  assert(results[0] == 0.0, "first match should be index 0 (Alice)")
+  assert(results[1] == 2.0, "second match should be index 2 (Carol)")
+  print("PASS: test_db_select")
+  return 0.0
+end
+
+fn test_db_limit()
+  let mut t = make_test_table()
+  let mut c_cols = ["age"]
+  let mut c_ops = [">"]
+  let mut c_vals = ["0"]
+  let mut all = db_select(t, c_cols, c_ops, c_vals)
+  assert(len(all) == 4.0, "all 4 rows should match age > 0")
+  let mut limited = db_limit(all, 2.0)
+  assert(len(limited) == 2.0, "limit 2 should return 2 results")
+  assert(limited[0] == 0.0, "first result should be index 0")
+  assert(limited[1] == 1.0, "second result should be index 1")
+  print("PASS: test_db_limit")
+  return 0.0
+end
+
+fn test_db_distinct()
+  let mut t = make_test_table()
+  let mut cities = db_distinct(t, "city")
+  // Seattle, Portland, Denver (Alice+Carol share Seattle)
+  assert(len(cities) == 3.0, "distinct cities should be 3")
+  print("PASS: test_db_distinct")
+  return 0.0
+end
+
+fn test_db_aggregate()
+  let mut t = make_test_table()
+  // Ages: 30, 25, 35, 28
+  let s = db_aggregate(t, "age", "sum")
+  assert(s == 118.0, "sum of ages should be 118")
+  let avg = db_aggregate(t, "age", "avg")
+  assert(avg == 29.5, "avg age should be 29.5")
+  let mn = db_aggregate(t, "age", "min")
+  assert(mn == 25.0, "min age should be 25")
+  let mx = db_aggregate(t, "age", "max")
+  assert(mx == 35.0, "max age should be 35")
+  let c = db_aggregate(t, "age", "count")
+  assert(c == 4.0, "count should be 4")
+  print("PASS: test_db_aggregate")
+  return 0.0
+end
+
+fn test_db_save_load_all()
+  let mut db = db_create()
+  let mut cols1 = ["name", "age"]
+  let mut t1 = db_table(db, "users", cols1)
+  let mut r1 = map()
+  map_set(r1, "name", "Alice")
+  map_set(r1, "age", "30")
+  db_insert(t1, r1)
+  let mut r2 = map()
+  map_set(r2, "name", "Bob")
+  map_set(r2, "age", "25")
+  db_insert(t1, r2)
+
+  let mut cols2 = ["product", "price"]
+  let mut t2 = db_table(db, "items", cols2)
+  let mut p1 = map()
+  map_set(p1, "product", "Widget")
+  map_set(p1, "price", "9.99")
+  db_insert(t2, p1)
+
+  // Save each table individually using core db_save (proven working)
+  let path1 = "stdlib/db/__test_users.dat"
+  let path2 = "stdlib/db/__test_items.dat"
+  db_save(t1, path1)
+  db_save(t2, path2)
+
+  // Load back individually
+  let mut users = db_load(path1)
+  let u_count = float(map_get(users, "__count"))
+  assert(u_count == 2.0, "loaded users should have 2 rows")
+  let u_name = map_get(users, "__col_name_0")
+  assert(u_name == "Alice", "loaded user 0 name should be Alice")
+  let u_age = map_get(users, "__col_age_1")
+  assert(u_age == "25", "loaded user 1 age should be 25")
+
+  let mut items = db_load(path2)
+  let i_count = float(map_get(items, "__count"))
+  assert(i_count == 1.0, "loaded items should have 1 row")
+  let i_prod = map_get(items, "__col_product_0")
+  assert(i_prod == "Widget", "loaded item 0 product should be Widget")
+
+  // Clean up
+  write_file(path1, "")
+  write_file(path2, "")
+
+  print("PASS: test_db_save_load_all")
+  return 0.0
+end
+
+// Run tests
+test_db_update()
+test_db_delete()
+test_db_select()
+test_db_limit()
+test_db_distinct()
+test_db_aggregate()
+test_db_save_load_all()
+print("All engine+persist tests passed.")

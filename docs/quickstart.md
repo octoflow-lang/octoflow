@@ -7,12 +7,13 @@ Five minutes from download to GPU compute.
 Download the binary for your platform:
 - [Windows x64](https://github.com/octoflow-lang/octoflow/releases/latest)
 - [Linux x64](https://github.com/octoflow-lang/octoflow/releases/latest)
+- [macOS aarch64](https://github.com/octoflow-lang/octoflow/releases/latest) (Apple Silicon)
 
 Unzip. Run. No installer, no dependencies, no SDK.
 
 ```
 $ octoflow --version
-OctoFlow 0.83.1
+OctoFlow 1.3.0
 ```
 
 ## Hello World
@@ -62,9 +63,9 @@ ok 12ms
 
 ```
 $ octoflow repl
-OctoFlow v0.83.1 — GPU-native language
+OctoFlow v1.3.0 — GPU-native language
 GPU: NVIDIA GeForce GTX 1660 SUPER
-143 stdlib modules | :help | :time
+246 stdlib modules | :help | :time
 
 > 2 + 2
 4
@@ -79,7 +80,7 @@ GPU: NVIDIA GeForce GTX 1660 SUPER
 ## Import Modules
 
 ```
-use timeseries
+use "stats/timeseries"
 
 let prices = [100.0, 102.0, 101.5, 103.0, 104.5, 103.5, 105.0]
 let sma_3 = sma(prices, 3)
@@ -87,7 +88,7 @@ let last_sma = sma_3[len(sma_3) - 1]
 print("SMA(3): {last_sma}")
 ```
 
-143 modules across 12 domains. Run `octoflow help <domain>` to explore:
+246 modules across 18 domains. Run `octoflow help <domain>` to explore:
 
 ```
 $ octoflow help stats
@@ -111,8 +112,13 @@ $ octoflow run server.flow --allow-read --allow-net
 ## Next Steps
 
 - [Language Guide](language-guide.md) — full syntax reference
+- [Chat Mode](chat.md) — AI code generation from natural language
 - [Builtins Reference](builtins.md) — all built-in functions
 - [GPU Guide](gpu-guide.md) — GPU computing in OctoFlow
 - [REPL Reference](repl.md) — REPL commands and usage
 - [Streams Guide](streams.md) — stream/pipeline syntax
-- [Stdlib Reference](stdlib/) — all 12 domain modules
+- [Permissions](permissions.md) — Deno-style security model
+- [MCP Server](mcp.md) — connect to Claude Desktop, Cursor, VS Code
+- [Installation](installation.md) — setup for Windows, Linux, macOS
+- [Feature Status](features.md) — what's stable, beta, planned
+- [Stdlib Reference](stdlib/) — all 18 domain modules

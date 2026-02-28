@@ -1,0 +1,192 @@
+// emit_ui_text.flow — OctoUI Text Glyph Rendering Kernel Emitter
+//
+// Renders a single scaled glyph from the font atlas into the framebuffer.
+// Font data is on Heap (binding 4): each glyph = 6 rows of 4-bit patterns
+// (stored as float values 0-15, one per row). Glyph index = (ASCII - 32) * 6.
+//
+// At scale S, each glyph renders as (4*S) x (6*S) pixels.
+// Total threads = 4*S * 6*S = 24*S*S.
+//
+// Thread gid maps to a scaled pixel position, which maps back to a font
+// row/column. A bit test determines if the pixel is foreground (opaque)
+// or background (transparent). Only foreground pixels are written.
+//
+// Bit test without bitwise AND:
+//   shifted = floor(pattern / pow(2, 3 - col))
+//   bit = shifted - floor(shifted / 2) * 2
+//   If bit != 0 -> write pixel (foreground)
+//
+// Framebuffer layout: planar RGB in globals (binding 2).
+//   globals[0 .. total-1]         = R channel
+//   globals[total .. 2*total-1]   = G channel
+//   globals[2*total .. 3*total-1] = B channel
+//
+// Push constants (9 floats):
+//   pc[0] = glyph_idx     (glyph offset into font atlas: (ASCII-32)*6)
+//   pc[1] = dest_x        (left edge of glyph in framebuffer)
+//   pc[2] = dest_y        (top edge of glyph in framebuffer)
+//   pc[3] = scale         (integer scale factor, >= 1)
+//   pc[4] = R             (text color red, 0.0-1.0)
+//   pc[5] = G             (text color green, 0.0-1.0)
+//   pc[6] = B             (text color blue, 0.0-1.0)
+//   pc[7] = screen_w      (framebuffer width in pixels)
+//   pc[8] = total_pixels  (screen_w * screen_h)
+//
+// VM SSBO layout:
+//   Binding 0: registers (unused)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (framebuffer — write R/G/B)
+//   Binding 3: control   (unused)
+//   Binding 4: heap      (font data — read glyph patterns)
+//
+// Dispatch: workgroups = ceil(24 * scale * scale / 256)
+//
+// Run: octoflow run octoui/kernels/emit_ui_text.flow --allow-read --allow-write
+
+use "../../stdlib/compiler/ir"
+
+fn emit_ui_text(out_path)
+  ir_new()
+  ir_input_count = 9.0
+
+  let entry = ir_block("entry")
+  let bounds_ok = ir_block("bounds_ok")
+  let font_ok = ir_block("font_ok")
+  let write_blk = ir_block("write")
+  let merge_fb = ir_block("merge_fb")
+  let merge_font = ir_block("merge_font")
+  let exit_block = ir_block("exit")
+
+  let gid = ir_load_gid(entry)
+
+  // Push constants
+  let glyph_idx_f = ir_push_const(entry, 0.0)
+  let dest_x_f = ir_push_const(entry, 1.0)
+  let dest_y_f = ir_push_const(entry, 2.0)
+  let scale_f = ir_push_const(entry, 3.0)
+  let r_color = ir_push_const(entry, 4.0)
+  let g_color = ir_push_const(entry, 5.0)
+  let b_color = ir_push_const(entry, 6.0)
+  let sw_f = ir_push_const(entry, 7.0)
+  let total_f = ir_push_const(entry, 8.0)
+
+  // Compute total threads: 4 * scale * 6 * scale = 24 * scale^2
+  let c4_f = ir_const_f(entry, 4.0)
+  let c6_f = ir_const_f(entry, 6.0)
+  let scaled_w_f = ir_fmul(entry, c4_f, scale_f)
+  let scaled_h_f = ir_fmul(entry, c6_f, scale_f)
+  let thread_count_f = ir_fmul(entry, scaled_w_f, scaled_h_f)
+  let thread_count_u = ir_ftou(entry, thread_count_f)
+
+  // Bounds check: gid >= total_threads -> skip
+  let oob_thread = ir_ugte(entry, gid, thread_count_u)
+  let _sm1 = ir_selection_merge(entry, exit_block)
+  let _br1 = ir_term_cond_branch(entry, oob_thread, exit_block, bounds_ok)
+
+  // bounds_ok: map gid to scaled pixel position
+  // scaled_row = floor(gid / scaled_w)
+  // scaled_col = gid - scaled_row * scaled_w  (modulo via subtraction)
+  let gid_f = ir_utof(bounds_ok, gid)
+  let scaled_row_f = ir_floor(bounds_ok, ir_fdiv(bounds_ok, gid_f, scaled_w_f))
+  let scaled_col_f = ir_fsub(bounds_ok, gid_f, ir_fmul(bounds_ok, scaled_row_f, scaled_w_f))
+
+  // Map back to font coordinates (which of the 6 rows, which of the 4 cols)
+  // font_row = floor(scaled_row / scale)
+  // font_col = floor(scaled_col / scale)
+  let font_row_f = ir_floor(bounds_ok, ir_fdiv(bounds_ok, scaled_row_f, scale_f))
+  let font_col_f = ir_floor(bounds_ok, ir_fdiv(bounds_ok, scaled_col_f, scale_f))
+
+  // Check font_row < 6 (safety bound for glyph height)
+  let oob_font = ir_foge(bounds_ok, font_row_f, c6_f)
+  let _sm2 = ir_selection_merge(bounds_ok, merge_font)
+  let _br2 = ir_term_cond_branch(bounds_ok, oob_font, merge_font, font_ok)
+
+  // font_ok: read font pattern from heap and test the bit
+  // font_offset = glyph_idx + font_row  (glyph_idx is already (ASCII-32)*6)
+  let font_offset_f = ir_fadd(font_ok, glyph_idx_f, font_row_f)
+  let font_offset_u = ir_ftou(font_ok, font_offset_f)
+
+  // Read pattern from heap (binding 4)
+  let pattern = ir_load_input_at(font_ok, 4.0, font_offset_u)
+
+  // Bit test: extract bit at position (3 - font_col)
+  // bit_pos = 3 - font_col  (bit 3 = leftmost pixel)
+  let c3_f = ir_const_f(font_ok, 3.0)
+  let bit_pos_f = ir_fsub(font_ok, c3_f, font_col_f)
+
+  // divisor = pow(2, bit_pos)
+  let c2_f = ir_const_f(font_ok, 2.0)
+  let divisor = ir_pow(font_ok, c2_f, bit_pos_f)
+
+  // shifted = floor(pattern / divisor)
+  let shifted = ir_floor(font_ok, ir_fdiv(font_ok, pattern, divisor))
+
+  // bit = shifted - floor(shifted / 2) * 2  (modulo 2 via subtraction)
+  let half_shifted = ir_floor(font_ok, ir_fdiv(font_ok, shifted, c2_f))
+  let even_part = ir_fmul(font_ok, half_shifted, c2_f)
+  let bit_val = ir_fsub(font_ok, shifted, even_part)
+
+  // Check if bit != 0 (foreground pixel)
+  let c0_f = ir_const_f(font_ok, 0.0)
+  let is_opaque = ir_fogt(font_ok, bit_val, c0_f)
+
+  // Compute framebuffer coordinates
+  // fb_x = dest_x + scaled_col
+  // fb_y = dest_y + scaled_row
+  let fb_x_f = ir_fadd(font_ok, dest_x_f, scaled_col_f)
+  let fb_y_f = ir_fadd(font_ok, dest_y_f, scaled_row_f)
+
+  // fb_idx = fb_y * screen_w + fb_x
+  let fb_idx_f = ir_fadd(font_ok, ir_fmul(font_ok, fb_y_f, sw_f), fb_x_f)
+  let fb_idx = ir_ftou(font_ok, fb_idx_f)
+  let total_u = ir_ftou(font_ok, total_f)
+
+  // Screen bounds: fb_idx >= total_pixels or fb_x >= screen_w -> skip
+  let oob_fb = ir_ugte(font_ok, fb_idx, total_u)
+  let sw_u = ir_ftou(font_ok, sw_f)
+  let fb_x_u = ir_ftou(font_ok, fb_x_f)
+  let oob_right = ir_ugte(font_ok, fb_x_u, sw_u)
+  let oob_screen = ir_lor(font_ok, oob_fb, oob_right)
+
+  // Also check fb_x < 0 and fb_y < 0 (negative coords)
+  let neg_x = ir_folt(font_ok, fb_x_f, c0_f)
+  let neg_y = ir_folt(font_ok, fb_y_f, c0_f)
+  let oob_neg = ir_lor(font_ok, neg_x, neg_y)
+  let oob_any = ir_lor(font_ok, oob_screen, oob_neg)
+
+  // Combined: must be opaque AND in-bounds
+  let skip_pixel = ir_lor(font_ok, oob_any, ir_fole(font_ok, bit_val, c0_f))
+  let _sm3 = ir_selection_merge(font_ok, merge_fb)
+  let _br3 = ir_term_cond_branch(font_ok, skip_pixel, merge_fb, write_blk)
+
+  // write_blk: write foreground color to framebuffer
+  // R channel: globals[fb_idx]
+  let _s_r = ir_buf_store_f(write_blk, 2.0, fb_idx, r_color)
+
+  // G channel: globals[total + fb_idx]
+  let g_offset = ir_iadd(write_blk, total_u, fb_idx)
+  let _s_g = ir_buf_store_f(write_blk, 2.0, g_offset, g_color)
+
+  // B channel: globals[2*total + fb_idx]
+  let two_u = ir_const_u(write_blk, 2.0)
+  let two_total = ir_imul(write_blk, two_u, total_u)
+  let b_offset = ir_iadd(write_blk, two_total, fb_idx)
+  let _s_b = ir_buf_store_f(write_blk, 2.0, b_offset, b_color)
+
+  let _br4 = ir_term_branch(write_blk, merge_fb)
+
+  // merge_fb -> merge_font
+  let _br5 = ir_term_branch(merge_fb, merge_font)
+
+  // merge_font -> exit
+  let _br6 = ir_term_branch(merge_font, exit_block)
+
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "octoui/kernels/ui_text.spv"
+let _r = emit_ui_text(out)
+print("Emitted: {out}")

@@ -4,11 +4,14 @@
 // Existing code using `use "gui"` works unchanged.
 //
 // Sub-modules:
-//   gui_core  — State arrays, constants, drawing primitives
-//   theme     — Color theme presets (dark/light/ocean)
-//   widgets   — 16 widget types + queries
-//   canvas    — Canvas drawing API
-//   window    — Init, event loop, software renderer
+//   gui_core    — State arrays, constants, drawing primitives
+//   theme       — Color theme presets (dark/light/ocean/midnight/forest/hicon)
+//   widgets     — 16 widget types + queries
+//   canvas      — Canvas drawing API
+//   gpu_render  — Level 1 GPU rendering (gpu_fill/where/scatter builtins)
+//   gpu_render_v2 — Level 2 shader rendering (custom SPIR-V + vm_present)
+//   gui_state   — LoomDB state management (undo/redo/session)
+//   window      — Init, event loop, render dispatch
 //
 // Usage:
 //   use "gui"
@@ -25,4 +28,7 @@ use "gui_core"
 use "theme"
 use "widgets"
 use "canvas"
+use "gpu_render"
+use "gpu_render_v2"
+use "gui_state"
 use "window"

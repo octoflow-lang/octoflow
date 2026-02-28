@@ -1,0 +1,203 @@
+// stdlib/db/engine.flow — Enhanced database operations
+//
+// Wraps core.flow with higher-level operations: UPDATE, DELETE (soft),
+// multi-condition SELECT, LIMIT, DISTINCT, AGGREGATE.
+//
+// Functions: db_update, db_delete, db_is_deleted, db_select, db_limit,
+//            db_distinct, db_aggregate
+
+use "core"
+
+fn db_update(table, idx, row)
+  // Update a row at the given index. row is a map of col→value.
+  // Only updates columns present in row — others unchanged.
+  // Returns 1.0 on success, 0.0 if idx out of range.
+  let count = float(map_get(table, "__count"))
+  if idx < 0.0 || idx >= count
+    return 0.0
+  end
+  // Check not deleted
+  if map_has(table, "__del_" + str(idx))
+    return 0.0
+  end
+  let keys = split(map_keys(row), ",")
+  for k in keys
+    let col_key = "__col_" + k + "_" + str(idx)
+    map_set(table, col_key, map_get(row, k))
+  end
+  return 1.0
+end
+
+fn db_delete(table, idx)
+  // Soft delete — marks row as deleted without shifting indices.
+  // db_where, db_select, db_select_row should skip deleted rows.
+  // Returns 1.0 on success, 0.0 if idx out of range.
+  let count = float(map_get(table, "__count"))
+  if idx < 0.0 || idx >= count
+    return 0.0
+  end
+  map_set(table, "__del_" + str(idx), "1")
+  return 1.0
+end
+
+fn db_is_deleted(table, idx)
+  // Check if a row has been soft-deleted
+  if map_has(table, "__del_" + str(idx))
+    return 1.0
+  end
+  return 0.0
+end
+
+fn db_select(table, cond_cols, cond_ops, cond_vals)
+  // Multi-condition SELECT — AND logic.
+  // cond_cols: array of column names
+  // cond_ops: array of operators ("==", "!=", ">", "<", "contains")
+  // cond_vals: array of values
+  // Returns array of matching row indices (skips deleted rows).
+  let count = float(map_get(table, "__count"))
+  let n_conds = len(cond_cols)
+  let mut indices = []
+
+  let mut i = 0.0
+  while i < count
+    // Skip deleted rows
+    if map_has(table, "__del_" + str(i)) == 0.0
+      let mut all_match = 1.0
+      let mut ci = 0.0
+      while ci < n_conds && all_match == 1.0
+        let col = cond_cols[ci]
+        let op = cond_ops[ci]
+        let val = cond_vals[ci]
+        let key = "__col_" + col + "_" + str(i)
+        if map_has(table, key)
+          let v = map_get(table, key)
+          if op == "=="
+            if v != val
+              all_match = 0.0
+            end
+          elif op == "!="
+            if v == val
+              all_match = 0.0
+            end
+          elif op == ">"
+            if float(v) <= float(val)
+              all_match = 0.0
+            end
+          elif op == "<"
+            if float(v) >= float(val)
+              all_match = 0.0
+            end
+          elif op == ">="
+            if float(v) < float(val)
+              all_match = 0.0
+            end
+          elif op == "<="
+            if float(v) > float(val)
+              all_match = 0.0
+            end
+          elif op == "contains"
+            if contains(v, val) == 0.0
+              all_match = 0.0
+            end
+          end
+        else
+          all_match = 0.0
+        end
+        ci = ci + 1.0
+      end
+      if all_match == 1.0
+        push(indices, i)
+      end
+    end
+    i = i + 1.0
+  end
+  return indices
+end
+
+fn db_limit(indices, n)
+  // Take first n elements from an indices array
+  if n >= len(indices)
+    return indices
+  end
+  let mut result = []
+  let mut i = 0.0
+  while i < n
+    push(result, indices[i])
+    i = i + 1.0
+  end
+  return result
+end
+
+fn db_distinct(table, col)
+  // Get unique values in a column (skips deleted rows)
+  let count = float(map_get(table, "__count"))
+  let mut seen = map()
+  let mut result = []
+  let mut i = 0.0
+  while i < count
+    if map_has(table, "__del_" + str(i)) == 0.0
+      let key = "__col_" + col + "_" + str(i)
+      if map_has(table, key)
+        let val = map_get(table, key)
+        if map_has(seen, val) == 0.0
+          map_set(seen, val, "1")
+          push(result, val)
+        end
+      end
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn db_aggregate(table, col, op)
+  // Column-level aggregation: "sum", "avg", "min", "max", "count"
+  // Skips deleted rows. Returns single value.
+  let count = float(map_get(table, "__count"))
+  let mut total = 0.0
+  let mut n_valid = 0.0
+  let mut min_val = 0.0
+  let mut max_val = 0.0
+  let mut first = 1.0
+
+  let mut i = 0.0
+  while i < count
+    if map_has(table, "__del_" + str(i)) == 0.0
+      let key = "__col_" + col + "_" + str(i)
+      if map_has(table, key)
+        let val = float(map_get(table, key))
+        total = total + val
+        n_valid = n_valid + 1.0
+        if first == 1.0
+          min_val = val
+          max_val = val
+          first = 0.0
+        else
+          if val < min_val
+            min_val = val
+          end
+          if val > max_val
+            max_val = val
+          end
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  if op == "sum"
+    return total
+  elif op == "avg"
+    if n_valid == 0.0
+      return 0.0
+    end
+    return total / n_valid
+  elif op == "min"
+    return min_val
+  elif op == "max"
+    return max_val
+  elif op == "count"
+    return n_valid
+  end
+  return 0.0
+end

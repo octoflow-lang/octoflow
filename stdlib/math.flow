@@ -50,11 +50,11 @@ fn sign(x)
 end
 
 fn deg_to_rad(deg)
-  return deg * 3.14159265 / 180.0
+  return deg * 3.14159265358979 / 180.0
 end
 
 fn rad_to_deg(rad)
-  return rad * 180.0 / 3.14159265
+  return rad * 180.0 / 3.14159265358979
 end
 
 fn gcd(a, b)

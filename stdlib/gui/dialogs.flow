@@ -1,0 +1,63 @@
+// dialogs.flow — Dialog Helper Functions
+//
+// Wraps platform dialog builtins with OctoFlow-friendly API.
+// Falls back gracefully if Dev 1's dialog builtins aren't available yet.
+//
+// Usage:
+//   use "gui"
+//   use "dialogs"
+//   let path = gui_open_file("Open File")
+//   let _a = gui_alert("Operation complete!")
+
+use "gui_core"
+
+// File dialogs — wrap platform builtins when available
+// These return file paths or "" on cancel
+
+fn gui_open_file(title)
+  // Fallback: return empty string (dialog builtins pending from Dev 1)
+  // When available: return dialog_open_file(title, "All Files\0*.*\0")
+  return ""
+end
+
+fn gui_open_file_filtered(title, description, extension)
+  // When available: use filter string
+  // let filter = description + "\0" + extension + "\0All Files\0*.*\0"
+  // return dialog_open_file(title, filter)
+  return ""
+end
+
+fn gui_save_file(title)
+  // Fallback: return empty string
+  // When available: return dialog_save_file(title, "All Files\0*.*\0")
+  return ""
+end
+
+fn gui_save_file_filtered(title, description, extension)
+  // When available: use filter string
+  return ""
+end
+
+// Message dialogs
+
+fn gui_alert(message)
+  // Fallback: print to console
+  print("ALERT: {message}")
+  // When available: dialog_message("Alert", message, "ok")
+  return 0.0
+end
+
+fn gui_confirm(message)
+  // Fallback: always returns 1.0 (yes)
+  print("CONFIRM: {message}")
+  // When available: let result = dialog_message("Confirm", message, "yesno")
+  // return result == "yes"
+  return 1.0
+end
+
+fn gui_prompt(message, default_text)
+  // Fallback: return default_text
+  print("PROMPT: {message}")
+  // When available: show input dialog
+  return default_text
+end

@@ -1,0 +1,151 @@
+// examples/long_list.flow — Virtualized List View Demo
+//
+// Demonstrates the ListView widget with 1,000 items.
+// Only 12 display widgets are allocated — virtual rendering.
+// Keyboard navigation scrolls through all items instantly.
+//
+// Controls:
+//   UP/DOWN      — Move selection
+//   PAGE UP/DOWN — Jump by page
+//   HOME/END     — First/last item
+//   Click        — Select item
+//   Escape       — Quit
+//
+// Run: octoflow run octoui/examples/long_list.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/text"
+use "../widgets/core/label"
+use "../widgets/core/separator"
+use "../widgets/input/button"
+use "../widgets/data/listview"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../widgets/layout/statusbar"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(460.0, 420.0, "OctoUI ListView — 1000 Items")
+
+// Root layout
+let root = ui_column(-1.0, 6.0)
+let _sp = ui_tree_set_padding(root, 12.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 460.0, 420.0)
+
+// Title
+let _title = ui_text(root, "LISTVIEW — 1000 ITEMS (12 WIDGETS)", UI_COLOR_PRIMARY)
+
+// Info row
+let info_row = ui_row(root, 8.0)
+let info_txt = ui_text(info_row, "VIRTUAL RENDERING:", UI_COLOR_TEXT_DIM)
+let info_val = ui_text(info_row, "ONLY 12 WIDGETS ALLOCATED", UI_COLOR_PRIMARY)
+
+let _sep = ui_separator(root, 436.0)
+
+// ListView — 12 visible rows, 24px each
+let lv = ui_listview(root, 436.0, 12.0, 24.0)
+
+// Add 1000 items
+let mut item_n = 0.0
+while item_n < 1000.0
+  item_n = item_n + 1.0
+  let padded = item_n
+  let _ai = ui_listview_add(lv, "ITEM " + str(padded) + " — CLICK TO SELECT")
+end
+
+let _fin = ui_listview_finalize(lv)
+
+// Button row
+let btn_row = ui_row(root, 8.0)
+let btn_first = ui_button(btn_row, 90.0, 28.0, "FIRST")
+let btn_last = ui_button(btn_row, 90.0, 28.0, "LAST")
+let btn_mid = ui_button(btn_row, 90.0, 28.0, "MID (500)")
+let btn_rnd = ui_button(btn_row, 120.0, 28.0, "RANDOM (137)")
+
+// Status bar
+let sbar = ui_statusbar(root, 460.0)
+let st_sel = ui_statusbar_text(sbar, "SELECTED: NONE")
+let st_count = ui_statusbar_text(sbar, "| 1000 ITEMS")
+let st_widgets = ui_statusbar_text(sbar, "| 12 WIDGETS")
+
+// Initial layout
+let _l = ui_layout_update()
+let _lr = ui_listview_refresh(lv)
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _inp = ui_process_input()
+  let mx = ui_mouse_x()
+  let my = ui_mouse_y()
+  let clicked = ui_mouse_clicked()
+  let key = ui_key_down()
+
+  // Process listview input
+  let _lp = ui_listview_process(lv, mx, my, clicked, key)
+
+  // Buttons
+  if ui_button_clicked(btn_first) == 1.0
+    let _s = ui_listview_set_selected(lv, 0.0)
+    let _r = ui_listview_refresh(lv)
+    let _su = ui_statusbar_set_text(st_sel, "SELECTED: ITEM 1")
+    let _l2 = ui_layout_update()
+  end
+
+  if ui_button_clicked(btn_last) == 1.0
+    let _s = ui_listview_set_selected(lv, 999.0)
+    let _r = ui_listview_refresh(lv)
+    let _su = ui_statusbar_set_text(st_sel, "SELECTED: ITEM 1000")
+    let _l2 = ui_layout_update()
+  end
+
+  if ui_button_clicked(btn_mid) == 1.0
+    let _s = ui_listview_set_selected(lv, 499.0)
+    let _r = ui_listview_refresh(lv)
+    let _su = ui_statusbar_set_text(st_sel, "SELECTED: ITEM 500")
+    let _l2 = ui_layout_update()
+  end
+
+  if ui_button_clicked(btn_rnd) == 1.0
+    let _s = ui_listview_set_selected(lv, 136.0)
+    let _r = ui_listview_refresh(lv)
+    let _su = ui_statusbar_set_text(st_sel, "SELECTED: ITEM 137")
+    let _l2 = ui_layout_update()
+  end
+
+  // Update status on selection change
+  let sel = ui_listview_selected(lv)
+  if sel >= 0.0
+    let sel_num = sel + 1.0
+    let _su2 = ui_statusbar_set_text(st_sel, "SELECTED: ITEM " + str(sel_num))
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _l3 = ui_layout_update()
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _wc = ui_window_close()
+print("ListView example finished.")

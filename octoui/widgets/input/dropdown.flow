@@ -1,0 +1,317 @@
+// widgets/input/dropdown.flow — Dropdown Select Widget
+//
+// A dropdown selector: trigger button + hidden option list.
+// Click trigger to open/close. Click option to select.
+// Only one dropdown can be open at a time.
+//
+// Usage:
+//   let dd = ui_dropdown(parent, 160.0, 28.0)
+//   let _o1 = ui_dropdown_option(dd, "DARK")
+//   let _o2 = ui_dropdown_option(dd, "LIGHT")
+//   let _o3 = ui_dropdown_option(dd, "AUTO")
+//   let _fin = ui_dropdown_finalize(dd)
+//
+//   // In event loop (after ui_process_input):
+//   let _dp = ui_dropdown_process()
+//
+//   // Get selection:
+//   let sel = ui_dropdown_selected(dd)  // 0-based index
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+use "../../widgets/input/button"
+
+// Dropdown registry (indexed by dropdown index, not widget ID)
+let mut _ui_dd_triggers = []      // trigger button widget IDs
+let mut _ui_dd_cols = []          // options column widget IDs
+let mut _ui_dd_selected = []      // selected option index (0-based)
+let mut _ui_dd_counts = []        // number of options per dropdown
+let mut _ui_dd_first_opt = []     // first option button widget ID
+
+// Global state: which dropdown is open (-1 = none)
+let mut _ui_dd_open_idx = -1.0
+
+// Create a dropdown widget
+// parent: parent widget ID
+// w: width in pixels
+// h: height in pixels (trigger height, options use same height)
+// Returns: trigger button widget ID
+fn ui_dropdown(parent, w, h)
+  // Create trigger button (shows current selection)
+  let trigger = ui_button(parent, w, h, " ")
+
+  // Create options column (root-level, hidden, positioned later)
+  let col = ui_tree_add(UI_COLUMN, -1.0, w, 0.0, " ")
+  _ui_visible[col] = 0.0
+
+  // Register this dropdown
+  push(_ui_dd_triggers, trigger)
+  push(_ui_dd_cols, col)
+  push(_ui_dd_selected, 0.0)
+  push(_ui_dd_counts, 0.0)
+  push(_ui_dd_first_opt, -1.0)
+
+  return trigger
+end
+
+// Add an option to a dropdown
+// trigger: the trigger widget ID returned by ui_dropdown()
+// label: option text
+// Returns: option button widget ID
+fn ui_dropdown_option(trigger, label)
+  // Find dropdown index from trigger
+  let mut dd_idx = -1.0
+  let mut si = 0.0
+  while si < len(_ui_dd_triggers)
+    if _ui_dd_triggers[si] == trigger
+      dd_idx = si
+    end
+    si = si + 1.0
+  end
+  if dd_idx < 0.0
+    return -1.0
+  end
+
+  let col = _ui_dd_cols[dd_idx]
+  let count = _ui_dd_counts[dd_idx]
+
+  // Create option button in the column (hidden with column)
+  let opt = ui_button(col, _ui_w[trigger], _ui_h[trigger], label)
+  _ui_visible[opt] = 0.0
+
+  // Track first option
+  if count == 0.0
+    _ui_dd_first_opt[dd_idx] = opt
+  end
+
+  _ui_dd_counts[dd_idx] = count + 1.0
+  return opt
+end
+
+// Finalize dropdown: set trigger text to first option
+// Call after adding all options.
+fn ui_dropdown_finalize(trigger)
+  let mut dd_idx = -1.0
+  let mut si = 0.0
+  while si < len(_ui_dd_triggers)
+    if _ui_dd_triggers[si] == trigger
+      dd_idx = si
+    end
+    si = si + 1.0
+  end
+  if dd_idx < 0.0
+    return -1.0
+  end
+
+  // Set trigger text to first option's text
+  let first = _ui_dd_first_opt[dd_idx]
+  if first >= 0.0
+    _ui_texts[trigger] = _ui_texts[first]
+  end
+
+  return 0.0
+end
+
+// Get selected option index (0-based)
+fn ui_dropdown_selected(trigger)
+  let mut si = 0.0
+  while si < len(_ui_dd_triggers)
+    if _ui_dd_triggers[si] == trigger
+      return _ui_dd_selected[si]
+    end
+    si = si + 1.0
+  end
+  return 0.0
+end
+
+// Set dropdown selection programmatically
+fn ui_dropdown_set(trigger, index)
+  let mut dd_idx = -1.0
+  let mut si = 0.0
+  while si < len(_ui_dd_triggers)
+    if _ui_dd_triggers[si] == trigger
+      dd_idx = si
+    end
+    si = si + 1.0
+  end
+  if dd_idx < 0.0
+    return -1.0
+  end
+
+  let count = _ui_dd_counts[dd_idx]
+  if index >= 0.0
+    if index < count
+      _ui_dd_selected[dd_idx] = index
+      // Update trigger text
+      let first = _ui_dd_first_opt[dd_idx]
+      let opt_id = first + index
+      _ui_texts[trigger] = _ui_texts[opt_id]
+      let _d = ui_mark_dirty()
+    end
+  end
+  return 0.0
+end
+
+// Open a dropdown (position options, show them)
+fn ui_dd_open(dd_idx)
+  let trigger = _ui_dd_triggers[dd_idx]
+  let col = _ui_dd_cols[dd_idx]
+  let count = _ui_dd_counts[dd_idx]
+  let first = _ui_dd_first_opt[dd_idx]
+
+  // Position column below trigger
+  let tx = _ui_x[trigger]
+  let ty = _ui_y[trigger]
+  let tw = _ui_w[trigger]
+  let th = _ui_h[trigger]
+
+  _ui_x[col] = tx
+  _ui_y[col] = ty + th
+  _ui_w[col] = tw
+  _ui_h[col] = count * th
+  _ui_visible[col] = 1.0
+
+  // Position and show each option button
+  let mut oi = 0.0
+  while oi < count
+    let opt_id = first + oi
+    _ui_x[opt_id] = tx
+    _ui_y[opt_id] = ty + th + oi * th
+    _ui_w[opt_id] = tw
+    _ui_visible[opt_id] = 1.0
+    oi = oi + 1.0
+  end
+
+  _ui_dd_open_idx = dd_idx
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Close a dropdown (hide options)
+fn ui_dd_close(dd_idx)
+  let col = _ui_dd_cols[dd_idx]
+  let count = _ui_dd_counts[dd_idx]
+  let first = _ui_dd_first_opt[dd_idx]
+
+  _ui_visible[col] = 0.0
+
+  // Hide each option
+  let mut oi = 0.0
+  while oi < count
+    let opt_id = first + oi
+    _ui_visible[opt_id] = 0.0
+    oi = oi + 1.0
+  end
+
+  _ui_dd_open_idx = -1.0
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Process dropdown interactions each frame
+// Call after ui_process_input() in the event loop.
+// mx, my: mouse position
+// clicked: 1.0 if mouse just pressed this frame, 0.0 otherwise
+fn ui_dropdown_process(mx, my, clicked)
+  let dd_count = len(_ui_dd_triggers)
+
+  // Escape key closes any open dropdown
+  if _ui_dd_open_idx >= 0.0
+    if _ui_key_down == "escape"
+      let _c = ui_dd_close(_ui_dd_open_idx)
+      return 0.0
+    end
+  end
+
+  // Check each dropdown's trigger button
+  let mut di = 0.0
+  while di < dd_count
+    let trigger = _ui_dd_triggers[di]
+
+    if ui_button_clicked(trigger) == 1.0
+      if _ui_dd_open_idx == di
+        // Close this dropdown
+        let _c = ui_dd_close(di)
+      else
+        // Close any open dropdown first
+        if _ui_dd_open_idx >= 0.0
+          let _c = ui_dd_close(_ui_dd_open_idx)
+        end
+        // Open this one
+        let _o = ui_dd_open(di)
+      end
+      return 0.0
+    end
+
+    di = di + 1.0
+  end
+
+  // Check option clicks for open dropdown
+  if _ui_dd_open_idx >= 0.0
+    let oi_dd = _ui_dd_open_idx
+    let first = _ui_dd_first_opt[oi_dd]
+    let count = _ui_dd_counts[oi_dd]
+    let trigger2 = _ui_dd_triggers[oi_dd]
+
+    let mut oi = 0.0
+    while oi < count
+      let opt_id = first + oi
+      if ui_button_clicked(opt_id) == 1.0
+        // Select this option
+        _ui_dd_selected[oi_dd] = oi
+        // Update trigger text
+        _ui_texts[trigger2] = _ui_texts[opt_id]
+        // Close dropdown
+        let _c = ui_dd_close(oi_dd)
+        return 0.0
+      end
+      oi = oi + 1.0
+    end
+
+    // Click outside: close dropdown if click was not on trigger or options
+    if clicked == 1.0
+      // Check if click was on trigger
+      let trig = _ui_dd_triggers[oi_dd]
+      let on_trigger = ui_dd_hit(mx, my, trig)
+
+      // Check if click was on any option
+      let mut on_option = 0.0
+      let mut ci = 0.0
+      while ci < count
+        let copt = first + ci
+        if ui_dd_hit(mx, my, copt) == 1.0
+          on_option = 1.0
+        end
+        ci = ci + 1.0
+      end
+
+      // If not on trigger or option, close
+      if on_trigger == 0.0
+        if on_option == 0.0
+          let _c = ui_dd_close(oi_dd)
+        end
+      end
+    end
+  end
+
+  return 0.0
+end
+
+// Helper: point-in-rect hit test for a widget
+fn ui_dd_hit(mx, my, widget_id)
+  let wx = _ui_x[widget_id]
+  let wy = _ui_y[widget_id]
+  let ww = _ui_w[widget_id]
+  let wh = _ui_h[widget_id]
+  if mx >= wx
+    if mx < wx + ww
+      if my >= wy
+        if my < wy + wh
+          return 1.0
+        end
+      end
+    end
+  end
+  return 0.0
+end

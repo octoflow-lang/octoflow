@@ -1,87 +1,516 @@
 // theme.flow — GUI Theme Color Presets
 //
-// Provides dark, light, and ocean theme presets for the GUI toolkit.
+// Provides 7 theme presets for the GUI toolkit. Each sets all 48 _tc values:
+//   [0-2]=bg  [3-5]=panel  [6-8]=widget  [9-11]=hover  [12-14]=active
+//   [15-17]=text  [18-20]=text_dim  [21-23]=border  [24-26]=accent  [27-29]=slider
+//   [30-32]=surface2  [33-35]=focus_ring  [36-38]=success  [39-41]=warning
+//   [42-44]=error  [45-47]=shadow
+//
+// Default theme: gui_theme_modern() (blue-violet tinted dark)
 //
 // Usage:
 //   use "gui"
-//   let _t = gui_theme_ocean()
+//   let _t = gui_theme_modern()   // default
+//   let _t = gui_theme_ocean()    // switch to ocean
 
 use "gui_core"
 
+fn _theme_reset_settings()
+  _ts[0] = 0.0
+  _ts[1] = 0.0
+  _ts[2] = 1.0
+  _ts[3] = 0.8
+  _ts[4] = 3.0
+  _ts[5] = 3.0
+  _ts[6] = 2.0
+  _ts[7] = 16.0
+  _ts[8] = 12.0
+  _ts[9] = 20.0
+  _ts[10] = 8.0
+  _ts[11] = 12.0
+  return 0.0
+end
+
+fn gui_theme_modern()
+  let _r = _theme_reset_settings()
+  // ── Modern Dark — Catppuccin/VS Code inspired ──
+  // Background: blue-black
+  _tc[0] = 22.0
+  _tc[1] = 22.0
+  _tc[2] = 30.0
+  // Panel: elevated surface
+  _tc[3] = 30.0
+  _tc[4] = 31.0
+  _tc[5] = 40.0
+  // Widget: interactive element bg
+  _tc[6] = 42.0
+  _tc[7] = 44.0
+  _tc[8] = 58.0
+  // Hover: subtle lift
+  _tc[9] = 52.0
+  _tc[10] = 55.0
+  _tc[11] = 72.0
+  // Active: periwinkle-blue
+  _tc[12] = 99.0
+  _tc[13] = 130.0
+  _tc[14] = 237.0
+  // Text: soft blue-white
+  _tc[15] = 205.0
+  _tc[16] = 214.0
+  _tc[17] = 230.0
+  // Text dim: muted blue-gray
+  _tc[18] = 110.0
+  _tc[19] = 118.0
+  _tc[20] = 138.0
+  // Border: subtle
+  _tc[21] = 44.0
+  _tc[22] = 46.0
+  _tc[23] = 58.0
+  // Accent: unified blue
+  _tc[24] = 99.0
+  _tc[25] = 130.0
+  _tc[26] = 237.0
+  // Slider/progress: blue accent
+  _tc[27] = 99.0
+  _tc[28] = 130.0
+  _tc[29] = 237.0
+  // Surface 2: popup/tooltip bg
+  _tc[30] = 38.0
+  _tc[31] = 40.0
+  _tc[32] = 52.0
+  // Focus ring: high-vis blue
+  _tc[33] = 120.0
+  _tc[34] = 150.0
+  _tc[35] = 255.0
+  // Success: clean green
+  _tc[36] = 80.0
+  _tc[37] = 200.0
+  _tc[38] = 120.0
+  // Warning: warm amber
+  _tc[39] = 230.0
+  _tc[40] = 180.0
+  _tc[41] = 60.0
+  // Error: clear red
+  _tc[42] = 230.0
+  _tc[43] = 80.0
+  _tc[44] = 80.0
+  // Shadow: deep blue-black
+  _tc[45] = 10.0
+  _tc[46] = 10.0
+  _tc[47] = 16.0
+  // Theme settings: modern defaults
+  _ts[0] = 6.0
+  _ts[1] = 1.0
+  _ts[2] = 1.0
+  _ts[3] = 0.8
+  _ts[6] = 2.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
 fn gui_theme_dark()
+  let _r = _theme_reset_settings()
+  // Background
   _tc[0] = 30.0
   _tc[1] = 30.0
   _tc[2] = 35.0
+  // Panel
   _tc[3] = 45.0
   _tc[4] = 45.0
   _tc[5] = 50.0
+  // Widget
   _tc[6] = 60.0
   _tc[7] = 62.0
   _tc[8] = 68.0
+  // Hover
   _tc[9] = 75.0
   _tc[10] = 78.0
   _tc[11] = 85.0
+  // Active/pressed
   _tc[12] = 90.0
   _tc[13] = 130.0
   _tc[14] = 240.0
+  // Text
   _tc[15] = 220.0
   _tc[16] = 222.0
   _tc[17] = 228.0
+  // Text dim
+  _tc[18] = 140.0
+  _tc[19] = 142.0
+  _tc[20] = 148.0
+  // Border
   _tc[21] = 80.0
   _tc[22] = 82.0
   _tc[23] = 88.0
+  // Accent (checkbox/radio fill)
+  _tc[24] = 100.0
+  _tc[25] = 180.0
+  _tc[26] = 100.0
+  // Slider/progress fill
+  _tc[27] = 90.0
+  _tc[28] = 130.0
+  _tc[29] = 240.0
+  // -- Extended slots --
+  _tc[30] = 55.0
+  _tc[31] = 55.0
+  _tc[32] = 60.0
+  _tc[33] = 90.0
+  _tc[34] = 130.0
+  _tc[35] = 240.0
+  _tc[36] = 80.0
+  _tc[37] = 200.0
+  _tc[38] = 120.0
+  _tc[39] = 230.0
+  _tc[40] = 180.0
+  _tc[41] = 60.0
+  _tc[42] = 230.0
+  _tc[43] = 80.0
+  _tc[44] = 80.0
+  _tc[45] = 10.0
+  _tc[46] = 10.0
+  _tc[47] = 12.0
+  _ts[0] = 0.0
+  _ts[1] = 0.0
   _gs[9] = 1.0
   return 0.0
 end
 
 fn gui_theme_light()
+  let _r = _theme_reset_settings()
+  // Background
   _tc[0] = 240.0
   _tc[1] = 240.0
   _tc[2] = 245.0
+  // Panel
   _tc[3] = 255.0
   _tc[4] = 255.0
   _tc[5] = 255.0
+  // Widget
   _tc[6] = 230.0
   _tc[7] = 232.0
   _tc[8] = 235.0
+  // Hover
   _tc[9] = 210.0
   _tc[10] = 215.0
   _tc[11] = 220.0
+  // Active/pressed
   _tc[12] = 60.0
   _tc[13] = 120.0
   _tc[14] = 220.0
+  // Text
   _tc[15] = 30.0
   _tc[16] = 32.0
   _tc[17] = 38.0
+  // Text dim
+  _tc[18] = 120.0
+  _tc[19] = 125.0
+  _tc[20] = 130.0
+  // Border
   _tc[21] = 180.0
   _tc[22] = 182.0
   _tc[23] = 188.0
+  // Accent
+  _tc[24] = 50.0
+  _tc[25] = 140.0
+  _tc[26] = 50.0
+  // Slider/progress fill
+  _tc[27] = 60.0
+  _tc[28] = 120.0
+  _tc[29] = 220.0
+  // -- Extended slots --
+  _tc[30] = 255.0
+  _tc[31] = 255.0
+  _tc[32] = 255.0
+  _tc[33] = 60.0
+  _tc[34] = 120.0
+  _tc[35] = 220.0
+  _tc[36] = 40.0
+  _tc[37] = 167.0
+  _tc[38] = 69.0
+  _tc[39] = 200.0
+  _tc[40] = 150.0
+  _tc[41] = 20.0
+  _tc[42] = 200.0
+  _tc[43] = 55.0
+  _tc[44] = 55.0
+  _tc[45] = 160.0
+  _tc[46] = 165.0
+  _tc[47] = 180.0
+  _ts[0] = 6.0
+  _ts[1] = 0.0
   _gs[9] = 1.0
   return 0.0
 end
 
 fn gui_theme_ocean()
+  let _r = _theme_reset_settings()
+  // Background
   _tc[0] = 15.0
   _tc[1] = 25.0
   _tc[2] = 45.0
+  // Panel
   _tc[3] = 25.0
   _tc[4] = 40.0
   _tc[5] = 65.0
+  // Widget
   _tc[6] = 35.0
   _tc[7] = 55.0
   _tc[8] = 85.0
+  // Hover
   _tc[9] = 45.0
   _tc[10] = 70.0
   _tc[11] = 110.0
+  // Active/pressed
   _tc[12] = 60.0
   _tc[13] = 150.0
   _tc[14] = 255.0
+  // Text
   _tc[15] = 200.0
   _tc[16] = 220.0
   _tc[17] = 245.0
+  // Text dim
+  _tc[18] = 120.0
+  _tc[19] = 150.0
+  _tc[20] = 180.0
+  // Border
   _tc[21] = 50.0
   _tc[22] = 75.0
   _tc[23] = 110.0
+  // Accent
+  _tc[24] = 60.0
+  _tc[25] = 200.0
+  _tc[26] = 120.0
+  // Slider/progress fill
+  _tc[27] = 60.0
+  _tc[28] = 150.0
+  _tc[29] = 255.0
+  // -- Extended slots --
+  _tc[30] = 35.0
+  _tc[31] = 50.0
+  _tc[32] = 80.0
+  _tc[33] = 80.0
+  _tc[34] = 180.0
+  _tc[35] = 255.0
+  _tc[36] = 60.0
+  _tc[37] = 200.0
+  _tc[38] = 120.0
+  _tc[39] = 220.0
+  _tc[40] = 180.0
+  _tc[41] = 50.0
+  _tc[42] = 220.0
+  _tc[43] = 80.0
+  _tc[44] = 80.0
+  _tc[45] = 5.0
+  _tc[46] = 10.0
+  _tc[47] = 20.0
+  _ts[0] = 6.0
+  _ts[1] = 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// H-24: New theme — midnight (deep blue/purple)
+fn gui_theme_midnight()
+  let _r = _theme_reset_settings()
+  // Background
+  _tc[0] = 18.0
+  _tc[1] = 14.0
+  _tc[2] = 35.0
+  // Panel
+  _tc[3] = 28.0
+  _tc[4] = 22.0
+  _tc[5] = 50.0
+  // Widget
+  _tc[6] = 42.0
+  _tc[7] = 35.0
+  _tc[8] = 72.0
+  // Hover
+  _tc[9] = 58.0
+  _tc[10] = 48.0
+  _tc[11] = 95.0
+  // Active/pressed
+  _tc[12] = 120.0
+  _tc[13] = 80.0
+  _tc[14] = 220.0
+  // Text
+  _tc[15] = 210.0
+  _tc[16] = 200.0
+  _tc[17] = 235.0
+  // Text dim
+  _tc[18] = 130.0
+  _tc[19] = 120.0
+  _tc[20] = 160.0
+  // Border
+  _tc[21] = 70.0
+  _tc[22] = 58.0
+  _tc[23] = 100.0
+  // Accent
+  _tc[24] = 160.0
+  _tc[25] = 100.0
+  _tc[26] = 240.0
+  // Slider/progress fill
+  _tc[27] = 120.0
+  _tc[28] = 80.0
+  _tc[29] = 220.0
+  // -- Extended slots --
+  _tc[30] = 35.0
+  _tc[31] = 28.0
+  _tc[32] = 60.0
+  _tc[33] = 140.0
+  _tc[34] = 100.0
+  _tc[35] = 255.0
+  _tc[36] = 80.0
+  _tc[37] = 200.0
+  _tc[38] = 120.0
+  _tc[39] = 220.0
+  _tc[40] = 180.0
+  _tc[41] = 60.0
+  _tc[42] = 220.0
+  _tc[43] = 80.0
+  _tc[44] = 80.0
+  _tc[45] = 8.0
+  _tc[46] = 5.0
+  _tc[47] = 18.0
+  _ts[0] = 8.0
+  _ts[1] = 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// H-24: New theme — forest (green tones)
+fn gui_theme_forest()
+  let _r = _theme_reset_settings()
+  // Background
+  _tc[0] = 20.0
+  _tc[1] = 30.0
+  _tc[2] = 18.0
+  // Panel
+  _tc[3] = 30.0
+  _tc[4] = 45.0
+  _tc[5] = 28.0
+  // Widget
+  _tc[6] = 42.0
+  _tc[7] = 62.0
+  _tc[8] = 40.0
+  // Hover
+  _tc[9] = 55.0
+  _tc[10] = 80.0
+  _tc[11] = 52.0
+  // Active/pressed
+  _tc[12] = 80.0
+  _tc[13] = 180.0
+  _tc[14] = 70.0
+  // Text
+  _tc[15] = 210.0
+  _tc[16] = 230.0
+  _tc[17] = 205.0
+  // Text dim
+  _tc[18] = 130.0
+  _tc[19] = 150.0
+  _tc[20] = 125.0
+  // Border
+  _tc[21] = 60.0
+  _tc[22] = 85.0
+  _tc[23] = 55.0
+  // Accent
+  _tc[24] = 100.0
+  _tc[25] = 200.0
+  _tc[26] = 80.0
+  // Slider/progress fill
+  _tc[27] = 80.0
+  _tc[28] = 180.0
+  _tc[29] = 70.0
+  // -- Extended slots --
+  _tc[30] = 35.0
+  _tc[31] = 52.0
+  _tc[32] = 32.0
+  _tc[33] = 100.0
+  _tc[34] = 220.0
+  _tc[35] = 90.0
+  _tc[36] = 80.0
+  _tc[37] = 200.0
+  _tc[38] = 80.0
+  _tc[39] = 220.0
+  _tc[40] = 180.0
+  _tc[41] = 50.0
+  _tc[42] = 220.0
+  _tc[43] = 80.0
+  _tc[44] = 60.0
+  _tc[45] = 8.0
+  _tc[46] = 12.0
+  _tc[47] = 6.0
+  _ts[0] = 4.0
+  _ts[1] = 1.0
+  _gs[9] = 1.0
+  return 0.0
+end
+
+// H-24: New theme — high contrast (accessibility)
+fn gui_theme_high_contrast()
+  let _r = _theme_reset_settings()
+  // Background
+  _tc[0] = 0.0
+  _tc[1] = 0.0
+  _tc[2] = 0.0
+  // Panel
+  _tc[3] = 0.0
+  _tc[4] = 0.0
+  _tc[5] = 0.0
+  // Widget
+  _tc[6] = 30.0
+  _tc[7] = 30.0
+  _tc[8] = 30.0
+  // Hover
+  _tc[9] = 60.0
+  _tc[10] = 60.0
+  _tc[11] = 60.0
+  // Active/pressed
+  _tc[12] = 255.0
+  _tc[13] = 255.0
+  _tc[14] = 0.0
+  // Text
+  _tc[15] = 255.0
+  _tc[16] = 255.0
+  _tc[17] = 255.0
+  // Text dim
+  _tc[18] = 180.0
+  _tc[19] = 180.0
+  _tc[20] = 180.0
+  // Border
+  _tc[21] = 255.0
+  _tc[22] = 255.0
+  _tc[23] = 255.0
+  // Accent
+  _tc[24] = 255.0
+  _tc[25] = 255.0
+  _tc[26] = 0.0
+  // Slider/progress fill
+  _tc[27] = 255.0
+  _tc[28] = 255.0
+  _tc[29] = 0.0
+  // -- Extended slots --
+  _tc[30] = 30.0
+  _tc[31] = 30.0
+  _tc[32] = 30.0
+  _tc[33] = 255.0
+  _tc[34] = 255.0
+  _tc[35] = 0.0
+  _tc[36] = 0.0
+  _tc[37] = 255.0
+  _tc[38] = 0.0
+  _tc[39] = 255.0
+  _tc[40] = 255.0
+  _tc[41] = 0.0
+  _tc[42] = 255.0
+  _tc[43] = 0.0
+  _tc[44] = 0.0
+  _tc[45] = 0.0
+  _tc[46] = 0.0
+  _tc[47] = 0.0
+  _ts[0] = 0.0
+  _ts[1] = 0.0
+  _ts[2] = 2.0
+  _ts[6] = 3.0
   _gs[9] = 1.0
   return 0.0
 end

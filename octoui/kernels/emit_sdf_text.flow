@@ -1,0 +1,286 @@
+// emit_sdf_text.flow — OctoUI SDF Text Glyph Rendering Kernel Emitter
+//
+// Renders a single glyph from an SDF (Signed Distance Field) atlas into
+// the framebuffer with anti-aliased edges via smoothstep alpha blending.
+//
+// SDF atlas layout (binding 4 = heap):
+//   Flat array: heap[floor(atlas_y) * atlas_w + floor(atlas_x)]
+//   Values: 0.0 = far outside, 0.5 = edge, 1.0 = deep inside
+//
+// Each thread handles one output pixel in the scaled glyph rectangle.
+// output_w = ceil(glyph_w * scale), output_h = ceil(glyph_h * scale)
+//
+// Algorithm per thread:
+//   1. Map gid -> (col, row) in output rect
+//   2. Map (col, row) -> atlas UV via (atlas_u + col/scale, atlas_v + row/scale)
+//   3. Bilinear-sample SDF from heap (4 texels, lerp)
+//   4. Compute smoothstep alpha from SDF value
+//   5. Alpha-blend text color onto existing framebuffer RGB
+//
+// Smoothstep: edge = 0.5, softness = max(0.25/scale, 0.01)
+//   t = clamp((sdf - (edge - soft)) / (2 * soft), 0, 1)
+//   alpha = t * t * (3 - 2 * t)
+//
+// Framebuffer layout: planar RGB in globals (binding 2).
+//   globals[0 .. total-1]         = R channel
+//   globals[total .. 2*total-1]   = G channel
+//   globals[2*total .. 3*total-1] = B channel
+//
+// Push constants (17 floats):
+//   pc[0]  = atlas_u       glyph left edge in atlas (pixel column)
+//   pc[1]  = atlas_v       glyph top edge in atlas (pixel row)
+//   pc[2]  = glyph_w       glyph width in atlas pixels
+//   pc[3]  = glyph_h       glyph height in atlas pixels
+//   pc[4]  = dest_x        screen X position (float)
+//   pc[5]  = dest_y        screen Y position (float)
+//   pc[6]  = scale         render scale (font_size / sdf_base_size)
+//   pc[7]  = R             text color red (0.0-1.0)
+//   pc[8]  = G             text color green (0.0-1.0)
+//   pc[9]  = B             text color blue (0.0-1.0)
+//   pc[10] = screen_w      framebuffer width
+//   pc[11] = total_pixels  screen_w * screen_h
+//   pc[12] = atlas_w       atlas width (e.g. 640)
+//   pc[13] = outline_w     outline thickness (reserved, unused in v1)
+//   pc[14] = shadow_dx     shadow X offset (reserved, unused in v1)
+//   pc[15] = shadow_dy     shadow Y offset (reserved, unused in v1)
+//   pc[16] = glow_radius   glow radius (reserved, unused in v1)
+//
+// VM SSBO layout:
+//   Binding 0: registers (unused)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (framebuffer — read existing RGB, write blended RGB)
+//   Binding 3: control   (unused)
+//   Binding 4: heap      (SDF atlas data — read SDF values)
+//
+// Dispatch: workgroups = ceil(output_w * output_h / 256)
+//
+// Run: octoflow run octoui/kernels/emit_sdf_text.flow --allow-read --allow-write
+
+use "../../stdlib/compiler/ir"
+
+fn emit_sdf_text(out_path)
+  ir_new()
+  ir_input_count = 9.0
+
+  // ---- Basic block layout ----
+  // entry      : load push constants, compute output dims, thread bounds check
+  // main_body  : map gid to (col, row), compute screen and atlas coords, atlas bounds check
+  // atlas_ok   : sample SDF, compute smoothstep alpha, screen bounds check
+  // alpha_ok   : alpha > threshold check
+  // write_blk  : read existing FB, blend, write R/G/B
+  // merge_write: merge from write_blk and alpha_skip branches
+  // merge_atlas: merge from atlas_ok and atlas_oob branches
+  // exit_block : return
+
+  let entry = ir_block("entry")
+  let main_body = ir_block("main_body")
+  let atlas_ok = ir_block("atlas_ok")
+  let alpha_ok = ir_block("alpha_ok")
+  let write_blk = ir_block("write")
+  let merge_write = ir_block("merge_write")
+  let merge_atlas = ir_block("merge_atlas")
+  let exit_block = ir_block("exit")
+
+  // ---- Load global invocation ID ----
+  let gid = ir_load_gid(entry)
+
+  // ---- Push constants ----
+  let atlas_u_f = ir_push_const(entry, 0.0)
+  let atlas_v_f = ir_push_const(entry, 1.0)
+  let glyph_w_f = ir_push_const(entry, 2.0)
+  let glyph_h_f = ir_push_const(entry, 3.0)
+  let dest_x_f = ir_push_const(entry, 4.0)
+  let dest_y_f = ir_push_const(entry, 5.0)
+  let scale_f = ir_push_const(entry, 6.0)
+  let r_color = ir_push_const(entry, 7.0)
+  let g_color = ir_push_const(entry, 8.0)
+  let b_color = ir_push_const(entry, 9.0)
+  let sw_f = ir_push_const(entry, 10.0)
+  let total_f = ir_push_const(entry, 11.0)
+  let atlas_w_f = ir_push_const(entry, 12.0)
+
+  // ---- Compute output dimensions: output_w = ceil(glyph_w * scale) ----
+  // ceil(x) = floor(x) when exact, otherwise floor(x)+1
+  // We approximate ceil via floor(x + 0.9999) for positive values
+  let c_near1 = ir_const_f(entry, 0.9999)
+  let raw_out_w = ir_fmul(entry, glyph_w_f, scale_f)
+  let raw_out_h = ir_fmul(entry, glyph_h_f, scale_f)
+  let out_w_f = ir_floor(entry, ir_fadd(entry, raw_out_w, c_near1))
+  let out_h_f = ir_floor(entry, ir_fadd(entry, raw_out_h, c_near1))
+
+  // ---- Thread bounds check: gid >= output_w * output_h -> exit ----
+  let total_threads_f = ir_fmul(entry, out_w_f, out_h_f)
+  let total_threads_u = ir_ftou(entry, total_threads_f)
+  let oob_thread = ir_ugte(entry, gid, total_threads_u)
+  let _sm1 = ir_selection_merge(entry, exit_block)
+  let _br1 = ir_term_cond_branch(entry, oob_thread, exit_block, main_body)
+
+  // ---- main_body: map gid -> (col, row) in output rect ----
+  let gid_f = ir_utof(main_body, gid)
+
+  // row = floor(gid / output_w)
+  let row_f = ir_floor(main_body, ir_fdiv(main_body, gid_f, out_w_f))
+
+  // col = gid - row * output_w   (modulo via subtraction)
+  let col_f = ir_fsub(main_body, gid_f, ir_fmul(main_body, row_f, out_w_f))
+
+  // ---- Screen coordinates ----
+  let screen_x_f = ir_fadd(main_body, dest_x_f, col_f)
+  let screen_y_f = ir_fadd(main_body, dest_y_f, row_f)
+
+  // ---- Atlas UV: map output pixel back to atlas space ----
+  let atlas_x_f = ir_fadd(main_body, atlas_u_f, ir_fdiv(main_body, col_f, scale_f))
+  let atlas_y_f = ir_fadd(main_body, atlas_v_f, ir_fdiv(main_body, row_f, scale_f))
+
+  // ---- Atlas bounds check: atlas_x < 0 or atlas_y < 0 or atlas_x >= atlas_w or atlas_y >= atlas_w ----
+  let c0_f = ir_const_f(main_body, 0.0)
+  let neg_ax = ir_folt(main_body, atlas_x_f, c0_f)
+  let neg_ay = ir_folt(main_body, atlas_y_f, c0_f)
+  let oob_ax = ir_foge(main_body, atlas_x_f, atlas_w_f)
+  let oob_ay = ir_foge(main_body, atlas_y_f, atlas_w_f)
+  let oob_atlas_a = ir_lor(main_body, neg_ax, neg_ay)
+  let oob_atlas_b = ir_lor(main_body, oob_ax, oob_ay)
+  let oob_atlas = ir_lor(main_body, oob_atlas_a, oob_atlas_b)
+
+  let _sm2 = ir_selection_merge(main_body, merge_atlas)
+  let _br2 = ir_term_cond_branch(main_body, oob_atlas, merge_atlas, atlas_ok)
+
+  // ---- atlas_ok: bilinear sample SDF from heap (binding 4) ----
+  let c1_f = ir_const_f(atlas_ok, 1.0)
+  let ax_floor = ir_floor(atlas_ok, atlas_x_f)
+  let ay_floor = ir_floor(atlas_ok, atlas_y_f)
+  let frac_x = ir_fsub(atlas_ok, atlas_x_f, ax_floor)
+  let frac_y = ir_fsub(atlas_ok, atlas_y_f, ay_floor)
+  let atlas_w_u = ir_ftou(atlas_ok, atlas_w_f)
+  let ax_u = ir_ftou(atlas_ok, ax_floor)
+  let ay_u = ir_ftou(atlas_ok, ay_floor)
+  let c1u_a = ir_const_u(atlas_ok, 1.0)
+  let ax1_u = ir_iadd(atlas_ok, ax_u, c1u_a)
+  let ay1_u = ir_iadd(atlas_ok, ay_u, c1u_a)
+
+  // 4 texel indices for bilinear
+  let row0_u = ir_imul(atlas_ok, ay_u, atlas_w_u)
+  let row1_u = ir_imul(atlas_ok, ay1_u, atlas_w_u)
+  let idx00 = ir_iadd(atlas_ok, row0_u, ax_u)
+  let idx10 = ir_iadd(atlas_ok, row0_u, ax1_u)
+  let idx01 = ir_iadd(atlas_ok, row1_u, ax_u)
+  let idx11 = ir_iadd(atlas_ok, row1_u, ax1_u)
+
+  // Load 4 SDF values
+  let s00 = ir_load_input_at(atlas_ok, 4.0, idx00)
+  let s10 = ir_load_input_at(atlas_ok, 4.0, idx10)
+  let s01 = ir_load_input_at(atlas_ok, 4.0, idx01)
+  let s11 = ir_load_input_at(atlas_ok, 4.0, idx11)
+
+  // Bilinear interpolation: lerp horizontally then vertically
+  let one_fx = ir_fsub(atlas_ok, c1_f, frac_x)
+  let top_lerp = ir_fadd(atlas_ok, ir_fmul(atlas_ok, one_fx, s00), ir_fmul(atlas_ok, frac_x, s10))
+  let bot_lerp = ir_fadd(atlas_ok, ir_fmul(atlas_ok, one_fx, s01), ir_fmul(atlas_ok, frac_x, s11))
+  let one_fy = ir_fsub(atlas_ok, c1_f, frac_y)
+  let sdf_val = ir_fadd(atlas_ok, ir_fmul(atlas_ok, one_fy, top_lerp), ir_fmul(atlas_ok, frac_y, bot_lerp))
+
+  // ---- Compute smoothstep alpha ----
+  // edge = 0.5, softness = max(0.25 / scale, 0.01)
+  let edge_f = ir_const_f(atlas_ok, 0.5)
+  let c_soft = ir_const_f(atlas_ok, 0.03)
+  let c_soft_min = ir_const_f(atlas_ok, 0.005)
+  let raw_soft = ir_fdiv(atlas_ok, c_soft, scale_f)
+  let softness = ir_fmax(atlas_ok, raw_soft, c_soft_min)
+
+  // e0 = edge - softness, e1 = edge + softness
+  let e0 = ir_fsub(atlas_ok, edge_f, softness)
+  let e1 = ir_fadd(atlas_ok, edge_f, softness)
+
+  // t_raw = (sdf - e0) / (e1 - e0)
+  let x_minus_e0 = ir_fsub(atlas_ok, sdf_val, e0)
+  let range = ir_fsub(atlas_ok, e1, e0)
+  let t_raw = ir_fdiv(atlas_ok, x_minus_e0, range)
+
+  // clamp(t_raw, 0, 1)
+  let t_lo = ir_fmax(atlas_ok, c0_f, t_raw)
+  let t_clamped = ir_fmin(atlas_ok, c1_f, t_lo)
+
+  // alpha = t * t * (3 - 2 * t)
+  let c3_f = ir_const_f(atlas_ok, 3.0)
+  let c2_f = ir_const_f(atlas_ok, 2.0)
+  let t_sq = ir_fmul(atlas_ok, t_clamped, t_clamped)
+  let two_t = ir_fmul(atlas_ok, c2_f, t_clamped)
+  let inner = ir_fsub(atlas_ok, c3_f, two_t)
+  let alpha = ir_fmul(atlas_ok, t_sq, inner)
+
+  // ---- Screen bounds check ----
+  // fb_idx = floor(screen_y) * screen_w + floor(screen_x)
+  let sx_floor = ir_floor(atlas_ok, screen_x_f)
+  let sy_floor = ir_floor(atlas_ok, screen_y_f)
+  let fb_idx_f = ir_fadd(atlas_ok, ir_fmul(atlas_ok, sy_floor, sw_f), sx_floor)
+  let fb_idx = ir_ftou(atlas_ok, fb_idx_f)
+  let total_u = ir_ftou(atlas_ok, total_f)
+  let sw_u = ir_ftou(atlas_ok, sw_f)
+  let sx_u = ir_ftou(atlas_ok, sx_floor)
+
+  // Skip if: fb_idx >= total_pixels, screen_x < 0, screen_y < 0, screen_x >= screen_w
+  let oob_fb = ir_ugte(atlas_ok, fb_idx, total_u)
+  let oob_right = ir_ugte(atlas_ok, sx_u, sw_u)
+  let neg_sx = ir_folt(atlas_ok, screen_x_f, c0_f)
+  let neg_sy = ir_folt(atlas_ok, screen_y_f, c0_f)
+  let oob_screen_a = ir_lor(atlas_ok, oob_fb, oob_right)
+  let oob_screen_b = ir_lor(atlas_ok, neg_sx, neg_sy)
+  let oob_screen = ir_lor(atlas_ok, oob_screen_a, oob_screen_b)
+
+  // Skip if alpha < 0.004 (effectively transparent)
+  let c_alpha_thresh = ir_const_f(atlas_ok, 0.004)
+  let alpha_too_low = ir_folt(atlas_ok, alpha, c_alpha_thresh)
+
+  // Combined skip condition
+  let skip_pixel = ir_lor(atlas_ok, oob_screen, alpha_too_low)
+
+  let _sm3 = ir_selection_merge(atlas_ok, merge_write)
+  let _br3 = ir_term_cond_branch(atlas_ok, skip_pixel, merge_write, alpha_ok)
+
+  // ---- alpha_ok: compute blended pixel, then write ----
+  // Read existing framebuffer values for alpha blending
+  // R: globals[fb_idx], G: globals[total + fb_idx], B: globals[2*total + fb_idx]
+  let g_offset_u = ir_iadd(alpha_ok, total_u, fb_idx)
+  let two_u = ir_const_u(alpha_ok, 2.0)
+  let two_total_u = ir_imul(alpha_ok, two_u, total_u)
+  let b_offset_u = ir_iadd(alpha_ok, two_total_u, fb_idx)
+
+  let exist_r = ir_load_input_at(alpha_ok, 2.0, fb_idx)
+  let exist_g = ir_load_input_at(alpha_ok, 2.0, g_offset_u)
+  let exist_b = ir_load_input_at(alpha_ok, 2.0, b_offset_u)
+
+  // one_minus_alpha = 1.0 - alpha
+  let one_minus_alpha = ir_fsub(alpha_ok, c1_f, alpha)
+
+  // blended = existing * (1 - alpha) + text_color * alpha
+  let blend_r = ir_fadd(alpha_ok, ir_fmul(alpha_ok, exist_r, one_minus_alpha), ir_fmul(alpha_ok, r_color, alpha))
+  let blend_g = ir_fadd(alpha_ok, ir_fmul(alpha_ok, exist_g, one_minus_alpha), ir_fmul(alpha_ok, g_color, alpha))
+  let blend_b = ir_fadd(alpha_ok, ir_fmul(alpha_ok, exist_b, one_minus_alpha), ir_fmul(alpha_ok, b_color, alpha))
+
+  let _br4 = ir_term_branch(alpha_ok, write_blk)
+
+  // ---- write_blk: store blended RGB to framebuffer ----
+  // R channel: globals[fb_idx]
+  let _s_r = ir_buf_store_f(write_blk, 2.0, fb_idx, blend_r)
+
+  // G channel: globals[total + fb_idx]
+  let _s_g = ir_buf_store_f(write_blk, 2.0, g_offset_u, blend_g)
+
+  // B channel: globals[2*total + fb_idx]
+  let _s_b = ir_buf_store_f(write_blk, 2.0, b_offset_u, blend_b)
+
+  let _br5 = ir_term_branch(write_blk, merge_write)
+
+  // ---- merge_write -> merge_atlas -> exit ----
+  let _br6 = ir_term_branch(merge_write, merge_atlas)
+  let _br7 = ir_term_branch(merge_atlas, exit_block)
+
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "octoui/kernels/ui_sdf_text.spv"
+let _r = emit_sdf_text(out)
+print("Emitted: {out}")

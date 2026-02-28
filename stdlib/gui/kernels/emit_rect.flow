@@ -1,0 +1,83 @@
+// emit_rect.flow — Fill a rectangle with a solid color
+//
+// Push constants:
+//   pc[0] = total (width * height)
+//   pc[1] = win_w (window width)
+//   pc[2] = rect_x
+//   pc[3] = rect_y
+//   pc[4] = rect_w
+//   pc[5] = rect_h
+//   pc[6] = r (0.0-255.0)
+//   pc[7] = g
+//   pc[8] = b
+//
+// Per-thread: compute pixel (px,py) from gid, check if inside rect, write color.
+// Dispatch: ceil(total / 256) workgroups
+
+use "../../compiler/ir"
+
+fn emit_rect(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+
+  // Read push constants
+  let total_f = ir_push_const(entry, 0.0)
+  let win_w_f = ir_push_const(entry, 1.0)
+  let rx_f = ir_push_const(entry, 2.0)
+  let ry_f = ir_push_const(entry, 3.0)
+  let rw_f = ir_push_const(entry, 4.0)
+  let rh_f = ir_push_const(entry, 5.0)
+  let cr = ir_push_const(entry, 6.0)
+  let cg = ir_push_const(entry, 7.0)
+  let cb = ir_push_const(entry, 8.0)
+
+  // Bounds check: gid < total
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, total_f)
+
+  let merge = ir_block("merge")
+  let check = ir_block("check")
+  ir_selection_merge(entry, merge)
+  ir_term_cond_branch(entry, in_bounds, check, merge)
+
+  // Compute pixel coordinates from linear index
+  let win_w_u = ir_ftou(check, win_w_f)
+  let px = ir_umod(check, gid, win_w_u)
+  let py = ir_udiv(check, gid, win_w_u)
+  let px_f = ir_utof(check, px)
+  let py_f = ir_utof(check, py)
+
+  // Check: px >= rx AND px < rx+rw AND py >= ry AND py < ry+rh
+  let rx_end = ir_fadd(check, rx_f, rw_f)
+  let ry_end = ir_fadd(check, ry_f, rh_f)
+  let c1 = ir_foge(check, px_f, rx_f)
+  let c2 = ir_folt(check, px_f, rx_end)
+  let c3 = ir_foge(check, py_f, ry_f)
+  let c4 = ir_folt(check, py_f, ry_end)
+  let cx_ok = ir_land(check, c1, c2)
+  let cy_ok = ir_land(check, c3, c4)
+  let inside = ir_land(check, cx_ok, cy_ok)
+
+  let write = ir_block("write")
+  let skip = ir_block("skip")
+  ir_selection_merge(check, skip)
+  ir_term_cond_branch(check, inside, write, skip)
+
+  // Write R, G, B channels
+  let total_u = ir_ftou(write, total_f)
+  ir_store_output_at(write, gid, cr)
+  let g_off = ir_iadd(write, gid, total_u)
+  ir_store_output_at(write, g_off, cg)
+  let b_off = ir_iadd(write, g_off, total_u)
+  ir_store_output_at(write, b_off, cb)
+
+  ir_term_branch(write, skip)
+  ir_term_branch(skip, merge)
+  ir_term_return(merge)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

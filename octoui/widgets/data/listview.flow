@@ -1,0 +1,393 @@
+// widgets/data/listview.flow — Virtualized List View Widget
+//
+// A scrollable list with virtual rendering: only allocates display widgets
+// for visible rows + a small buffer. Supports thousands of items efficiently.
+//
+// Usage:
+//   let lv = ui_listview(parent, 300.0, 8.0, 24.0)
+//   //                            width  rows  row_h
+//   let _i1 = ui_listview_add(lv, "Item One")
+//   let _i2 = ui_listview_add(lv, "Item Two")
+//   // ... add more items (thousands ok)
+//   let _fin = ui_listview_finalize(lv)
+//
+//   // After layout:
+//   let _r = ui_listview_refresh(lv)
+//
+//   // In event loop:
+//   let _lp = ui_listview_process(lv, mx, my, clicked, key)
+//
+//   // Get selected:
+//   let sel = ui_listview_selected(lv)    // -1 if none
+//   let lbl = ui_listview_label(lv, sel)  // label at index
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// --- Registry (one entry per listview) ---
+let mut _ui_lv_ids = []          // listview container widget ID
+let mut _ui_lv_row_h = []        // row height in pixels
+let mut _ui_lv_disp_count = []   // number of display rows allocated
+let mut _ui_lv_selected = []     // selected data index (-1 = none)
+let mut _ui_lv_scroll = []       // scroll offset (first visible data index)
+let mut _ui_lv_width = []        // widget width
+
+// --- Item data (flat, shared across listviews) ---
+let mut _ui_lv_items = []        // flat array of item labels
+let mut _ui_lv_item_off = []     // per-listview: start index into _ui_lv_items
+let mut _ui_lv_item_count = []   // per-listview: number of items
+
+// --- Display widgets (flat, shared) ---
+let mut _ui_lv_disp_bg = []      // background box widget IDs
+let mut _ui_lv_disp_txt = []     // text widget IDs
+let mut _ui_lv_dw_off = []       // per-listview: start index into disp arrays
+
+// --- Find listview by widget ID ---
+fn ui_lv_find(lv_id)
+  let n = len(_ui_lv_ids)
+  let mut i = 0.0
+  while i < n
+    if _ui_lv_ids[i] == lv_id
+      return i
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+// Create a listview
+// parent: parent widget ID
+// w: widget width in pixels
+// disp_rows: number of visible display rows to allocate
+// row_h: height of each row in pixels
+// Returns: listview container widget ID
+fn ui_listview(parent, w, disp_rows, row_h)
+  let lv_id = ui_tree_add(UI_COLUMN, parent, w, disp_rows * row_h, " ")
+  let _ls = ui_tree_set_spacing(lv_id, 0.0)
+
+  let item_off = len(_ui_lv_items)
+  let dw_off = len(_ui_lv_disp_bg)
+
+  push(_ui_lv_ids, lv_id)
+  push(_ui_lv_row_h, row_h)
+  push(_ui_lv_disp_count, disp_rows)
+  push(_ui_lv_selected, -1.0)
+  push(_ui_lv_scroll, 0.0)
+  push(_ui_lv_width, w)
+  push(_ui_lv_item_off, item_off)
+  push(_ui_lv_item_count, 0.0)
+  push(_ui_lv_dw_off, dw_off)
+
+  return lv_id
+end
+
+// Add an item to the listview (call before finalize)
+fn ui_listview_add(lv_id, label)
+  let li = ui_lv_find(lv_id)
+  if li < 0.0
+    return 0.0
+  end
+  push(_ui_lv_items, label)
+  _ui_lv_item_count[li] = _ui_lv_item_count[li] + 1.0
+  return 0.0
+end
+
+// Finalize: create display widgets (call after adding all items)
+fn ui_listview_finalize(lv_id)
+  let li = ui_lv_find(lv_id)
+  if li < 0.0
+    return -1.0
+  end
+
+  let disp = _ui_lv_disp_count[li]
+  let row_h = _ui_lv_row_h[li]
+  let w = _ui_lv_width[li]
+
+  // Create display rows (only as many as visible)
+  let mut ri = 0.0
+  while ri < disp
+    let bg = ui_tree_add(UI_BOX, lv_id, w, row_h, " ")
+    let _bc = ui_tree_set_color_themed(bg, UI_COLOR_BG)
+    let txt = ui_tree_add(UI_TEXT, lv_id, w - 8.0, row_h - 4.0, " ")
+    let _tc = ui_tree_set_color_themed(txt, UI_COLOR_TEXT)
+    push(_ui_lv_disp_bg, bg)
+    push(_ui_lv_disp_txt, txt)
+    ri = ri + 1.0
+  end
+
+  return lv_id
+end
+
+// Refresh display widgets to match current scroll offset
+fn ui_listview_refresh(lv_id)
+  let li = ui_lv_find(lv_id)
+  if li < 0.0
+    return 0.0
+  end
+
+  let disp = _ui_lv_disp_count[li]
+  let dw_off = _ui_lv_dw_off[li]
+  let item_off = _ui_lv_item_off[li]
+  let item_count = _ui_lv_item_count[li]
+  let scroll = _ui_lv_scroll[li]
+  let selected = _ui_lv_selected[li]
+
+  let mut ri = 0.0
+  while ri < disp
+    let bg = _ui_lv_disp_bg[dw_off + ri]
+    let txt = _ui_lv_disp_txt[dw_off + ri]
+    let data_idx = scroll + ri
+
+    if data_idx < item_count
+      // Show row
+      _ui_visible[bg] = 1.0
+      _ui_visible[txt] = 1.0
+      let item_label = _ui_lv_items[item_off + data_idx]
+      _ui_texts[txt] = item_label
+
+      // Highlight selected row
+      if data_idx == selected
+        let _cb1 = ui_tree_set_color_themed(bg, UI_COLOR_PRIMARY)
+        let _ct1 = ui_tree_set_color_themed(txt, UI_COLOR_TEXT)
+      else
+        // Alternating row colors
+        let alt = floor(data_idx / 2.0) * 2.0
+        if alt == data_idx
+          let _cb2 = ui_tree_set_color_themed(bg, UI_COLOR_BG)
+        else
+          let _cb3 = ui_tree_set_color_themed(bg, UI_COLOR_SURFACE)
+        end
+        let _ct2 = ui_tree_set_color_themed(txt, UI_COLOR_TEXT)
+      end
+    else
+      // Hide empty rows
+      _ui_visible[bg] = 0.0
+      _ui_visible[txt] = 0.0
+    end
+    ri = ri + 1.0
+  end
+
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// Get selected item index (-1 if none)
+fn ui_listview_selected(lv_id)
+  let li = ui_lv_find(lv_id)
+  if li < 0.0
+    return -1.0
+  end
+  return _ui_lv_selected[li]
+end
+
+// Get label at data index
+fn ui_listview_label(lv_id, data_idx)
+  let li = ui_lv_find(lv_id)
+  if li < 0.0
+    return " "
+  end
+  let item_off = _ui_lv_item_off[li]
+  let item_count = _ui_lv_item_count[li]
+  if data_idx < 0.0
+    return " "
+  end
+  if data_idx >= item_count
+    return " "
+  end
+  return _ui_lv_items[item_off + data_idx]
+end
+
+// Get item count
+fn ui_listview_count(lv_id)
+  let li = ui_lv_find(lv_id)
+  if li < 0.0
+    return 0.0
+  end
+  return _ui_lv_item_count[li]
+end
+
+// Set selected item (programmatic)
+fn ui_listview_set_selected(lv_id, data_idx)
+  let li = ui_lv_find(lv_id)
+  if li < 0.0
+    return 0.0
+  end
+  let item_count = _ui_lv_item_count[li]
+  if data_idx < 0.0
+    _ui_lv_selected[li] = -1.0
+    return 0.0
+  end
+  if data_idx < item_count
+    _ui_lv_selected[li] = data_idx
+    // Ensure visible — auto-scroll if needed
+    let scroll = _ui_lv_scroll[li]
+    let disp = _ui_lv_disp_count[li]
+    if data_idx < scroll
+      _ui_lv_scroll[li] = data_idx
+    end
+    let scroll_end = scroll + disp - 1.0
+    if data_idx > scroll_end
+      let new_scroll = data_idx - disp + 1.0
+      if new_scroll < 0.0
+        _ui_lv_scroll[li] = 0.0
+      else
+        _ui_lv_scroll[li] = new_scroll
+      end
+    end
+  end
+  return 0.0
+end
+
+// Scroll to a specific item
+fn ui_listview_scroll_to(lv_id, data_idx)
+  let li = ui_lv_find(lv_id)
+  if li < 0.0
+    return 0.0
+  end
+  let item_count = _ui_lv_item_count[li]
+  let disp = _ui_lv_disp_count[li]
+  let max_scroll = item_count - disp
+  if max_scroll < 0.0
+    _ui_lv_scroll[li] = 0.0
+    return 0.0
+  end
+  if data_idx < 0.0
+    _ui_lv_scroll[li] = 0.0
+  else
+    if data_idx > max_scroll
+      _ui_lv_scroll[li] = max_scroll
+    else
+      _ui_lv_scroll[li] = data_idx
+    end
+  end
+  return 0.0
+end
+
+// Process mouse + keyboard input
+// mx, my: mouse position
+// clicked: 1.0 if left button just clicked
+// key: current key from ui_key_down()
+fn ui_listview_process(lv_id, mx, my, clicked, key)
+  let li = ui_lv_find(lv_id)
+  if li < 0.0
+    return 0.0
+  end
+
+  let lv_x = _ui_x[lv_id]
+  let lv_y = _ui_y[lv_id]
+  let lv_w = _ui_w[lv_id]
+  let lv_h = _ui_h[lv_id]
+  let row_h = _ui_lv_row_h[li]
+  let disp = _ui_lv_disp_count[li]
+  let item_count = _ui_lv_item_count[li]
+  let scroll = _ui_lv_scroll[li]
+  let max_scroll = item_count - disp
+
+  // Click to select
+  if clicked == 1.0
+    if mx >= lv_x
+      if mx <= lv_x + lv_w
+        if my >= lv_y
+          if my <= lv_y + lv_h
+            let row_rel = floor((my - lv_y) / row_h)
+            let data_idx = scroll + row_rel
+            if data_idx < item_count
+              _ui_lv_selected[li] = data_idx
+              let _r = ui_listview_refresh(lv_id)
+            end
+          end
+        end
+      end
+    end
+  end
+
+  // Keyboard navigation
+  let updated = 0.0
+  let mut do_up = 0.0
+  let mut do_down = 0.0
+  let mut do_pgup = 0.0
+  let mut do_pgdn = 0.0
+  let mut do_home = 0.0
+  let mut do_end = 0.0
+
+  if key == "up"
+    do_up = 1.0
+  end
+  if key == "down"
+    do_down = 1.0
+  end
+  if key == "pageup"
+    do_pgup = 1.0
+  end
+  if key == "pagedown"
+    do_pgdn = 1.0
+  end
+  if key == "home"
+    do_home = 1.0
+  end
+  if key == "end"
+    do_end = 1.0
+  end
+
+  let sel = _ui_lv_selected[li]
+  let mut new_sel = sel
+
+  if do_up == 1.0
+    if sel > 0.0
+      new_sel = sel - 1.0
+    else
+      new_sel = 0.0
+    end
+  end
+  if do_down == 1.0
+    let max_sel = item_count - 1.0
+    if sel < max_sel
+      new_sel = sel + 1.0
+    else
+      new_sel = max_sel
+    end
+  end
+  if do_pgup == 1.0
+    let new_s = sel - disp
+    if new_s < 0.0
+      new_sel = 0.0
+    else
+      new_sel = new_s
+    end
+  end
+  if do_pgdn == 1.0
+    let max_sel = item_count - 1.0
+    let new_s = sel + disp
+    if new_s > max_sel
+      new_sel = max_sel
+    else
+      new_sel = new_s
+    end
+  end
+  if do_home == 1.0
+    new_sel = 0.0
+  end
+  if do_end == 1.0
+    new_sel = item_count - 1.0
+  end
+
+  if new_sel != sel
+    let _ss = ui_listview_set_selected(lv_id, new_sel)
+    let _r = ui_listview_refresh(lv_id)
+  end
+
+  return 0.0
+end
+
+// Refresh all listviews (call after layout updates)
+fn ui_listview_refresh_all()
+  let n = len(_ui_lv_ids)
+  let mut i = 0.0
+  while i < n
+    let lv_id = _ui_lv_ids[i]
+    let _r = ui_listview_refresh(lv_id)
+    i = i + 1.0
+  end
+  return 0.0
+end

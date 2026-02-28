@@ -1,0 +1,38 @@
+// themes/terminal.flow — OctoUI Terminal Theme
+//
+// A green-on-black palette inspired by classic phosphor terminals.
+// Call ui_theme_load_terminal() then ui_theme_apply_all() to switch.
+//
+// Shares the same semantic color constants as dark.flow.
+
+use "dark"
+
+// Load terminal theme colors into the existing theme arrays
+fn ui_theme_load_terminal()
+  // BG: near-black with green tint
+  let _s0 = ui_theme_set(UI_COLOR_BG, 8.0, 12.0, 8.0)
+  // SURFACE: slightly lighter green-black
+  let _s1 = ui_theme_set(UI_COLOR_SURFACE, 16.0, 28.0, 16.0)
+  // PRIMARY: bright phosphor green
+  let _s2 = ui_theme_set(UI_COLOR_PRIMARY, 0.0, 220.0, 0.0)
+  // TEXT: soft green (easier on the eyes than pure 0,255,0)
+  let _s3 = ui_theme_set(UI_COLOR_TEXT, 140.0, 255.0, 140.0)
+  // TEXT_DIM: dimmer green
+  let _s4 = ui_theme_set(UI_COLOR_TEXT_DIM, 60.0, 130.0, 60.0)
+  // BORDER: medium green
+  let _s5 = ui_theme_set(UI_COLOR_BORDER, 30.0, 90.0, 30.0)
+  // HOVER: dark green highlight
+  let _s6 = ui_theme_set(UI_COLOR_HOVER, 20.0, 50.0, 20.0)
+  // ACTIVE: same bright green as PRIMARY
+  let _s7 = ui_theme_set(UI_COLOR_ACTIVE, 0.0, 220.0, 0.0)
+  // Extended slots (terminal green)
+  let _s8 = ui_theme_set(UI_COLOR_SURFACE_2, 24.0, 40.0, 24.0)
+  let _s9 = ui_theme_set(UI_COLOR_FOCUS_RING, 0.0, 255.0, 0.0)
+  let _s10 = ui_theme_set(UI_COLOR_SUCCESS, 0.0, 200.0, 0.0)
+  let _s11 = ui_theme_set(UI_COLOR_WARNING, 200.0, 200.0, 0.0)
+  let _s12 = ui_theme_set(UI_COLOR_ERROR, 200.0, 0.0, 0.0)
+  let _s13 = ui_theme_set(UI_COLOR_GRADIENT_A, 20.0, 36.0, 20.0)
+  let _s14 = ui_theme_set(UI_COLOR_GRADIENT_B, 12.0, 24.0, 12.0)
+  let _s15 = ui_theme_set(UI_COLOR_SHADOW, 0.0, 8.0, 0.0)
+  return 0.0
+end

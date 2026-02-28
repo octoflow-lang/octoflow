@@ -1,0 +1,46 @@
+// engine/sdf_font.flow — Font Manager (GDI backend)
+//
+// Provides text measurement via OS font rasterizer (Win32 GDI).
+// Text rendering handled by pipeline via gdi_text_* batch API.
+//
+// Replaces SDF font system. Same function signatures for compatibility.
+// The SDF atlas, metrics, and bezier data are no longer used.
+
+// Legacy arrays — kept for pipeline.flow references until restructured
+let mut _ui_sdf_metrics = []
+let mut _ui_sdf_info = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+// Kernel paths — text blit kernel replaces SDF text kernel
+let _ui_sdf_spv_gen = "octoui/kernels/sdf_generate.spv"
+let _ui_sdf_spv_text = "octoui/kernels/ui_text_blit.spv"
+
+// Initialize font system — no atlas generation needed with GDI
+fn ui_sdf_font_init(vm)
+  print("Font: GDI backend (Segoe UI)")
+  return 0.0
+end
+
+// Measure text width at a given font size (pixels)
+// Delegates to OS rasterizer for accurate kerned measurement
+fn ui_text_width(text, font_size)
+  return gdi_text_width(text, font_size)
+end
+
+// Get line height at a given font size (pixels)
+fn ui_font_line_height(font_size)
+  return gdi_text_height(font_size)
+end
+
+// Get ascent at a given font size (pixels)
+// Approximation: 80% of total line height (typical for Western fonts)
+fn ui_font_ascent(font_size)
+  return gdi_text_height(font_size) * 0.8
+end
+
+// Get single glyph advance width (normalized, unscaled)
+// With GDI backend, measure a single character and normalize
+fn ui_glyph_advance(char_code)
+  let ch = chr(char_code)
+  let w = gdi_text_width(ch, 16.0)
+  return w / 16.0
+end

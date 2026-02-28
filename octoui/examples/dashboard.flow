@@ -1,0 +1,126 @@
+// examples/dashboard.flow — OctoUI Dashboard Demo
+//
+// Multi-panel layout: header + two columns with counter and stats.
+// Demonstrates: nested layout, multiple buttons, reactive state, theming.
+//
+// Run: octoflow run octoui/examples/dashboard.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/input/button"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../state/reactive"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(520.0, 360.0, "OctoUI Dashboard")
+
+// Create reactive states
+let clicks_state = ui_state(0.0)
+let score_state = ui_state(0.0)
+
+// ── Root layout ──
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 520.0, 360.0)
+
+// ── Header ──
+let header = ui_text(root, "OCTOUI DASHBOARD", UI_COLOR_PRIMARY)
+
+// ── Content row ──
+let content = ui_row(root, 16.0)
+
+// ── Left panel: Click counter ──
+let left_col = ui_column(content, 8.0)
+let _lpad = ui_tree_set_padding(left_col, 12.0)
+
+let left_title = ui_text(left_col, "CLICKS", UI_COLOR_TEXT)
+let click_display = ui_text(left_col, "0", UI_COLOR_PRIMARY)
+let _bind_c = ui_bind_text(click_display, clicks_state)
+
+let btn_row = ui_row(left_col, 8.0)
+let btn_minus = ui_button(btn_row, 60.0, 32.0, " - ")
+let btn_plus = ui_button(btn_row, 60.0, 32.0, " + ")
+let btn_reset = ui_button(left_col, 128.0, 32.0, "RESET")
+
+// ── Right panel: Score ──
+let right_col = ui_column(content, 8.0)
+let _rpad = ui_tree_set_padding(right_col, 12.0)
+
+let right_title = ui_text(right_col, "SCORE", UI_COLOR_TEXT)
+let score_display = ui_text(right_col, "0", UI_COLOR_PRIMARY)
+let _bind_s = ui_bind_text(score_display, score_state)
+
+let score_row = ui_row(right_col, 8.0)
+let btn_add1 = ui_button(score_row, 60.0, 32.0, "+1")
+let btn_add5 = ui_button(score_row, 60.0, 32.0, "+5")
+let btn_score_reset = ui_button(right_col, 128.0, 32.0, "RESET")
+
+// ── Status bar ──
+let status = ui_text(root, "READY", UI_COLOR_TEXT_DIM)
+
+// Initial layout
+let _l = ui_layout_update()
+
+// ── Event loop ──
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  // Escape to close
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  // Left panel buttons
+  if ui_button_clicked(btn_plus) == 1.0
+    let val = ui_state_get(clicks_state)
+    let _s = ui_state_set(clicks_state, val + 1.0)
+  end
+  if ui_button_clicked(btn_minus) == 1.0
+    let val = ui_state_get(clicks_state)
+    let _s = ui_state_set(clicks_state, val - 1.0)
+  end
+  if ui_button_clicked(btn_reset) == 1.0
+    let _s = ui_state_set(clicks_state, 0.0)
+  end
+
+  // Right panel buttons
+  if ui_button_clicked(btn_add1) == 1.0
+    let val = ui_state_get(score_state)
+    let _s = ui_state_set(score_state, val + 1.0)
+  end
+  if ui_button_clicked(btn_add5) == 1.0
+    let val = ui_state_get(score_state)
+    let _s = ui_state_set(score_state, val + 5.0)
+  end
+  if ui_button_clicked(btn_score_reset) == 1.0
+    let _s = ui_state_set(score_state, 0.0)
+  end
+
+  // Render if dirty, otherwise sleep
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Dashboard example finished.")

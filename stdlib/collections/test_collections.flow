@@ -1,0 +1,71 @@
+// test_collections.flow — Tests for stdlib/collections/collections.flow
+use "collections"
+
+fn test_stack()
+  let mut s = stack_new()
+  assert(stack_is_empty(s) == 1.0, "new stack should be empty")
+  stack_push(s, 10.0)
+  stack_push(s, 20.0)
+  stack_push(s, 30.0)
+  assert(stack_is_empty(s) == 0.0, "stack with items not empty")
+  assert(stack_peek(s) == 30.0, "peek should return top (30)")
+  assert(stack_pop(s) == 30.0, "pop should return 30")
+  assert(stack_pop(s) == 20.0, "pop should return 20")
+  assert(stack_pop(s) == 10.0, "pop should return 10")
+  // pop on empty should return "" not crash
+  let empty_val = stack_pop(s)
+  assert(empty_val == "", "pop on empty stack should return empty string")
+  print("PASS: test_stack")
+  return 0.0
+end
+
+fn test_queue()
+  let mut q = queue_new()
+  assert(queue_is_empty(q) == 1.0, "new queue should be empty")
+  queue_enqueue(q, "first")
+  queue_enqueue(q, "second")
+  queue_enqueue(q, "third")
+  assert(queue_size(q) == 3.0, "queue should have 3 items")
+  assert(queue_dequeue(q) == "first", "dequeue should return first")
+  assert(queue_dequeue(q) == "second", "dequeue should return second")
+  assert(queue_size(q) == 1.0, "queue should have 1 item left")
+  assert(queue_dequeue(q) == "third", "dequeue should return third")
+  // dequeue on empty should return "" not crash
+  assert(queue_dequeue(q) == "", "dequeue on empty queue should return empty string")
+  print("PASS: test_queue")
+  return 0.0
+end
+
+fn test_set()
+  let mut s = set_new()
+  set_add(s, "apple")
+  set_add(s, "banana")
+  set_add(s, "apple")
+  assert(set_has(s, "apple") == 1.0, "set should have apple")
+  assert(set_has(s, "banana") == 1.0, "set should have banana")
+  assert(set_has(s, "cherry") == 0.0, "set should not have cherry")
+  set_remove(s, "apple")
+  assert(set_has(s, "apple") == 0.0, "apple should be removed")
+  print("PASS: test_set")
+  return 0.0
+end
+
+fn test_counter()
+  let mut c = counter_new()
+  counter_add(c, "a")
+  counter_add(c, "b")
+  counter_add(c, "a")
+  counter_add(c, "a")
+  assert(counter_get(c, "a") == 3.0, "counter 'a' should be 3")
+  assert(counter_get(c, "b") == 1.0, "counter 'b' should be 1")
+  assert(counter_get(c, "c") == 0.0, "counter 'c' should be 0")
+  print("PASS: test_counter")
+  return 0.0
+end
+
+// Run tests
+test_stack()
+test_queue()
+test_set()
+test_counter()
+print("All collections tests passed.")

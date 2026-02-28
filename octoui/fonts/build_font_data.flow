@@ -1,0 +1,85 @@
+// build_font_data.flow — One-time font data pre-baker
+//
+// Parses Inter.ttf and saves pre-baked binary data for instant runtime loading.
+// Run ONCE: octoflow run octoui/fonts/build_font_data.flow --allow-read --allow-write --max-iters 10000000
+//
+// Generates: octoui/fonts/inter_metrics.bin  (f32 LE: 570 metrics + 4 font_info)
+//            octoui/fonts/inter_beziers.bin  (f32 LE: 95 counts + 95 offsets + N seg_data)
+
+use "../../stdlib/media/ttf"
+
+print("Parsing Inter.ttf (this takes ~10 minutes)...")
+let _r = ttf_parse_all_ascii("octoui/fonts/Inter.ttf")
+
+let seg_len = len(ttf_seg_data)
+let metrics_len = len(ttf_metrics)
+print("Parsed: {metrics_len} metrics, {seg_len} bezier floats")
+
+// ── Save metrics + font_info as f32 LE binary ──
+// Layout: [570 metrics floats] [4 font_info floats] = 574 floats = 2296 bytes
+let mut metrics_bytes = []
+let mut mi = 0.0
+while mi < metrics_len
+  let v = ttf_metrics[mi]
+  push(metrics_bytes, float_byte(v, 0.0))
+  push(metrics_bytes, float_byte(v, 1.0))
+  push(metrics_bytes, float_byte(v, 2.0))
+  push(metrics_bytes, float_byte(v, 3.0))
+  mi = mi + 1.0
+end
+// Append font_info (4 floats: ascent, descent, line_gap, upm)
+let mut fi = 0.0
+while fi < 4.0
+  let v = ttf_font_info[fi]
+  push(metrics_bytes, float_byte(v, 0.0))
+  push(metrics_bytes, float_byte(v, 1.0))
+  push(metrics_bytes, float_byte(v, 2.0))
+  push(metrics_bytes, float_byte(v, 3.0))
+  fi = fi + 1.0
+end
+write_bytes("octoui/fonts/inter_metrics.bin", metrics_bytes)
+let mb_len = len(metrics_bytes)
+print("Saved inter_metrics.bin ({mb_len} bytes)")
+
+// ── Save bezier data as f32 LE binary ──
+// Layout: [95 seg_counts] [95 seg_offsets] [N seg_data] = (190 + N) floats
+let mut bezier_bytes = []
+
+// Segment counts (95 floats)
+let mut bi = 0.0
+while bi < 95.0
+  let v = ttf_seg_counts[bi]
+  push(bezier_bytes, float_byte(v, 0.0))
+  push(bezier_bytes, float_byte(v, 1.0))
+  push(bezier_bytes, float_byte(v, 2.0))
+  push(bezier_bytes, float_byte(v, 3.0))
+  bi = bi + 1.0
+end
+
+// Segment offsets (95 floats)
+bi = 0.0
+while bi < 95.0
+  let v = ttf_seg_offsets[bi]
+  push(bezier_bytes, float_byte(v, 0.0))
+  push(bezier_bytes, float_byte(v, 1.0))
+  push(bezier_bytes, float_byte(v, 2.0))
+  push(bezier_bytes, float_byte(v, 3.0))
+  bi = bi + 1.0
+end
+
+// Segment data (N floats)
+bi = 0.0
+while bi < seg_len
+  let v = ttf_seg_data[bi]
+  push(bezier_bytes, float_byte(v, 0.0))
+  push(bezier_bytes, float_byte(v, 1.0))
+  push(bezier_bytes, float_byte(v, 2.0))
+  push(bezier_bytes, float_byte(v, 3.0))
+  bi = bi + 1.0
+end
+
+write_bytes("octoui/fonts/inter_beziers.bin", bezier_bytes)
+let bb_len = len(bezier_bytes)
+print("Saved inter_beziers.bin ({bb_len} bytes)")
+
+print("Done! Font data pre-baked.")

@@ -1,0 +1,169 @@
+// examples/settings.flow — OctoUI Settings Panel
+//
+// A realistic settings/preferences panel demonstrating all Phase 2-3 widgets:
+// radio buttons, checkboxes, slider, text input, labels, separators.
+// Tab navigation cycles through all interactive widgets.
+//
+// Controls:
+//   TAB        — Cycle focus
+//   SPACE      — Toggle checkbox/radio, click button
+//   ENTER      — Click button
+//   LEFT/RIGHT — Adjust focused slider
+//   ESCAPE     — Quit
+//   Click      — Interact with widgets
+//
+// Run: octoflow run octoui/examples/settings.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/core/label"
+use "../widgets/core/progress"
+use "../widgets/input/button"
+use "../widgets/input/checkbox"
+use "../widgets/input/textinput"
+use "../widgets/input/slider"
+use "../widgets/input/radio"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../state/reactive"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(480.0, 480.0, "OctoUI Settings")
+
+// Reactive states
+let vol_state = ui_state(75.0)
+let bright_state = ui_state(50.0)
+
+// Root layout
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 20.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 480.0, 480.0)
+
+// ── Title ──
+let title = ui_text(root, "SETTINGS", UI_COLOR_PRIMARY)
+
+let sep1 = ui_separator(root, 440.0)
+
+// ── User section ──
+let user_label = ui_text(root, "USER", UI_COLOR_TEXT_DIM)
+let name_input = ui_textinput(root, 280.0, 28.0)
+
+let sep2 = ui_separator(root, 440.0)
+
+// ── Theme selection (radio group) ──
+let theme_label = ui_text(root, "THEME", UI_COLOR_TEXT_DIM)
+let theme_group = ui_radio_group(root)
+let _r1 = ui_radio(theme_group, "DARK")
+let _r2 = ui_radio(theme_group, "LIGHT")
+let _r3 = ui_radio(theme_group, "AUTO")
+
+let sep3 = ui_separator(root, 440.0)
+
+// ── Toggles ──
+let toggles_label = ui_text(root, "OPTIONS", UI_COLOR_TEXT_DIM)
+let chk_sound = ui_checkbox(root, "SOUND EFFECTS")
+let chk_notify = ui_checkbox(root, "NOTIFICATIONS")
+let chk_auto = ui_checkbox(root, "AUTO-SAVE")
+let _sda = ui_checkbox_set(chk_auto, 1.0)
+
+let sep4 = ui_separator(root, 440.0)
+
+// ── Sliders ──
+let vol_row = ui_row(root, 12.0)
+let vol_label = ui_text(vol_row, "VOLUME", UI_COLOR_TEXT_DIM)
+let vol_display = ui_text(vol_row, "75", UI_COLOR_TEXT)
+let _bvt = ui_bind_text(vol_display, vol_state)
+let vol_slider = ui_slider(root, 300.0, 14.0, 0.0, 100.0, 75.0)
+
+let bright_row = ui_row(root, 12.0)
+let bright_label = ui_text(bright_row, "BRIGHTNESS", UI_COLOR_TEXT_DIM)
+let bright_display = ui_text(bright_row, "50", UI_COLOR_TEXT)
+let _bbt = ui_bind_text(bright_display, bright_state)
+let bright_slider = ui_slider(root, 300.0, 14.0, 0.0, 100.0, 50.0)
+
+let sep5 = ui_separator(root, 440.0)
+
+// ── Action buttons ──
+let btn_row = ui_row(root, 12.0)
+let btn_apply = ui_button(btn_row, 100.0, 32.0, "APPLY")
+let btn_reset = ui_button(btn_row, 100.0, 32.0, "RESET")
+let btn_close = ui_button(btn_row, 100.0, 32.0, "CLOSE")
+
+// Status
+let status = ui_text(root, "TAB TO NAVIGATE", UI_COLOR_TEXT_DIM)
+
+// Initial layout
+let _l = ui_layout_update()
+let _su = ui_slider_update_all()
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  // Process text input
+  let key = ui_key_down()
+  let _tk = ui_textinput_process_key(key)
+
+  // Process sliders (mouse + keyboard)
+  let _sp2 = ui_slider_process(ui_mouse_x(), ui_mouse_y(), ui_mouse_down())
+  let _sk = ui_slider_process_key(key)
+
+  // Update slider display values
+  let vol = floor(ui_slider_value(vol_slider))
+  let _sv = ui_state_set(vol_state, vol)
+  let bright = floor(ui_slider_value(bright_slider))
+  let _sb = ui_state_set(bright_state, bright)
+
+  // Button clicks
+  if ui_button_clicked(btn_apply) == 1.0
+    let _st = ui_tree_set_text(status, "SETTINGS APPLIED")
+    let _d = ui_mark_dirty()
+  end
+  if ui_button_clicked(btn_reset) == 1.0
+    // Reset all to defaults
+    let _s1 = ui_checkbox_set(chk_sound, 0.0)
+    let _s2 = ui_checkbox_set(chk_notify, 0.0)
+    let _s3 = ui_checkbox_set(chk_auto, 1.0)
+    let _s4 = ui_slider_set(vol_slider, 75.0)
+    let _s5 = ui_slider_set(bright_slider, 50.0)
+    let _s6 = ui_radio_set(theme_group, 0.0)
+    let _s7 = ui_textinput_set(name_input, " ")
+    let _st = ui_tree_set_text(status, "SETTINGS RESET")
+    let _d = ui_mark_dirty()
+  end
+  if ui_button_clicked(btn_close) == 1.0
+    running = 0.0
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Settings example finished.")

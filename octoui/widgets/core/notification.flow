@@ -1,0 +1,124 @@
+// widgets/core/notification.flow — Notification Toast Widget
+//
+// Pop-up notifications that appear at the top-right of the screen,
+// display a message for a few seconds, then auto-dismiss.
+// Notifications queue — only one shows at a time.
+//
+// Usage:
+//   let _n = ui_notify("SAVED", UI_COLOR_PRIMARY)
+//
+//   // In event loop (each frame):
+//   let _np = ui_notify_process()
+//
+//   // Rendering handled by pipeline overlay (like tooltip)
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// Notification queue (flat: text, color_idx pairs)
+let mut _ui_notify_texts = []
+let mut _ui_notify_colors = []
+
+// Display state
+// [0]=visible [1]=x [2]=y [3]=frames_shown [4]=color_idx
+let mut _ui_notify_state = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+// Active notification text
+let mut _ui_notify_active_text = " "
+
+// Screen width (set during pipeline init)
+let mut _ui_notify_screen_w = 800.0
+
+// Duration in frames (~3 seconds at 60fps)
+let UI_NOTIFY_DURATION = 180.0
+
+// Set screen width for notification positioning
+fn ui_notify_set_screen_w(w)
+  _ui_notify_screen_w = w
+  return 0.0
+end
+
+// Queue a notification
+// text: message to display
+// color_idx: theme color for background (UI_COLOR_PRIMARY, etc.)
+fn ui_notify(text, color_idx)
+  push(_ui_notify_texts, text)
+  push(_ui_notify_colors, color_idx)
+  return 0.0
+end
+
+// Process notification state each frame
+fn ui_notify_process()
+  let showing = _ui_notify_state[0]
+
+  if showing == 1.0
+    // Currently showing — count frames
+    _ui_notify_state[3] = _ui_notify_state[3] + 1.0
+    if _ui_notify_state[3] >= UI_NOTIFY_DURATION
+      // Dismiss
+      _ui_notify_state[0] = 0.0
+      let _d = ui_mark_dirty()
+    end
+    return 0.0
+  end
+
+  // Not showing — check queue
+  if len(_ui_notify_texts) > 0.0
+    // Pop first notification
+    _ui_notify_active_text = _ui_notify_texts[0]
+    let color_idx = _ui_notify_colors[0]
+
+    // Remove from queue (shift remaining)
+    let n = len(_ui_notify_texts)
+    let mut new_texts = []
+    let mut new_colors = []
+    let mut i = 1.0
+    while i < n
+      push(new_texts, _ui_notify_texts[i])
+      push(new_colors, _ui_notify_colors[i])
+      i = i + 1.0
+    end
+    _ui_notify_texts = new_texts
+    _ui_notify_colors = new_colors
+
+    // Position: top-right, with padding
+    let text_w = ui_text_width(_ui_notify_active_text, 16.0) + 20.0
+    let nx = _ui_notify_screen_w - text_w - 12.0
+    let ny = 12.0
+
+    _ui_notify_state[0] = 1.0
+    _ui_notify_state[1] = nx
+    _ui_notify_state[2] = ny
+    _ui_notify_state[3] = 0.0
+    _ui_notify_state[4] = color_idx
+
+    let _d = ui_mark_dirty()
+  end
+
+  return 0.0
+end
+
+// Check if a notification is visible
+fn ui_notify_visible()
+  return _ui_notify_state[0]
+end
+
+// Get notification position
+fn ui_notify_x()
+  return _ui_notify_state[1]
+end
+
+fn ui_notify_y()
+  return _ui_notify_state[2]
+end
+
+// Get notification text
+fn ui_notify_text()
+  return _ui_notify_active_text
+end
+
+// Get notification background color index
+fn ui_notify_color()
+  return _ui_notify_state[4]
+end

@@ -1,0 +1,420 @@
+// emit_sdf_generate.flow — OctoUI SDF Atlas Generator Kernel Emitter
+//
+// Generates a 640x640 SDF (Signed Distance Field) atlas from quadratic
+// bezier curve segment data. Each thread processes one pixel of the atlas.
+//
+// Heap layout (binding 4, read-only input):
+//   [0..94]:    seg_count per glyph (95 floats)
+//   [95..189]:  seg_offset per glyph (cumulative segment index)
+//   [190..N]:   segment data (6 floats per segment: p0x p0y p1x p1y p2x p2y)
+//               All coordinates normalized to [0,1] in font-unit space
+//
+// Push constants (6 floats):
+//   pc[0] = atlas_w         (640.0)
+//   pc[1] = cell_size       (64.0)
+//   pc[2] = num_glyphs      (95.0)
+//   pc[3] = grid_cols       (10.0)
+//   pc[4] = spread          (0.1  — normalization range)
+//   pc[5] = seg_data_offset (190.0 — where segment data starts in heap)
+//
+// Output (globals, binding 2): SDF values at globals[gid]
+//   409600 floats total (640*640)
+//
+// VM SSBO layout:
+//   Binding 0: registers (unused)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (SDF output — write sdf value)
+//   Binding 3: control   (unused)
+//   Binding 4: heap      (bezier segment data — read)
+//
+// Dispatch: workgroups = ceil(640 * 640 / 256) = 1600
+//
+// Run: octoflow run octoui/kernels/emit_sdf_generate.flow
+//      --allow-read --allow-write --max-iters 50000000
+
+use "../../stdlib/compiler/ir"
+
+fn emit_sdf_generate(out_path)
+  let _n = ir_new()
+  ir_input_count = 9.0
+
+  // ── Block declarations ───────────────────────────────────────────────────────
+  // Top-level structure:
+  //   entry -> bounds_ok -> glyph_ok -> [seg loop] -> seg_merge -> exit
+  //   seg loop: seg_hdr <-> seg_cond -> seg_body -> sign_merge -> seg_cont -> seg_hdr
+  //   In seg_body, NO nested branches. Use ir_select for all sign decisions.
+  //   sign_merge is the block where we finalize crossings before seg_cont.
+
+  let entry       = ir_block("entry")
+  let entry_merge = ir_block("entry_merge")
+  let bounds_ok   = ir_block("bounds_ok")
+  let bounds_merge = ir_block("bounds_merge")
+  let glyph_ok    = ir_block("glyph_ok")
+
+  // Segment loop
+  let seg_hdr     = ir_block("seg_hdr")
+  let seg_cond    = ir_block("seg_cond")
+  let seg_body    = ir_block("seg_body")
+  let seg_cont    = ir_block("seg_cont")
+  let seg_merge   = ir_block("seg_merge")
+
+  let exit_block  = ir_block("exit")
+
+  // ── Entry: push constants + GID + atlas bounds check ─────────────────────────
+  let gid          = ir_load_gid(entry)
+  let atlas_w_f    = ir_push_const(entry, 0.0)
+  let cell_size_f  = ir_push_const(entry, 1.0)
+  let num_glyphs_f = ir_push_const(entry, 2.0)
+  let grid_cols_f  = ir_push_const(entry, 3.0)
+  let spread_f     = ir_push_const(entry, 4.0)
+  let seg_data_off = ir_push_const(entry, 5.0)
+
+  let atlas_sq_f   = ir_fmul(entry, atlas_w_f, atlas_w_f)
+  let atlas_sq_u   = ir_ftou(entry, atlas_sq_f)
+  let oob_atlas    = ir_ugte(entry, gid, atlas_sq_u)
+  let _sm1         = ir_selection_merge(entry, entry_merge)
+  let _br1         = ir_term_cond_branch(entry, oob_atlas, entry_merge, bounds_ok)
+
+  // ── bounds_ok: pixel coords + glyph index ───────────────────────────────────
+  let gid_f        = ir_utof(bounds_ok, gid)
+  let row_f        = ir_floor(bounds_ok, ir_fdiv(bounds_ok, gid_f, atlas_w_f))
+  let px_f         = ir_fsub(bounds_ok, gid_f, ir_fmul(bounds_ok, row_f, atlas_w_f))
+  let py_f         = row_f
+
+  let cell_col_f   = ir_floor(bounds_ok, ir_fdiv(bounds_ok, px_f, cell_size_f))
+  let cell_row_f   = ir_floor(bounds_ok, ir_fdiv(bounds_ok, py_f, cell_size_f))
+  let glyph_idx_f  = ir_fadd(bounds_ok, ir_fmul(bounds_ok, cell_row_f, grid_cols_f), cell_col_f)
+
+  let oob_glyph    = ir_foge(bounds_ok, glyph_idx_f, num_glyphs_f)
+  let _sm2         = ir_selection_merge(bounds_ok, bounds_merge)
+  let _br2         = ir_term_cond_branch(bounds_ok, oob_glyph, bounds_merge, glyph_ok)
+
+  // ── glyph_ok: local UV + read seg count/offset ───────────────────────────────
+  let c1_f         = ir_const_f(glyph_ok, 1.0)
+  let c0_f         = ir_const_f(glyph_ok, 0.0)
+  let c2_f         = ir_const_f(glyph_ok, 2.0)
+
+  let local_px     = ir_fsub(glyph_ok, px_f, ir_fmul(glyph_ok, cell_col_f, cell_size_f))
+  let local_py     = ir_fsub(glyph_ok, py_f, ir_fmul(glyph_ok, cell_row_f, cell_size_f))
+  let local_x      = ir_fdiv(glyph_ok, local_px, cell_size_f)
+  // Y-flip: TTF Y-up, atlas Y-down
+  let local_y      = ir_fsub(glyph_ok, c1_f, ir_fdiv(glyph_ok, local_py, cell_size_f))
+
+  // Read seg_count: heap[glyph_idx]
+  let glyph_idx_u  = ir_ftou(glyph_ok, glyph_idx_f)
+  let n_segs_f     = ir_load_input_at(glyph_ok, 4.0, glyph_idx_u)
+  let n_segs_u     = ir_ftou(glyph_ok, n_segs_f)
+
+  // Read seg_offset: heap[95 + glyph_idx]
+  let c95_u        = ir_const_u(glyph_ok, 95.0)
+  let seg_off_idx_u = ir_iadd(glyph_ok, c95_u, glyph_idx_u)
+  let seg_off_f    = ir_load_input_at(glyph_ok, 4.0, seg_off_idx_u)
+
+  let c0_u         = ir_const_u(glyph_ok, 0.0)
+  let c999_f       = ir_const_f(glyph_ok, 999.0)
+
+  let _br3         = ir_term_branch(glyph_ok, seg_hdr)
+
+  // ── seg_hdr: loop header phi nodes ──────────────────────────────────────────
+  // phi_i: uint loop index (0..n_segs)
+  // phi_dist: float min_dist (starts at 999.0)
+  // phi_cross: uint crossings count (starts at 0)
+  let phi_i        = ir_phi(seg_hdr, 2.0)
+  let phi_dist     = ir_phi(seg_hdr, 1.0)
+  let phi_cross    = ir_phi(seg_hdr, 2.0)
+
+  let _a1          = ir_phi_add(phi_i,     c0_u,   glyph_ok)
+  let _a2          = ir_phi_add(phi_dist,  c999_f, glyph_ok)
+  let _a3          = ir_phi_add(phi_cross, c0_u,   glyph_ok)
+
+  let _lm          = ir_loop_merge(seg_hdr, seg_merge, seg_cont)
+  let _bh          = ir_term_branch(seg_hdr, seg_cond)
+
+  // ── seg_cond: i < n_segs ? ──────────────────────────────────────────────────
+  let done         = ir_ugte(seg_cond, phi_i, n_segs_u)
+  let _bc          = ir_term_cond_branch(seg_cond, done, seg_merge, seg_body)
+
+  // ── seg_body: ALL computation for one segment — NO nested branches ────────────
+  // Load 6 segment control points from heap
+  let i_f          = ir_utof(seg_body, phi_i)
+  let seg_off_plus_i = ir_fadd(seg_body, seg_off_f, i_f)
+  let c6_f         = ir_const_f(seg_body, 6.0)
+  let base_f       = ir_fadd(seg_body, seg_data_off, ir_fmul(seg_body, seg_off_plus_i, c6_f))
+  let base_u       = ir_ftou(seg_body, base_f)
+  let b1_u         = ir_iadd(seg_body, base_u, ir_const_u(seg_body, 1.0))
+  let b2_u         = ir_iadd(seg_body, base_u, ir_const_u(seg_body, 2.0))
+  let b3_u         = ir_iadd(seg_body, base_u, ir_const_u(seg_body, 3.0))
+  let b4_u         = ir_iadd(seg_body, base_u, ir_const_u(seg_body, 4.0))
+  let b5_u         = ir_iadd(seg_body, base_u, ir_const_u(seg_body, 5.0))
+
+  let p0x          = ir_load_input_at(seg_body, 4.0, base_u)
+  let p0y          = ir_load_input_at(seg_body, 4.0, b1_u)
+  let p1x          = ir_load_input_at(seg_body, 4.0, b2_u)
+  let p1y          = ir_load_input_at(seg_body, 4.0, b3_u)
+  let p2x          = ir_load_input_at(seg_body, 4.0, b4_u)
+  let p2y          = ir_load_input_at(seg_body, 4.0, b5_u)
+
+  // ── 8 unrolled bezier distance samples ──────────────────────────────────────
+  // Helper macro-pattern: bx = omt^2*p0x + 2*omt*t*p1x + t^2*p2x
+  // We chain fmin calls: md_k = fmin(md_{k-1}, dist_k)
+
+  // s0: t=0
+  let s0_t         = ir_const_f(seg_body, 0.0)
+  let s0_omt       = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), s0_t)
+  let s0_omtsq     = ir_fmul(seg_body, s0_omt, s0_omt)
+  let s0_tsq       = ir_fmul(seg_body, s0_t, s0_t)
+  let s0_bx        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s0_omtsq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s0_omt), s0_t), p1x)), ir_fmul(seg_body, s0_tsq, p2x))
+  let s0_by        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s0_omtsq, p0y), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s0_omt), s0_t), p1y)), ir_fmul(seg_body, s0_tsq, p2y))
+  let s0_dsq       = ir_fadd(seg_body, ir_fmul(seg_body, ir_fsub(seg_body, s0_bx, local_x), ir_fsub(seg_body, s0_bx, local_x)), ir_fmul(seg_body, ir_fsub(seg_body, s0_by, local_y), ir_fsub(seg_body, s0_by, local_y)))
+  let s0_d         = ir_sqrt(seg_body, s0_dsq)
+  let md0          = ir_fmin(seg_body, phi_dist, s0_d)
+
+  // s1: t=1/7
+  let c7_f         = ir_const_f(seg_body, 7.0)
+  let s1_t         = ir_fdiv(seg_body, ir_const_f(seg_body, 1.0), c7_f)
+  let s1_omt       = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), s1_t)
+  let s1_omtsq     = ir_fmul(seg_body, s1_omt, s1_omt)
+  let s1_tsq       = ir_fmul(seg_body, s1_t, s1_t)
+  let s1_bx        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s1_omtsq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s1_omt), s1_t), p1x)), ir_fmul(seg_body, s1_tsq, p2x))
+  let s1_by        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s1_omtsq, p0y), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s1_omt), s1_t), p1y)), ir_fmul(seg_body, s1_tsq, p2y))
+  let s1_dsq       = ir_fadd(seg_body, ir_fmul(seg_body, ir_fsub(seg_body, s1_bx, local_x), ir_fsub(seg_body, s1_bx, local_x)), ir_fmul(seg_body, ir_fsub(seg_body, s1_by, local_y), ir_fsub(seg_body, s1_by, local_y)))
+  let s1_d         = ir_sqrt(seg_body, s1_dsq)
+  let md1          = ir_fmin(seg_body, md0, s1_d)
+
+  // s2: t=2/7
+  let s2_t         = ir_fdiv(seg_body, ir_const_f(seg_body, 2.0), c7_f)
+  let s2_omt       = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), s2_t)
+  let s2_omtsq     = ir_fmul(seg_body, s2_omt, s2_omt)
+  let s2_tsq       = ir_fmul(seg_body, s2_t, s2_t)
+  let s2_bx        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s2_omtsq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s2_omt), s2_t), p1x)), ir_fmul(seg_body, s2_tsq, p2x))
+  let s2_by        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s2_omtsq, p0y), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s2_omt), s2_t), p1y)), ir_fmul(seg_body, s2_tsq, p2y))
+  let s2_dsq       = ir_fadd(seg_body, ir_fmul(seg_body, ir_fsub(seg_body, s2_bx, local_x), ir_fsub(seg_body, s2_bx, local_x)), ir_fmul(seg_body, ir_fsub(seg_body, s2_by, local_y), ir_fsub(seg_body, s2_by, local_y)))
+  let s2_d         = ir_sqrt(seg_body, s2_dsq)
+  let md2          = ir_fmin(seg_body, md1, s2_d)
+
+  // s3: t=3/7
+  let s3_t         = ir_fdiv(seg_body, ir_const_f(seg_body, 3.0), c7_f)
+  let s3_omt       = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), s3_t)
+  let s3_omtsq     = ir_fmul(seg_body, s3_omt, s3_omt)
+  let s3_tsq       = ir_fmul(seg_body, s3_t, s3_t)
+  let s3_bx        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s3_omtsq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s3_omt), s3_t), p1x)), ir_fmul(seg_body, s3_tsq, p2x))
+  let s3_by        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s3_omtsq, p0y), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s3_omt), s3_t), p1y)), ir_fmul(seg_body, s3_tsq, p2y))
+  let s3_dsq       = ir_fadd(seg_body, ir_fmul(seg_body, ir_fsub(seg_body, s3_bx, local_x), ir_fsub(seg_body, s3_bx, local_x)), ir_fmul(seg_body, ir_fsub(seg_body, s3_by, local_y), ir_fsub(seg_body, s3_by, local_y)))
+  let s3_d         = ir_sqrt(seg_body, s3_dsq)
+  let md3          = ir_fmin(seg_body, md2, s3_d)
+
+  // s4: t=4/7
+  let s4_t         = ir_fdiv(seg_body, ir_const_f(seg_body, 4.0), c7_f)
+  let s4_omt       = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), s4_t)
+  let s4_omtsq     = ir_fmul(seg_body, s4_omt, s4_omt)
+  let s4_tsq       = ir_fmul(seg_body, s4_t, s4_t)
+  let s4_bx        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s4_omtsq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s4_omt), s4_t), p1x)), ir_fmul(seg_body, s4_tsq, p2x))
+  let s4_by        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s4_omtsq, p0y), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s4_omt), s4_t), p1y)), ir_fmul(seg_body, s4_tsq, p2y))
+  let s4_dsq       = ir_fadd(seg_body, ir_fmul(seg_body, ir_fsub(seg_body, s4_bx, local_x), ir_fsub(seg_body, s4_bx, local_x)), ir_fmul(seg_body, ir_fsub(seg_body, s4_by, local_y), ir_fsub(seg_body, s4_by, local_y)))
+  let s4_d         = ir_sqrt(seg_body, s4_dsq)
+  let md4          = ir_fmin(seg_body, md3, s4_d)
+
+  // s5: t=5/7
+  let s5_t         = ir_fdiv(seg_body, ir_const_f(seg_body, 5.0), c7_f)
+  let s5_omt       = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), s5_t)
+  let s5_omtsq     = ir_fmul(seg_body, s5_omt, s5_omt)
+  let s5_tsq       = ir_fmul(seg_body, s5_t, s5_t)
+  let s5_bx        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s5_omtsq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s5_omt), s5_t), p1x)), ir_fmul(seg_body, s5_tsq, p2x))
+  let s5_by        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s5_omtsq, p0y), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s5_omt), s5_t), p1y)), ir_fmul(seg_body, s5_tsq, p2y))
+  let s5_dsq       = ir_fadd(seg_body, ir_fmul(seg_body, ir_fsub(seg_body, s5_bx, local_x), ir_fsub(seg_body, s5_bx, local_x)), ir_fmul(seg_body, ir_fsub(seg_body, s5_by, local_y), ir_fsub(seg_body, s5_by, local_y)))
+  let s5_d         = ir_sqrt(seg_body, s5_dsq)
+  let md5          = ir_fmin(seg_body, md4, s5_d)
+
+  // s6: t=6/7
+  let s6_t         = ir_fdiv(seg_body, ir_const_f(seg_body, 6.0), c7_f)
+  let s6_omt       = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), s6_t)
+  let s6_omtsq     = ir_fmul(seg_body, s6_omt, s6_omt)
+  let s6_tsq       = ir_fmul(seg_body, s6_t, s6_t)
+  let s6_bx        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s6_omtsq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s6_omt), s6_t), p1x)), ir_fmul(seg_body, s6_tsq, p2x))
+  let s6_by        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s6_omtsq, p0y), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s6_omt), s6_t), p1y)), ir_fmul(seg_body, s6_tsq, p2y))
+  let s6_dsq       = ir_fadd(seg_body, ir_fmul(seg_body, ir_fsub(seg_body, s6_bx, local_x), ir_fsub(seg_body, s6_bx, local_x)), ir_fmul(seg_body, ir_fsub(seg_body, s6_by, local_y), ir_fsub(seg_body, s6_by, local_y)))
+  let s6_d         = ir_sqrt(seg_body, s6_dsq)
+  let md6          = ir_fmin(seg_body, md5, s6_d)
+
+  // s7: t=1.0
+  let s7_t         = ir_const_f(seg_body, 1.0)
+  let s7_omt       = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), s7_t)
+  let s7_omtsq     = ir_fmul(seg_body, s7_omt, s7_omt)
+  let s7_tsq       = ir_fmul(seg_body, s7_t, s7_t)
+  let s7_bx        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s7_omtsq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s7_omt), s7_t), p1x)), ir_fmul(seg_body, s7_tsq, p2x))
+  let s7_by        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, s7_omtsq, p0y), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, s7_omt), s7_t), p1y)), ir_fmul(seg_body, s7_tsq, p2y))
+  let s7_dsq       = ir_fadd(seg_body, ir_fmul(seg_body, ir_fsub(seg_body, s7_bx, local_x), ir_fsub(seg_body, s7_bx, local_x)), ir_fmul(seg_body, ir_fsub(seg_body, s7_by, local_y), ir_fsub(seg_body, s7_by, local_y)))
+  let s7_d         = ir_sqrt(seg_body, s7_dsq)
+  let new_dist     = ir_fmin(seg_body, md6, s7_d)
+  // new_dist = updated min_dist
+
+  // ── Ray crossing — quadratic formula, all via ir_select (no branches) ────────
+  // a = p0y - 2*p1y + p2y
+  // b = 2*(p1y - p0y)
+  // c = p0y - local_y
+  let two_p1y      = ir_fmul(seg_body, c2_f, p1y)
+  let a_coef       = ir_fadd(seg_body, ir_fsub(seg_body, p0y, two_p1y), p2y)
+  let b_coef       = ir_fmul(seg_body, c2_f, ir_fsub(seg_body, p1y, p0y))
+  let c_coef       = ir_fsub(seg_body, p0y, local_y)
+
+  // discriminant = b^2 - 4*a*c
+  let b_sq         = ir_fmul(seg_body, b_coef, b_coef)
+  let c4_f         = ir_const_f(seg_body, 4.0)
+  let four_ac      = ir_fmul(seg_body, ir_fmul(seg_body, c4_f, a_coef), c_coef)
+  let disc         = ir_fsub(seg_body, b_sq, four_ac)
+
+  let eps_f        = ir_const_f(seg_body, 0.0001)
+
+  // is_linear: |a| < eps
+  let abs_a        = ir_fabs(seg_body, a_coef)
+  let is_linear    = ir_folt(seg_body, abs_a, eps_f)
+
+  // is_quad: NOT is_linear = |a| >= eps
+  // We use ir_select to pick between linear and quadratic results.
+
+  // ── Linear crossing computation (used when is_linear) ────────────────────────
+  // t_lin = -c / b  (only valid when |b| > eps)
+  // Check: |b| > eps AND 0 <= t_lin <= 1 AND bx_lin > local_x
+  let abs_b        = ir_fabs(seg_body, b_coef)
+  let b_nonzero    = ir_fogt(seg_body, abs_b, eps_f)
+
+  // Avoid div-by-zero: if b == 0, use b=eps as divisor (result will be invalid anyway)
+  let safe_b       = ir_select(seg_body, 1.0, b_nonzero, b_coef, eps_f)
+  let neg_c        = ir_fneg(seg_body, c_coef)
+  let t_lin        = ir_fdiv(seg_body, neg_c, safe_b)
+
+  let t_lin_ge0    = ir_foge(seg_body, t_lin, c0_f)
+  let t_lin_le1    = ir_fole(seg_body, t_lin, ir_const_f(seg_body, 1.0))
+  let t_lin_rng    = ir_land(seg_body, t_lin_ge0, t_lin_le1)
+  let t_lin_valid  = ir_land(seg_body, b_nonzero, t_lin_rng)
+
+  // bx at t_lin
+  let omt_lin      = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), t_lin)
+  let omt_lin_sq   = ir_fmul(seg_body, omt_lin, omt_lin)
+  let t_lin_sq     = ir_fmul(seg_body, t_lin, t_lin)
+  let bx_lin       = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, omt_lin_sq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, omt_lin), t_lin), p1x)), ir_fmul(seg_body, t_lin_sq, p2x))
+  let bx_lin_gt    = ir_fogt(seg_body, bx_lin, local_x)
+
+  // lin_cross: 1 if (t_lin_valid AND bx_lin > local_x) else 0
+  let lin_hit      = ir_land(seg_body, t_lin_valid, bx_lin_gt)
+  let c1u_b        = ir_const_u(seg_body, 1.0)
+  let c0u_b        = ir_const_u(seg_body, 0.0)
+  let lin_cross    = ir_select(seg_body, 2.0, lin_hit, c1u_b, c0u_b)
+
+  // ── Quadratic crossing computation (used when NOT is_linear) ─────────────────
+  // disc = b^2 - 4ac
+  // disc_ok: disc >= 0
+  let disc_ok      = ir_foge(seg_body, disc, c0_f)
+
+  // sqrt_disc (only meaningful when disc >= 0; use fmax(disc, 0) to avoid NaN)
+  let disc_safe    = ir_fmax(seg_body, disc, c0_f)
+  let sqrt_disc    = ir_sqrt(seg_body, disc_safe)
+
+  let neg_b        = ir_fneg(seg_body, b_coef)
+  let two_a        = ir_fmul(seg_body, c2_f, a_coef)
+  // Avoid div-by-zero: if a==0 (is_linear), safe_a = eps
+  let safe_a_denom = ir_select(seg_body, 1.0, is_linear, eps_f, two_a)
+
+  // t1 = (-b + sqrt_disc) / (2*a)
+  let t1           = ir_fdiv(seg_body, ir_fadd(seg_body, neg_b, sqrt_disc), safe_a_denom)
+  // t2 = (-b - sqrt_disc) / (2*a)
+  let t2           = ir_fdiv(seg_body, ir_fsub(seg_body, neg_b, sqrt_disc), safe_a_denom)
+
+  // t1 valid: disc_ok AND 0 <= t1 <= 1
+  let t1_ge0       = ir_foge(seg_body, t1, c0_f)
+  let t1_le1       = ir_fole(seg_body, t1, ir_const_f(seg_body, 1.0))
+  let t1_rng       = ir_land(seg_body, t1_ge0, t1_le1)
+  let t1_valid     = ir_land(seg_body, disc_ok, t1_rng)
+
+  // bx at t1: (1-t1)^2*p0x + 2*(1-t1)*t1*p1x + t1^2*p2x
+  let omt1         = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), t1)
+  let omt1sq       = ir_fmul(seg_body, omt1, omt1)
+  let t1sq         = ir_fmul(seg_body, t1, t1)
+  let bx_t1        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, omt1sq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, omt1), t1), p1x)), ir_fmul(seg_body, t1sq, p2x))
+  let bx_t1_gt     = ir_fogt(seg_body, bx_t1, local_x)
+  let t1_hit       = ir_land(seg_body, t1_valid, bx_t1_gt)
+  let t1_cross     = ir_select(seg_body, 2.0, t1_hit, c1u_b, c0u_b)
+
+  // t2 valid: disc_ok AND 0 <= t2 <= 1
+  let t2_ge0       = ir_foge(seg_body, t2, c0_f)
+  let t2_le1       = ir_fole(seg_body, t2, ir_const_f(seg_body, 1.0))
+  let t2_rng       = ir_land(seg_body, t2_ge0, t2_le1)
+  let t2_valid     = ir_land(seg_body, disc_ok, t2_rng)
+
+  // bx at t2
+  let omt2         = ir_fsub(seg_body, ir_const_f(seg_body, 1.0), t2)
+  let omt2sq       = ir_fmul(seg_body, omt2, omt2)
+  let t2sq         = ir_fmul(seg_body, t2, t2)
+  let bx_t2        = ir_fadd(seg_body, ir_fadd(seg_body, ir_fmul(seg_body, omt2sq, p0x), ir_fmul(seg_body, ir_fmul(seg_body, ir_fmul(seg_body, c2_f, omt2), t2), p1x)), ir_fmul(seg_body, t2sq, p2x))
+  let bx_t2_gt     = ir_fogt(seg_body, bx_t2, local_x)
+  let t2_hit       = ir_land(seg_body, t2_valid, bx_t2_gt)
+  let t2_cross     = ir_select(seg_body, 2.0, t2_hit, c1u_b, c0u_b)
+
+  // quad total crossings = t1_cross + t2_cross
+  let quad_cross   = ir_iadd(seg_body, t1_cross, t2_cross)
+
+  // Final crossings for this segment:
+  // is_linear ? lin_cross : quad_cross
+  let seg_cross    = ir_select(seg_body, 2.0, is_linear, lin_cross, quad_cross)
+
+  // new_cross = phi_cross + seg_cross
+  let new_cross    = ir_iadd(seg_body, phi_cross, seg_cross)
+
+  // seg_body -> seg_cont
+  let _bsb         = ir_term_branch(seg_body, seg_cont)
+
+  // ── seg_cont: increment i, feed phi back-edges ────────────────────────────────
+  let c1u_inc      = ir_const_u(seg_cont, 1.0)
+  let i_next       = ir_iadd(seg_cont, phi_i, c1u_inc)
+  let _bsc         = ir_term_branch(seg_cont, seg_hdr)
+
+  // Complete phi back-edges (parent must be seg_cont — the block that branches to seg_hdr)
+  let _bp1         = ir_phi_add(phi_i,     i_next,    seg_cont)
+  let _bp2         = ir_phi_add(phi_dist,  new_dist,  seg_cont)
+  let _bp3         = ir_phi_add(phi_cross, new_cross, seg_cont)
+
+  // ── seg_merge: compute SDF value from accumulated min_dist + crossings ────────
+  // is_inside = (crossings % 2) == 1
+  let c2u_m        = ir_const_u(seg_merge, 2.0)
+  let cross_mod2   = ir_umod(seg_merge, phi_cross, c2u_m)
+  let c1u_m        = ir_const_u(seg_merge, 1.0)
+  let is_inside    = ir_uequ(seg_merge, cross_mod2, c1u_m)
+
+  // clamped_dist = fmin(min_dist, spread)
+  let clamped_d    = ir_fmin(seg_merge, phi_dist, spread_f)
+
+  // normalized = clamped_dist / (2 * spread)
+  let spread2      = ir_fmul(seg_merge, c2_f, spread_f)
+  let normalized   = ir_fdiv(seg_merge, clamped_d, spread2)
+
+  // half_f = 0.5
+  let half_f       = ir_const_f(seg_merge, 0.5)
+
+  // inside_sdf  = 0.5 + normalized   (> 0.5)
+  let inside_sdf   = ir_fadd(seg_merge, half_f, normalized)
+  // outside_sdf = 0.5 - normalized   (< 0.5)
+  let outside_sdf  = ir_fsub(seg_merge, half_f, normalized)
+
+  // sdf = is_inside ? inside_sdf : outside_sdf
+  let sdf          = ir_select(seg_merge, 1.0, is_inside, inside_sdf, outside_sdf)
+
+  // Write to globals[gid]
+  let _ws          = ir_buf_store_f(seg_merge, 2.0, gid, sdf)
+  let _bdone       = ir_term_branch(seg_merge, bounds_merge)
+
+  // ── bounds_merge: flows from glyph OOB path or seg_merge ────────────────────
+  let _bbm         = ir_term_branch(bounds_merge, entry_merge)
+
+  // ── entry_merge: flows from atlas OOB path or bounds_merge ──────────────────
+  let _bem         = ir_term_branch(entry_merge, exit_block)
+
+  // ── exit_block ───────────────────────────────────────────────────────────────
+  let _ret         = ir_term_return(exit_block)
+
+  let _e           = ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "octoui/kernels/sdf_generate.spv"
+let _r = emit_sdf_generate(out)
+print("Emitted: {out}")

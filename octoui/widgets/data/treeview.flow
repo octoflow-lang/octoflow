@@ -1,0 +1,580 @@
+// widgets/data/treeview.flow — Tree View Widget
+//
+// A hierarchical tree view with expandable/collapsible nodes.
+// Uses virtual-list pattern (only visible rows have render widgets).
+// Nodes are added in topological order (parent before children).
+//
+// Usage:
+//   let tree = ui_treeview(parent, 200.0, 20.0)
+//   let root = ui_treeview_node(tree, -1.0, "PROJECT")
+//   let src  = ui_treeview_node(tree, root, "SRC")
+//   let _f1  = ui_treeview_node(tree, src, "MAIN.FLOW")
+//   let _f2  = ui_treeview_node(tree, src, "TEST.FLOW")
+//   let _fin = ui_treeview_finalize(tree)
+//
+//   // After layout:  let _r = ui_treeview_refresh_all()
+//   // In event loop: let _p = ui_treeview_process(mx, my, clicked)
+//   //                let _k = ui_treeview_process_key(key)
+//   // Selected node: let sel = ui_treeview_selected(tree)
+
+use "../../engine/tree"
+use "../../engine/dirty"
+use "../../themes/dark"
+
+// UI_TREEVIEW defined in tree.flow
+// Indent per depth level in pixels
+let UI_TV_INDENT = 16.0
+
+// --- Registry (per tree view) ---
+let mut _ui_tv_ids = []
+let mut _ui_tv_row_h = []
+let mut _ui_tv_body_h = []
+let mut _ui_tv_selected = []
+let mut _ui_tv_scroll = []
+let mut _ui_tv_disp_count = []
+
+// --- Node data (flat, shared across tree views) ---
+let mut _ui_tv_parent = []
+let mut _ui_tv_label = []
+let mut _ui_tv_expanded = []
+let mut _ui_tv_depth = []
+let mut _ui_tv_leaf = []
+let mut _ui_tv_node_off = []
+let mut _ui_tv_node_count = []
+
+// --- Visible node list (rebuilt on expand/collapse) ---
+let mut _ui_tv_vis = []
+let mut _ui_tv_vis_off = []
+let mut _ui_tv_vis_total = []
+
+// --- Display widgets (flat, shared) ---
+let mut _ui_tv_disp_bg = []
+let mut _ui_tv_disp_txt = []
+let mut _ui_tv_dw_off = []
+
+// --- Find tree view index ---
+fn ui_tv_find(tree_id)
+  let n = len(_ui_tv_ids)
+  let mut i = 0.0
+  while i < n
+    if _ui_tv_ids[i] == tree_id
+      return i
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+// --- Check if a node is visible (all ancestors expanded) ---
+fn ui_tv_is_node_visible(abs_idx)
+  let mut check = _ui_tv_parent[abs_idx]
+  while check >= 0.0
+    if _ui_tv_expanded[check] == 0.0
+      return 0.0
+    end
+    check = _ui_tv_parent[check]
+  end
+  return 1.0
+end
+
+// --- Rebuild visible node list for a tree view ---
+fn ui_tv_compute_visible(ti)
+  let off = _ui_tv_node_off[ti]
+  let count = _ui_tv_node_count[ti]
+
+  // Append new visible list at end of shared array
+  _ui_tv_vis_off[ti] = len(_ui_tv_vis)
+
+  let mut i = 0.0
+  while i < count
+    let abs_i = off + i
+    if ui_tv_is_node_visible(abs_i) == 1.0
+      push(_ui_tv_vis, abs_i)
+    end
+    i = i + 1.0
+  end
+
+  _ui_tv_vis_total[ti] = len(_ui_tv_vis) - _ui_tv_vis_off[ti]
+  return 0.0
+end
+
+// --- Create a tree view ---
+// parent: parent widget ID
+// body_h: viewport height in pixels
+// row_h: row height per node
+// Returns: container widget ID
+fn ui_treeview(parent, body_h, row_h)
+  let container = ui_tree_add(UI_TREEVIEW, parent, 200.0, body_h, " ")
+  let _c = ui_tree_set_color_themed(container, UI_COLOR_SURFACE)
+
+  push(_ui_tv_ids, container)
+  push(_ui_tv_row_h, row_h)
+  push(_ui_tv_body_h, body_h)
+  push(_ui_tv_selected, -1.0)
+  push(_ui_tv_scroll, 0.0)
+  push(_ui_tv_disp_count, floor(body_h / row_h))
+  push(_ui_tv_node_off, len(_ui_tv_parent))
+  push(_ui_tv_node_count, 0.0)
+  push(_ui_tv_vis_off, 0.0)
+  push(_ui_tv_vis_total, 0.0)
+  push(_ui_tv_dw_off, len(_ui_tv_disp_bg))
+
+  return container
+end
+
+// --- Add a node ---
+// tree: container widget ID from ui_treeview()
+// parent_node: absolute index of parent node (-1.0 for root level)
+// label: node text
+// Returns: absolute node index (use as parent_node for children)
+fn ui_treeview_node(tree, parent_node, label)
+  let ti = ui_tv_find(tree)
+  if ti < 0.0
+    return -1.0
+  end
+
+  let abs_idx = len(_ui_tv_parent)
+  push(_ui_tv_parent, parent_node)
+  push(_ui_tv_label, label)
+  push(_ui_tv_expanded, 1.0)
+  push(_ui_tv_depth, 0.0)
+  push(_ui_tv_leaf, 1.0)
+
+  _ui_tv_node_count[ti] = _ui_tv_node_count[ti] + 1.0
+  return abs_idx
+end
+
+// --- Finalize: compute depths, create display widgets ---
+fn ui_treeview_finalize(tree)
+  let ti = ui_tv_find(tree)
+  if ti < 0.0
+    return -1.0
+  end
+
+  let off = _ui_tv_node_off[ti]
+  let count = _ui_tv_node_count[ti]
+  let row_h = _ui_tv_row_h[ti]
+  let disp = _ui_tv_disp_count[ti]
+
+  // Compute depths and mark non-leaf nodes
+  let mut i = 0.0
+  while i < count
+    let abs_i = off + i
+    let parent = _ui_tv_parent[abs_i]
+    if parent < 0.0
+      _ui_tv_depth[abs_i] = 0.0
+    else
+      _ui_tv_depth[abs_i] = _ui_tv_depth[parent] + 1.0
+    end
+    // Mark parent as non-leaf
+    if parent >= 0.0
+      _ui_tv_leaf[parent] = 0.0
+    end
+    i = i + 1.0
+  end
+
+  // Compute initial visible node list
+  let _cv = ui_tv_compute_visible(ti)
+
+  // Compute max width from deepest node
+  let mut max_depth = 0.0
+  let mut max_label_len = 0.0
+  let mut j = 0.0
+  while j < count
+    let abs_j = off + j
+    if _ui_tv_depth[abs_j] > max_depth
+      max_depth = _ui_tv_depth[abs_j]
+    end
+    let ll = len(_ui_tv_label[abs_j])
+    if ll > max_label_len
+      max_label_len = ll
+    end
+    j = j + 1.0
+  end
+  // Width: max indent + icon (2 chars) + max label + padding
+  let total_w = max_depth * UI_TV_INDENT + 20.0 + max_label_len * 10.0 + 8.0
+  _ui_w[tree] = total_w
+
+  // Create display rows
+  let mut ri = 0.0
+  while ri < disp
+    let bg = ui_tree_add(UI_BOX, tree, total_w, row_h, " ")
+    let _bc = ui_tree_set_color_themed(bg, UI_COLOR_BG)
+    _ui_visible[bg] = 0.0
+    push(_ui_tv_disp_bg, bg)
+
+    let txt = ui_tree_add(UI_TEXT, tree, total_w, row_h, " ")
+    let _tc = ui_tree_set_color_themed(txt, UI_COLOR_TEXT)
+    _ui_visible[txt] = 0.0
+    push(_ui_tv_disp_txt, txt)
+
+    ri = ri + 1.0
+  end
+
+  return 0.0
+end
+
+// --- Refresh display rows ---
+fn ui_treeview_refresh(tree)
+  let ti = ui_tv_find(tree)
+  if ti < 0.0
+    return -1.0
+  end
+
+  let cx = _ui_x[tree]
+  let cy = _ui_y[tree]
+  let row_h = _ui_tv_row_h[ti]
+  let disp = _ui_tv_disp_count[ti]
+  let scroll = _ui_tv_scroll[ti]
+  let selected = _ui_tv_selected[ti]
+  let vis_off = _ui_tv_vis_off[ti]
+  let vis_total = _ui_tv_vis_total[ti]
+  let dw_off = _ui_tv_dw_off[ti]
+
+  let mut ri = 0.0
+  while ri < disp
+    let vis_idx = scroll + ri
+    let bg = _ui_tv_disp_bg[dw_off + ri]
+    let txt = _ui_tv_disp_txt[dw_off + ri]
+
+    if vis_idx < vis_total
+      let abs_node = _ui_tv_vis[vis_off + vis_idx]
+      let depth = _ui_tv_depth[abs_node]
+      let label = _ui_tv_label[abs_node]
+      let leaf = _ui_tv_leaf[abs_node]
+      let expanded = _ui_tv_expanded[abs_node]
+
+      // Show row
+      _ui_visible[bg] = 1.0
+      _ui_visible[txt] = 1.0
+
+      // Position background (full width)
+      _ui_x[bg] = cx
+      _ui_y[bg] = cy + ri * row_h
+      _ui_dirty[bg] = 1.0
+
+      // Background color: selected = PRIMARY, else alternating
+      if abs_node == selected
+        let _sc = ui_tree_set_color_themed(bg, UI_COLOR_PRIMARY)
+      else
+        let row_mod = ri - floor(ri / 2.0) * 2.0
+        if row_mod == 0.0
+          let _sc = ui_tree_set_color_themed(bg, UI_COLOR_BG)
+        else
+          let _sc = ui_tree_set_color_themed(bg, UI_COLOR_SURFACE)
+        end
+      end
+
+      // Build display text: icon + label
+      let mut icon = "  "
+      if leaf == 0.0
+        if expanded == 1.0
+          icon = "- "
+        else
+          icon = "+ "
+        end
+      end
+      let display_text = icon + label
+
+      // Position text with depth indent
+      let indent = depth * UI_TV_INDENT
+      _ui_x[txt] = cx + indent + 4.0
+      _ui_y[txt] = cy + ri * row_h + 2.0
+      _ui_w[txt] = ui_text_width(display_text, 16.0)
+      _ui_dirty[txt] = 1.0
+      _ui_texts[txt] = display_text
+    else
+      // No node for this display row
+      _ui_visible[bg] = 0.0
+      _ui_visible[txt] = 0.0
+    end
+
+    ri = ri + 1.0
+  end
+
+  return 0.0
+end
+
+// --- Refresh all tree views ---
+fn ui_treeview_refresh_all()
+  let n = len(_ui_tv_ids)
+  let mut i = 0.0
+  while i < n
+    let _r = ui_treeview_refresh(_ui_tv_ids[i])
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// --- Get selected node ---
+// Returns absolute node index (-1.0 if none)
+fn ui_treeview_selected(tree)
+  let ti = ui_tv_find(tree)
+  if ti < 0.0
+    return -1.0
+  end
+  return _ui_tv_selected[ti]
+end
+
+// --- Get label for a node ---
+fn ui_treeview_label(abs_idx)
+  if abs_idx < 0.0
+    return " "
+  end
+  if abs_idx >= len(_ui_tv_label)
+    return " "
+  end
+  return _ui_tv_label[abs_idx]
+end
+
+// --- Toggle expand/collapse ---
+fn ui_treeview_toggle(tree, abs_idx)
+  if abs_idx < 0.0
+    return 0.0
+  end
+  if _ui_tv_leaf[abs_idx] == 1.0
+    return 0.0
+  end
+
+  let ti = ui_tv_find(tree)
+  if ti < 0.0
+    return 0.0
+  end
+
+  if _ui_tv_expanded[abs_idx] == 1.0
+    _ui_tv_expanded[abs_idx] = 0.0
+  else
+    _ui_tv_expanded[abs_idx] = 1.0
+  end
+
+  // Rebuild visible list
+  let _cv = ui_tv_compute_visible(ti)
+
+  // Clamp scroll
+  let vis_total = _ui_tv_vis_total[ti]
+  let disp = _ui_tv_disp_count[ti]
+  if _ui_tv_scroll[ti] > vis_total - disp
+    _ui_tv_scroll[ti] = vis_total - disp
+  end
+  if _ui_tv_scroll[ti] < 0.0
+    _ui_tv_scroll[ti] = 0.0
+  end
+
+  let _r = ui_treeview_refresh(tree)
+  let _d = ui_mark_dirty()
+  return 0.0
+end
+
+// --- Ensure a visible index is in the viewport ---
+fn ui_tv_ensure_visible(ti, vis_idx)
+  let scroll = _ui_tv_scroll[ti]
+  let disp = _ui_tv_disp_count[ti]
+
+  if vis_idx < scroll
+    _ui_tv_scroll[ti] = vis_idx
+  end
+  if vis_idx >= scroll + disp
+    _ui_tv_scroll[ti] = vis_idx - disp + 1.0
+  end
+  if _ui_tv_scroll[ti] < 0.0
+    _ui_tv_scroll[ti] = 0.0
+  end
+  return 0.0
+end
+
+// --- Find visible index for an absolute node index ---
+fn ui_tv_vis_index_of(ti, abs_idx)
+  let vis_off = _ui_tv_vis_off[ti]
+  let vis_total = _ui_tv_vis_total[ti]
+  let mut i = 0.0
+  while i < vis_total
+    if _ui_tv_vis[vis_off + i] == abs_idx
+      return i
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+// --- Process mouse clicks ---
+fn ui_treeview_process(mx, my, clicked)
+  if clicked != 1.0
+    return 0.0
+  end
+
+  let n = len(_ui_tv_ids)
+  let mut i = 0.0
+  while i < n
+    let tree = _ui_tv_ids[i]
+    let disp = _ui_tv_disp_count[i]
+    let dw_off = _ui_tv_dw_off[i]
+    let scroll = _ui_tv_scroll[i]
+    let vis_off = _ui_tv_vis_off[i]
+    let vis_total = _ui_tv_vis_total[i]
+
+    let mut ri = 0.0
+    while ri < disp
+      let vis_idx = scroll + ri
+      if vis_idx < vis_total
+        let bg = _ui_tv_disp_bg[dw_off + ri]
+        if _ui_visible[bg] == 1.0
+          // Hit test
+          let mut hit = 0.0
+          if mx >= _ui_x[bg]
+            if mx < _ui_x[bg] + _ui_w[bg]
+              if my >= _ui_y[bg]
+                if my < _ui_y[bg] + _ui_h[bg]
+                  hit = 1.0
+                end
+              end
+            end
+          end
+          if hit == 1.0
+            let abs_node = _ui_tv_vis[vis_off + vis_idx]
+            _ui_tv_selected[i] = abs_node
+            let _r = ui_treeview_refresh(tree)
+            let _d = ui_mark_dirty()
+            return 0.0
+          end
+        end
+      end
+      ri = ri + 1.0
+    end
+
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// --- Keyboard navigation ---
+fn ui_treeview_process_key(key)
+  let focus = _ui_focus_id
+  if focus < 0.0
+    return 0.0
+  end
+
+  let ti = ui_tv_find(focus)
+  if ti < 0.0
+    return 0.0
+  end
+
+  let tree = _ui_tv_ids[ti]
+  let vis_total = _ui_tv_vis_total[ti]
+  let disp = _ui_tv_disp_count[ti]
+  let selected = _ui_tv_selected[ti]
+
+  if vis_total == 0.0
+    return 0.0
+  end
+
+  // Find current visible index of selected node
+  let mut cur_vis = -1.0
+  if selected >= 0.0
+    cur_vis = ui_tv_vis_index_of(ti, selected)
+  end
+
+  if key == "down"
+    let mut next = cur_vis + 1.0
+    if cur_vis < 0.0
+      next = 0.0
+    end
+    if next >= vis_total
+      next = vis_total - 1.0
+    end
+    let vis_off = _ui_tv_vis_off[ti]
+    _ui_tv_selected[ti] = _ui_tv_vis[vis_off + next]
+    let _ev = ui_tv_ensure_visible(ti, next)
+    let _r = ui_treeview_refresh(tree)
+    let _d = ui_mark_dirty()
+  end
+
+  if key == "up"
+    let mut prev = cur_vis - 1.0
+    if prev < 0.0
+      prev = 0.0
+    end
+    let vis_off = _ui_tv_vis_off[ti]
+    _ui_tv_selected[ti] = _ui_tv_vis[vis_off + prev]
+    let _ev = ui_tv_ensure_visible(ti, prev)
+    let _r = ui_treeview_refresh(tree)
+    let _d = ui_mark_dirty()
+  end
+
+  if key == "right"
+    // Expand selected node (if collapsed and has children)
+    if selected >= 0.0
+      if _ui_tv_leaf[selected] == 0.0
+        if _ui_tv_expanded[selected] == 0.0
+          let _t = ui_treeview_toggle(tree, selected)
+        else
+          // Already expanded: select first child
+          let off = _ui_tv_node_off[ti]
+          let count = _ui_tv_node_count[ti]
+          let mut ci = 0.0
+          while ci < count
+            let abs_ci = off + ci
+            if _ui_tv_parent[abs_ci] == selected
+              _ui_tv_selected[ti] = abs_ci
+              let child_vis = ui_tv_vis_index_of(ti, abs_ci)
+              if child_vis >= 0.0
+                let _ev = ui_tv_ensure_visible(ti, child_vis)
+              end
+              let _r = ui_treeview_refresh(tree)
+              let _d = ui_mark_dirty()
+              return 0.0
+            end
+            ci = ci + 1.0
+          end
+        end
+      end
+    end
+  end
+
+  if key == "left"
+    // Collapse selected node (if expanded) or select parent
+    if selected >= 0.0
+      if _ui_tv_leaf[selected] == 0.0
+        if _ui_tv_expanded[selected] == 1.0
+          let _t = ui_treeview_toggle(tree, selected)
+          return 0.0
+        end
+      end
+      // Select parent
+      let parent = _ui_tv_parent[selected]
+      if parent >= 0.0
+        _ui_tv_selected[ti] = parent
+        let parent_vis = ui_tv_vis_index_of(ti, parent)
+        if parent_vis >= 0.0
+          let _ev = ui_tv_ensure_visible(ti, parent_vis)
+        end
+        let _r = ui_treeview_refresh(tree)
+        let _d = ui_mark_dirty()
+      end
+    end
+  end
+
+  if key == "space"
+    // Toggle expand/collapse
+    if selected >= 0.0
+      let _t = ui_treeview_toggle(tree, selected)
+    end
+  end
+
+  if key == "home"
+    let vis_off = _ui_tv_vis_off[ti]
+    _ui_tv_selected[ti] = _ui_tv_vis[vis_off]
+    _ui_tv_scroll[ti] = 0.0
+    let _r = ui_treeview_refresh(tree)
+    let _d = ui_mark_dirty()
+  end
+
+  if key == "end"
+    let vis_off = _ui_tv_vis_off[ti]
+    _ui_tv_selected[ti] = _ui_tv_vis[vis_off + vis_total - 1.0]
+    let _ev = ui_tv_ensure_visible(ti, vis_total - 1.0)
+    let _r = ui_treeview_refresh(tree)
+    let _d = ui_mark_dirty()
+  end
+
+  return 0.0
+end

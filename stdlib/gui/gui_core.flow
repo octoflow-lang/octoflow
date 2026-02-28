@@ -39,8 +39,18 @@ let mut _gss = [" ", " "]
 
 // ── Theme Colors: _tc[] ─────────────────────────────────────────────
 // [0-2]=bg [3-5]=panel [6-8]=widget [9-11]=hover [12-14]=active
-// [15-17]=text [18-20]=text_dim [21-23]=border [24-26]=check [27-29]=slider
-let mut _tc = [30.0, 30.0, 35.0, 45.0, 45.0, 50.0, 60.0, 62.0, 68.0, 75.0, 78.0, 85.0, 90.0, 130.0, 240.0, 220.0, 222.0, 228.0, 140.0, 142.0, 148.0, 80.0, 82.0, 88.0, 100.0, 180.0, 100.0, 90.0, 130.0, 240.0]
+// [15-17]=text [18-20]=text_dim [21-23]=border [24-26]=accent [27-29]=slider
+// [30-32]=surface2 [33-35]=focus_ring [36-38]=success [39-41]=warning
+// [42-44]=error [45-47]=shadow
+let mut _tc = [22.0, 22.0, 30.0, 30.0, 31.0, 40.0, 42.0, 44.0, 58.0, 52.0, 55.0, 72.0, 99.0, 130.0, 237.0, 205.0, 214.0, 230.0, 110.0, 118.0, 138.0, 44.0, 46.0, 58.0, 99.0, 130.0, 237.0, 99.0, 130.0, 237.0, 38.0, 40.0, 52.0, 120.0, 150.0, 255.0, 80.0, 200.0, 120.0, 230.0, 180.0, 60.0, 230.0, 80.0, 80.0, 10.0, 10.0, 16.0]
+
+// ── Theme Settings: _ts[] ─────────────────────────────────────────────
+// Non-color rendering properties for the shader pipeline
+// [0]=corner_radius [1]=gradient_enabled [2]=border_width
+// [3]=shadow_alpha [4]=shadow_offset_x [5]=shadow_offset_y
+// [6]=focus_ring_width [7]=font_size [8]=font_size_small [9]=font_size_large
+// [10]=spacing [11]=padding
+let mut _ts = [6.0, 1.0, 1.0, 0.8, 3.0, 3.0, 2.0, 16.0, 12.0, 20.0, 8.0, 12.0]
 
 // ── Widget Registry (Parallel Arrays) ───────────────────────────────
 let mut _gui_types = []
@@ -557,9 +567,13 @@ fn _gui_fill_rect(px_r, px_g, px_b, x0, y0, rw, rh, cr, cg, cb, win_w, win_h)
           if px >= 0.0
             if px < win_w
               let idx = int(py * win_w + px)
-              px_r[idx] = cr
-              px_g[idx] = cg
-              px_b[idx] = cb
+              if idx >= 0.0
+                if idx < len(px_r)
+                  px_r[idx] = cr
+                  px_g[idx] = cg
+                  px_b[idx] = cb
+                end
+              end
             end
           end
           px = px + 1.0
@@ -623,9 +637,12 @@ fn _gui_draw_text(px_r, px_g, px_b, text, tx, ty, scale, cr, cg, cb, win_w, win_
   let char_w = 5.0 * scale
   let mut i = 0.0
   while i < tlen
+    let cx = tx + i * char_w
+    if cx + char_w > win_w
+      return 0.0
+    end
     let c = char_at(text, i)
     let code = ord(c)
-    let cx = tx + i * char_w
     let _d = _gui_draw_char(px_r, px_g, px_b, code, cx, ty, scale, cr, cg, cb, win_w, win_h)
     i = i + 1.0
   end
@@ -721,7 +738,11 @@ fn _gui_fill_circle(px_r, px_g, px_b, cx, cy, radius, cr, cg, cb, win_w, win_h)
   let r = floor(radius)
   let mut y = 0.0 - r
   while y <= r
-    let x_span = floor(sqrt(r * r - y * y))
+    let mut sq = r * r - y * y
+    if sq < 0.0
+      sq = 0.0
+    end
+    let x_span = floor(sqrt(sq))
     let _fl = _gui_fill_rect(px_r, px_g, px_b, cx - x_span, cy + y, 2.0 * x_span + 1.0, 1.0, cr, cg, cb, win_w, win_h)
     y = y + 1.0
   end
@@ -731,6 +752,10 @@ end
 // ── Base Widget Registration ────────────────────────────────────────
 
 fn _gui_add_widget(wtype, x, y, w, h, text)
+  // Enforce 200-widget limit for state snapshot compatibility
+  if len(_gui_types) >= 200.0
+    return -1.0
+  end
   // Clamp dimensions to minimum 1x1 to prevent zero/negative sizes
   let mut cw = w
   let mut ch = h

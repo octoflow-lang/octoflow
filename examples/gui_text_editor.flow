@@ -1,0 +1,96 @@
+// gui_text_editor.flow — Simple text editor with toolbar and theme selector
+//
+// Demonstrates: text input, listbox as text display, toolbar buttons,
+// dropdown theme selector, status bar, layout composition.
+//
+// Run: octoflow run gui_text_editor.flow
+
+use "gui/gui"
+use "gui/layout"
+use "gui/theme"
+
+gui_init(700, 500, "OctoFlow Text Editor")
+
+// Toolbar
+let toolbar = hstack(10, 10, 8)
+let new_btn  = hstack_button(toolbar, 80, 30, "New")
+let save_btn = hstack_button(toolbar, 80, 30, "Save")
+let _sep = hstack_space(toolbar, 20)
+let theme_dd = hstack_dropdown(toolbar, 120)
+let _t1 = gui_dropdown_add(theme_dd, "Dark")
+let _t2 = gui_dropdown_add(theme_dd, "Light")
+let _t3 = gui_dropdown_add(theme_dd, "Ocean")
+
+// Input line
+let input_lbl = gui_label(10, 50, "Input:")
+let input = gui_textinput(80, 48, 500)
+let add_btn = gui_button(590, 48, 100, 30, "Add Line")
+
+// Text display (listbox as line viewer)
+let editor = gui_listbox(10, 90, 680, 360)
+
+// Status bar
+let status = gui_label(10, 460, "Lines: 0 | Ready")
+
+// State
+let mut line_count = 0
+
+while gui_running() == 1.0
+  gui_update()
+
+  // Add line from input
+  if gui_clicked(add_btn) == 1.0
+    let text = gui_get_text(input)
+    if len(text) > 1.0
+      let _a = gui_listbox_add(editor, text)
+      line_count = line_count + 1
+      gui_set_text(status, "Lines: " + str(line_count) + " | Added")
+    end
+  end
+
+  // New: clear all (soft clear — add "---" marker)
+  if gui_clicked(new_btn) == 1.0
+    let _a = gui_listbox_add(editor, "--- NEW DOCUMENT ---")
+    line_count = line_count + 1
+    gui_set_text(status, "Lines: " + str(line_count) + " | New document")
+  end
+
+  // Save: show line count in status
+  if gui_clicked(save_btn) == 1.0
+    gui_set_text(status, "Lines: " + str(line_count) + " | Saved (in memory)")
+  end
+
+  // Theme switching
+  if gui_clicked(theme_dd) == 1.0
+    let sel = gui_dropdown_selected(theme_dd)
+    if sel == 0.0
+      let _t = gui_theme_dark()
+    elif sel == 1.0
+      let _t = gui_theme_light()
+    elif sel == 2.0
+      let _t = gui_theme_ocean()
+    end
+  end
+
+  // Show selected line in status
+  if gui_clicked(editor) == 1.0
+    let sel = gui_listbox_selected(editor)
+    if sel >= 0.0
+      let txt = gui_listbox_text(editor, sel)
+      gui_set_text(status, "Lines: " + str(line_count) + " | L" + str(sel + 1.0) + ": " + txt)
+    end
+  end
+
+  // Keyboard: Enter key adds line
+  if _gs[7] == 1.0
+    let key = _gss[0]
+    if key == "enter"
+      let text = gui_get_text(input)
+      if len(text) > 1.0
+        let _a = gui_listbox_add(editor, text)
+        line_count = line_count + 1
+        gui_set_text(status, "Lines: " + str(line_count) + " | Added")
+      end
+    end
+  end
+end

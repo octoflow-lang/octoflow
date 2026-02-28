@@ -1,0 +1,79 @@
+// emit_circle.flow — Fill a circle with a solid color
+//
+// Push constants:
+//   pc[0] = total (width * height)
+//   pc[1] = win_w (window width)
+//   pc[2] = cx (center x)
+//   pc[3] = cy (center y)
+//   pc[4] = radius
+//   pc[5] = r (0.0-255.0)
+//   pc[6] = g
+//   pc[7] = b
+//
+// Per-thread: distance² check vs radius². No Bresenham/midpoint.
+// Dispatch: ceil(total / 256) workgroups
+
+use "../../compiler/ir"
+
+fn emit_circle(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+
+  // Read push constants
+  let total_f = ir_push_const(entry, 0.0)
+  let win_w_f = ir_push_const(entry, 1.0)
+  let cx_f = ir_push_const(entry, 2.0)
+  let cy_f = ir_push_const(entry, 3.0)
+  let rad_f = ir_push_const(entry, 4.0)
+  let cr = ir_push_const(entry, 5.0)
+  let cg = ir_push_const(entry, 6.0)
+  let cb = ir_push_const(entry, 7.0)
+
+  // Bounds check: gid < total
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, total_f)
+
+  let merge = ir_block("merge")
+  let check = ir_block("check")
+  ir_selection_merge(entry, merge)
+  ir_term_cond_branch(entry, in_bounds, check, merge)
+
+  // Compute pixel coordinates
+  let win_w_u = ir_ftou(check, win_w_f)
+  let px = ir_umod(check, gid, win_w_u)
+  let py = ir_udiv(check, gid, win_w_u)
+  let px_f = ir_utof(check, px)
+  let py_f = ir_utof(check, py)
+
+  // Distance² from pixel to center
+  let dx = ir_fsub(check, px_f, cx_f)
+  let dy = ir_fsub(check, py_f, cy_f)
+  let dx2 = ir_fmul(check, dx, dx)
+  let dy2 = ir_fmul(check, dy, dy)
+  let dist_sq = ir_fadd(check, dx2, dy2)
+  let rad_sq = ir_fmul(check, rad_f, rad_f)
+  let inside = ir_fole(check, dist_sq, rad_sq)
+
+  let write = ir_block("write")
+  let skip = ir_block("skip")
+  ir_selection_merge(check, skip)
+  ir_term_cond_branch(check, inside, write, skip)
+
+  // Write R, G, B channels
+  let total_u = ir_ftou(write, total_f)
+  ir_store_output_at(write, gid, cr)
+  let g_off = ir_iadd(write, gid, total_u)
+  ir_store_output_at(write, g_off, cg)
+  let b_off = ir_iadd(write, g_off, total_u)
+  ir_store_output_at(write, b_off, cb)
+
+  ir_term_branch(write, skip)
+  ir_term_branch(skip, merge)
+  ir_term_return(merge)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

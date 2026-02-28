@@ -46,12 +46,15 @@ end
 // Percent-encode a string for safe use in URLs.
 // Encodes all characters except unreserved: A-Z a-z 0-9 - _ . ~
 fn url_encode(s)
+  if len(s) == 0.0
+    return ""
+  end
   let mut result = ""
   let hex = "0123456789ABCDEF"
   let mut i = 0.0
   while i < len(s)
     let c = char_at(s, i)
-    let code = char_code(c)
+    let code = ord(c)
     // Unreserved characters pass through
     if (code >= 65.0 && code <= 90.0) || (code >= 97.0 && code <= 122.0) || (code >= 48.0 && code <= 57.0) || c == "-" || c == "_" || c == "." || c == "~"
       result = result + c

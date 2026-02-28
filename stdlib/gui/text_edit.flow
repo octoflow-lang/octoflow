@@ -1,0 +1,89 @@
+// text_edit.flow — Multi-line Text Editor Widget
+//
+// Provides a multi-line text area with line-based editing,
+// vertical scrolling, and cursor movement.
+//
+// Usage:
+//   use "gui"
+//   use "text_edit"
+//   let ta = gui_text_area(10.0, 10.0, 400.0, 300.0)
+//   let _s = gui_text_area_set(ta, "Hello\nWorld")
+
+use "gui_core"
+use "widgets"
+
+// Text area state (parallel arrays indexed by text area count)
+let mut _ta_widget_id = []
+let mut _ta_text = []
+let mut _ta_cursor_row = []
+let mut _ta_cursor_col = []
+let mut _ta_scroll = []
+let mut _ta_focused = []
+
+fn gui_text_area(x, y, w, h)
+  let id = _gui_add_widget(GUI_PANEL, x, y, w, h, " ")
+  let ta_idx = len(_ta_widget_id)
+  push(_ta_widget_id, id)
+  push(_ta_text, "")
+  push(_ta_cursor_row, 0.0)
+  push(_ta_cursor_col, 0.0)
+  push(_ta_scroll, 0.0)
+  push(_ta_focused, 0.0)
+  return id
+end
+
+fn _ta_find(id)
+  let n = len(_ta_widget_id)
+  let mut i = 0.0
+  while i < n
+    if _ta_widget_id[int(i)] == id
+      return i
+    end
+    i = i + 1.0
+  end
+  return -1.0
+end
+
+fn gui_text_area_get(id)
+  let idx = _ta_find(id)
+  if idx < 0.0
+    return ""
+  end
+  return _ta_text[int(idx)]
+end
+
+fn gui_text_area_set(id, text)
+  let idx = _ta_find(id)
+  if idx < 0.0
+    return 0.0
+  end
+  let ii = int(idx)
+  _ta_text[ii] = text
+  _ta_cursor_row[ii] = 0.0
+  _ta_cursor_col[ii] = 0.0
+  _ta_scroll[ii] = 0.0
+  _gs[9] = 1.0
+  return 1.0
+end
+
+fn gui_text_area_line_count(id)
+  let idx = _ta_find(id)
+  if idx < 0.0
+    return 0.0
+  end
+  let text = _ta_text[int(idx)]
+  if len(text) == 0.0
+    return 1.0
+  end
+  // Count newlines + 1
+  let mut count = 1.0
+  let mut ci = 0.0
+  while ci < len(text)
+    let c = char_at(text, ci)
+    if c == "\n"
+      count = count + 1.0
+    end
+    ci = ci + 1.0
+  end
+  return count
+end

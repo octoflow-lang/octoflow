@@ -1,0 +1,121 @@
+// examples/logviewer.flow — Log Viewer
+//
+// Demonstrates readonly textarea with programmatic content updates.
+// Click "ADD LOG" to append timestamped entries. Auto-scrolls to bottom.
+//
+// Controls:
+//   Click "ADD LOG"  — Append a log entry
+//   Click "CLEAR"    — Clear all entries
+//   Arrow/Page keys  — Navigate (readonly, no editing)
+//   Escape           — Quit
+//
+// Run: octoflow run octoui/examples/logviewer.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/text"
+use "../widgets/input/button"
+use "../widgets/input/textarea"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../widgets/layout/menubar"
+use "../widgets/layout/statusbar"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(520.0, 400.0, "OctoUI Log Viewer")
+
+// Root layout
+let root = ui_column(-1.0, 4.0)
+let _sp = ui_tree_set_padding(root, 8.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 520.0, 400.0)
+
+// Title
+let title = ui_text(root, "LOG VIEWER", UI_COLOR_PRIMARY)
+
+// Button row
+let btn_row = ui_row(root, 8.0)
+let btn_add = ui_button(btn_row, 100.0, 28.0, "ADD LOG")
+let btn_clear = ui_button(btn_row, 100.0, 28.0, "CLEAR")
+
+// Readonly textarea
+let ta = ui_textarea(root, 504.0, 290.0)
+let _ro = ui_textarea_set_readonly(ta, 1.0)
+
+// Pre-load some log entries
+let _l1 = ui_textarea_set_text(ta, "[INFO] LOG VIEWER STARTED")
+let _l2 = ui_textarea_append_line(ta, "[INFO] READY FOR INPUT")
+let _l3 = ui_textarea_append_line(ta, "[INFO] CLICK ADD LOG TO ADD ENTRIES")
+
+// Status bar
+let sbar = ui_statusbar(root, 520.0)
+let st_text = ui_statusbar_text(sbar, "3 ENTRIES")
+
+// Position status bar at bottom
+_ui_y[sbar] = 378.0
+_ui_x[sbar] = 0.0
+
+// Counter for log entries
+let mut log_count = 3.0
+
+// Initial layout
+let _l = ui_layout_update()
+
+// Initialize pipeline
+let _pi2 = ui_pipeline_init(520.0, 400.0)
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  let _inp = ui_process_input()
+
+  // Add log button
+  if ui_button_clicked(btn_add) == 1.0
+    log_count = log_count + 1.0
+    let _al = ui_textarea_append_line(ta, "[INFO] LOG ENTRY " + log_count)
+    let _sb = ui_textarea_scroll_to_bottom(ta)
+    let _su = ui_statusbar_set_text(st_text, log_count + " ENTRIES")
+    let _l2 = ui_layout_update()
+  end
+
+  // Clear button
+  if ui_button_clicked(btn_clear) == 1.0
+    let _st2 = ui_textarea_set_text(ta, "[INFO] LOG CLEARED")
+    log_count = 1.0
+    let _su = ui_statusbar_set_text(st_text, "1 ENTRY")
+    let _l2 = ui_layout_update()
+  end
+
+  // Process textarea keyboard (navigation only — readonly)
+  let key = ui_key_down()
+  let _tp = ui_textarea_process_key(key)
+
+  // Escape quits
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _ps = ui_pipeline_shutdown()
+let _wc = ui_window_close()
+print("Log viewer example finished.")

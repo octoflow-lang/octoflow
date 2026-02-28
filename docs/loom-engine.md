@@ -551,17 +551,194 @@ octoflow run hello_loom.flow --allow-read
 
 ---
 
+## LoomDB — GPU-Resident Data Layer
+
+LoomDB captures GPU pipeline results and makes them searchable — without
+touching disk. It runs in its own Loom, completely isolated from your main
+compute pipeline.
+
+### The Two-Loom Pattern
+
+```
+┌──────────────────────────────────┐
+│  MAIN LOOM (zero I/O)            │
+│                                  │
+│  Compute: loom_dispatch chains   │
+│  Capture: loomdb_capture()       │  GPU memory only
+│  Search:  loomdb_search()        │  No file syscalls
+│           loomdb_gpu_search()    │  No network calls
+└────────────────┬─────────────────┘
+                 │ shared VRAM
+┌────────────────┴─────────────────┐
+│  LOOMDB LOOM (owns all I/O)      │
+│                                  │
+│  Persist: loomdb_flush()         │  Writes .ldb + .vectors + .meta
+│  Restore: loomdb_restore_*()     │  Loads from disk at startup
+│  Never blocks the Main Loom.     │
+└──────────────────────────────────┘
+```
+
+The Main Loom physically cannot do I/O — none of the capture/search functions
+contain file operations. This isn't a convention; it's architectural enforcement.
+
+### Quick Start
+
+```flow
+use "db/loomdb"
+
+// Create: 384-dimensional embeddings, auto-flush at 10,000
+let ldb = loomdb_create(384.0, 10000.0)
+let vectors = loomdb_create_vectors()
+
+// Capture results (GPU memory, zero I/O)
+let _c1 = loomdb_capture(ldb, vectors, "emb_001", embedding_a, "batch=42")
+let _c2 = loomdb_capture(ldb, vectors, "emb_002", embedding_b, "batch=42")
+let _c3 = loomdb_capture(ldb, vectors, "emb_003", embedding_c, "batch=43")
+
+// Search (GPU memory, zero I/O)
+let _s = loomdb_search(ldb, vectors, query_vector, 5.0, "cosine")
+
+// Read results
+let count = loomdb_result_count(ldb)
+for i in range(0, count)
+  let id = loomdb_result_id(ldb, i)
+  let score = loomdb_result_score(ldb, i)
+  print("{id}: {score}")
+end
+
+// GPU-accelerated search (fast for 1000+ vectors)
+let _g = loomdb_gpu_search(ldb, vectors, query_vector, 10.0)
+```
+
+### Persistence
+
+```flow
+// Check capacity
+if loomdb_needs_flush(ldb) == 1.0
+  let _f = loomdb_flush(ldb, vectors, "cache/embeddings")
+end
+
+// Restore on next startup
+let ldb = loomdb_restore_meta("cache/embeddings")
+let vectors = loomdb_restore_vectors("cache/embeddings")
+// GPU-resident again, ready to search
+```
+
+### LoomDB API
+
+| Function | I/O? | Description |
+|----------|------|-------------|
+| `loomdb_create(dims, cap)` | No | Create instance (dims = embedding size, cap = flush threshold) |
+| `loomdb_create_vectors()` | No | Create empty vectors array |
+| `loomdb_capture(ldb, vecs, id, emb, meta)` | No | Capture a vector to GPU memory |
+| `loomdb_search(ldb, vecs, q, k, metric)` | No | CPU similarity search (cosine/dot/euclidean) |
+| `loomdb_gpu_search(ldb, vecs, q, k)` | No | GPU-accelerated search via gpu_matmul |
+| `loomdb_needs_flush(ldb)` | No | Check if capacity threshold reached |
+| `loomdb_normalize(ldb, vecs)` | No | Pre-normalize for faster cosine search |
+| `loomdb_result_count(ldb)` | No | Number of search results |
+| `loomdb_result_id(ldb, i)` | No | Result ID at position i |
+| `loomdb_result_score(ldb, i)` | No | Result score at position i |
+| `loomdb_result_meta(ldb, i)` | No | Result metadata at position i |
+| `loomdb_flush(ldb, vecs, path)` | **Yes** | Persist to .ldb + .vectors + .meta |
+| `loomdb_restore_meta(path)` | **Yes** | Load metadata from disk |
+| `loomdb_restore_vectors(path)` | **Yes** | Load vectors from disk |
+
+---
+
+## OctoDB — Structured Data Storage
+
+OctoDB is OctoFlow's embedded database for structured data — tables, rows,
+CRUD operations, and `.odb` file persistence. It also serves as LoomDB's
+cold storage tier.
+
+### Quick Start
+
+```flow
+use "db/core"
+use "db/engine"
+
+// Create a table
+let db = db_create()
+let users = db_table(db, "users", ["name", "age", "email"])
+
+// Insert
+let mut row = map()
+row["name"] = "Alice"
+row["age"] = 30.0
+row["email"] = "alice@example.com"
+let _i = db_insert(users, row)
+
+// Query
+let indices = db_where(users, "age", ">", 25.0)
+let avg_age = db_aggregate(users, "age", "avg")
+
+// Multi-condition
+let results = db_select(users, ["age", "name"], [">", "contains"], [25.0, "Ali"])
+
+// Persist
+let _s = db_save(users, "data/users.odb")
+let restored = db_load("data/users.odb")
+```
+
+### OctoDB API
+
+| Function | Description |
+|----------|-------------|
+| `db_create()` | Create database |
+| `db_table(db, name, columns)` | Create table |
+| `db_insert(table, row)` | Insert row (returns index) |
+| `db_select_row(table, idx)` | Get row by index |
+| `db_select_column(table, col, n)` | Get first n values of a column |
+| `db_where(table, col, op, val)` | Filter rows (==, !=, >, <, >=, <=, contains) |
+| `db_select(table, cols, ops, vals)` | Multi-condition AND filter |
+| `db_update(table, idx, row)` | Update row fields |
+| `db_delete(table, idx)` | Soft delete |
+| `db_count(table)` | Row count |
+| `db_distinct(table, col)` | Unique values |
+| `db_aggregate(table, col, op)` | sum, avg, min, max, count |
+| `db_save(table, path)` / `db_load(path)` | Single-table persistence (.odb) |
+| `db_import_csv(table, path)` | Import CSV into table |
+
+For multi-table persistence: `db_save_all_start`, `db_save_all_add`, `db_load_all`
+(see `stdlib/db/persist.flow`).
+
+---
+
+## The Two-Tier Pattern
+
+OctoDB and LoomDB work together:
+
+```
+GPU Memory (LoomDB)          Disk (OctoDB)
+┌───────────────────┐        ┌──────────────┐
+│ loomdb_capture()  │        │ .odb files   │
+│ loomdb_search()   │ flush  │ .ldb files   │
+│ loomdb_gpu_search │ ────>  │ .vectors     │
+│                   │        │ .meta        │
+│ Source of truth   │ <────  │ Cold storage │
+│ during runtime    │restore │ between runs │
+└───────────────────┘        └──────────────┘
+```
+
+**Use OctoDB** for structured data: user tables, config, logs, CSV imports.
+**Use LoomDB** for GPU pipeline results: embeddings, features, similarity search.
+**Use both** when you need GPU-speed search with disk persistence between sessions.
+
+---
+
 ## Roadmap
 
 | Phase | What | Status |
 |---|---|---|
-| Loom Core | boot, dispatch, build, run, launch, poll, read | Done (as vm_*) |
-| IR Builder | 60+ SPIR-V ops including uint64, atomics, shared memory | Done |
-| Prime Sieve | v1-v7, exact to 10^10, 95K dispatches | Done |
-| Neural Net Kernels | attention, ffn, rmsnorm, rope, silu, softmax, matvec | Done |
-| API Rename | vm_* → loom_* function aliases | Planned |
-| Pattern Library | gpu_sum, gpu_sort, gpu_sieve one-call wrappers | Planned |
-| stdlib Reorganization | Domain-sorted directory structure | Planned |
+| Loom Core | boot, dispatch, build, run, launch, poll, read | **Done** |
+| IR Builder | 60+ SPIR-V ops including uint64, atomics, shared memory | **Done** |
+| Prime Sieve | v1-v7, exact to 10^10, 95K dispatches | **Done** |
+| Neural Net Kernels | attention, ffn, rmsnorm, rope, silu, softmax, matvec | **Done** |
+| API Rename | vm_* → loom_* function aliases | **Done** |
+| LoomDB | GPU-resident data layer with I/O isolation | **Done** |
+| OctoDB | Structured CRUD with .odb persistence | **Done** |
+| Two-Tier DB | LoomDB + OctoDB integration | **Done** |
+| Pattern Library | gpu_sum, gpu_sort one-call wrappers | Partial |
 | Console Monitor | loom_profile_start/end, timing, VRAM stats | Planned |
 | Multi-GPU Swarm | Network dispatch across machines | Future |
 | Compiled Chains | Eliminate interpreter bottleneck for dispatch recording | Future |

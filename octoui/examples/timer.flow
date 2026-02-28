@@ -1,0 +1,182 @@
+// examples/timer.flow — OctoUI Timer App
+//
+// Countdown timer with progress bar, start/pause/reset buttons.
+// Demonstrates: progress bar, separator, keyboard input, reactive state.
+//
+// Controls:
+//   SPACE  — Start / Pause
+//   R      — Reset
+//   ESCAPE — Quit
+//
+// Run: octoflow run octoui/examples/timer.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/core/progress"
+use "../widgets/input/button"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../state/reactive"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(400.0, 280.0, "OctoUI Timer")
+
+// Timer settings
+let timer_total = 30.0
+
+// Reactive states
+let time_state = ui_state(timer_total)
+let pct_state = ui_state(100.0)
+let status_state = ui_state(0.0)
+
+// Root layout
+let root = ui_column(-1.0, 10.0)
+let _sp = ui_tree_set_padding(root, 24.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 400.0, 280.0)
+
+// Title
+let title = ui_text(root, "TIMER", UI_COLOR_PRIMARY)
+
+// Separator
+let sep1 = ui_separator(root, 352.0)
+
+// Time display — bound to time_state
+let time_display = ui_text(root, "30", UI_COLOR_TEXT)
+let _bt = ui_bind_text(time_display, time_state)
+
+// Progress bar — bound to pct_state
+let pbar = ui_progress(root, 352.0, 12.0)
+let _bp = ui_bind_progress(pbar, pct_state)
+
+// Separator
+let sep2 = ui_separator(root, 352.0)
+
+// Button row
+let btn_row = ui_row(root, 12.0)
+let btn_start = ui_button(btn_row, 100.0, 36.0, "START")
+let btn_pause = ui_button(btn_row, 100.0, 36.0, "PAUSE")
+let btn_reset = ui_button(btn_row, 100.0, 36.0, "RESET")
+
+// Status text
+let status_text = ui_text(root, "READY", UI_COLOR_TEXT_DIM)
+
+// Initial layout
+let _l = ui_layout_update()
+
+// Timer state
+let mut running = 1.0
+let mut timer_running = 0.0
+let mut remaining = timer_total
+let mut last_time = time()
+
+// Event loop
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  // Escape to close
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  // Keyboard shortcuts
+  if ui_key_pressed("space") == 1.0
+    if timer_running == 0.0
+      if remaining > 0.0
+        timer_running = 1.0
+        last_time = time()
+        let _st = ui_tree_set_text(status_text, "RUNNING")
+        let _d = ui_mark_dirty()
+      end
+    else
+      timer_running = 0.0
+      let _st = ui_tree_set_text(status_text, "PAUSED")
+      let _d = ui_mark_dirty()
+    end
+  end
+
+  if ui_key_pressed("r") == 1.0
+    timer_running = 0.0
+    remaining = timer_total
+    let _s1 = ui_state_set(time_state, timer_total)
+    let _s2 = ui_state_set(pct_state, 100.0)
+    let _pu = ui_progress_update()
+    let _st = ui_tree_set_text(status_text, "READY")
+    let _d = ui_mark_dirty()
+  end
+
+  // Button clicks
+  if ui_button_clicked(btn_start) == 1.0
+    if remaining > 0.0
+      timer_running = 1.0
+      last_time = time()
+      let _st = ui_tree_set_text(status_text, "RUNNING")
+      let _d = ui_mark_dirty()
+    end
+  end
+  if ui_button_clicked(btn_pause) == 1.0
+    timer_running = 0.0
+    let _st = ui_tree_set_text(status_text, "PAUSED")
+    let _d = ui_mark_dirty()
+  end
+  if ui_button_clicked(btn_reset) == 1.0
+    timer_running = 0.0
+    remaining = timer_total
+    let _s1 = ui_state_set(time_state, timer_total)
+    let _s2 = ui_state_set(pct_state, 100.0)
+    let _pu = ui_progress_update()
+    let _st = ui_tree_set_text(status_text, "READY")
+    let _d = ui_mark_dirty()
+  end
+
+  // Update timer
+  if timer_running == 1.0
+    let now = time()
+    let dt = now - last_time
+    // Only update if at least 1 second has passed (f32 precision floor)
+    if dt >= 1.0
+      remaining = remaining - 1.0
+      last_time = now
+      if remaining < 0.0
+        remaining = 0.0
+      end
+      // Update display
+      let _s1 = ui_state_set(time_state, remaining)
+      let pct = remaining * 100.0 / timer_total
+      let _s2 = ui_state_set(pct_state, pct)
+      let _pu = ui_progress_update()
+      // Check if done
+      if remaining <= 0.0
+        timer_running = 0.0
+        let _st = ui_tree_set_text(status_text, "DONE!")
+        let _d = ui_mark_dirty()
+      end
+    end
+  end
+
+  // Render if dirty, otherwise sleep
+  if ui_is_dirty() == 1.0
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Timer example finished.")

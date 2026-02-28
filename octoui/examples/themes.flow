@@ -1,0 +1,179 @@
+// examples/themes.flow — OctoUI Theme Switching Demo
+//
+// Demonstrates runtime theme switching between dark and light modes.
+// Click the theme buttons or use the toggle to switch themes.
+// Notifications confirm each switch.
+//
+// Controls:
+//   TAB        — Cycle focus
+//   SPACE      — Toggle/click focused widget
+//   ESCAPE     — Quit
+//   Click      — Interact with widgets
+//
+// Run: octoflow run octoui/examples/themes.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../themes/light"
+use "../widgets/core/box"
+use "../widgets/core/text"
+use "../widgets/core/separator"
+use "../widgets/core/label"
+use "../widgets/core/notification"
+use "../widgets/input/button"
+use "../widgets/input/checkbox"
+use "../widgets/input/slider"
+use "../widgets/input/radio"
+use "../widgets/input/toggle"
+use "../widgets/layout/column"
+use "../widgets/layout/row"
+use "../platform/desktop/window_win32"
+use "../platform/desktop/input"
+
+// Open window
+let _w = ui_window_open(500.0, 420.0, "OctoUI Theme Demo")
+
+// Track current theme (0=dark, 1=light)
+let mut current_theme = [0.0]
+
+// Root layout
+let root = ui_column(-1.0, 10.0)
+let _sp = ui_tree_set_padding(root, 20.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 500.0, 420.0)
+
+// ── Title ──
+let title = ui_text(root, "THEME SWITCHER", UI_COLOR_PRIMARY)
+let sep1 = ui_separator(root, 460.0)
+
+// ── Theme toggle ──
+let toggle_row = ui_row(root, 12.0)
+let theme_label = ui_text(toggle_row, "LIGHT MODE", UI_COLOR_TEXT_DIM)
+let theme_toggle = ui_toggle(toggle_row, " ")
+
+// ── Theme buttons ──
+let btn_row = ui_row(root, 12.0)
+let btn_dark = ui_button(btn_row, 120.0, 32.0, "DARK")
+let btn_light = ui_button(btn_row, 120.0, 32.0, "LIGHT")
+
+let sep2 = ui_separator(root, 460.0)
+
+// ── Preview widgets ──
+let preview_label = ui_text(root, "WIDGET PREVIEW", UI_COLOR_TEXT_DIM)
+
+// Checkbox preview
+let chk_demo = ui_checkbox(root, "SAMPLE OPTION")
+let _scd = ui_checkbox_set(chk_demo, 1.0)
+
+// Radio preview
+let radio_group = ui_radio_group(root)
+let _rr1 = ui_radio(radio_group, "OPTION A")
+let _rr2 = ui_radio(radio_group, "OPTION B")
+
+// Slider preview
+let slider_row = ui_row(root, 12.0)
+let slider_label = ui_text(slider_row, "VALUE", UI_COLOR_TEXT_DIM)
+let slider_val = ui_text(slider_row, "50", UI_COLOR_TEXT)
+let demo_slider = ui_slider(root, 300.0, 14.0, 0.0, 100.0, 50.0)
+
+let sep3 = ui_separator(root, 460.0)
+
+// Status
+let status = ui_label(root, "THEME", "DARK", UI_COLOR_PRIMARY)
+
+// Initial layout
+let _l = ui_layout_update()
+let _su = ui_slider_update_all()
+let _tu = ui_toggle_update_all()
+
+// Event loop
+let mut running = 1.0
+while running == 1.0
+  let alive = ui_poll_events()
+  if alive == 0.0
+    running = 0.0
+  end
+
+  if ui_key_pressed("escape") == 1.0
+    running = 0.0
+  end
+
+  let _pi = ui_process_input()
+
+  let key = ui_key_down()
+
+  // Process slider
+  let _sp2 = ui_slider_process(ui_mouse_x(), ui_mouse_y(), ui_mouse_down())
+  let _sk = ui_slider_process_key(key)
+
+  // Update slider display
+  let sv = floor(ui_slider_value(demo_slider))
+  let sv_text = str(sv)
+  let _svt = ui_tree_set_text(slider_val, sv_text)
+
+  // Process notification
+  let _np = ui_notify_process()
+
+  // Theme toggle
+  let tgl_on = ui_toggle_on(theme_toggle)
+  if tgl_on != current_theme[0]
+    current_theme[0] = tgl_on
+    if tgl_on == 1.0
+      let _lt = ui_theme_load_light()
+      let _ta = ui_theme_apply_all()
+      let _lv = ui_label_set_value(status, "LIGHT")
+      let _n = ui_notify("LIGHT THEME APPLIED", UI_COLOR_PRIMARY)
+    else
+      let _dt = ui_theme_load_dark()
+      let _ta = ui_theme_apply_all()
+      let _lv = ui_label_set_value(status, "DARK")
+      let _n = ui_notify("DARK THEME APPLIED", UI_COLOR_PRIMARY)
+    end
+    let _d = ui_mark_dirty()
+  end
+
+  // Dark button
+  if ui_button_clicked(btn_dark) == 1.0
+    if current_theme[0] != 0.0
+      current_theme[0] = 0.0
+      let _ts = ui_toggle_set(theme_toggle, 0.0)
+      let _dt = ui_theme_load_dark()
+      let _ta = ui_theme_apply_all()
+      let _lv = ui_label_set_value(status, "DARK")
+      let _n = ui_notify("DARK THEME APPLIED", UI_COLOR_PRIMARY)
+      let _d = ui_mark_dirty()
+    end
+  end
+
+  // Light button
+  if ui_button_clicked(btn_light) == 1.0
+    if current_theme[0] != 1.0
+      current_theme[0] = 1.0
+      let _ts = ui_toggle_set(theme_toggle, 1.0)
+      let _lt = ui_theme_load_light()
+      let _ta = ui_theme_apply_all()
+      let _lv = ui_label_set_value(status, "LIGHT")
+      let _n = ui_notify("LIGHT THEME APPLIED", UI_COLOR_PRIMARY)
+      let _d = ui_mark_dirty()
+    end
+  end
+
+  // Render if dirty
+  if ui_is_dirty() == 1.0
+    let _ly = ui_layout_update()
+    let _su2 = ui_slider_update_all()
+    let _tu2 = ui_toggle_update_all()
+    let _r = ui_pipeline_render()
+    let _cd = ui_clear_dirty()
+  else
+    let _p = ui_pipeline_present()
+    let _sl = sleep(16.0)
+  end
+end
+
+// Cleanup
+let _c = ui_window_close()
+print("Theme demo finished.")
