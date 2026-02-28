@@ -9,6 +9,9 @@ fn dense_forward(input, weights, bias, n_in, n_out)
   // input: array of n_in values
   // weights: flat array n_in * n_out (row-major)
   // bias: array of n_out values
+  if len(input) < n_in || len(weights) < n_in * n_out || len(bias) < n_out
+    return []
+  end
   let mut output = []
   let mut j = 0.0
   while j < n_out
@@ -140,6 +143,16 @@ fn sgd_update(params, grads, lr)
 end
 
 fn dropout(arr, rate)
+  if rate >= 1.0
+    let mut result = []
+    for x in arr
+      push(result, 0.0)
+    end
+    return result
+  end
+  if rate <= 0.0
+    return arr
+  end
   let mut result = []
   let scale = 1.0 / (1.0 - rate)
   for x in arr

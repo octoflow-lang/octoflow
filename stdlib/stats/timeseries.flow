@@ -7,6 +7,12 @@
 
 fn sma(arr, period)
   let n = len(arr)
+  if period > n
+    period = n
+  end
+  if period <= 0.0
+    return arr
+  end
   let mut result = []
   let mut i = 0.0
   while i < n

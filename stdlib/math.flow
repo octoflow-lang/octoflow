@@ -32,6 +32,9 @@ fn lerp(a, b, t)
 end
 
 fn map_range(val, in_lo, in_hi, out_lo, out_hi)
+  if in_hi == in_lo
+    return out_lo
+  end
   let t = (val - in_lo) / (in_hi - in_lo)
   return out_lo + (out_hi - out_lo) * t
 end

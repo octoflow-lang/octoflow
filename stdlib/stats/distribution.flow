@@ -112,7 +112,7 @@ fn binomial_pmf(k, n, p)
 end
 
 fn combinations(n, k)
-  if k > n
+  if k < 0.0 || k > n
     return 0.0
   end
   if k == 0.0 || k == n

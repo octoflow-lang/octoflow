@@ -125,6 +125,9 @@ fn csv_parse_text(text, result_rows)
   let header_line = trim(lines[0])
   let headers = csv_parse_line(header_line)
   let ncols = len(headers)
+  if ncols == 0.0
+    return 0.0
+  end
   // Parse data rows
   let mut i = 1.0
   while i < nlines
@@ -221,13 +224,18 @@ end
 // Extract a column as an array of floats (non-numeric values become 0.0).
 fn csv_column(rows, col_name)
   let mut result = []
+  let mut found = 0.0
   for row in rows
     if map_has(row, col_name)
       let v = map_get(row, col_name)
       push(result, float(v))
+      found = 1.0
     else
       push(result, 0.0)
     end
+  end
+  if found == 0.0
+    print("Warning: column '" + col_name + "' not found in any row")
   end
   return result
 end

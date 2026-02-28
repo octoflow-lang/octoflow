@@ -123,6 +123,14 @@ fn find_best_split(x, y, n_thresholds)
     end
     i = i + 1.0
   end
+  if x_max == x_min
+    let mut result = map()
+    map_set(result, "threshold", str(x_min))
+    map_set(result, "gini", str(1.0))
+    map_set(result, "left_value", str(y[0]))
+    map_set(result, "right_value", str(y[0]))
+    return result
+  end
   let step = (x_max - x_min) / (n_thresholds + 1.0)
   let mut best_thr = x_min
   let mut best_gini = 2.0

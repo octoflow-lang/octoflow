@@ -134,6 +134,10 @@ fn b64_decode(s)
     let v1 = b64_val(ch1)
     let v2 = b64_val(ch2)
     let v3 = b64_val(ch3)
+    if v0 < 0.0 || v1 < 0.0
+      i = i + 4.0
+      continue
+    end
 
     // Byte 0: top 6 from v0, top 2 from v1
     let byte0 = bit_or(bit_shl(v0, 2.0), bit_shr(v1, 4.0))

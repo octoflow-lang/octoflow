@@ -118,6 +118,12 @@ fn sigmoid(x)
 end
 
 fn tanh_fn(x)
+  if x > 20.0
+    return 1.0
+  end
+  if x < -20.0
+    return -1.0
+  end
   let e2x = exp(2.0 * x)
   return (e2x - 1.0) / (e2x + 1.0)
 end
@@ -130,6 +136,9 @@ fn relu(x)
 end
 
 fn softplus(x)
+  if x > 20.0
+    return x
+  end
   return log(1.0 + exp(x))
 end
 
@@ -138,6 +147,12 @@ fn logistic(x, L, k, x0)
 end
 
 fn linspace(start, stop, n)
+  if n <= 0.0
+    return []
+  end
+  if n == 1.0
+    return [start]
+  end
   let mut result = []
   let step = (stop - start) / (n - 1.0)
   let mut i = 0.0
@@ -160,6 +175,9 @@ end
 
 fn dot_product(a, b)
   let n = len(a)
+  if len(b) < n
+    n = len(b)
+  end
   let mut sum = 0.0
   let mut i = 0.0
   while i < n
@@ -191,6 +209,9 @@ fn normalize_vec(arr)
 end
 
 fn cross_product_3d(a, b)
+  if len(a) < 3.0 || len(b) < 3.0
+    return [0.0, 0.0, 0.0]
+  end
   let mut result = []
   push(result, a[1] * b[2] - a[2] * b[1])
   push(result, a[2] * b[0] - a[0] * b[2])

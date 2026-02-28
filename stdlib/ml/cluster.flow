@@ -9,6 +9,12 @@ fn kmeans(data, k, n_features, max_iter)
   // Returns: labels array (cluster assignment per sample)
   let n = len(data)
   let n_samples = floor(n / n_features)
+  if n_samples == 0.0
+    return []
+  end
+  if k > n_samples
+    k = n_samples
+  end
   // Initialize centroids by picking k random samples
   let mut centroids = []
   let mut i = 0.0
@@ -143,7 +149,10 @@ fn silhouette_score(data, labels, k)
       end
       j = j + 1.0
     end
-    let a = a_sum / a_count
+    let a = 0.0
+    if a_count > 0.0
+      a = a_sum / a_count
+    end
     // b(i) = min mean distance to other clusters
     let mut b_best = 999999.0
     let mut c = 0.0

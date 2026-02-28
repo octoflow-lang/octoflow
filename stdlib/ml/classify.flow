@@ -5,6 +5,9 @@
 
 fn knn_predict(x_train, y_train, x_test, k)
   // K-nearest neighbors (1D features)
+  if len(x_train) == 0.0
+    return []
+  end
   let n_train = len(x_train)
   let n_test = len(x_test)
   let mut predictions = []
@@ -43,6 +46,11 @@ fn knn_predict(x_train, y_train, x_test, k)
       i = i + 1.0
     end
     // Majority vote
+    if len(labels) == 0.0
+      push(predictions, 0.0)
+      ti = ti + 1.0
+      continue
+    end
     let mut votes = map()
     let mut best_label = labels[0]
     let mut best_count = 0.0
@@ -67,6 +75,13 @@ fn knn_predict(x_train, y_train, x_test, k)
 end
 
 fn logistic_regression(x, y, lr, epochs)
+  if len(x) == 0.0
+    let mut m = map()
+    map_set(m, "type", "logistic")
+    map_set(m, "weight", "0")
+    map_set(m, "bias", "0")
+    return m
+  end
   // Binary logistic regression (1D)
   let n = len(x)
   let mut w = 0.0

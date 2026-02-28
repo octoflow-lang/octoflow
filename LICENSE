@@ -1,27 +1,21 @@
-OctoFlow Compiler License
+MIT License
 
-Copyright (c) 2026 OctoFlow. All rights reserved.
+Copyright (c) 2026 OctoFlow
 
-Your Code Is Yours
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-Programs you write in OctoFlow (.flow files) are entirely yours. OctoFlow
-claims no rights over your source code, compiled output, or data processed
-by your programs. Build what you want. Ship what you want. Owe us nothing.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-Compiler Binary
-
-The OctoFlow compiler binary is free to download and use for any purpose --
-personal, commercial, educational, or research. No cost, no registration,
-no usage limits.
-
-Compiler Source Code
-
-The compiler source code (all files under compiler/) is proprietary and not
-distributed. The compiler binary may not be reverse-engineered, decompiled,
-disassembled, or redistributed without written permission.
-
-Open Source Components
-
-The standard library, GPU kernel modules, domain modules, examples,
-documentation, and tests are licensed separately under the Apache License
-2.0. See LICENSE-STDLIB for details.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
