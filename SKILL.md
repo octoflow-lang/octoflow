@@ -5,11 +5,11 @@ description: >
   Use when the user wants to run GPU-accelerated computations, analyze data,
   process images, train ML models, or generate code from natural language.
   OctoFlow turns English task descriptions into GPU programs via Vulkan.
-  Ships as an MCP server — run `octoflow mcp-serve` for 7 structured tools.
+  Also runs as an MCP server (`octoflow mcp-serve`) with 7 structured tools.
   No Python, no CUDA, no dependencies — single 3.2 MB binary.
   Use for: "sort a million numbers", "cluster this CSV", "blur this image",
   "plot my data", "calculate statistics", "run regression".
-version: 1.3.0
+version: 1.3.1
 metadata:
   openclaw:
     emoji: "\U0001F419"
@@ -19,22 +19,21 @@ metadata:
     install:
       - id: github-release
         kind: download
-        url: https://github.com/octoflow-lang/octoflow/releases
+        url: https://github.com/octoflow-lang/octoflow/releases/download/v1.2.0/octoflow-v1.2.0-x86_64-windows.zip
         bins: [octoflow]
-        label: "Download OctoFlow binary from GitHub Releases (3.2 MB)"
-    os: [darwin, linux, win32]
+        label: "Download OctoFlow binary (3.2 MB, zero dependencies)"
+    os: [linux, win32]
     always: false
-tags: [gpu, vulkan, compute, data-analysis, image-processing, llm,
-       machine-learning, programming-language, ai, natural-language]
+tags: [gpu, vulkan, compute, data-analysis, image-processing,
+       machine-learning, programming-language, natural-language]
 author: octoflow-lang
 repository: https://github.com/octoflow-lang/octoflow
 homepage: https://octoflow-lang.github.io/octoflow/
 license: MIT
 permissions:
-  - file-read
-  - file-write
-  - network
-  - process-exec
+  # All permissions are DENIED by default.
+  # Users must explicitly opt-in with --allow-* flags.
+  # See "Security Model" section below.
 ---
 
 # OctoFlow
@@ -82,28 +81,27 @@ octoflow chat "fetch weather data" --allow-net=api.weather.com
 octoflow run report.flow --allow-read=./data --allow-write=./output
 ```
 
-## Permissions & Security
+## Security Model
 
-OctoFlow runs **sandboxed by default** — no network, no file writes outside cwd, no process execution.
+OctoFlow uses Deno-style permissions. **Everything is denied by default.**
 
-| Flag | What it allows |
-|------|---------------|
-| `--allow-read=./data` | Read files from `./data` only |
-| `--allow-write=./output` | Write to `./output` only |
-| `--allow-net=api.example.com` | Network to specific domain only |
-| `--allow-exec=python` | Execute specific command only |
+| Permission | Default | How to enable | Example |
+|------------|---------|---------------|---------|
+| File read | **DENIED** | `--allow-read=./data` | Read CSV from `./data` only |
+| File write | **DENIED** | `--allow-write=./output` | Write results to `./output` only |
+| Network | **DENIED** | `--allow-net=api.example.com` | Fetch from one domain only |
+| Process exec | **DENIED** | `--allow-exec=curl` | Allow `curl` only |
 
-Without flags: can only read `.flow` source files and print to stdout.
+Without flags, OctoFlow can only read `.flow` source files and print to stdout.
+No file access, no network, no subprocesses unless the user explicitly opts in.
 
-## MCP Server (Agent Integration)
+## MCP Server
 
-OctoFlow ships as an MCP server for AI agent integration:
+OctoFlow can run as an MCP server for AI agent integration:
 
 ```bash
 octoflow mcp-serve
 ```
-
-### Configuration
 
 Add to your OpenClaw, Claude Desktop, or Cursor config:
 
@@ -122,8 +120,6 @@ Add to your OpenClaw, Claude Desktop, or Cursor config:
 | `octoflow_gpu_stats` | GPU statistical operations |
 | `octoflow_image` | Image processing (BMP, GIF) |
 | `octoflow_csv` | CSV data analysis |
-
-Works with OpenClaw, Claude Desktop, Cursor, Windsurf, and any MCP client.
 
 ## Common Patterns
 
@@ -167,35 +163,34 @@ octoflow chat "load data.csv, compute Pearson correlation between col1 and col2"
 | GPU support | Any Vulkan GPU (NVIDIA, AMD, Intel) |
 | Binary size | 3.2 MB, zero dependencies |
 | Chat mode | English to code with auto-fix loop (max 3 retries) |
-| Grammar | GBNF-constrained decoding prevents syntax errors |
 | Errors | 69 structured error codes with auto-fix suggestions |
 | MCP Server | 7 structured tools via JSON-RPC 2.0 |
-| Context Engine | 169-file knowledge tree, auto-skill loading |
-| Memory | Persistent cross-session memory, OCTOFLOW.md project config |
-| Platforms | Windows, Linux, macOS (Apple Silicon via MoltenVK) |
+| Platforms | Windows, Linux |
 
-## Domains
+## Data Storage
 
-| Domain | Key functions |
-|--------|--------------|
-| gpu | gpu_fill, gpu_add, gpu_matmul, gpu_sort, gpu_scale |
-| data | read_csv, write_csv, json_parse, read_file, write_file |
-| ml | kmeans, knn_predict, linear_regression, train_test_split |
-| stats | mean, stddev, pearson, sma, ema, sharpe_ratio |
-| media | bmp_decode, gif_encode, h264_decode, wav_write |
-| web | http_get, http_post, http_listen, web_search |
-| gui | window_open, plot_create, canvas, widgets |
-| science | calculus, interpolate, optimize, matrix, physics |
-| ai | tokenizer, sampling, chat, gguf |
+OctoFlow optionally saves your preferences to `~/.octoflow/` (user-level) and `.octoflow/` (per-project).
 
-Plus: crypto, db, devops, sys, terminal, string, collections, compiler, loom.
+Contents: which stdlib modules you use frequently and corrections from previous sessions.
+
+- **No telemetry.** No data is sent anywhere.
+- **No network calls** unless you explicitly use `--allow-net`.
+- **All data stays local** on your machine.
+- **Disable entirely** with `--no-memory` flag — nothing is saved.
+- **Project config** via `OCTOFLOW.md` in your project root (like `.eslintrc` or `pyproject.toml`).
 
 ## Install
 
-Download from [GitHub Releases](https://github.com/octoflow-lang/octoflow/releases):
-- **Windows:** `octoflow-vX.Y.Z-x86_64-windows.zip` — unzip, add to PATH
-- **Linux:** `octoflow-vX.Y.Z-x86_64-linux.tar.gz` — extract, add to PATH
-- **macOS:** `octoflow-vX.Y.Z-aarch64-macos.tar.gz` — extract, add to PATH
+### Download (recommended)
+
+| Platform | File | SHA-256 |
+|----------|------|---------|
+| Windows x64 | [octoflow-v1.2.0-x86_64-windows.zip](https://github.com/octoflow-lang/octoflow/releases/download/v1.2.0/octoflow-v1.2.0-x86_64-windows.zip) | `0f2614a6f34f3e2f` |
+| Linux x64 | [octoflow-v1.2.0-x86_64-linux.tar.gz](https://github.com/octoflow-lang/octoflow/releases/download/v1.2.0/octoflow-v1.2.0-x86_64-linux.tar.gz) | `9276e78ed92f023a` |
+
+Verify: `sha256sum octoflow-*` (full checksums match the above prefixes).
+
+Unzip/extract, add to PATH. No installer needed.
 
 ## Links
 
