@@ -1,0 +1,410 @@
+// test_game.flow — Preflight test for game engine stdlib modules
+//
+// Tests that all modules parse, import correctly, and basic functions work.
+// Does NOT open a window — tests data operations only.
+
+use "sprite"
+use "collision"
+use "input"
+use "tilemap"
+use "camera"
+use "particles"
+use "ecs"
+use "physics2d"
+use "tween"
+use "anim"
+use "noise"
+use "procgen"
+
+// Counters in array (scalars don't propagate across fn calls)
+let mut _tc = [0.0, 0.0]
+
+fn check(name, actual, expected)
+  _tc[1] = _tc[1] + 1.0
+  if actual == expected
+    _tc[0] = _tc[0] + 1.0
+    return 1.0
+  end
+  print("FAIL: {name} — got {actual}, expected {expected}")
+  return 0.0
+end
+
+// ── Sprite tests ──────────────────────────────────────────
+print("1. Sprite System")
+
+let s0 = sprite_create(10.0, 20.0, 32.0, 32.0, 255.0, 0.0, 0.0)
+check("sprite_create returns 0", s0, 0.0)
+check("sprite_x", sprite_x(s0), 10.0)
+check("sprite_y", sprite_y(s0), 20.0)
+check("sprite_w", sprite_w(s0), 32.0)
+check("sprite_h", sprite_h(s0), 32.0)
+
+sprite_set_pos(s0, 50.0, 60.0)
+check("sprite_set_pos x", sprite_x(s0), 50.0)
+check("sprite_set_pos y", sprite_y(s0), 60.0)
+
+sprite_move(s0, 5.0, -3.0)
+check("sprite_move x", sprite_x(s0), 55.0)
+check("sprite_move y", sprite_y(s0), 57.0)
+
+sprite_set_vel(s0, 100.0, 50.0)
+check("sprite_vx", sprite_vx(s0), 100.0)
+check("sprite_vy", sprite_vy(s0), 50.0)
+
+let s1 = sprite_create(200.0, 200.0, 16.0, 16.0, 0.0, 255.0, 0.0)
+check("sprite_create returns 1", s1, 1.0)
+check("sprite_count", sprite_count(), 2.0)
+
+// Update all by dt=0.1
+sprite_update_all(0.1)
+check("sprite_update x", sprite_x(s0), 65.0)
+check("sprite_update y", sprite_y(s0), 62.0)
+
+// ── Collision tests ───────────────────────────────────────
+print("2. Collision Detection")
+
+// Reset s0 to overlap with s1
+sprite_set_pos(s0, 195.0, 195.0)
+check("sprite_collides overlap", sprite_collides(s0, s1), 1.0)
+
+sprite_set_pos(s0, 0.0, 0.0)
+check("sprite_collides no overlap", sprite_collides(s0, s1), 0.0)
+
+// Point in sprite
+check("sprite_contains inside", sprite_contains(s1, 208.0, 208.0), 1.0)
+check("sprite_contains outside", sprite_contains(s1, 0.0, 0.0), 0.0)
+
+// Screen collision
+sprite_set_pos(s0, -5.0, 50.0)
+check("screen_collision left", sprite_screen_collision(s0, 800.0, 600.0), 1.0)
+
+sprite_set_pos(s0, 780.0, 50.0)
+check("screen_collision right", sprite_screen_collision(s0, 800.0, 600.0), 2.0)
+
+sprite_set_pos(s0, 100.0, -5.0)
+check("screen_collision top", sprite_screen_collision(s0, 800.0, 600.0), 3.0)
+
+sprite_set_pos(s0, 100.0, 580.0)
+check("screen_collision bottom", sprite_screen_collision(s0, 800.0, 600.0), 4.0)
+
+sprite_set_pos(s0, 100.0, 100.0)
+check("screen_collision none", sprite_screen_collision(s0, 800.0, 600.0), 0.0)
+
+// Bounce
+sprite_set_pos(s0, -5.0, 100.0)
+sprite_set_vel(s0, -50.0, 0.0)
+let side = sprite_bounce_screen(s0, 800.0, 600.0)
+check("bounce left side", side, 1.0)
+check("bounce left pos", sprite_x(s0), 0.0)
+check("bounce left vel positive", sprite_vx(s0), 50.0)
+
+// ── Tilemap tests ─────────────────────────────────────────
+print("3. Tilemap")
+
+tilemap_create(10.0, 8.0, 32.0)
+check("tilemap_width", tilemap_width(), 10.0)
+check("tilemap_height", tilemap_height(), 8.0)
+check("tilemap_tile_size", tilemap_tile_size(), 32.0)
+
+check("tilemap default empty", tilemap_get(0.0, 0.0), 0.0)
+
+tilemap_set(3.0, 2.0, 1.0)
+check("tilemap_set/get", tilemap_get(3.0, 2.0), 1.0)
+
+tilemap_set(0.0, 0.0, 5.0)
+check("tilemap_set corner", tilemap_get(0.0, 0.0), 5.0)
+
+// Out of bounds returns 0
+check("tilemap oob negative", tilemap_get(-1.0, 0.0), 0.0)
+check("tilemap oob large", tilemap_get(99.0, 0.0), 0.0)
+
+// Solid at (tile at 3,2 is tile_id 1.0 → solid)
+check("tilemap_solid_at occupied", tilemap_solid_at(96.0 + 16.0, 64.0 + 16.0), 1.0)
+check("tilemap_solid_at empty", tilemap_solid_at(32.0 + 16.0, 0.0 + 16.0), 0.0)
+
+// Custom color
+tilemap_set_tile_color(1.0, 200.0, 50.0, 50.0)
+check("tilemap color set", 1.0, 1.0)
+
+// ── Camera tests ──────────────────────────────────────────
+print("4. Camera")
+
+camera_init(800.0, 600.0)
+check("camera_x init", camera_x(), 0.0)
+check("camera_y init", camera_y(), 0.0)
+
+camera_follow(600.0, 500.0)
+camera_update(0.016)
+check("camera moves toward target", camera_x() > 0.0, 1.0)
+
+camera_set_pos(100.0, 50.0)
+check("camera_set_pos x", camera_x(), 100.0)
+check("camera_set_pos y", camera_y(), 50.0)
+
+check("world_to_screen x", camera_world_to_screen_x(150.0), 50.0)
+check("world_to_screen y", camera_world_to_screen_y(80.0), 30.0)
+
+// ── Particle tests ────────────────────────────────────────
+print("5. Particles")
+
+check("particle_count init", particle_count(), 0.0)
+
+particle_emit(100.0, 100.0, 5.0, 10.0, 50.0, 2.0, 255.0, 128.0, 0.0, 8.0)
+check("particle_emit count", particle_count(), 5.0)
+
+// Update with gravity
+particle_update(0.1, 100.0)
+check("particles survive update", particle_count(), 5.0)
+
+// Update with large dt to kill particles
+particle_update(3.0, 0.0)
+check("particles die after lifetime", particle_count(), 0.0)
+
+// Clear
+particle_emit(100.0, 100.0, 10.0, 5.0, 30.0, 5.0, 0.0, 255.0, 0.0, 4.0)
+check("emit 10 particles", particle_count(), 10.0)
+particle_clear()
+check("particle_clear", particle_count(), 0.0)
+
+// ── ECS tests ─────────────────────────────────────────────
+print("6. Entity Component System")
+
+let mut ecs_ids = []
+let mut pos_eid = []
+let mut pos_x = []
+let mut pos_y = []
+let mut vel_eid = []
+let mut vel_vx = []
+let mut vel_vy = []
+let mut hp_eid = []
+let mut hp_val = []
+
+let next = ecs_new()
+check("ecs_new", next, 0.0)
+
+let next2 = ecs_create(ecs_ids, next)
+check("ecs_create first", next2, 1.0)
+check("ecs_ids len", len(ecs_ids), 1.0)
+
+let next3 = ecs_create(ecs_ids, next2)
+check("ecs_create second", next3, 2.0)
+
+// FIX-01: ecs_add_pos delegates to ecs_add_pos_at with (0,0)
+let pi0 = ecs_add_pos(0.0, pos_eid, pos_x, pos_y)
+check("ecs_add_pos index", pi0, 0.0)
+check("ecs_add_pos x=0", pos_x[0], 0.0)
+check("ecs_add_pos y=0", pos_y[0], 0.0)
+
+let pi1 = ecs_add_pos_at(1.0, pos_eid, pos_x, pos_y, 10.0, 20.0)
+check("ecs_add_pos_at index", pi1, 1.0)
+check("ecs_add_pos_at x", pos_x[1], 10.0)
+check("ecs_add_pos_at y", pos_y[1], 20.0)
+
+// Find
+check("ecs_find 0", ecs_find(pos_eid, 0.0), 0.0)
+check("ecs_find 1", ecs_find(pos_eid, 1.0), 1.0)
+check("ecs_find missing", ecs_find(pos_eid, 99.0), -1.0)
+
+// Velocity
+ecs_add_vel(0.0, vel_eid, vel_vx, vel_vy, 5.0, -3.0)
+check("ecs_add_vel", len(vel_eid), 1.0)
+
+// Physics update: entity 0 moves by vel*dt
+ecs_update_physics(pos_eid, pos_x, pos_y, vel_eid, vel_vx, vel_vy, 1.0)
+check("ecs_physics x", pos_x[0], 5.0)
+check("ecs_physics y", pos_y[0], -3.0)
+
+// HP
+ecs_add_hp(0.0, hp_eid, hp_val, 100.0)
+check("ecs_add_hp", hp_val[0], 100.0)
+
+let dmg = ecs_damage(0.0, hp_eid, hp_val, 30.0)
+check("ecs_damage", dmg, 70.0)
+check("ecs_alive_count", ecs_alive_count(hp_eid, hp_val), 1.0)
+
+// Get position
+let mut result = [0.0, 0.0]
+ecs_get_pos(1.0, pos_eid, pos_x, pos_y, result)
+check("ecs_get_pos x", result[0], 10.0)
+check("ecs_get_pos y", result[1], 20.0)
+
+// FIX-02: Removal
+let rem = ecs_remove(ecs_ids, 0.0)
+check("ecs_remove found", rem, 1.0)
+check("ecs_ids after remove", len(ecs_ids), 1.0)
+
+let rem2 = ecs_remove(ecs_ids, 99.0)
+check("ecs_remove missing", rem2, 0.0)
+
+let rem_pos = ecs_remove_pos(0.0, pos_eid, pos_x, pos_y)
+check("ecs_remove_pos", rem_pos, 1.0)
+check("pos_eid after remove", len(pos_eid), 1.0)
+
+// ── Physics2D tests ───────────────────────────────────────
+print("7. Physics2D")
+
+let mut bx = []
+let mut by = []
+let mut bvx = []
+let mut bvy = []
+let mut bmass = []
+let mut bradius = []
+
+let b0 = phys_add_body(bx, by, bvx, bvy, bmass, bradius, 10.0, 10.0, 5.0, 0.0, 1.0, 5.0)
+check("phys_add_body", b0, 0.0)
+check("bx[0]", bx[0], 10.0)
+
+let b1 = phys_add_body(bx, by, bvx, bvy, bmass, bradius, 50.0, 10.0, -3.0, 0.0, 2.0, 5.0)
+check("phys_add_body second", b1, 1.0)
+
+// Integrate
+phys_integrate(bx, by, bvx, bvy, 1.0)
+check("phys_integrate x", bx[0], 15.0)
+check("phys_integrate y", by[0], 10.0)
+
+// Gravity
+phys_gravity(by, bvy, bmass, 1.0, 10.0)
+check("phys_gravity vy", bvy[0], 10.0)
+
+// Dist squared
+let d2 = phys_dist_sq(0.0, 0.0, 3.0, 4.0)
+check("phys_dist_sq", d2, 25.0)
+
+// Kinetic energy
+let mut test_vx = [3.0]
+let mut test_vy = [4.0]
+let mut test_m = [2.0]
+let ke = phys_kinetic_energy(test_vx, test_vy, test_m)
+check("phys_kinetic_energy", ke, 25.0)
+
+// ── Tween tests ───────────────────────────────────────────
+print("8. Tweening")
+
+// Linear tween from 0 to 100 over 1.0 sec
+let tw0 = tween_create(0.0, 100.0, 1.0, EASE_LINEAR)
+check("tween_create", tw0, 0.0)
+check("tween_done init", tween_done(tw0), 0.0)
+
+// Update halfway
+let val1 = tween_update(tw0, 0.5)
+check("tween linear 50%", val1, 50.0)
+
+// Update to completion
+let val2 = tween_update(tw0, 0.5)
+check("tween linear 100%", val2, 100.0)
+check("tween_done complete", tween_done(tw0), 1.0)
+
+// Reset and test easing
+tween_reset(tw0)
+check("tween_reset", tween_done(tw0), 0.0)
+
+// Test ease_in_quad
+tween_set_easing(tw0, EASE_IN_QUAD)
+let val3 = tween_update(tw0, 0.5)
+check("tween ease_in_quad 50%", val3, 25.0)
+
+// Reverse
+tween_reset(tw0)
+tween_set_easing(tw0, EASE_LINEAR)
+tween_update(tw0, 0.5)
+tween_reverse(tw0)
+let val4 = tween_update(tw0, 0.25)
+check("tween reverse", val4, 25.0)
+
+// Easing function tests
+check("ease_linear 0.5", ease_linear(0.5), 0.5)
+check("ease_in_quad 0", ease_in_quad(0.0), 0.0)
+check("ease_in_quad 1", ease_in_quad(1.0), 1.0)
+check("ease_out_quad 1", ease_out_quad(1.0), 1.0)
+check("ease_out_bounce 1", ease_out_bounce(1.0), 1.0)
+check("ease_in_cubic 0", ease_in_cubic(0.0), 0.0)
+check("ease_out_cubic 1", ease_out_cubic(1.0), 1.0)
+
+// ── Animation tests ───────────────────────────────────────
+print("9. Animation")
+
+let a0 = anim_create(0.0, 3.0, 0.1)
+check("anim_create", a0, 0.0)
+check("anim_frame init", anim_frame(a0), 0.0)
+check("anim_done init", anim_done(a0), 0.0)
+
+// Not playing yet
+anim_update(a0, 0.5)
+check("anim not playing", anim_frame(a0), 0.0)
+
+// Start playing
+anim_play(a0)
+anim_update(a0, 0.1)
+check("anim frame 1", anim_frame(a0), 1.0)
+
+anim_update(a0, 0.1)
+check("anim frame 2", anim_frame(a0), 2.0)
+
+anim_update(a0, 0.1)
+check("anim frame 3", anim_frame(a0), 3.0)
+
+// Loop back to start
+anim_update(a0, 0.1)
+check("anim loop", anim_frame(a0), 0.0)
+
+// Non-looping
+anim_set_loop(a0, 0.0)
+anim_reset(a0)
+anim_play(a0)
+anim_update(a0, 0.1)
+anim_update(a0, 0.1)
+anim_update(a0, 0.1)
+anim_update(a0, 0.1)
+check("anim no-loop stops", anim_frame(a0), 3.0)
+check("anim no-loop done", anim_done(a0), 1.0)
+
+// ── Noise tests ───────────────────────────────────────────
+print("10. Noise")
+
+let vnoise = noise_value_2d(4.0, 4.0, 2.0, 42.0)
+check("value noise length", len(vnoise), 16.0)
+// Values should be in [0,1]
+let mut noise_valid = 1.0
+let mut ni = 0.0
+while ni < 16.0
+  if vnoise[int(ni)] < 0.0
+    noise_valid = 0.0
+  end
+  if vnoise[int(ni)] > 1.0
+    noise_valid = 0.0
+  end
+  ni = ni + 1.0
+end
+check("value noise range [0,1]", noise_valid, 1.0)
+
+let pnoise = noise_perlin_2d(4.0, 4.0, 2.0, 2.0, 42.0)
+check("perlin noise length", len(pnoise), 16.0)
+
+let fbm = noise_fbm_2d(4.0, 4.0, 2.0, 3.0, 2.0, 0.5, 42.0)
+check("fbm noise length", len(fbm), 16.0)
+
+// ── Procgen tests ─────────────────────────────────────────
+print("11. Procedural Generation")
+
+let cave = cave_generate(10.0, 8.0, 0.45, 3.0)
+check("cave_generate length", len(cave), 80.0)
+// Borders should be solid
+check("cave border top-left", cave[0], 1.0)
+check("cave border top-right", cave[9], 1.0)
+check("cave border bot-left", cave[70], 1.0)
+
+let dungeon = dungeon_generate(20.0, 15.0, 3.0, 3.0, 6.0)
+check("dungeon_generate length", len(dungeon), 300.0)
+
+let maze = maze_generate(11.0, 11.0, 42.0)
+check("maze_generate length", len(maze), 121.0)
+// Start cell (1,1) should be open
+check("maze start open", maze[int(1.0 * 11.0 + 1.0)], 0.0)
+// Corner (0,0) should be wall
+check("maze corner wall", maze[0], 1.0)
+
+// ── Results ───────────────────────────────────────────────
+print("")
+let p = _tc[0]
+let t = _tc[1]
+print("=== Results: {p}/{t} passed ===")

@@ -1,0 +1,86 @@
+// stdlib/game/anim.flow — Frame-based sprite animation
+//
+// Functions: anim_create, anim_play, anim_stop, anim_set_loop,
+//            anim_update, anim_frame, anim_done
+//
+// Animations cycle through a range of frame indices at a given rate.
+// Use anim_frame(id) to get the current frame index for sprite sheet lookup.
+
+// Animation storage: parallel arrays
+// [start_frame, end_frame, frame_time, elapsed, current_frame, playing, looping, done]
+let mut _an_start = []
+let mut _an_end = []
+let mut _an_ftime = []
+let mut _an_elapsed = []
+let mut _an_current = []
+let mut _an_playing = []
+let mut _an_looping = []
+let mut _an_done = []
+
+fn anim_create(start_frame, end_frame, frame_time)
+  let id = len(_an_start)
+  push(_an_start, start_frame)
+  push(_an_end, end_frame)
+  push(_an_ftime, frame_time)
+  push(_an_elapsed, 0.0)
+  push(_an_current, start_frame)
+  push(_an_playing, 0.0)
+  push(_an_looping, 1.0)
+  push(_an_done, 0.0)
+  return id
+end
+
+fn anim_play(id)
+  let i = int(id)
+  _an_playing[i] = 1.0
+  _an_done[i] = 0.0
+  return 0.0
+end
+
+fn anim_stop(id)
+  _an_playing[int(id)] = 0.0
+  return 0.0
+end
+
+fn anim_set_loop(id, flag)
+  _an_looping[int(id)] = flag
+  return 0.0
+end
+
+fn anim_update(id, dt)
+  let i = int(id)
+  if _an_playing[i] == 0.0
+    return _an_current[i]
+  end
+  _an_elapsed[i] = _an_elapsed[i] + dt
+  if _an_elapsed[i] >= _an_ftime[i]
+    _an_elapsed[i] = 0.0
+    _an_current[i] = _an_current[i] + 1.0
+    if _an_current[i] > _an_end[i]
+      if _an_looping[i] == 1.0
+        _an_current[i] = _an_start[i]
+      else
+        _an_current[i] = _an_end[i]
+        _an_playing[i] = 0.0
+        _an_done[i] = 1.0
+      end
+    end
+  end
+  return _an_current[i]
+end
+
+fn anim_frame(id)
+  return _an_current[int(id)]
+end
+
+fn anim_done(id)
+  return _an_done[int(id)]
+end
+
+fn anim_reset(id)
+  let i = int(id)
+  _an_current[i] = _an_start[i]
+  _an_elapsed[i] = 0.0
+  _an_done[i] = 0.0
+  return 0.0
+end

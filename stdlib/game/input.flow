@@ -1,0 +1,90 @@
+// stdlib/game/input.flow — Keyboard and mouse input helpers
+//
+// Functions: input_update, input_key_down (one-shot), input_key_held (continuous),
+//            input_mouse_x, input_mouse_y, input_mouse_clicked, input_mouse_down,
+//            input_left/right/up/down/space/escape, input_last_key
+//
+// Two key detection modes:
+//   input_key_down(key)  — true only on the frame the key is first pressed
+//   input_key_held(key)  — true while the key is physically held (R-08 builtin)
+//
+// Reads from _gs[]/_gss[] (set by gui_update) and window_key_held() builtin.
+// Call input_update() at the start of each frame after game_frame_start().
+
+use "gui/gui"
+
+// Per-frame input state in array (scalars don't propagate across fn calls)
+// [0]=key_pressed_this_frame, [1]=mx, [2]=my, [3]=click, [4]=down
+let mut _input = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+fn input_update()
+  _input[0] = _gs[7]
+  _input[1] = _gs[3]
+  _input[2] = _gs[4]
+  _input[3] = _gs[6]
+  _input[4] = _gs[5]
+  return 0.0
+end
+
+// One-shot: true only on the frame the key was pressed
+fn input_key_down(key_name)
+  if _input[0] == 1.0
+    if _gss[0] == key_name
+      return 1.0
+    end
+  end
+  return 0.0
+end
+
+// Continuous: true while key is physically held down (R-08 builtin)
+fn input_key_held(key_name)
+  return window_key_held(key_name)
+end
+
+fn input_mouse_x()
+  return _input[1]
+end
+
+fn input_mouse_y()
+  return _input[2]
+end
+
+fn input_mouse_clicked()
+  return _input[3]
+end
+
+fn input_mouse_down()
+  return gui_mouse_down()
+end
+
+// Arrow key helpers (continuous — for movement)
+fn input_left()
+  return window_key_held("left")
+end
+
+fn input_right()
+  return window_key_held("right")
+end
+
+fn input_up()
+  return window_key_held("up")
+end
+
+fn input_down()
+  return window_key_held("down")
+end
+
+fn input_space()
+  return input_key_down("space")
+end
+
+fn input_escape()
+  return input_key_down("escape")
+end
+
+fn input_last_key()
+  if _input[0] == 1.0
+    return _gss[0]
+  end
+  return " "
+end

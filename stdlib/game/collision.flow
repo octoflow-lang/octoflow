@@ -1,0 +1,118 @@
+// stdlib/game/collision.flow — Collision detection for sprites
+//
+// Functions: sprite_collides, sprite_contains, sprite_distance_sq,
+//            sprite_circle_collides, sprite_screen_collision,
+//            sprite_bounce_screen
+//
+// All functions operate on sprite data from sprite.flow parallel arrays.
+// AABB and circle collision, point-in-sprite, screen bounds.
+
+use "sprite"
+
+// AABB collision between two sprites
+fn sprite_collides(id_a, id_b)
+  let a = int(id_a)
+  let b = int(id_b)
+  let ax = _spr_x[a]
+  let ay = _spr_y[a]
+  let aw = _spr_w[a]
+  let ah = _spr_h[a]
+  let bx = _spr_x[b]
+  let by = _spr_y[b]
+  let bw = _spr_w[b]
+  let bh = _spr_h[b]
+  if ax + aw <= bx
+    return 0.0
+  end
+  if bx + bw <= ax
+    return 0.0
+  end
+  if ay + ah <= by
+    return 0.0
+  end
+  if by + bh <= ay
+    return 0.0
+  end
+  return 1.0
+end
+
+// Point inside sprite
+fn sprite_contains(id, px, py)
+  let i = int(id)
+  if px >= _spr_x[i]
+    if px <= _spr_x[i] + _spr_w[i]
+      if py >= _spr_y[i]
+        if py <= _spr_y[i] + _spr_h[i]
+          return 1.0
+        end
+      end
+    end
+  end
+  return 0.0
+end
+
+// Distance squared between sprite centers
+fn sprite_distance_sq(id_a, id_b)
+  let a = int(id_a)
+  let b = int(id_b)
+  let cx_a = _spr_x[a] + _spr_w[a] / 2.0
+  let cy_a = _spr_y[a] + _spr_h[a] / 2.0
+  let cx_b = _spr_x[b] + _spr_w[b] / 2.0
+  let cy_b = _spr_y[b] + _spr_h[b] / 2.0
+  let dx = cx_a - cx_b
+  let dy = cy_a - cy_b
+  return dx * dx + dy * dy
+end
+
+// Circle collision (distance squared < (r1+r2) squared)
+fn sprite_circle_collides(id_a, id_b)
+  let a = int(id_a)
+  let b = int(id_b)
+  let r_a = _spr_w[a] / 2.0
+  let r_b = _spr_w[b] / 2.0
+  let dist_sq = sprite_distance_sq(id_a, id_b)
+  let radii = r_a + r_b
+  if dist_sq <= radii * radii
+    return 1.0
+  end
+  return 0.0
+end
+
+// Check sprite against screen bounds
+// Returns: 0=none, 1=left, 2=right, 3=top, 4=bottom
+fn sprite_screen_collision(id, screen_w, screen_h)
+  let i = int(id)
+  if _spr_x[i] <= 0.0
+    return 1.0
+  end
+  if _spr_x[i] + _spr_w[i] >= screen_w
+    return 2.0
+  end
+  if _spr_y[i] <= 0.0
+    return 3.0
+  end
+  if _spr_y[i] + _spr_h[i] >= screen_h
+    return 4.0
+  end
+  return 0.0
+end
+
+// Bounce sprite off screen edges
+fn sprite_bounce_screen(id, screen_w, screen_h)
+  let side = sprite_screen_collision(id, screen_w, screen_h)
+  let i = int(id)
+  if side == 1.0
+    _spr_x[i] = 0.0
+    _spr_vx[i] = abs(_spr_vx[i])
+  elif side == 2.0
+    _spr_x[i] = screen_w - _spr_w[i]
+    _spr_vx[i] = 0.0 - abs(_spr_vx[i])
+  elif side == 3.0
+    _spr_y[i] = 0.0
+    _spr_vy[i] = abs(_spr_vy[i])
+  elif side == 4.0
+    _spr_y[i] = screen_h - _spr_h[i]
+    _spr_vy[i] = 0.0 - abs(_spr_vy[i])
+  end
+  return side
+end

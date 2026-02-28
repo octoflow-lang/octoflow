@@ -1,0 +1,307 @@
+// stdlib/game/procgen.flow — Procedural level generation
+//
+// Functions: cave_generate, cave_to_tilemap, dungeon_generate, maze_generate
+//
+// Cellular automata caves, BSP dungeons, and recursive backtracker mazes.
+// All operate on flat arrays that can be converted to tilemaps.
+
+use "tilemap"
+
+// ── Cellular Automata Cave ────────────────────────────────
+
+fn cave_generate(width, height, fill_ratio, smooth_steps)
+  let total = width * height
+  let mut grid = []
+
+  // Random fill
+  let mut i = 0.0
+  while i < total
+    if random() < fill_ratio
+      push(grid, 1.0)
+    else
+      push(grid, 0.0)
+    end
+    i = i + 1.0
+  end
+
+  // Always make borders solid
+  let mut bx = 0.0
+  while bx < width
+    grid[int(bx)] = 1.0
+    grid[int((height - 1.0) * width + bx)] = 1.0
+    bx = bx + 1.0
+  end
+  let mut by = 0.0
+  while by < height
+    grid[int(by * width)] = 1.0
+    grid[int(by * width + width - 1.0)] = 1.0
+    by = by + 1.0
+  end
+
+  // Smoothing passes
+  let mut step = 0.0
+  while step < smooth_steps
+    let mut new_grid = []
+    let mut y = 0.0
+    while y < height
+      let mut x = 0.0
+      while x < width
+        let walls = _cave_count_neighbors(grid, x, y, width, height)
+        if walls >= 5.0
+          push(new_grid, 1.0)
+        else
+          push(new_grid, 0.0)
+        end
+        x = x + 1.0
+      end
+      y = y + 1.0
+    end
+    // Copy new_grid to grid
+    let mut ci = 0.0
+    while ci < total
+      grid[int(ci)] = new_grid[int(ci)]
+      ci = ci + 1.0
+    end
+    step = step + 1.0
+  end
+
+  return grid
+end
+
+fn _cave_count_neighbors(grid, cx, cy, w, h)
+  let mut count = 0.0
+  let mut dy = -1.0
+  while dy <= 1.0
+    let mut dx = -1.0
+    while dx <= 1.0
+      if dx == 0.0 && dy == 0.0
+        dx = dx + 1.0
+      end
+      let nx = cx + dx
+      let ny = cy + dy
+      if nx < 0.0
+        count = count + 1.0
+      elif nx >= w
+        count = count + 1.0
+      elif ny < 0.0
+        count = count + 1.0
+      elif ny >= h
+        count = count + 1.0
+      elif grid[int(ny * w + nx)] == 1.0
+        count = count + 1.0
+      end
+      dx = dx + 1.0
+    end
+    dy = dy + 1.0
+  end
+  return count
+end
+
+fn cave_to_tilemap(cave, width, height, tile_wall, tile_floor)
+  tilemap_create(width, height, tilemap_tile_size())
+  let total = width * height
+  let mut i = 0.0
+  while i < total
+    let x = i - floor(i / width) * width
+    let y = floor(i / width)
+    if cave[int(i)] == 1.0
+      tilemap_set(x, y, tile_wall)
+    else
+      tilemap_set(x, y, tile_floor)
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// ── BSP Dungeon ───────────────────────────────────────────
+
+fn dungeon_generate(width, height, room_count, room_min, room_max)
+  let total = width * height
+
+  // Start with all walls
+  let mut grid = []
+  let mut i = 0.0
+  while i < total
+    push(grid, 1.0)
+    i = i + 1.0
+  end
+
+  // Place random rooms
+  let mut rooms_placed = 0.0
+  let mut attempts = 0.0
+  // Store room data: [x, y, w, h] per room
+  let mut room_cx = []
+  let mut room_cy = []
+
+  while rooms_placed < room_count && attempts < room_count * 10.0
+    let rw = floor(random() * (room_max - room_min) + room_min)
+    let rh = floor(random() * (room_max - room_min) + room_min)
+    let rx = floor(random() * (width - rw - 2.0)) + 1.0
+    let ry = floor(random() * (height - rh - 2.0)) + 1.0
+
+    // Check for overlap (simple: check if area is all walls)
+    let mut overlap = 0.0
+    let mut cy = ry - 1.0
+    while cy <= ry + rh && overlap == 0.0
+      let mut cx = rx - 1.0
+      while cx <= rx + rw && overlap == 0.0
+        if cx >= 0.0 && cx < width && cy >= 0.0 && cy < height
+          if grid[int(cy * width + cx)] == 0.0
+            overlap = 1.0
+          end
+        end
+        cx = cx + 1.0
+      end
+      cy = cy + 1.0
+    end
+
+    if overlap == 0.0
+      // Carve room
+      let mut ry2 = ry
+      while ry2 < ry + rh
+        let mut rx2 = rx
+        while rx2 < rx + rw
+          grid[int(ry2 * width + rx2)] = 0.0
+          rx2 = rx2 + 1.0
+        end
+        ry2 = ry2 + 1.0
+      end
+      push(room_cx, floor(rx + rw / 2.0))
+      push(room_cy, floor(ry + rh / 2.0))
+      rooms_placed = rooms_placed + 1.0
+    end
+    attempts = attempts + 1.0
+  end
+
+  // Connect rooms with corridors (connect each room to previous)
+  let mut ri = 1.0
+  while ri < len(room_cx)
+    let rii = int(ri)
+    let prev = int(ri - 1.0)
+    let x1 = room_cx[prev]
+    let y1 = room_cy[prev]
+    let x2 = room_cx[rii]
+    let y2 = room_cy[rii]
+    // Horizontal then vertical corridor
+    let mut cx = x1
+    let step_x = 1.0
+    if x2 < x1
+      let step_x = -1.0
+    end
+    while cx != x2
+      if cx >= 0.0 && cx < width
+        grid[int(y1 * width + cx)] = 0.0
+      end
+      if x2 > x1
+        cx = cx + 1.0
+      else
+        cx = cx - 1.0
+      end
+    end
+    let mut cy2 = y1
+    while cy2 != y2
+      if cy2 >= 0.0 && cy2 < height
+        grid[int(cy2 * width + x2)] = 0.0
+      end
+      if y2 > y1
+        cy2 = cy2 + 1.0
+      else
+        cy2 = cy2 - 1.0
+      end
+    end
+    ri = ri + 1.0
+  end
+
+  return grid
+end
+
+// ── Maze Generator ────────────────────────────────────────
+
+fn maze_generate(width, height, seed)
+  // Recursive backtracker maze using an explicit stack
+  // Width and height should be odd for proper maze walls
+  let total = width * height
+  let mut grid = []
+  let mut i = 0.0
+  while i < total
+    push(grid, 1.0)
+    i = i + 1.0
+  end
+
+  // Stack for backtracking
+  let mut stack_x = []
+  let mut stack_y = []
+
+  // Start at (1,1)
+  let start_x = 1.0
+  let start_y = 1.0
+  grid[int(start_y * width + start_x)] = 0.0
+  push(stack_x, start_x)
+  push(stack_y, start_y)
+
+  while len(stack_x) > 0.0
+    let cx = stack_x[int(len(stack_x) - 1.0)]
+    let cy = stack_y[int(len(stack_y) - 1.0)]
+
+    // Find unvisited neighbors (2 cells away)
+    let mut dirs = []
+    // Check north
+    if cy >= 3.0
+      if grid[int((cy - 2.0) * width + cx)] == 1.0
+        push(dirs, 0.0)
+      end
+    end
+    // Check south
+    if cy + 2.0 < height
+      if grid[int((cy + 2.0) * width + cx)] == 1.0
+        push(dirs, 1.0)
+      end
+    end
+    // Check west
+    if cx >= 3.0
+      if grid[int(cy * width + cx - 2.0)] == 1.0
+        push(dirs, 2.0)
+      end
+    end
+    // Check east
+    if cx + 2.0 < width
+      if grid[int(cy * width + cx + 2.0)] == 1.0
+        push(dirs, 3.0)
+      end
+    end
+
+    if len(dirs) > 0.0
+      // Pick random direction
+      let di = int(floor(random() * len(dirs)))
+      let dir = dirs[di]
+      if dir == 0.0
+        grid[int((cy - 1.0) * width + cx)] = 0.0
+        grid[int((cy - 2.0) * width + cx)] = 0.0
+        push(stack_x, cx)
+        push(stack_y, cy - 2.0)
+      elif dir == 1.0
+        grid[int((cy + 1.0) * width + cx)] = 0.0
+        grid[int((cy + 2.0) * width + cx)] = 0.0
+        push(stack_x, cx)
+        push(stack_y, cy + 2.0)
+      elif dir == 2.0
+        grid[int(cy * width + cx - 1.0)] = 0.0
+        grid[int(cy * width + cx - 2.0)] = 0.0
+        push(stack_x, cx - 2.0)
+        push(stack_y, cy)
+      elif dir == 3.0
+        grid[int(cy * width + cx + 1.0)] = 0.0
+        grid[int(cy * width + cx + 2.0)] = 0.0
+        push(stack_x, cx + 2.0)
+        push(stack_y, cy)
+      end
+    else
+      // Backtrack
+      pop(stack_x)
+      pop(stack_y)
+    end
+  end
+
+  return grid
+end

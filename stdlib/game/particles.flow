@@ -1,0 +1,121 @@
+// stdlib/game/particles.flow — Emit/update/render particle system
+//
+// Functions: particle_emit, particle_update, particle_render, particle_count,
+//            particle_clear
+//
+// Particles are colored squares that move, fade, and shrink over their lifetime.
+// Dead particles are swap-removed for O(1) deletion.
+// Rendering via gui_canvas_fill.
+
+use "gui/gui"
+use "gui/canvas"
+
+let mut _part_x = []
+let mut _part_y = []
+let mut _part_vx = []
+let mut _part_vy = []
+let mut _part_life = []
+let mut _part_max_life = []
+let mut _part_r = []
+let mut _part_g = []
+let mut _part_b = []
+let mut _part_size = []
+
+fn particle_emit(x, y, count, spread, speed, life, r, g, b, size)
+  let mut i = 0.0
+  while i < count
+    let angle = random() * 6.28318
+    let spd = speed * (0.5 + random() * 0.5)
+    push(_part_x, x + (random() - 0.5) * spread)
+    push(_part_y, y + (random() - 0.5) * spread)
+    push(_part_vx, cos(angle) * spd)
+    push(_part_vy, sin(angle) * spd)
+    push(_part_life, life)
+    push(_part_max_life, life)
+    push(_part_r, r)
+    push(_part_g, g)
+    push(_part_b, b)
+    push(_part_size, size)
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn particle_update(dt, gravity)
+  let count = len(_part_x)
+  let mut i = count - 1.0
+  while i >= 0.0
+    let ii = int(i)
+    _part_life[ii] = _part_life[ii] - dt
+    if _part_life[ii] <= 0.0
+      // Swap-remove dead particle with last element
+      let last = int(len(_part_x) - 1.0)
+      if ii != last
+        _part_x[ii] = _part_x[last]
+        _part_y[ii] = _part_y[last]
+        _part_vx[ii] = _part_vx[last]
+        _part_vy[ii] = _part_vy[last]
+        _part_life[ii] = _part_life[last]
+        _part_max_life[ii] = _part_max_life[last]
+        _part_r[ii] = _part_r[last]
+        _part_g[ii] = _part_g[last]
+        _part_b[ii] = _part_b[last]
+        _part_size[ii] = _part_size[last]
+      end
+      pop(_part_x)
+      pop(_part_y)
+      pop(_part_vx)
+      pop(_part_vy)
+      pop(_part_life)
+      pop(_part_max_life)
+      pop(_part_r)
+      pop(_part_g)
+      pop(_part_b)
+      pop(_part_size)
+    else
+      _part_x[ii] = _part_x[ii] + _part_vx[ii] * dt
+      _part_y[ii] = _part_y[ii] + _part_vy[ii] * dt
+      _part_vy[ii] = _part_vy[ii] + gravity * dt
+    end
+    i = i - 1.0
+  end
+  return 0.0
+end
+
+fn particle_render(canvas_id)
+  let count = len(_part_x)
+  let mut i = 0.0
+  while i < count
+    let ii = int(i)
+    let alpha = _part_life[ii] / _part_max_life[ii]
+    let s = _part_size[ii] * alpha
+    let px = _part_x[ii] - s / 2.0
+    let py = _part_y[ii] - s / 2.0
+    let pr = _part_r[ii] * alpha
+    let pg = _part_g[ii] * alpha
+    let pb = _part_b[ii] * alpha
+    gui_canvas_fill(canvas_id, px, py, s, s, pr, pg, pb)
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn particle_count()
+  return len(_part_x)
+end
+
+fn particle_clear()
+  while len(_part_x) > 0.0
+    pop(_part_x)
+    pop(_part_y)
+    pop(_part_vx)
+    pop(_part_vy)
+    pop(_part_life)
+    pop(_part_max_life)
+    pop(_part_r)
+    pop(_part_g)
+    pop(_part_b)
+    pop(_part_size)
+  end
+  return 0.0
+end

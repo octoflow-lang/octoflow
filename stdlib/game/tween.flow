@@ -1,0 +1,252 @@
+// stdlib/game/tween.flow — Tweening system with easing functions
+//
+// Functions: tween_create, tween_update, tween_done, tween_reset,
+//            tween_reverse, tween_value, tween_set_easing
+//
+// Easing: ease_linear, ease_in_quad, ease_out_quad, ease_in_out_quad,
+//         ease_in_cubic, ease_out_cubic, ease_in_out_cubic,
+//         ease_in_elastic, ease_out_elastic, ease_out_bounce,
+//         ease_in_back, ease_out_back
+//
+// Tweens interpolate a value from start to target over a duration.
+// Call tween_update(id, dt) each frame to advance.
+
+// Tween storage: parallel arrays
+// Each tween: start, target, duration, elapsed, easing_type, direction
+let mut _tw_start = []
+let mut _tw_target = []
+let mut _tw_dur = []
+let mut _tw_elapsed = []
+let mut _tw_easing = []
+let mut _tw_dir = []
+
+// Easing type constants
+let EASE_LINEAR = 0.0
+let EASE_IN_QUAD = 1.0
+let EASE_OUT_QUAD = 2.0
+let EASE_IN_OUT_QUAD = 3.0
+let EASE_IN_CUBIC = 4.0
+let EASE_OUT_CUBIC = 5.0
+let EASE_IN_OUT_CUBIC = 6.0
+let EASE_IN_ELASTIC = 7.0
+let EASE_OUT_ELASTIC = 8.0
+let EASE_OUT_BOUNCE = 9.0
+let EASE_IN_BACK = 10.0
+let EASE_OUT_BACK = 11.0
+
+// ── Easing functions ──────────────────────────────────────
+
+fn ease_linear(t)
+  return t
+end
+
+fn ease_in_quad(t)
+  return t * t
+end
+
+fn ease_out_quad(t)
+  return t * (2.0 - t)
+end
+
+fn ease_in_out_quad(t)
+  if t < 0.5
+    return 2.0 * t * t
+  end
+  return -1.0 + (4.0 - 2.0 * t) * t
+end
+
+fn ease_in_cubic(t)
+  return t * t * t
+end
+
+fn ease_out_cubic(t)
+  let t1 = t - 1.0
+  return t1 * t1 * t1 + 1.0
+end
+
+fn ease_in_out_cubic(t)
+  if t < 0.5
+    return 4.0 * t * t * t
+  end
+  let t1 = 2.0 * t - 2.0
+  return 0.5 * t1 * t1 * t1 + 1.0
+end
+
+fn ease_in_elastic(t)
+  if t == 0.0
+    return 0.0
+  end
+  if t == 1.0
+    return 1.0
+  end
+  let p = 0.3
+  let s = p / 4.0
+  let t1 = t - 1.0
+  let pow2 = 1.0
+  let mut ii = 0.0
+  while ii < 10.0 * t1 * -1.0
+    pow2 = pow2 * 2.0
+    ii = ii + 1.0
+  end
+  return 0.0 - pow2 * sin((t1 - s) * 6.28318 / p)
+end
+
+fn ease_out_elastic(t)
+  if t == 0.0
+    return 0.0
+  end
+  if t == 1.0
+    return 1.0
+  end
+  let p = 0.3
+  let s = p / 4.0
+  let pow2 = 1.0
+  let mut ii = 0.0
+  while ii < 10.0 * t * -1.0
+    pow2 = pow2 * 2.0
+    ii = ii + 1.0
+  end
+  return pow2 * sin((t - s) * 6.28318 / p) + 1.0
+end
+
+fn ease_out_bounce(t)
+  if t < 1.0 / 2.75
+    return 7.5625 * t * t
+  elif t < 2.0 / 2.75
+    let t2 = t - 1.5 / 2.75
+    return 7.5625 * t2 * t2 + 0.75
+  elif t < 2.5 / 2.75
+    let t2 = t - 2.25 / 2.75
+    return 7.5625 * t2 * t2 + 0.9375
+  end
+  let t2 = t - 2.625 / 2.75
+  return 7.5625 * t2 * t2 + 0.984375
+end
+
+fn ease_in_back(t)
+  let s = 1.70158
+  return t * t * ((s + 1.0) * t - s)
+end
+
+fn ease_out_back(t)
+  let s = 1.70158
+  let t1 = t - 1.0
+  return t1 * t1 * ((s + 1.0) * t1 + s) + 1.0
+end
+
+// ── Apply easing by type ──────────────────────────────────
+
+fn _tw_apply_easing(t, easing_type)
+  if easing_type == 1.0
+    return ease_in_quad(t)
+  elif easing_type == 2.0
+    return ease_out_quad(t)
+  elif easing_type == 3.0
+    return ease_in_out_quad(t)
+  elif easing_type == 4.0
+    return ease_in_cubic(t)
+  elif easing_type == 5.0
+    return ease_out_cubic(t)
+  elif easing_type == 6.0
+    return ease_in_out_cubic(t)
+  elif easing_type == 7.0
+    return ease_in_elastic(t)
+  elif easing_type == 8.0
+    return ease_out_elastic(t)
+  elif easing_type == 9.0
+    return ease_out_bounce(t)
+  elif easing_type == 10.0
+    return ease_in_back(t)
+  elif easing_type == 11.0
+    return ease_out_back(t)
+  end
+  return t
+end
+
+// ── Tween API ─────────────────────────────────────────────
+
+fn tween_create(start, target, duration, easing)
+  let id = len(_tw_start)
+  push(_tw_start, start)
+  push(_tw_target, target)
+  push(_tw_dur, duration)
+  push(_tw_elapsed, 0.0)
+  push(_tw_easing, easing)
+  push(_tw_dir, 1.0)
+  return id
+end
+
+fn tween_update(id, dt)
+  let i = int(id)
+  _tw_elapsed[i] = _tw_elapsed[i] + dt * _tw_dir[i]
+  if _tw_elapsed[i] > _tw_dur[i]
+    _tw_elapsed[i] = _tw_dur[i]
+  end
+  if _tw_elapsed[i] < 0.0
+    _tw_elapsed[i] = 0.0
+  end
+  let mut t = _tw_elapsed[i] / _tw_dur[i]
+  if t > 1.0
+    t = 1.0
+  end
+  if t < 0.0
+    t = 0.0
+  end
+  let eased = _tw_apply_easing(t, _tw_easing[i])
+  return _tw_start[i] + (_tw_target[i] - _tw_start[i]) * eased
+end
+
+fn tween_value(id)
+  let i = int(id)
+  let mut t = _tw_elapsed[i] / _tw_dur[i]
+  if t > 1.0
+    t = 1.0
+  end
+  if t < 0.0
+    t = 0.0
+  end
+  let eased = _tw_apply_easing(t, _tw_easing[i])
+  return _tw_start[i] + (_tw_target[i] - _tw_start[i]) * eased
+end
+
+fn tween_done(id)
+  let i = int(id)
+  if _tw_dir[i] >= 0.0
+    if _tw_elapsed[i] >= _tw_dur[i]
+      return 1.0
+    end
+  else
+    if _tw_elapsed[i] <= 0.0
+      return 1.0
+    end
+  end
+  return 0.0
+end
+
+fn tween_reset(id)
+  _tw_elapsed[int(id)] = 0.0
+  _tw_dir[int(id)] = 1.0
+  return 0.0
+end
+
+fn tween_reverse(id)
+  _tw_dir[int(id)] = 0.0 - _tw_dir[int(id)]
+  return 0.0
+end
+
+fn tween_set_easing(id, easing)
+  _tw_easing[int(id)] = easing
+  return 0.0
+end
+
+fn tween_progress(id)
+  let i = int(id)
+  let t = _tw_elapsed[i] / _tw_dur[i]
+  if t > 1.0
+    return 1.0
+  end
+  if t < 0.0
+    return 0.0
+  end
+  return t
+end

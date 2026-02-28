@@ -1,0 +1,199 @@
+// stdlib/game/noise.flow — Procedural noise generation
+//
+// Functions: noise_perlin_2d, noise_value_2d, noise_fbm_2d,
+//            noise_to_tilemap
+//
+// CPU noise generators. Returns flat float arrays (row-major).
+// Values normalized to [0, 1] range.
+
+// ── Internal helpers ──────────────────────────────────────
+
+fn _noise_hash(x, y, seed)
+  // Simple hash function for pseudo-random gradient
+  let n = x * 374761393.0 + y * 668265263.0 + seed * 1274126177.0
+  let n2 = n * n * n * 60493.0
+  // Normalize to [0,1] by using modular arithmetic
+  let big = abs(n2)
+  let scaled = big / 1000000.0
+  return scaled - floor(scaled)
+end
+
+fn _noise_lerp(a, b, t)
+  return a + (b - a) * t
+end
+
+fn _noise_smoothstep(t)
+  // Smoothstep: 6t^5 - 15t^4 + 10t^3
+  return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+end
+
+// ── Value Noise ───────────────────────────────────────────
+
+fn noise_value_2d(width, height, scale, seed)
+  let mut out = []
+  let mut py = 0.0
+  while py < height
+    let mut px = 0.0
+    while px < width
+      let sx = px / scale
+      let sy = py / scale
+      let ix = floor(sx)
+      let iy = floor(sy)
+      let fx = sx - ix
+      let fy = sy - iy
+      let tx = _noise_smoothstep(fx)
+      let ty = _noise_smoothstep(fy)
+      let v00 = _noise_hash(ix, iy, seed)
+      let v10 = _noise_hash(ix + 1.0, iy, seed)
+      let v01 = _noise_hash(ix, iy + 1.0, seed)
+      let v11 = _noise_hash(ix + 1.0, iy + 1.0, seed)
+      let top = _noise_lerp(v00, v10, tx)
+      let bot = _noise_lerp(v01, v11, tx)
+      let val = _noise_lerp(top, bot, ty)
+      push(out, val)
+      px = px + 1.0
+    end
+    py = py + 1.0
+  end
+  return out
+end
+
+// ── Perlin-style Noise ────────────────────────────────────
+
+fn _noise_grad(hash_val, dx, dy)
+  // 4-direction gradient based on hash
+  let h = floor(hash_val * 4.0)
+  if h == 0.0
+    return dx + dy
+  elif h == 1.0
+    return 0.0 - dx + dy
+  elif h == 2.0
+    return dx - dy
+  end
+  return 0.0 - dx - dy
+end
+
+fn noise_perlin_2d(width, height, scale, octaves, seed)
+  let mut out = []
+  let mut py = 0.0
+  while py < height
+    let mut px = 0.0
+    while px < width
+      let mut val = 0.0
+      let mut amp = 1.0
+      let mut freq = 1.0
+      let mut max_amp = 0.0
+      let mut oct = 0.0
+      while oct < octaves
+        let sx = px * freq / scale
+        let sy = py * freq / scale
+        let ix = floor(sx)
+        let iy = floor(sy)
+        let fx = sx - ix
+        let fy = sy - iy
+        let tx = _noise_smoothstep(fx)
+        let ty = _noise_smoothstep(fy)
+        let h00 = _noise_hash(ix, iy, seed + oct * 31.0)
+        let h10 = _noise_hash(ix + 1.0, iy, seed + oct * 31.0)
+        let h01 = _noise_hash(ix, iy + 1.0, seed + oct * 31.0)
+        let h11 = _noise_hash(ix + 1.0, iy + 1.0, seed + oct * 31.0)
+        let g00 = _noise_grad(h00, fx, fy)
+        let g10 = _noise_grad(h10, fx - 1.0, fy)
+        let g01 = _noise_grad(h01, fx, fy - 1.0)
+        let g11 = _noise_grad(h11, fx - 1.0, fy - 1.0)
+        let top = _noise_lerp(g00, g10, tx)
+        let bot = _noise_lerp(g01, g11, tx)
+        let n = _noise_lerp(top, bot, ty)
+        val = val + n * amp
+        max_amp = max_amp + amp
+        amp = amp * 0.5
+        freq = freq * 2.0
+        oct = oct + 1.0
+      end
+      // Normalize to [0,1]
+      let normalized = (val / max_amp + 1.0) / 2.0
+      let mut clamped = normalized
+      if clamped < 0.0
+        clamped = 0.0
+      end
+      if clamped > 1.0
+        clamped = 1.0
+      end
+      push(out, clamped)
+      px = px + 1.0
+    end
+    py = py + 1.0
+  end
+  return out
+end
+
+// ── Fractal Brownian Motion ───────────────────────────────
+
+fn noise_fbm_2d(width, height, scale, octaves, lacunarity, gain, seed)
+  let mut out = []
+  let mut py = 0.0
+  while py < height
+    let mut px = 0.0
+    while px < width
+      let mut val = 0.0
+      let mut amp = 1.0
+      let mut freq = 1.0
+      let mut max_amp = 0.0
+      let mut oct = 0.0
+      while oct < octaves
+        let sx = px * freq / scale
+        let sy = py * freq / scale
+        let ix = floor(sx)
+        let iy = floor(sy)
+        let fx = sx - ix
+        let fy = sy - iy
+        let tx = _noise_smoothstep(fx)
+        let ty = _noise_smoothstep(fy)
+        let v00 = _noise_hash(ix, iy, seed + oct * 37.0)
+        let v10 = _noise_hash(ix + 1.0, iy, seed + oct * 37.0)
+        let v01 = _noise_hash(ix, iy + 1.0, seed + oct * 37.0)
+        let v11 = _noise_hash(ix + 1.0, iy + 1.0, seed + oct * 37.0)
+        let top = _noise_lerp(v00, v10, tx)
+        let bot = _noise_lerp(v01, v11, tx)
+        let n = _noise_lerp(top, bot, ty)
+        val = val + n * amp
+        max_amp = max_amp + amp
+        amp = amp * gain
+        freq = freq * lacunarity
+        oct = oct + 1.0
+      end
+      let normalized = val / max_amp
+      let mut clamped = normalized
+      if clamped < 0.0
+        clamped = 0.0
+      end
+      if clamped > 1.0
+        clamped = 1.0
+      end
+      push(out, clamped)
+      px = px + 1.0
+    end
+    py = py + 1.0
+  end
+  return out
+end
+
+// ── Noise to Tilemap ──────────────────────────────────────
+
+fn noise_to_tilemap(noise, width, height, threshold)
+  // Convert noise array to tilemap: solid (tile 1) if value > threshold
+  let total = width * height
+  let mut i = 0.0
+  while i < total
+    let ii = int(i)
+    let tx = floor(i - floor(i / width) * width)
+    let ty = floor(i / width)
+    if noise[ii] > threshold
+      tilemap_set(tx, ty, 1.0)
+    else
+      tilemap_set(tx, ty, 0.0)
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end

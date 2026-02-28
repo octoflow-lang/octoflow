@@ -1,0 +1,101 @@
+// game_particles.flow — Interactive particle demo
+//
+// Controls: Click to emit particles, C to clear, 1-4 to change color
+// Features: Gravity, fade, color cycling, particle count display
+
+use "game/game"
+use "game/input"
+use "game/particles"
+
+// [0]=color_mode (0=red, 1=green, 2=blue, 3=gold)
+let mut _pd = [0.0]
+
+// Color palette (r,g,b per mode)
+let mut _pd_r = []
+let mut _pd_g = []
+let mut _pd_b = []
+
+fn _pd_init_colors()
+  // 0: red/orange
+  push(_pd_r, 255.0)
+  push(_pd_g, 100.0)
+  push(_pd_b, 30.0)
+  // 1: green
+  push(_pd_r, 50.0)
+  push(_pd_g, 255.0)
+  push(_pd_b, 80.0)
+  // 2: blue/cyan
+  push(_pd_r, 50.0)
+  push(_pd_g, 150.0)
+  push(_pd_b, 255.0)
+  // 3: gold
+  push(_pd_r, 255.0)
+  push(_pd_g, 220.0)
+  push(_pd_b, 50.0)
+  return 0.0
+end
+
+// ── Main ──────────────────────────────────────────────────
+let cvs = game_init(800.0, 600.0, "Particle Demo")
+_pd_init_colors()
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+
+  // Click to emit
+  if input_mouse_clicked() == 1.0
+    let mx = input_mouse_x()
+    let my = input_mouse_y()
+    let ci = int(_pd[0])
+    let cr = _pd_r[ci]
+    let cg = _pd_g[ci]
+    let cb = _pd_b[ci]
+    particle_emit(mx, my, 50.0, 20.0, 150.0, 2.5, cr, cg, cb, 10.0)
+    // Cycle color
+    _pd[0] = _pd[0] + 1.0
+    if _pd[0] >= 4.0
+      _pd[0] = 0.0
+    end
+  end
+
+  // C to clear
+  if input_key_down("c") == 1.0
+    particle_clear()
+  end
+
+  // 1-4 to set color
+  if input_key_down("1") == 1.0
+    _pd[0] = 0.0
+  end
+  if input_key_down("2") == 1.0
+    _pd[0] = 1.0
+  end
+  if input_key_down("3") == 1.0
+    _pd[0] = 2.0
+  end
+  if input_key_down("4") == 1.0
+    _pd[0] = 3.0
+  end
+
+  // Update particles with gravity
+  particle_update(dt, 200.0)
+
+  // Render
+  gui_canvas_fill(cvs, 0.0, 0.0, 800.0, 600.0, 15.0, 15.0, 25.0)
+  particle_render(cvs)
+
+  // HUD
+  let pc = particle_count()
+  let ci2 = int(_pd[0])
+  gui_canvas_text_colored(cvs, 10.0, 10.0, "Particles: {pc}", 2.0, 200.0, 200.0, 200.0)
+  gui_canvas_text_colored(cvs, 10.0, 30.0, "Click to emit | C=clear | 1-4=color", 1.5, 140.0, 140.0, 140.0)
+
+  // Color indicator
+  let ir = _pd_r[ci2]
+  let ig = _pd_g[ci2]
+  let ib = _pd_b[ci2]
+  gui_canvas_fill(cvs, 760.0, 10.0, 20.0, 20.0, ir, ig, ib)
+
+  game_frame_end()
+end

@@ -1,0 +1,243 @@
+// game_snake.flow — Snake game using OctoFlow game engine
+//
+// Controls: Arrow keys to change direction
+// Features: Grid movement, growing body, food spawn, score, game over
+
+use "game/game"
+use "game/input"
+
+// ── State (all in arrays for fn mutation) ─────────────────
+// [0]=grid_w, [1]=grid_h, [2]=tile_size, [3]=dir_x, [4]=dir_y
+// [5]=score, [6]=game_over, [7]=move_timer, [8]=move_interval
+// [9]=food_x, [10]=food_y, [11]=screen_w, [12]=screen_h
+let mut _sn = [20.0, 15.0, 30.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.15, 0.0, 0.0, 600.0, 450.0]
+
+// Snake body: parallel x/y arrays (head at index 0)
+let mut _sn_x = []
+let mut _sn_y = []
+
+fn _sn_spawn_food()
+  _sn[9] = floor(random() * _sn[0])
+  _sn[10] = floor(random() * _sn[1])
+  // Make sure food isn't on snake
+  let count = len(_sn_x)
+  let mut on_snake = 1.0
+  while on_snake == 1.0
+    on_snake = 0.0
+    let mut i = 0.0
+    while i < count
+      let ii = int(i)
+      if _sn_x[ii] == _sn[9]
+        if _sn_y[ii] == _sn[10]
+          on_snake = 1.0
+          _sn[9] = floor(random() * _sn[0])
+          _sn[10] = floor(random() * _sn[1])
+        end
+      end
+      i = i + 1.0
+    end
+  end
+  return 0.0
+end
+
+fn _sn_init()
+  // Clear body
+  while len(_sn_x) > 0.0
+    pop(_sn_x)
+    pop(_sn_y)
+  end
+
+  // Start in center with 3 segments
+  let cx = floor(_sn[0] / 2.0)
+  let cy = floor(_sn[1] / 2.0)
+  push(_sn_x, cx)
+  push(_sn_y, cy)
+  push(_sn_x, cx - 1.0)
+  push(_sn_y, cy)
+  push(_sn_x, cx - 2.0)
+  push(_sn_y, cy)
+
+  _sn[3] = 1.0
+  _sn[4] = 0.0
+  _sn[5] = 0.0
+  _sn[6] = 0.0
+  _sn[7] = 0.0
+  _sn[8] = 0.15
+
+  _sn_spawn_food()
+  return 0.0
+end
+
+fn _sn_update(dt)
+  if _sn[6] == 1.0
+    if input_key_down("space") == 1.0
+      _sn_init()
+    end
+    return 0.0
+  end
+
+  // Direction input (prevent reversing)
+  if input_key_down("left") == 1.0
+    if _sn[3] != 1.0
+      _sn[3] = -1.0
+      _sn[4] = 0.0
+    end
+  end
+  if input_key_down("right") == 1.0
+    if _sn[3] != -1.0
+      _sn[3] = 1.0
+      _sn[4] = 0.0
+    end
+  end
+  if input_key_down("up") == 1.0
+    if _sn[4] != 1.0
+      _sn[3] = 0.0
+      _sn[4] = -1.0
+    end
+  end
+  if input_key_down("down") == 1.0
+    if _sn[4] != -1.0
+      _sn[3] = 0.0
+      _sn[4] = 1.0
+    end
+  end
+
+  // Move timer
+  _sn[7] = _sn[7] + dt
+  if _sn[7] < _sn[8]
+    return 0.0
+  end
+  _sn[7] = 0.0
+
+  // Calculate new head position
+  let head_x = _sn_x[0] + _sn[3]
+  let head_y = _sn_y[0] + _sn[4]
+
+  // Wall collision
+  if head_x < 0.0
+    _sn[6] = 1.0
+    return 0.0
+  end
+  if head_x >= _sn[0]
+    _sn[6] = 1.0
+    return 0.0
+  end
+  if head_y < 0.0
+    _sn[6] = 1.0
+    return 0.0
+  end
+  if head_y >= _sn[1]
+    _sn[6] = 1.0
+    return 0.0
+  end
+
+  // Self collision
+  let body_len = len(_sn_x)
+  let mut si = 0.0
+  while si < body_len
+    let sii = int(si)
+    if _sn_x[sii] == head_x
+      if _sn_y[sii] == head_y
+        _sn[6] = 1.0
+        return 0.0
+      end
+    end
+    si = si + 1.0
+  end
+
+  // Check food
+  let mut ate = 0.0
+  if head_x == _sn[9]
+    if head_y == _sn[10]
+      ate = 1.0
+      _sn[5] = _sn[5] + 1.0
+      // Speed up
+      if _sn[8] > 0.05
+        _sn[8] = _sn[8] - 0.005
+      end
+    end
+  end
+
+  // Move body: shift all segments down, insert new head
+  // If didn't eat, remove tail
+  if ate == 0.0
+    pop(_sn_x)
+    pop(_sn_y)
+  end
+
+  // Shift everything right by 1
+  let new_len = len(_sn_x)
+  push(_sn_x, 0.0)
+  push(_sn_y, 0.0)
+  let mut mi = new_len
+  while mi > 0.0
+    let mii = int(mi)
+    let prev = int(mi - 1.0)
+    _sn_x[mii] = _sn_x[prev]
+    _sn_y[mii] = _sn_y[prev]
+    mi = mi - 1.0
+  end
+  _sn_x[0] = head_x
+  _sn_y[0] = head_y
+
+  if ate == 1.0
+    _sn_spawn_food()
+  end
+
+  return 0.0
+end
+
+fn _sn_render(cvs)
+  let ts = _sn[2]
+
+  // Draw grid background
+  gui_canvas_fill(cvs, 0.0, 0.0, _sn[0] * ts, _sn[1] * ts, 20.0, 20.0, 30.0)
+
+  // Draw food
+  let fx = _sn[9] * ts + 2.0
+  let fy = _sn[10] * ts + 2.0
+  let fs = ts - 4.0
+  gui_canvas_fill(cvs, fx, fy, fs, fs, 220.0, 50.0, 50.0)
+
+  // Draw snake body
+  let count = len(_sn_x)
+  let mut i = 0.0
+  while i < count
+    let ii = int(i)
+    let sx = _sn_x[ii] * ts + 1.0
+    let sy = _sn_y[ii] * ts + 1.0
+    let ss = ts - 2.0
+    if i == 0.0
+      gui_canvas_fill(cvs, sx, sy, ss, ss, 100.0, 220.0, 100.0)
+    else
+      gui_canvas_fill(cvs, sx, sy, ss, ss, 60.0, 180.0, 60.0)
+    end
+    i = i + 1.0
+  end
+
+  // Score
+  let score = _sn[5]
+  gui_canvas_text_colored(cvs, 10.0, _sn[1] * ts + 5.0, "Score: {score}", 2.0, 200.0, 200.0, 200.0)
+
+  if _sn[6] == 1.0
+    let cx = _sn[0] * ts / 2.0 - 80.0
+    let cy = _sn[1] * ts / 2.0 - 20.0
+    gui_canvas_fill(cvs, cx - 10.0, cy - 10.0, 200.0, 60.0, 0.0, 0.0, 0.0)
+    gui_canvas_text_colored(cvs, cx, cy, "GAME OVER", 3.0, 255.0, 80.0, 80.0)
+    gui_canvas_text_colored(cvs, cx, cy + 30.0, "Press SPACE", 2.0, 180.0, 180.0, 180.0)
+  end
+
+  return 0.0
+end
+
+// ── Main ──────────────────────────────────────────────────
+let cvs = game_init(600.0, 480.0, "Snake")
+_sn_init()
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+  _sn_update(dt)
+  _sn_render(cvs)
+  game_frame_end()
+end

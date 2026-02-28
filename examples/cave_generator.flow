@@ -1,0 +1,106 @@
+// cave_generator.flow — Random cave with tilemap + player movement
+//
+// Controls: Arrow keys to move, R to regenerate, +/- to change fill ratio
+
+use "game/game"
+use "game/input"
+use "game/tilemap"
+use "game/procgen"
+
+// [0]=player_x, [1]=player_y, [2]=fill_ratio, [3]=dirty, [4]=tile_size
+let mut _cg = [5.0, 5.0, 0.45, 1.0, 12.0]
+
+fn _cg_generate()
+  let w = 50.0
+  let h = 37.0
+  let cave = cave_generate(w, h, _cg[2], 5.0)
+  tilemap_create(w, h, _cg[4])
+  tilemap_set_tile_color(1.0, 80.0, 70.0, 60.0)
+  cave_to_tilemap(cave, w, h, 1.0, 0.0)
+
+  // Place player on empty tile
+  _cg[0] = 5.0
+  _cg[1] = 5.0
+  // Find nearest empty tile
+  let mut found = 0.0
+  let mut sy = 2.0
+  while sy < h && found == 0.0
+    let mut sx = 2.0
+    while sx < w && found == 0.0
+      if tilemap_get(sx, sy) == 0.0
+        _cg[0] = sx
+        _cg[1] = sy
+        found = 1.0
+      end
+      sx = sx + 1.0
+    end
+    sy = sy + 1.0
+  end
+  return 0.0
+end
+
+// ── Main ──────────────────────────────────────────────────
+let cvs = game_init(600.0, 470.0, "Cave Generator")
+_cg_generate()
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+
+  // Move player
+  let mut nx = _cg[0]
+  let mut ny = _cg[1]
+  if input_key_down("left") == 1.0
+    nx = _cg[0] - 1.0
+  end
+  if input_key_down("right") == 1.0
+    nx = _cg[0] + 1.0
+  end
+  if input_key_down("up") == 1.0
+    ny = _cg[1] - 1.0
+  end
+  if input_key_down("down") == 1.0
+    ny = _cg[1] + 1.0
+  end
+
+  // Only move if not solid
+  if tilemap_get(nx, ny) == 0.0
+    _cg[0] = nx
+    _cg[1] = ny
+  end
+
+  // Regenerate
+  if input_key_down("r") == 1.0
+    _cg_generate()
+  end
+  if input_key_down("=") == 1.0
+    _cg[2] = _cg[2] + 0.05
+    if _cg[2] > 0.7
+      _cg[2] = 0.7
+    end
+    _cg_generate()
+  end
+  if input_key_down("-") == 1.0
+    _cg[2] = _cg[2] - 0.05
+    if _cg[2] < 0.2
+      _cg[2] = 0.2
+    end
+    _cg_generate()
+  end
+
+  // Render
+  gui_canvas_fill(cvs, 0.0, 0.0, 600.0, 470.0, 10.0, 10.0, 15.0)
+  tilemap_render(cvs, 0.0, 0.0)
+
+  // Player
+  let ts = _cg[4]
+  let px = _cg[0] * ts + 2.0
+  let py = _cg[1] * ts + 2.0
+  gui_canvas_fill(cvs, px, py, ts - 4.0, ts - 4.0, 100.0, 220.0, 100.0)
+
+  // HUD
+  let fill = _cg[2]
+  gui_canvas_text_colored(cvs, 5.0, 450.0, "Arrows=move R=regen +/-=density({fill})", 1.5, 200.0, 200.0, 200.0)
+
+  game_frame_end()
+end

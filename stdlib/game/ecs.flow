@@ -1,8 +1,9 @@
 // stdlib/game/ecs.flow — Simple Entity Component System
 //
-// Functions: ecs_new, ecs_create, ecs_find, ecs_add_pos, ecs_add_pos_at,
-//            ecs_add_vel, ecs_add_hp, ecs_update_physics, ecs_damage,
-//            ecs_get_pos, ecs_alive_count
+// Functions: ecs_new, ecs_create, ecs_find, ecs_remove, ecs_add_pos,
+//            ecs_add_pos_at, ecs_add_vel, ecs_add_hp, ecs_update_physics,
+//            ecs_damage, ecs_get_pos, ecs_alive_count, ecs_remove_pos,
+//            ecs_remove_vel, ecs_remove_hp
 //
 // Data-oriented ECS using parallel arrays for cache-friendly iteration.
 // Entities are integer IDs. Components stored in contiguous arrays.
@@ -33,18 +34,8 @@ fn ecs_find(comp_eid, target_id)
 end
 
 fn ecs_add_pos(ent_id, pos_eid, pos_x, pos_y)
-  // Add position component (x, y) for entity
-  push(pos_eid, ent_id)
-  push(pos_x, ent_id * 0.0)
-  push(pos_y, ent_id * 0.0)
-  // Set actual values at the last index
-  let idx = len(pos_x) - 1.0
-  pos_x[idx] = pos_x[idx] + ent_id * 0.0
-  pos_y[idx] = pos_y[idx] + ent_id * 0.0
-  // We need the caller to pass the values separately
-  // Since .flow uses snapshot semantics for scalars, we store zeros
-  // and the caller overwrites via array indexing
-  return idx
+  // Add position component at (0, 0) for entity
+  return ecs_add_pos_at(ent_id, pos_eid, pos_x, pos_y, 0.0, 0.0)
 end
 
 fn ecs_add_pos_at(ent_id, pos_eid, pos_x, pos_y, x, y)
@@ -121,4 +112,70 @@ fn ecs_alive_count(hp_eid, hp_val)
     end
   end
   return count
+end
+
+fn ecs_remove(ids, ent_id)
+  // Remove entity from ID list (swap-delete)
+  let idx = ecs_find(ids, ent_id)
+  if idx < 0.0
+    return 0.0
+  end
+  let last = len(ids) - 1.0
+  if idx < last
+    ids[int(idx)] = ids[int(last)]
+  end
+  pop(ids)
+  return 1.0
+end
+
+fn ecs_remove_pos(ent_id, pos_eid, pos_x, pos_y)
+  // Remove position component for entity (swap-delete)
+  let idx = ecs_find(pos_eid, ent_id)
+  if idx < 0.0
+    return 0.0
+  end
+  let last = len(pos_eid) - 1.0
+  if idx < last
+    pos_eid[int(idx)] = pos_eid[int(last)]
+    pos_x[int(idx)] = pos_x[int(last)]
+    pos_y[int(idx)] = pos_y[int(last)]
+  end
+  pop(pos_eid)
+  pop(pos_x)
+  pop(pos_y)
+  return 1.0
+end
+
+fn ecs_remove_vel(ent_id, vel_eid, vel_vx, vel_vy)
+  // Remove velocity component for entity (swap-delete)
+  let idx = ecs_find(vel_eid, ent_id)
+  if idx < 0.0
+    return 0.0
+  end
+  let last = len(vel_eid) - 1.0
+  if idx < last
+    vel_eid[int(idx)] = vel_eid[int(last)]
+    vel_vx[int(idx)] = vel_vx[int(last)]
+    vel_vy[int(idx)] = vel_vy[int(last)]
+  end
+  pop(vel_eid)
+  pop(vel_vx)
+  pop(vel_vy)
+  return 1.0
+end
+
+fn ecs_remove_hp(ent_id, hp_eid, hp_val)
+  // Remove health component for entity (swap-delete)
+  let idx = ecs_find(hp_eid, ent_id)
+  if idx < 0.0
+    return 0.0
+  end
+  let last = len(hp_eid) - 1.0
+  if idx < last
+    hp_eid[int(idx)] = hp_eid[int(last)]
+    hp_val[int(idx)] = hp_val[int(last)]
+  end
+  pop(hp_eid)
+  pop(hp_val)
+  return 1.0
 end

@@ -54,10 +54,15 @@ fn bytes_to_hex(data)
 end
 
 // Decode hex string to array of byte values (0-255 floats)
+// Requires even-length input; odd-length strings return empty array.
 fn hex_to_bytes(s)
   let mut out = []
   let n = len(s)
   if n == 0.0
+    return out
+  end
+  // Reject odd-length hex strings
+  if int(n) % 2 != 0
     return out
   end
   let mut i = 0.0

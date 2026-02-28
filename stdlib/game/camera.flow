@@ -1,0 +1,58 @@
+// stdlib/game/camera.flow — Smooth-follow 2D camera
+//
+// Functions: camera_init, camera_follow, camera_update, camera_set_smooth,
+//            camera_x, camera_y, camera_world_to_screen_x,
+//            camera_world_to_screen_y, camera_set_pos
+//
+// Lerp-based camera that smoothly tracks a target position.
+// Use cam_x/cam_y offsets when rendering sprites and tilemaps.
+
+// [0]=x, [1]=y, [2]=target_x, [3]=target_y, [4]=smooth, [5]=screen_w, [6]=screen_h
+let mut _cam = [0.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0]
+
+fn camera_init(screen_w, screen_h)
+  _cam[5] = screen_w
+  _cam[6] = screen_h
+  return 0.0
+end
+
+fn camera_follow(x, y)
+  _cam[2] = x - _cam[5] / 2.0
+  _cam[3] = y - _cam[6] / 2.0
+  return 0.0
+end
+
+fn camera_update(dt)
+  _cam[0] = _cam[0] + (_cam[2] - _cam[0]) * _cam[4]
+  _cam[1] = _cam[1] + (_cam[3] - _cam[1]) * _cam[4]
+  return 0.0
+end
+
+fn camera_set_smooth(factor)
+  _cam[4] = factor
+  return 0.0
+end
+
+fn camera_set_pos(x, y)
+  _cam[0] = x
+  _cam[1] = y
+  _cam[2] = x
+  _cam[3] = y
+  return 0.0
+end
+
+fn camera_x()
+  return _cam[0]
+end
+
+fn camera_y()
+  return _cam[1]
+end
+
+fn camera_world_to_screen_x(wx)
+  return wx - _cam[0]
+end
+
+fn camera_world_to_screen_y(wy)
+  return wy - _cam[1]
+end

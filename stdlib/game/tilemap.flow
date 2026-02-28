@@ -1,0 +1,158 @@
+// stdlib/game/tilemap.flow — 2D tile grid system
+//
+// Functions: tilemap_create, tilemap_set, tilemap_get, tilemap_set_tile_color,
+//            tilemap_render, tilemap_solid_at, tilemap_width, tilemap_height,
+//            tilemap_tile_size
+//
+// Grid-based level design with colored tiles. Tile 0 = empty/transparent.
+// Renders via gui_canvas_fill with camera offset support.
+
+use "gui/gui"
+use "gui/canvas"
+
+let mut _tm_data = []
+// [0]=width, [1]=height, [2]=tile_size
+let mut _tm_cfg = [0.0, 0.0, 32.0]
+let mut _tm_colors_r = []
+let mut _tm_colors_g = []
+let mut _tm_colors_b = []
+
+fn tilemap_create(width, height, tile_size)
+  _tm_cfg[0] = width
+  _tm_cfg[1] = height
+  _tm_cfg[2] = tile_size
+  let total = width * height
+
+  // Clear existing data
+  while len(_tm_data) > 0.0
+    pop(_tm_data)
+  end
+
+  // Fill grid with zeros
+  let mut i = 0.0
+  while i < total
+    push(_tm_data, 0.0)
+    i = i + 1.0
+  end
+
+  // Clear existing colors
+  while len(_tm_colors_r) > 0.0
+    pop(_tm_colors_r)
+    pop(_tm_colors_g)
+    pop(_tm_colors_b)
+  end
+
+  // Default tile colors: 0=empty, 1-7=basic palette
+  push(_tm_colors_r, 0.0)
+  push(_tm_colors_g, 0.0)
+  push(_tm_colors_b, 0.0)
+  push(_tm_colors_r, 100.0)
+  push(_tm_colors_g, 100.0)
+  push(_tm_colors_b, 100.0)
+  push(_tm_colors_r, 60.0)
+  push(_tm_colors_g, 140.0)
+  push(_tm_colors_b, 60.0)
+  push(_tm_colors_r, 40.0)
+  push(_tm_colors_g, 80.0)
+  push(_tm_colors_b, 160.0)
+  push(_tm_colors_r, 180.0)
+  push(_tm_colors_g, 120.0)
+  push(_tm_colors_b, 60.0)
+  push(_tm_colors_r, 200.0)
+  push(_tm_colors_g, 200.0)
+  push(_tm_colors_b, 60.0)
+  push(_tm_colors_r, 80.0)
+  push(_tm_colors_g, 80.0)
+  push(_tm_colors_b, 200.0)
+  push(_tm_colors_r, 160.0)
+  push(_tm_colors_g, 160.0)
+  push(_tm_colors_b, 160.0)
+
+  return 0.0
+end
+
+fn tilemap_set(tx, ty, tile_id)
+  if tx >= 0.0
+    if tx < _tm_cfg[0]
+      if ty >= 0.0
+        if ty < _tm_cfg[1]
+          _tm_data[int(ty * _tm_cfg[0] + tx)] = tile_id
+        end
+      end
+    end
+  end
+  return 0.0
+end
+
+fn tilemap_get(tx, ty)
+  if tx < 0.0
+    return 0.0
+  end
+  if tx >= _tm_cfg[0]
+    return 0.0
+  end
+  if ty < 0.0
+    return 0.0
+  end
+  if ty >= _tm_cfg[1]
+    return 0.0
+  end
+  return _tm_data[int(ty * _tm_cfg[0] + tx)]
+end
+
+fn tilemap_set_tile_color(tile_id, r, g, b)
+  let i = int(tile_id)
+  while len(_tm_colors_r) <= i
+    push(_tm_colors_r, 0.0)
+    push(_tm_colors_g, 0.0)
+    push(_tm_colors_b, 0.0)
+  end
+  _tm_colors_r[i] = r
+  _tm_colors_g[i] = g
+  _tm_colors_b[i] = b
+  return 0.0
+end
+
+fn tilemap_render(canvas_id, cam_x, cam_y)
+  let ts = _tm_cfg[2]
+  let mut ty = 0.0
+  while ty < _tm_cfg[1]
+    let mut tx = 0.0
+    while tx < _tm_cfg[0]
+      let tile = _tm_data[int(ty * _tm_cfg[0] + tx)]
+      if tile > 0.0
+        let ti = int(tile)
+        if ti < len(_tm_colors_r)
+          let px = tx * ts - cam_x
+          let py = ty * ts - cam_y
+          gui_canvas_fill(canvas_id, px, py, ts, ts, _tm_colors_r[ti], _tm_colors_g[ti], _tm_colors_b[ti])
+        end
+      end
+      tx = tx + 1.0
+    end
+    ty = ty + 1.0
+  end
+  return 0.0
+end
+
+fn tilemap_solid_at(world_x, world_y)
+  let tx = floor(world_x / _tm_cfg[2])
+  let ty = floor(world_y / _tm_cfg[2])
+  let tile = tilemap_get(tx, ty)
+  if tile > 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+fn tilemap_width()
+  return _tm_cfg[0]
+end
+
+fn tilemap_height()
+  return _tm_cfg[1]
+end
+
+fn tilemap_tile_size()
+  return _tm_cfg[2]
+end

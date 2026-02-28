@@ -1,0 +1,147 @@
+// stdlib/game/sprite.flow — Parallel-array sprite system
+//
+// Functions: sprite_create, sprite_set_pos, sprite_set_vel, sprite_move,
+//            sprite_set_color, sprite_set_visible, sprite_set_layer,
+//            sprite_x, sprite_y, sprite_w, sprite_h,
+//            sprite_update_all, sprite_render_all, sprite_count,
+//            sprite_set_active
+//
+// Data-oriented design: all sprite data in parallel arrays for cache efficiency.
+// Sprites are colored rectangles rendered via gui_canvas_fill.
+
+use "gui/gui"
+use "gui/canvas"
+
+// Sprite storage: parallel arrays
+let mut _spr_x = []
+let mut _spr_y = []
+let mut _spr_w = []
+let mut _spr_h = []
+let mut _spr_r = []
+let mut _spr_g = []
+let mut _spr_b = []
+let mut _spr_visible = []
+let mut _spr_layer = []
+let mut _spr_vx = []
+let mut _spr_vy = []
+let mut _spr_active = []
+
+fn sprite_create(x, y, w, h, r, g, b)
+  let id = len(_spr_x)
+  push(_spr_x, x)
+  push(_spr_y, y)
+  push(_spr_w, w)
+  push(_spr_h, h)
+  push(_spr_r, r)
+  push(_spr_g, g)
+  push(_spr_b, b)
+  push(_spr_visible, 1.0)
+  push(_spr_layer, 0.0)
+  push(_spr_vx, 0.0)
+  push(_spr_vy, 0.0)
+  push(_spr_active, 1.0)
+  return id
+end
+
+fn sprite_set_pos(id, x, y)
+  let i = int(id)
+  _spr_x[i] = x
+  _spr_y[i] = y
+  return 0.0
+end
+
+fn sprite_set_vel(id, vx, vy)
+  let i = int(id)
+  _spr_vx[i] = vx
+  _spr_vy[i] = vy
+  return 0.0
+end
+
+fn sprite_move(id, dx, dy)
+  let i = int(id)
+  _spr_x[i] = _spr_x[i] + dx
+  _spr_y[i] = _spr_y[i] + dy
+  return 0.0
+end
+
+fn sprite_set_color(id, r, g, b)
+  let i = int(id)
+  _spr_r[i] = r
+  _spr_g[i] = g
+  _spr_b[i] = b
+  return 0.0
+end
+
+fn sprite_set_visible(id, vis)
+  _spr_visible[int(id)] = vis
+  return 0.0
+end
+
+fn sprite_set_layer(id, layer)
+  _spr_layer[int(id)] = layer
+  return 0.0
+end
+
+fn sprite_set_active(id, active)
+  _spr_active[int(id)] = active
+  return 0.0
+end
+
+fn sprite_x(id)
+  return _spr_x[int(id)]
+end
+
+fn sprite_y(id)
+  return _spr_y[int(id)]
+end
+
+fn sprite_w(id)
+  return _spr_w[int(id)]
+end
+
+fn sprite_h(id)
+  return _spr_h[int(id)]
+end
+
+fn sprite_vx(id)
+  return _spr_vx[int(id)]
+end
+
+fn sprite_vy(id)
+  return _spr_vy[int(id)]
+end
+
+fn sprite_count()
+  return len(_spr_x)
+end
+
+// Update all sprites by velocity * dt
+fn sprite_update_all(dt)
+  let count = len(_spr_x)
+  let mut i = 0.0
+  while i < count
+    let ii = int(i)
+    if _spr_active[ii] == 1.0
+      _spr_x[ii] = _spr_x[ii] + _spr_vx[ii] * dt
+      _spr_y[ii] = _spr_y[ii] + _spr_vy[ii] * dt
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// Render all visible sprites via canvas rects
+fn sprite_render_all(canvas_id)
+  let count = len(_spr_x)
+  let mut i = 0.0
+  while i < count
+    let ii = int(i)
+    if _spr_visible[ii] == 1.0
+      if _spr_active[ii] == 1.0
+        gui_canvas_fill(canvas_id, _spr_x[ii], _spr_y[ii], _spr_w[ii], _spr_h[ii], _spr_r[ii], _spr_g[ii], _spr_b[ii])
+      end
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end

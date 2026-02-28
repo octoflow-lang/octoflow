@@ -1,0 +1,253 @@
+// game_breakout.flow — Breakout clone using OctoFlow game engine
+//
+// Controls: Left/Right arrows to move paddle, Space to restart
+// Features: 5x8 brick grid, ball physics, score, speed-up on paddle hit
+
+use "game/game"
+use "game/sprite"
+use "game/collision"
+use "game/input"
+
+// ── Constants (stored in array for fn access) ─────────────
+// [0]=screen_w, [1]=screen_h, [2]=paddle_speed, [3]=ball_speed_init
+// [4]=brick_rows, [5]=brick_cols, [6]=brick_w, [7]=brick_h
+// [8]=score, [9]=game_over, [10]=ball_vx, [11]=ball_vy
+let mut _bo = [800.0, 600.0, 400.0, 300.0, 5.0, 8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+// Sprite IDs
+// [0]=paddle, [1]=ball
+let mut _bo_ids = [-1.0, -1.0]
+
+// Brick alive flags
+let mut _bo_bricks = []
+// Brick sprite IDs
+let mut _bo_brick_ids = []
+
+// Row colors (r,g,b per row)
+let mut _bo_row_r = []
+let mut _bo_row_g = []
+let mut _bo_row_b = []
+
+fn _bo_setup_colors()
+  // Row 0: red
+  push(_bo_row_r, 220.0)
+  push(_bo_row_g, 50.0)
+  push(_bo_row_b, 50.0)
+  // Row 1: orange
+  push(_bo_row_r, 220.0)
+  push(_bo_row_g, 140.0)
+  push(_bo_row_b, 40.0)
+  // Row 2: yellow
+  push(_bo_row_r, 220.0)
+  push(_bo_row_g, 220.0)
+  push(_bo_row_b, 40.0)
+  // Row 3: green
+  push(_bo_row_r, 50.0)
+  push(_bo_row_g, 200.0)
+  push(_bo_row_b, 50.0)
+  // Row 4: blue
+  push(_bo_row_r, 50.0)
+  push(_bo_row_g, 100.0)
+  push(_bo_row_b, 220.0)
+  return 0.0
+end
+
+fn _bo_init()
+  let sw = _bo[0]
+  let sh = _bo[1]
+  let cols = _bo[5]
+  let rows = _bo[4]
+
+  // Calculate brick size
+  let pad = 4.0
+  let bw = (sw - pad * (cols + 1.0)) / cols
+  let bh = 20.0
+  _bo[6] = bw
+  _bo[7] = bh
+
+  // Paddle: centered at bottom
+  let pw = 100.0
+  let ph = 14.0
+  let px = (sw - pw) / 2.0
+  let py = sh - 40.0
+  _bo_ids[0] = sprite_create(px, py, pw, ph, 200.0, 200.0, 220.0)
+
+  // Ball: centered above paddle
+  let bs = 10.0
+  let bx = sw / 2.0 - bs / 2.0
+  let by = py - bs - 10.0
+  _bo_ids[1] = sprite_create(bx, by, bs, bs, 255.0, 255.0, 255.0)
+
+  // Ball velocity
+  _bo[10] = 200.0
+  _bo[11] = 0.0 - _bo[3]
+
+  // Create bricks
+  let _c = _bo_setup_colors()
+  let mut row = 0.0
+  while row < rows
+    let mut col = 0.0
+    while col < cols
+      let bx2 = pad + col * (bw + pad)
+      let by2 = 50.0 + row * (bh + pad)
+      let ri = int(row)
+      let bid = sprite_create(bx2, by2, bw, bh, _bo_row_r[ri], _bo_row_g[ri], _bo_row_b[ri])
+      push(_bo_brick_ids, bid)
+      push(_bo_bricks, 1.0)
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+
+  _bo[8] = 0.0
+  _bo[9] = 0.0
+  return 0.0
+end
+
+fn _bo_update(dt)
+  if _bo[9] == 1.0
+    // Game over — check for restart
+    if input_key_down("space") == 1.0
+      _bo_restart()
+    end
+    return 0.0
+  end
+
+  let sw = _bo[0]
+  let sh = _bo[1]
+  let paddle = _bo_ids[0]
+  let ball = _bo_ids[1]
+
+  // Move paddle
+  if input_left() == 1.0
+    sprite_move(paddle, 0.0 - _bo[2] * dt, 0.0)
+  end
+  if input_right() == 1.0
+    sprite_move(paddle, _bo[2] * dt, 0.0)
+  end
+
+  // Clamp paddle to screen
+  let px = sprite_x(paddle)
+  let pw = sprite_w(paddle)
+  if px < 0.0
+    sprite_set_pos(paddle, 0.0, sprite_y(paddle))
+  end
+  if px + pw > sw
+    sprite_set_pos(paddle, sw - pw, sprite_y(paddle))
+  end
+
+  // Move ball
+  let bvx = _bo[10]
+  let bvy = _bo[11]
+  sprite_move(ball, bvx * dt, bvy * dt)
+
+  let bx = sprite_x(ball)
+  let by = sprite_y(ball)
+  let bs = sprite_w(ball)
+
+  // Wall bounces
+  if bx <= 0.0
+    _bo[10] = abs(_bo[10])
+    sprite_set_pos(ball, 0.0, by)
+  end
+  if bx + bs >= sw
+    _bo[10] = 0.0 - abs(_bo[10])
+    sprite_set_pos(ball, sw - bs, by)
+  end
+  if by <= 0.0
+    _bo[11] = abs(_bo[11])
+    sprite_set_pos(ball, bx, 0.0)
+  end
+
+  // Ball fell below paddle → game over
+  if by > sh
+    _bo[9] = 1.0
+    return 0.0
+  end
+
+  // Paddle collision
+  if sprite_collides(ball, paddle) == 1.0
+    _bo[11] = 0.0 - abs(_bo[11])
+    // Angle based on hit position
+    let hit_x = (bx + bs / 2.0) - sprite_x(paddle)
+    let ratio = hit_x / pw
+    _bo[10] = (ratio - 0.5) * 400.0
+    // Speed up slightly
+    if _bo[11] > -600.0
+      _bo[11] = _bo[11] * 1.05
+    end
+    sprite_set_pos(ball, bx, sprite_y(paddle) - bs)
+  end
+
+  // Brick collisions
+  let brick_count = len(_bo_bricks)
+  let mut bi = 0.0
+  while bi < brick_count
+    let bii = int(bi)
+    if _bo_bricks[bii] == 1.0
+      let brick_id = _bo_brick_ids[bii]
+      if sprite_collides(ball, brick_id) == 1.0
+        _bo_bricks[bii] = 0.0
+        sprite_set_visible(brick_id, 0.0)
+        _bo[11] = 0.0 - _bo[11]
+        _bo[8] = _bo[8] + 10.0
+      end
+    end
+    bi = bi + 1.0
+  end
+
+  return 0.0
+end
+
+fn _bo_restart()
+  let sw = _bo[0]
+  let sh = _bo[1]
+  let paddle = _bo_ids[0]
+  let ball = _bo_ids[1]
+
+  // Reset paddle
+  sprite_set_pos(paddle, (sw - sprite_w(paddle)) / 2.0, sh - 40.0)
+
+  // Reset ball
+  let bs = sprite_w(ball)
+  sprite_set_pos(ball, sw / 2.0 - bs / 2.0, sh - 40.0 - bs - 10.0)
+  _bo[10] = 200.0
+  _bo[11] = 0.0 - _bo[3]
+
+  // Restore bricks
+  let bc = len(_bo_bricks)
+  let mut i = 0.0
+  while i < bc
+    _bo_bricks[int(i)] = 1.0
+    sprite_set_visible(_bo_brick_ids[int(i)], 1.0)
+    i = i + 1.0
+  end
+
+  _bo[8] = 0.0
+  _bo[9] = 0.0
+  return 0.0
+end
+
+// ── Main ──────────────────────────────────────────────────
+let cvs = game_init(800.0, 600.0, "Breakout")
+_bo_init()
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+  _bo_update(dt)
+
+  // Render
+  sprite_render_all(cvs)
+
+  // HUD
+  let score = _bo[8]
+  gui_canvas_text_colored(cvs, 10.0, 10.0, "Score: {score}", 2.0, 255.0, 255.0, 255.0)
+
+  if _bo[9] == 1.0
+    gui_canvas_text_colored(cvs, 250.0, 280.0, "GAME OVER", 4.0, 255.0, 80.0, 80.0)
+    gui_canvas_text_colored(cvs, 260.0, 330.0, "Press SPACE to restart", 2.0, 200.0, 200.0, 200.0)
+  end
+
+  game_frame_end()
+end

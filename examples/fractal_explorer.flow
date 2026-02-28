@@ -1,0 +1,97 @@
+// fractal_explorer.flow — Interactive Mandelbrot/Julia set explorer
+//
+// Controls: Click to center, +/- to zoom, J to toggle Julia mode
+// Arrow keys to pan, R to reset
+
+use "game/game"
+use "game/input"
+use "game/fractals"
+
+// [0]=center_x, [1]=center_y, [2]=zoom, [3]=max_iter, [4]=mode (0=mandelbrot, 1=julia)
+// [5]=julia_cr, [6]=julia_ci, [7]=dirty
+let mut _fe = [-0.5, 0.0, 200.0, 64.0, 0.0, -0.7, 0.27015, 1.0]
+
+let cvs = game_init(400.0, 300.0, "Fractal Explorer")
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+
+  // Pan with arrow keys
+  let pan_speed = 100.0 / _fe[2]
+  if input_left() == 1.0
+    _fe[0] = _fe[0] - pan_speed
+    _fe[7] = 1.0
+  end
+  if input_right() == 1.0
+    _fe[0] = _fe[0] + pan_speed
+    _fe[7] = 1.0
+  end
+  if input_up() == 1.0
+    _fe[1] = _fe[1] - pan_speed
+    _fe[7] = 1.0
+  end
+  if input_down() == 1.0
+    _fe[1] = _fe[1] + pan_speed
+    _fe[7] = 1.0
+  end
+
+  // Zoom with +/-
+  if input_key_down("=") == 1.0
+    _fe[2] = _fe[2] * 1.5
+    _fe[7] = 1.0
+  end
+  if input_key_down("-") == 1.0
+    _fe[2] = _fe[2] / 1.5
+    _fe[7] = 1.0
+  end
+
+  // Toggle Julia mode
+  if input_key_down("j") == 1.0
+    if _fe[4] == 0.0
+      _fe[4] = 1.0
+    else
+      _fe[4] = 0.0
+    end
+    _fe[7] = 1.0
+  end
+
+  // Reset
+  if input_key_down("r") == 1.0
+    _fe[0] = -0.5
+    _fe[1] = 0.0
+    _fe[2] = 200.0
+    _fe[4] = 0.0
+    _fe[7] = 1.0
+  end
+
+  // Click to center
+  if input_mouse_clicked() == 1.0
+    let mx = input_mouse_x()
+    let my = input_mouse_y()
+    _fe[0] = _fe[0] + (mx - 200.0) / _fe[2]
+    _fe[1] = _fe[1] + (my - 150.0) / _fe[2]
+    _fe[7] = 1.0
+  end
+
+  // Render only when dirty
+  if _fe[7] == 1.0
+    _fe[7] = 0.0
+    if _fe[4] == 0.0
+      fractal_mandelbrot(cvs, _fe[0], _fe[1], _fe[2], _fe[3])
+    else
+      fractal_julia(cvs, _fe[5], _fe[6], _fe[2], _fe[3])
+    end
+
+    // HUD overlay
+    let z = _fe[2]
+    if _fe[4] == 0.0
+      gui_canvas_text_colored(cvs, 5.0, 5.0, "Mandelbrot | zoom: {z}", 1.5, 255.0, 255.0, 255.0)
+    else
+      gui_canvas_text_colored(cvs, 5.0, 5.0, "Julia | zoom: {z}", 1.5, 255.0, 255.0, 255.0)
+    end
+    gui_canvas_text_colored(cvs, 5.0, 20.0, "Click=center +/-=zoom J=julia R=reset", 1.0, 180.0, 180.0, 180.0)
+  end
+
+  game_frame_end()
+end

@@ -1,0 +1,77 @@
+// stdlib/game/game.flow — Game loop and timing
+//
+// Functions: game_init, game_running, game_frame_start, game_frame_end,
+//            game_dt, game_fps, game_frame, game_canvas, game_width, game_height
+//
+// Wraps the GUI system with a game-friendly loop pattern.
+// Creates a fullscreen canvas for game rendering.
+//
+// Usage:
+//   let cvs = game_init(800, 600, "My Game")
+//   while game_running() == 1.0
+//     let dt = game_frame_start()
+//     // game logic + draw to game_canvas()
+//     game_frame_end()
+//   end
+
+use "gui/gui"
+use "gui/canvas"
+
+// Global game state in array (scalars don't propagate across fn calls)
+// [0]=running, [1]=dt, [2]=frame, [3]=time, [4]=canvas_id, [5]=width, [6]=height
+let mut _game = [0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0]
+
+fn game_init(width, height, title)
+  let _w = gui_init(width, height, title)
+  _game[4] = gui_canvas(0.0, 0.0, width, height)
+  _game[0] = 1.0
+  _game[5] = width
+  _game[6] = height
+  _game[3] = time()
+  return _game[4]
+end
+
+fn game_running()
+  return gui_running()
+end
+
+fn game_frame_start()
+  let now = time()
+  _game[1] = now - _game[3]
+  _game[3] = now
+  _game[2] = _game[2] + 1.0
+  gui_canvas_clear(int(_game[4]))
+  return _game[1]
+end
+
+fn game_frame_end()
+  gui_update()
+  return 0.0
+end
+
+fn game_dt()
+  return _game[1]
+end
+
+fn game_fps()
+  if _game[1] > 0.0
+    return 1.0 / _game[1]
+  end
+  return 60.0
+end
+
+fn game_frame()
+  return _game[2]
+end
+
+fn game_canvas()
+  return _game[4]
+end
+
+fn game_width()
+  return _game[5]
+end
+
+fn game_height()
+  return _game[6]
+end

@@ -1,0 +1,202 @@
+// stdlib/game/fractals.flow — Fractal rendering (CPU)
+//
+// Functions: fractal_mandelbrot, fractal_julia, fractal_burning_ship
+//
+// Renders fractals to a canvas using gui_canvas_fill for each pixel.
+// For GPU-accelerated version, see kernels/emit_fractal.flow.
+
+use "gui/gui"
+use "gui/canvas"
+
+// Color palette for iteration mapping
+let mut _frac_pal_r = []
+let mut _frac_pal_g = []
+let mut _frac_pal_b = []
+
+fn _frac_init_palette()
+  if len(_frac_pal_r) > 0.0
+    return 0.0
+  end
+  // 16-color palette for smooth coloring
+  let mut i = 0.0
+  while i < 16.0
+    let t = i / 16.0
+    // Dark blue → cyan → yellow → red → dark cycle
+    if t < 0.25
+      let s = t / 0.25
+      push(_frac_pal_r, s * 50.0)
+      push(_frac_pal_g, s * 100.0)
+      push(_frac_pal_b, 100.0 + s * 155.0)
+    elif t < 0.5
+      let s = (t - 0.25) / 0.25
+      push(_frac_pal_r, 50.0 + s * 200.0)
+      push(_frac_pal_g, 100.0 + s * 155.0)
+      push(_frac_pal_b, 255.0 - s * 155.0)
+    elif t < 0.75
+      let s = (t - 0.5) / 0.25
+      push(_frac_pal_r, 250.0)
+      push(_frac_pal_g, 255.0 - s * 155.0)
+      push(_frac_pal_b, 100.0 - s * 100.0)
+    else
+      let s = (t - 0.75) / 0.25
+      push(_frac_pal_r, 250.0 - s * 200.0)
+      push(_frac_pal_g, 100.0 - s * 80.0)
+      push(_frac_pal_b, s * 50.0)
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn _frac_color_r(iter, max_iter)
+  if iter >= max_iter
+    return 0.0
+  end
+  _frac_init_palette()
+  let idx = int(iter - floor(iter / 16.0) * 16.0)
+  return _frac_pal_r[idx]
+end
+
+fn _frac_color_g(iter, max_iter)
+  if iter >= max_iter
+    return 0.0
+  end
+  _frac_init_palette()
+  let idx = int(iter - floor(iter / 16.0) * 16.0)
+  return _frac_pal_g[idx]
+end
+
+fn _frac_color_b(iter, max_iter)
+  if iter >= max_iter
+    return 0.0
+  end
+  _frac_init_palette()
+  let idx = int(iter - floor(iter / 16.0) * 16.0)
+  return _frac_pal_b[idx]
+end
+
+// ── Mandelbrot Set ────────────────────────────────────────
+
+fn fractal_mandelbrot(canvas_id, cx, cy, zoom, max_iter)
+  _frac_init_palette()
+  // Get canvas dimensions from widget arrays
+  let cw = _gui_w[int(canvas_id)]
+  let ch = _gui_h[int(canvas_id)]
+
+  let mut py = 0.0
+  while py < ch
+    let mut px = 0.0
+    while px < cw
+      let x0 = cx + (px - cw / 2.0) / zoom
+      let y0 = cy + (py - ch / 2.0) / zoom
+      let mut zx = 0.0
+      let mut zy = 0.0
+      let mut iter = 0.0
+      while iter < max_iter
+        let zx2 = zx * zx
+        let zy2 = zy * zy
+        if zx2 + zy2 > 4.0
+          iter = max_iter + iter + 1.0
+        end
+        if iter < max_iter
+          zy = 2.0 * zx * zy + y0
+          zx = zx2 - zy2 + x0
+          iter = iter + 1.0
+        end
+      end
+      let actual_iter = iter - max_iter - 1.0
+      if iter > max_iter
+        let r = _frac_color_r(actual_iter, max_iter)
+        let g = _frac_color_g(actual_iter, max_iter)
+        let b = _frac_color_b(actual_iter, max_iter)
+        gui_canvas_fill(canvas_id, px, py, 1.0, 1.0, r, g, b)
+      end
+      px = px + 1.0
+    end
+    py = py + 1.0
+  end
+  return 0.0
+end
+
+// ── Julia Set ─────────────────────────────────────────────
+
+fn fractal_julia(canvas_id, cr, ci, zoom, max_iter)
+  _frac_init_palette()
+  let cw = _gui_w[int(canvas_id)]
+  let ch = _gui_h[int(canvas_id)]
+
+  let mut py = 0.0
+  while py < ch
+    let mut px = 0.0
+    while px < cw
+      let mut zx = (px - cw / 2.0) / zoom
+      let mut zy = (py - ch / 2.0) / zoom
+      let mut iter = 0.0
+      while iter < max_iter
+        let zx2 = zx * zx
+        let zy2 = zy * zy
+        if zx2 + zy2 > 4.0
+          iter = max_iter + iter + 1.0
+        end
+        if iter < max_iter
+          let new_zx = zx2 - zy2 + cr
+          zy = 2.0 * zx * zy + ci
+          zx = new_zx
+          iter = iter + 1.0
+        end
+      end
+      let actual_iter = iter - max_iter - 1.0
+      if iter > max_iter
+        let r = _frac_color_r(actual_iter, max_iter)
+        let g = _frac_color_g(actual_iter, max_iter)
+        let b = _frac_color_b(actual_iter, max_iter)
+        gui_canvas_fill(canvas_id, px, py, 1.0, 1.0, r, g, b)
+      end
+      px = px + 1.0
+    end
+    py = py + 1.0
+  end
+  return 0.0
+end
+
+// ── Burning Ship ──────────────────────────────────────────
+
+fn fractal_burning_ship(canvas_id, cx, cy, zoom, max_iter)
+  _frac_init_palette()
+  let cw = _gui_w[int(canvas_id)]
+  let ch = _gui_h[int(canvas_id)]
+
+  let mut py = 0.0
+  while py < ch
+    let mut px = 0.0
+    while px < cw
+      let x0 = cx + (px - cw / 2.0) / zoom
+      let y0 = cy + (py - ch / 2.0) / zoom
+      let mut zx = 0.0
+      let mut zy = 0.0
+      let mut iter = 0.0
+      while iter < max_iter
+        let zx2 = zx * zx
+        let zy2 = zy * zy
+        if zx2 + zy2 > 4.0
+          iter = max_iter + iter + 1.0
+        end
+        if iter < max_iter
+          zy = abs(2.0 * zx * zy) + y0
+          zx = zx2 - zy2 + x0
+          iter = iter + 1.0
+        end
+      end
+      let actual_iter = iter - max_iter - 1.0
+      if iter > max_iter
+        let r = _frac_color_r(actual_iter, max_iter)
+        let g = _frac_color_g(actual_iter, max_iter)
+        let b = _frac_color_b(actual_iter, max_iter)
+        gui_canvas_fill(canvas_id, px, py, 1.0, 1.0, r, g, b)
+      end
+      px = px + 1.0
+    end
+    py = py + 1.0
+  end
+  return 0.0
+end

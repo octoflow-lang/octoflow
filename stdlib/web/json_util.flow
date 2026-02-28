@@ -3,7 +3,9 @@
 // Functions: json_pretty, json_merge, json_get, json_flatten
 
 fn json_pretty(data)
-  // Simple indented JSON output
+  // Convert data to JSON string.
+  // Note: indentation is not yet supported by json_stringify;
+  // returns compact JSON. Use for serialization, not display.
   let raw = json_stringify(data)
   return raw
 end
@@ -30,7 +32,8 @@ fn json_get(data, key, default_val)
 end
 
 fn json_flatten(data, prefix)
-  // Flatten nested map to flat key paths
+  // Prefix top-level map keys with a given string.
+  // Note: only processes one level deep; nested maps are not recursed.
   let mut result = map()
   let keys = split(map_keys(data), ",")
   for k in keys
