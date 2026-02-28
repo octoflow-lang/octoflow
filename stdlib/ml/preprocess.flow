@@ -17,6 +17,8 @@ fn train_test_split(arr, test_ratio, train_out, test_out)
     map_set(result, "test_size", "0")
     return result
   end
+  // Shuffle to avoid bias from ordered data
+  shuffle_array(arr)
   // Clamp ratio to [0, 1]
   let mut ratio = test_ratio
   if ratio < 0.0
@@ -157,6 +159,9 @@ fn impute_missing(arr, strategy, missing_val)
         count = count + 1.0
       end
     end
+    if count == 0.0
+      return arr
+    end
     let fill = sum / count
     let mut result = []
     for x in arr
@@ -173,6 +178,9 @@ fn impute_missing(arr, strategy, missing_val)
       if x != missing_val
         push(valid, x)
       end
+    end
+    if len(valid) == 0.0
+      return arr
     end
     let fill = median(valid)
     let mut result = []

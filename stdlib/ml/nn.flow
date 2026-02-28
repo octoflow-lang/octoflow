@@ -77,13 +77,14 @@ fn softmax(arr)
 end
 
 fn cross_entropy_loss(predicted, target)
+  // Binary cross-entropy: -[t*log(p) + (1-t)*log(1-p)]
   let n = len(predicted)
   let mut loss = 0.0
+  let eps = 0.0001
   let mut i = 0.0
   while i < n
-    if target[i] == 1.0 && predicted[i] > 0.0001
-      loss = loss - log(predicted[i])
-    end
+    let p = clamp(predicted[i], eps, 1.0 - eps)
+    loss = loss - target[i] * log(p) - (1.0 - target[i]) * log(1.0 - p)
     i = i + 1.0
   end
   return loss / n

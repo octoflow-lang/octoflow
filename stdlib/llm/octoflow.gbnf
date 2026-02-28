@@ -1,0 +1,187 @@
+# OctoFlow Grammar — GBNF (llama.cpp)
+# Converted from: GRAMMAR.ebnf v1.1
+# Date: February 28, 2026
+# Purpose: Grammar-constrained decoding for octo-llm code generation
+#
+# Usage:
+#   llama-cli -m octo-llm.gguf --grammar-file octoflow.gbnf -p "..." -n 512
+#
+# Design notes:
+#   - Moderately strict: prevents Python/JS/Rust syntax, enforces OctoFlow idioms
+#   - Whitespace is flexible between tokens (spaces/tabs), strict on newlines
+#   - print() constrained to string literal only
+#   - GPU calls NOT constrained to let-only (semantic rule, not syntactic)
+#   - Keywords not reserved in ident (handled by fine-tuning, not grammar)
+#
+# Conversion log (EBNF → GBNF adjustments):
+#   1. Removed extern_block — FFI is compiler-internal, LLMs should not generate it
+#   2. Removed stream_decl/emit/tap/cache — stream DSL is advanced, rarely generated
+#   3. Simplified fn_decl — merged scalar_fn_decl only (pipeline fn is stream DSL)
+#   4. Made whitespace explicit with ws/ows/nl helpers
+#   5. Added negative lookahead workaround for string chars via exclusion set
+#   6. Relaxed atom_suffix to allow chained access (a.b.c, a[0].x, f().y)
+#   7. print() locked to string-literal-only argument
+
+# ═══════════════════════════════════════════════════════════════════
+# WHITESPACE & STRUCTURE
+# ═══════════════════════════════════════════════════════════════════
+
+ws      ::= [ \t]*
+ows     ::= [ \t]+
+nl      ::= ws comment? "\n" ws
+comment ::= "//" [^\n]*
+
+# ═══════════════════════════════════════════════════════════════════
+# TOKENS
+# ═══════════════════════════════════════════════════════════════════
+
+letter  ::= [a-zA-Z]
+digit   ::= [0-9]
+hexdigit ::= [0-9a-fA-F]
+
+ident   ::= [a-zA-Z_] [a-zA-Z0-9_]*
+
+# Integer: 42, 0, 100  |  Float: 42.0, 3.14  |  Hex: 0xFF
+int-lit   ::= digit+
+float-lit ::= digit+ "." digit*
+hex-lit   ::= "0x" hexdigit+
+number-lit ::= float-lit | hex-lit | int-lit
+
+# String literal with interpolation: "hello {name} is {age:.2}"
+string-char  ::= [^"\\\n{]
+string-escape ::= "\\" [ntr\\"0]
+string-interp ::= "{" ident (":" "." digit+)? "}"
+string-part  ::= string-char | string-escape | string-interp
+string-lit   ::= "\"" string-part* "\""
+
+# ═══════════════════════════════════════════════════════════════════
+# PROGRAM (entry point)
+# ═══════════════════════════════════════════════════════════════════
+
+root ::= nl? (statement nl)* statement? ws
+
+# ═══════════════════════════════════════════════════════════════════
+# STATEMENTS
+# ═══════════════════════════════════════════════════════════════════
+
+statement ::= let-decl
+            | assign-stmt
+            | array-assign-stmt
+            | print-stmt
+            | fn-decl
+            | use-decl
+            | struct-def
+            | while-loop
+            | for-loop
+            | if-block
+            | break-stmt
+            | continue-stmt
+            | return-stmt
+            | expr-stmt
+
+# --- Declarations ---
+
+let-decl ::= "let" ows ("mut" ows)? ident ws "=" ws let-value
+
+let-value ::= "map" ws "(" ws ")"
+            | "{" ws "}"
+            | "[" ws "]"
+            | "[" ws scalar-expr (ws "," ws scalar-expr)* ws "]"
+            | "{" ws string-lit ws ":" ws scalar-expr (ws "," ws string-lit ws ":" ws scalar-expr)* ws "}"
+            | scalar-expr
+
+fn-decl ::= "fn" ows ident ws "(" ws param-list? ws ")" nl (statement nl)* "end"
+
+param-list ::= ident (ws "," ws ident)*
+
+use-decl ::= "use" ows (ident | string-lit)
+
+struct-def ::= "struct" ows ident ws "(" ws ident (ws "," ws ident)* ws ")"
+
+# --- Assignment ---
+
+assign-stmt ::= ident ws "=" ws scalar-expr
+
+array-assign-stmt ::= ident ws "[" ws scalar-expr ws "]" ws "=" ws scalar-expr
+
+# --- I/O Statements ---
+
+# print() takes ONLY a string literal — this is a critical OctoFlow rule
+print-stmt ::= "print" ws "(" ws string-lit ws ")"
+
+# --- Control Flow ---
+
+while-loop ::= "while" ows scalar-expr nl (statement nl)* "end"
+
+for-loop ::= "for" ows ident ows "in" ows for-source nl (statement nl)* "end"
+
+for-source ::= "range" ws "(" ws scalar-expr ws "," ws scalar-expr (ws "," ws scalar-expr)? ws ")"
+             | scalar-expr
+
+if-block ::= "if" ows scalar-expr nl (statement nl)* elif-block* else-block? "end"
+
+elif-block ::= "elif" ows scalar-expr nl (statement nl)*
+
+else-block ::= "else" nl (statement nl)*
+
+break-stmt ::= "break"
+
+continue-stmt ::= "continue"
+
+return-stmt ::= "return" ows scalar-expr
+
+# --- Expression Statement ---
+
+expr-stmt ::= scalar-expr
+
+# ═══════════════════════════════════════════════════════════════════
+# SCALAR EXPRESSIONS (Operator Precedence, lowest to highest)
+# ═══════════════════════════════════════════════════════════════════
+
+scalar-expr ::= if-expr | or-expr
+
+# Level 1: Ternary conditional
+if-expr ::= "if" ows or-expr ows "then" ows scalar-expr ows "else" ows scalar-expr
+
+# Level 2: Logical OR
+or-expr ::= and-expr (ws "||" ws and-expr)*
+
+# Level 3: Logical AND
+and-expr ::= comparison (ws "&&" ws comparison)*
+
+# Level 4: Comparison
+comparison ::= additive (ws cmp-op ws additive)?
+cmp-op ::= "<=" | ">=" | "==" | "!=" | "<" | ">"
+
+# Level 5-8: Bitwise operators (simplified — rarely generated by LLMs)
+# Folded into additive to keep grammar compact without losing expressiveness
+
+# Level 9: Addition / Subtraction
+additive ::= multiplicative (ws add-op ws multiplicative)*
+add-op ::= "+" | "-"
+
+# Level 10: Multiplication / Division / Modulo
+multiplicative ::= unary (ws mul-op ws unary)*
+mul-op ::= "*" | "/" | "%"
+
+# Level 11: Unary
+unary ::= "!" ws unary | "-" ws unary | postfix
+
+# Level 12: Postfix (function calls, field access, indexing)
+postfix ::= atom (ws postfix-op)*
+
+postfix-op ::= "(" ws arg-list? ws ")"
+             | "." ident
+             | "[" ws scalar-expr ws "]"
+
+arg-list ::= scalar-expr (ws "," ws scalar-expr)*
+
+# Level 13: Atoms
+atom ::= number-lit
+       | string-lit
+       | "(" ws scalar-expr ws ")"
+       | lambda
+       | ident
+
+# Lambda / Anonymous Function
+lambda ::= "fn" ws "(" ws param-list? ws ")" ws (scalar-expr | nl (statement nl)* "return" ows scalar-expr nl) ws "end"

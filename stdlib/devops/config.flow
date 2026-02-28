@@ -35,6 +35,11 @@ end
 
 fn parse_env_file(path)
   // Parse .env file: KEY=VALUE
+  // Security: reject paths with ".." to prevent directory traversal
+  if contains(path, "..")
+    print("parse_env_file: path traversal rejected (contains '..')")
+    return map()
+  end
   let content = read_file(path)
   let lines = split(content, chr(10))
   let mut result = map()

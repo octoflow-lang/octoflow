@@ -24,7 +24,7 @@ fn knn_predict(x_train, y_train, x_test, k)
         dists[len(dists) - 1.0] = d
         labels[len(labels) - 1.0] = y_train[i]
       end
-      // Simple sort of last k
+      // Insertion sort: bubble new element into sorted position
       let nd = len(dists)
       let mut j = nd - 1.0
       while j > 0.0
@@ -35,6 +35,8 @@ fn knn_predict(x_train, y_train, x_test, k)
           let tmp_l = labels[j]
           labels[j] = labels[j - 1.0]
           labels[j - 1.0] = tmp_l
+        else
+          break
         end
         j = j - 1.0
       end

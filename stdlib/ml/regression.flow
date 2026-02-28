@@ -16,6 +16,14 @@ fn linear_regression(x, y)
     sxx = sxx + (x[i] - mx) * (x[i] - mx)
     i = i + 1.0
   end
+  if sxx == 0.0
+    // All x values are identical — no variance, slope is undefined
+    let mut model = map()
+    map_set(model, "type", "linear")
+    map_set(model, "slope", "0")
+    map_set(model, "intercept", str(my))
+    return model
+  end
   let slope = sxy / sxx
   let intercept = my - slope * mx
   let mut model = map()

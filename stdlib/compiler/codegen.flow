@@ -287,6 +287,9 @@ while pi < tok_count
                     // collect expression tokens until ")" that closes the map(
                     let mut expr_str = ""
                     let mut paren_depth = 1.0
+                    // Track last operand position for ** → pow(a, b) rewriting
+                    let mut last_operand_start = 0.0
+                    let mut in_pow = 0.0
                     while param_i < tok_count && paren_depth > 0.0
                       let et = tok_types[param_i]
                       let ev = tok_values[param_i]
@@ -298,6 +301,11 @@ while pi < tok_count
                         if paren_depth > 0.0
                           expr_str = expr_str + ")"
                         end
+                        // Close pow() if we were inside one
+                        if in_pow == 1.0
+                          expr_str = expr_str + ")"
+                          in_pow = 0.0
+                        end
                       elif et == "nl"
                         // ignore newlines inside expr
                       elif et == "float"
@@ -307,6 +315,7 @@ while pi < tok_count
                             expr_str = expr_str + " "
                           end
                         end
+                        last_operand_start = len(expr_str)
                         // Format: ensure float suffix for GLSL (x.0 → x.0)
                         let fv_str = ev
                         if contains(fv_str, ".")
@@ -314,22 +323,39 @@ while pi < tok_count
                         else
                           expr_str = expr_str + fv_str + ".0"
                         end
-                      elif et == "ident" || et == "op" || et == "kw"
-                        if len(expr_str) > 0.0
-                          let last_ch = char_at(expr_str, len(expr_str) - 1.0)
-                          if last_ch != "(" && last_ch != " "
-                            expr_str = expr_str + " "
-                          end
+                        // Close pow() after the second operand
+                        if in_pow == 1.0
+                          expr_str = expr_str + ")"
+                          in_pow = 0.0
                         end
-                        // Remap OctoFlow ops to GLSL
+                      elif et == "ident" || et == "op" || et == "kw"
                         if ev == "**"
-                          expr_str = expr_str + "pow("
-                        elif ev == "&&"
-                          expr_str = expr_str + " && "
-                        elif ev == "||"
-                          expr_str = expr_str + " || "
+                          // Rewrite: wrap previous operand with pow(, add comma
+                          // expr_str = "...prev_operand" → "...pow(prev_operand, "
+                          let before = substr(expr_str, 0.0, last_operand_start)
+                          let operand = substr(expr_str, last_operand_start, len(expr_str))
+                          expr_str = before + "pow(" + trim(operand) + ", "
+                          in_pow = 1.0
                         else
-                          expr_str = expr_str + ev
+                          if len(expr_str) > 0.0
+                            let last_ch = char_at(expr_str, len(expr_str) - 1.0)
+                            if last_ch != "(" && last_ch != " "
+                              expr_str = expr_str + " "
+                            end
+                          end
+                          if ev == "&&"
+                            expr_str = expr_str + " && "
+                          elif ev == "||"
+                            expr_str = expr_str + " || "
+                          else
+                            last_operand_start = len(expr_str)
+                            expr_str = expr_str + ev
+                            // Close pow() after the second operand (ident case)
+                            if in_pow == 1.0
+                              expr_str = expr_str + ")"
+                              in_pow = 0.0
+                            end
+                          end
                         end
                       end
                       param_i = param_i + 1.0

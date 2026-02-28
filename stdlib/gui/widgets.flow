@@ -89,7 +89,12 @@ fn gui_listbox_selected(id)
 end
 
 fn gui_listbox_text(id, idx)
-  let start = _gui_list_start[int(id)]
+  let ii = int(id)
+  let count = _gui_list_count[ii]
+  if idx < 0.0 || idx >= count
+    return ""
+  end
+  let start = _gui_list_start[ii]
   let actual = int(start + idx)
   return _gui_list_items[actual]
 end
@@ -152,7 +157,12 @@ fn gui_dropdown_selected(id)
 end
 
 fn gui_dropdown_text(id, idx)
-  let start = _gui_list_start[int(id)]
+  let ii = int(id)
+  let count = _gui_list_count[ii]
+  if idx < 0.0 || idx >= count
+    return ""
+  end
+  let start = _gui_list_start[ii]
   return _gui_list_items[int(start + idx)]
 end
 
@@ -232,12 +242,21 @@ fn gui_tree_selected(id)
 end
 
 fn gui_tree_text(id, node_idx)
-  let start = _gui_list_start[int(id)]
+  let ii = int(id)
+  let count = _gui_list_count[ii]
+  if node_idx < 0.0 || node_idx >= count
+    return ""
+  end
+  let start = _gui_list_start[ii]
   return _gui_tree_labels[int(start + node_idx)]
 end
 
 fn gui_tree_toggle(id, node_idx)
   let ii = int(id)
+  let count = _gui_list_count[ii]
+  if node_idx < 0.0 || node_idx >= count
+    return 0.0
+  end
   let abs_idx = int(_gui_list_start[ii] + node_idx)
   if _gui_tree_expanded[abs_idx] == 1.0
     _gui_tree_expanded[abs_idx] = 0.0
@@ -249,7 +268,12 @@ fn gui_tree_toggle(id, node_idx)
 end
 
 fn gui_tree_is_expanded(id, node_idx)
-  let abs_idx = int(_gui_list_start[int(id)] + node_idx)
+  let ii = int(id)
+  let count = _gui_list_count[ii]
+  if node_idx < 0.0 || node_idx >= count
+    return 0.0
+  end
+  let abs_idx = int(_gui_list_start[ii] + node_idx)
   return _gui_tree_expanded[abs_idx]
 end
 

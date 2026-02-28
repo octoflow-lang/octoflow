@@ -1,12 +1,19 @@
 // stdlib/devops/process.flow — Process and shell utilities
 //
 // Functions: run, run_shell, run_status, run_ok, pipe, env_get, which
+//
+// WARNING: run_shell() and pipe() pass commands through the system shell
+// (sh -c / cmd /c). NEVER construct shell commands from untrusted input
+// without escaping — this enables command injection. For safe execution
+// of programs with arguments, use run() or exec() directly instead.
 
 fn run(cmd)
   let r = exec(cmd)
   return r.output
 end
 
+// WARNING: Shell injection risk if cmd contains untrusted input.
+// Use exec(program, arg1, arg2, ...) for safe argument passing.
 fn run_shell(cmd)
   if os_name() == "windows"
     let r = exec("cmd", "/c", cmd)
@@ -26,6 +33,7 @@ fn run_ok(cmd)
   return r.ok
 end
 
+// WARNING: Shell injection risk — same as run_shell().
 fn pipe(cmd1, cmd2)
   // Run cmd1, check success, then run cmd2
   let r1 = exec("sh", "-c", cmd1)

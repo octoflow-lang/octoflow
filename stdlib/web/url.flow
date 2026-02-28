@@ -1,6 +1,6 @@
 // stdlib/web/url.flow — URL parsing and manipulation
 //
-// Functions: url_parse, build_url, query_string
+// Functions: url_parse, build_url, query_string, url_encode
 
 fn url_parse(url)
   let mut result = map()
@@ -43,13 +43,37 @@ fn build_url(protocol, host, path, query)
   return url
 end
 
+// Percent-encode a string for safe use in URLs.
+// Encodes all characters except unreserved: A-Z a-z 0-9 - _ . ~
+fn url_encode(s)
+  let mut result = ""
+  let hex = "0123456789ABCDEF"
+  let mut i = 0.0
+  while i < len(s)
+    let c = char_at(s, i)
+    let code = char_code(c)
+    // Unreserved characters pass through
+    if (code >= 65.0 && code <= 90.0) || (code >= 97.0 && code <= 122.0) || (code >= 48.0 && code <= 57.0) || c == "-" || c == "_" || c == "." || c == "~"
+      result = result + c
+    else
+      // Percent-encode: %XX
+      let hi = int(code / 16.0)
+      let lo = int(code) % 16
+      result = result + "%" + char_at(hex, hi) + char_at(hex, lo)
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
 fn query_string(params)
   // params: map of key -> value
+  // Values are percent-encoded to prevent injection
   let keys = split(map_keys(params), ",")
   let mut parts = []
   for key in keys
     let val = map_get(params, key)
-    push(parts, key + "=" + val)
+    push(parts, url_encode(key) + "=" + url_encode(val))
   end
   return join(parts, "&")
 end

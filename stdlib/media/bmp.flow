@@ -116,6 +116,18 @@ fn bmp_decode(bytes)
   let bpp = bmp_u16le(bytes, 28.0)
   let compression = bmp_u32le(bytes, 30.0)
 
+  // Reject zero-size or excessively large images (max 16384x16384)
+  if width <= 0.0 || height <= 0.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Invalid image dimensions (zero or negative)")
+    return result
+  end
+  if width > 16384.0 || height > 16384.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Image too large (max 16384x16384)")
+    return result
+  end
+
   // Only support uncompressed (0) and BITFIELDS (3) for 32-bit
   if compression != 0.0
     if compression != 3.0

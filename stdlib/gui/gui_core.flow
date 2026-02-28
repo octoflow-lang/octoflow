@@ -731,12 +731,21 @@ end
 // ── Base Widget Registration ────────────────────────────────────────
 
 fn _gui_add_widget(wtype, x, y, w, h, text)
+  // Clamp dimensions to minimum 1x1 to prevent zero/negative sizes
+  let mut cw = w
+  let mut ch = h
+  if cw < 1.0
+    cw = 1.0
+  end
+  if ch < 1.0
+    ch = 1.0
+  end
   let id = len(_gui_types)
   push(_gui_types, wtype)
   push(_gui_x, x)
   push(_gui_y, y)
-  push(_gui_w, w)
-  push(_gui_h, h)
+  push(_gui_w, cw)
+  push(_gui_h, ch)
   push(_gui_visible, 1.0)
   push(_gui_enabled, 1.0)
   push(_gui_parent, -1.0)

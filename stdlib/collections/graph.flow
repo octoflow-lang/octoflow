@@ -34,8 +34,9 @@ fn graph_add_edge(g, from, to, weight)
   let key = "adj_" + from
   let existing = map_get(g, key)
   if len(existing) > 0.0
-    // Check if already present
-    if contains(existing, to) == 0.0
+    // Check if already present (delimited match to avoid substring false positives)
+    let delimited = "," + existing + ","
+    if contains(delimited, "," + to + ",") == 0.0
       map_set(g, key, existing + "," + to)
     end
   else
@@ -124,7 +125,9 @@ fn graph_has_edge(g, from, to)
     return 0.0
   end
   let adj = map_get(g, key)
-  if contains(adj, to)
+  // Use delimited match to avoid substring false positives (e.g. "1" in "1,10")
+  let delimited = "," + adj + ","
+  if contains(delimited, "," + to + ",")
     return 1.0
   end
   return 0.0

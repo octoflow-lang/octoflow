@@ -80,7 +80,12 @@ fn str_count(s, sub)
 end
 
 fn str_reverse(s)
+  // Note: operates on byte-level indices — safe for ASCII strings.
+  // For multibyte UTF-8 strings, use split() + array reversal instead.
   let n = len(s)
+  if n == 0.0
+    return ""
+  end
   let mut result = ""
   let mut i = n - 1.0
   while i >= 0.0

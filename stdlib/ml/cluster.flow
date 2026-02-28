@@ -2,20 +2,23 @@
 //
 // Functions: kmeans, euclidean_distance, manhattan_distance, silhouette_score
 
-fn kmeans(data, k, max_iter)
+fn kmeans(data, k, n_features, max_iter)
   // K-means clustering on flat array (n_samples * n_features)
-  // data: flat array, features_per_sample implied by len(data)/n_samples
+  // data: flat array of length n_samples * n_features (row-major)
+  // n_features: number of features per sample
   // Returns: labels array (cluster assignment per sample)
   let n = len(data)
-  // Assume 1D data for simplicity
-  let n_samples = n
-  let n_features = 1.0
-  // Initialize centroids randomly
+  let n_samples = floor(n / n_features)
+  // Initialize centroids by picking k random samples
   let mut centroids = []
   let mut i = 0.0
   while i < k
     let idx = floor(random() * n_samples)
-    push(centroids, data[idx])
+    let mut f = 0.0
+    while f < n_features
+      push(centroids, data[idx * n_features + f])
+      f = f + 1.0
+    end
     i = i + 1.0
   end
   let mut labels = []
@@ -31,10 +34,23 @@ fn kmeans(data, k, max_iter)
     i = 0.0
     while i < n_samples
       let mut best_c = 0.0
-      let mut best_dist = abs(data[i] - centroids[0])
+      // Distance to centroid 0
+      let mut best_dist = 0.0
+      let mut f = 0.0
+      while f < n_features
+        let d = data[i * n_features + f] - centroids[0 * n_features + f]
+        best_dist = best_dist + d * d
+        f = f + 1.0
+      end
       let mut c = 1.0
       while c < k
-        let dist = abs(data[i] - centroids[c])
+        let mut dist = 0.0
+        f = 0.0
+        while f < n_features
+          let d = data[i * n_features + f] - centroids[c * n_features + f]
+          dist = dist + d * d
+          f = f + 1.0
+        end
         if dist < best_dist
           best_dist = dist
           best_c = c
@@ -53,18 +69,27 @@ fn kmeans(data, k, max_iter)
     // Update centroids
     let mut c = 0.0
     while c < k
-      let mut sum = 0.0
-      let mut count = 0.0
-      i = 0.0
-      while i < n_samples
-        if labels[i] == c
-          sum = sum + data[i]
-          count = count + 1.0
+      // Sum features for all samples in cluster c
+      let mut counts = 0.0
+      let mut f = 0.0
+      while f < n_features
+        let mut sum = 0.0
+        let mut cnt = 0.0
+        i = 0.0
+        while i < n_samples
+          if labels[i] == c
+            sum = sum + data[i * n_features + f]
+            cnt = cnt + 1.0
+          end
+          i = i + 1.0
         end
-        i = i + 1.0
-      end
-      if count > 0.0
-        centroids[c] = sum / count
+        if cnt > 0.0
+          centroids[c * n_features + f] = sum / cnt
+        end
+        if f == 0.0
+          counts = cnt
+        end
+        f = f + 1.0
       end
       c = c + 1.0
     end
@@ -101,7 +126,7 @@ fn manhattan_distance(a, b)
 end
 
 fn silhouette_score(data, labels, k)
-  // Simplified silhouette score (1D data)
+  // Simplified silhouette score (1D data, pass n_features=1)
   let n = len(data)
   let mut total = 0.0
   let mut i = 0.0

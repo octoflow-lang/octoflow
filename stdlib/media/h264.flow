@@ -698,11 +698,15 @@ fn h264_decode_idr(sample, nal_length_size)
     let mb_type = h264_read_ue(rbsp, bs)
 
     if mb_type == 25.0
-      // I_PCM: read 256 luma + 64 Cb + 64 Cr raw bytes
+      // I_PCM: read 256 luma + 64 Cb + 64 Cr raw bytes (384 total)
       // Align to byte boundary
       if bs[1] > 0.0
         bs[0] = bs[0] + 1.0
         bs[1] = 0.0
+      end
+      // Bounds check: need 384 bytes remaining
+      if bs[0] + 384.0 > len(rbsp)
+        break
       end
       for r in range(0, 16)
         for c in range(0, 16)

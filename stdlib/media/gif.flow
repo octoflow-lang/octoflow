@@ -244,6 +244,19 @@ fn gif_decode(bytes)
   // Logical screen descriptor
   let width = gif_u16le(bytes, 6.0)
   let height = gif_u16le(bytes, 8.0)
+
+  // Reject zero-size or excessively large images (max 16384x16384)
+  if width <= 0.0 || height <= 0.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Invalid image dimensions (zero or negative)")
+    return result
+  end
+  if width > 16384.0 || height > 16384.0
+    map_set(result, "ok", 0.0)
+    map_set(result, "error", "Image too large (max 16384x16384)")
+    return result
+  end
+
   let packed = bytes[10]
   let has_gct = bit_and(bit_shr(packed, 7.0), 1.0)
   let gct_size_bits = bit_and(packed, 7.0)
