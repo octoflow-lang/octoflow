@@ -143,4 +143,5 @@ examples/test_*.flow
 !examples/test_math_mod.flow
 !examples/test_nested_use_mod.flow
 examples/GPU_*.md
-.github/
+.github/*
+!.github/ISSUE_TEMPLATE/
