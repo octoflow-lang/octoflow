@@ -6,6 +6,8 @@ OctoFlow is a GPU-native programming language with built-in AI code generation. 
 
 ## `octoflow chat` — Describe What You Want
 
+![OctoFlow Chat Demo](docs/demo.gif)
+
 ```
 $ octoflow chat --allow-net
 OctoFlow v1.2 — Chat Mode (type :help for commands)
