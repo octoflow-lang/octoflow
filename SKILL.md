@@ -9,7 +9,7 @@ description: >
   No Python, no CUDA, no dependencies — single 3.2 MB binary.
   Use for: "sort a million numbers", "cluster this CSV", "blur this image",
   "plot my data", "calculate statistics", "run regression".
-version: 1.3.1
+version: 1.3.2
 metadata:
   openclaw:
     emoji: "\U0001F419"
@@ -17,11 +17,20 @@ metadata:
       anyBins:
         - octoflow
     install:
-      - id: github-release
+      - id: github-release-windows
         kind: download
-        url: https://github.com/octoflow-lang/octoflow/releases/download/v1.2.0/octoflow-v1.2.0-x86_64-windows.zip
+        url: https://github.com/octoflow-lang/octoflow/releases/download/v1.3.0/octoflow-v1.3.0-x86_64-windows.zip
         bins: [octoflow]
-        label: "Download OctoFlow binary (3.2 MB, zero dependencies)"
+        os: win32
+        sha256: 84753c206a1c238b400f956a6ca6d550834db90dd406ad5912cbbd7170bfb73e
+        label: "Download OctoFlow for Windows (3.2 MB, zero dependencies)"
+      - id: github-release-linux
+        kind: download
+        url: https://github.com/octoflow-lang/octoflow/releases/download/v1.3.0/octoflow-v1.3.0-x86_64-linux.tar.gz
+        bins: [octoflow]
+        os: linux
+        sha256: 4630ee16ec04f61fe540d0d4bf18cc490e8d8b3a3d1fcadeab384abc57ef71bf
+        label: "Download OctoFlow for Linux (3.2 MB, zero dependencies)"
     os: [linux, win32]
     always: false
 tags: [gpu, vulkan, compute, data-analysis, image-processing,
@@ -185,10 +194,10 @@ Contents: which stdlib modules you use frequently and corrections from previous 
 
 | Platform | File | SHA-256 |
 |----------|------|---------|
-| Windows x64 | [octoflow-v1.2.0-x86_64-windows.zip](https://github.com/octoflow-lang/octoflow/releases/download/v1.2.0/octoflow-v1.2.0-x86_64-windows.zip) | `0f2614a6f34f3e2f` |
-| Linux x64 | [octoflow-v1.2.0-x86_64-linux.tar.gz](https://github.com/octoflow-lang/octoflow/releases/download/v1.2.0/octoflow-v1.2.0-x86_64-linux.tar.gz) | `9276e78ed92f023a` |
+| Windows x64 | [octoflow-v1.3.0-x86_64-windows.zip](https://github.com/octoflow-lang/octoflow/releases/download/v1.3.0/octoflow-v1.3.0-x86_64-windows.zip) | `84753c206a1c238b` |
+| Linux x64 | [octoflow-v1.3.0-x86_64-linux.tar.gz](https://github.com/octoflow-lang/octoflow/releases/download/v1.3.0/octoflow-v1.3.0-x86_64-linux.tar.gz) | `4630ee16ec04f61f` |
 
-Verify: `sha256sum octoflow-*` (full checksums match the above prefixes).
+Verify: `sha256sum octoflow-v1.3.0-*` (full checksums in [SHA256SUMS.txt](https://github.com/octoflow-lang/octoflow/releases/download/v1.3.0/SHA256SUMS.txt)).
 
 Unzip/extract, add to PATH. No installer needed.
 
