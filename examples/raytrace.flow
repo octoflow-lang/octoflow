@@ -7,7 +7,7 @@
 //   octoflow run examples/raytrace.flow --allow-read --allow-write --set mode=sixel
 //   octoflow run examples/raytrace.flow --allow-read --allow-write --set mode=halfblock
 
-use "../stdlib/loom/raytrace_emit"
+use "../stdlib/loom/emit/misc/raytrace_emit"
 use "../stdlib/terminal/render"
 
 // Protocol selection: override via --set mode=kitty|sixel|halfblock|digits

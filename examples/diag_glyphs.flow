@@ -1,4 +1,4 @@
-use "stdlib/media/ttf"
+use "../stdlib/media/ttf"
 
 print("Parsing Inter.ttf...")
 let _r = ttf_parse_all_ascii("octoui/fonts/Inter.ttf")

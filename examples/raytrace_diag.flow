@@ -1,5 +1,5 @@
 // raytrace_diag.flow — Diagnostic: compare CPU vs GPU unpack, test all render paths
-use "../stdlib/loom/raytrace_emit"
+use "../stdlib/loom/emit/misc/raytrace_emit"
 
 let w = 80.0
 let h = 60.0

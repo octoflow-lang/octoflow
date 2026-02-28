@@ -8,7 +8,7 @@
 //   octoflow run examples/raytrace_orbit.flow --allow-read --allow-write --set mode=sixel
 //   octoflow run examples/raytrace_orbit.flow --allow-read --allow-write --set delay=150
 
-use "../stdlib/loom/raytrace_emit"
+use "../stdlib/loom/emit/misc/raytrace_emit"
 use "../stdlib/terminal/render"
 
 // Configuration (overridable via --set)
