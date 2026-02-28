@@ -71,8 +71,9 @@ GPU: NVIDIA GeForce GTX 1660 SUPER
 30000000
 ```
 
-Download the binary. Unzip. Run. GPU detected automatically.
-Works without a GPU too — all GPU operations fall back to CPU.
+**[Download the latest release](https://github.com/octoflow-lang/octoflow/releases/latest)** — unzip, run. GPU detected automatically. Works without a GPU too (all GPU operations fall back to CPU).
+
+New? Start here: **[Getting Started Guide](docs/getting-started.md)**
 
 ## What's New in v1.2
 
@@ -302,7 +303,7 @@ Three crates. Zero external Rust dependencies. Only system libraries (vulkan-1, 
 
 ## Tests
 
-**1,017+ tests**, all passing. Zero failures.
+**1,030+ tests**, all passing. Zero failures.
 
 ```
 Rust unit tests:       854 (compiler, parser, Vulkan, OctoView)

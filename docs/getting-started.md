@@ -6,13 +6,21 @@ Get from zero to running GPU code in under 5 minutes.
 
 ## 1. Install
 
+Download from **[GitHub Releases](https://github.com/octoflow-lang/octoflow/releases/latest)**.
+
 ### Windows
 
-Download from [GitHub Releases](https://github.com/octoflow-lang/octoflow/releases/latest), unzip, and add to PATH.
+1. Download `octoflow-v1.2.0-x86_64-windows.zip`
+2. Unzip and add the folder to your PATH
 
-### Linux / macOS
+### Linux
 
-Coming soon. For now, build from source (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
+1. Download `octoflow-v1.2.0-x86_64-linux.tar.gz`
+2. Extract and move to PATH:
+   ```bash
+   tar xzf octoflow-v1.2.0-x86_64-linux.tar.gz
+   sudo cp octoflow/octoflow /usr/local/bin/
+   ```
 
 ### Verify
 
