@@ -5,6 +5,7 @@ description: >
   Use when the user wants to run GPU-accelerated computations, analyze data,
   process images, train ML models, or generate code from natural language.
   OctoFlow turns English task descriptions into GPU programs via Vulkan.
+  Ships as an MCP server — run `octoflow mcp-serve` for 7 structured tools.
   No Python, no CUDA, no dependencies — single 3.2 MB binary.
   Use for: "sort a million numbers", "cluster this CSV", "blur this image",
   "plot my data", "calculate statistics", "run regression".
@@ -18,10 +19,9 @@ metadata:
     install:
       - id: github-release
         kind: download
-        url: https://github.com/octoflow-lang/octoflow/releases/latest
+        url: https://github.com/octoflow-lang/octoflow/releases
         bins: [octoflow]
-        label: "Download OctoFlow binary from GitHub Releases (~3 MB)"
-        verify: "Each release includes SHA256SUMS.txt — run: sha256sum -c SHA256SUMS.txt"
+        label: "Download OctoFlow binary from GitHub Releases (3.2 MB)"
     os: [darwin, linux, win32]
     always: false
 tags: [gpu, vulkan, compute, data-analysis, image-processing, llm,
@@ -95,6 +95,36 @@ OctoFlow runs **sandboxed by default** — no network, no file writes outside cw
 
 Without flags: can only read `.flow` source files and print to stdout.
 
+## MCP Server (Agent Integration)
+
+OctoFlow ships as an MCP server for AI agent integration:
+
+```bash
+octoflow mcp-serve
+```
+
+### Configuration
+
+Add to your OpenClaw, Claude Desktop, or Cursor config:
+
+```json
+{"mcpServers": {"octoflow": {"command": "octoflow", "args": ["mcp-serve"]}}}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `octoflow_run` | Execute OctoFlow code directly |
+| `octoflow_chat` | Natural language to GPU code |
+| `octoflow_check` | Validate .flow syntax |
+| `octoflow_gpu_sort` | GPU-accelerated sorting |
+| `octoflow_gpu_stats` | GPU statistical operations |
+| `octoflow_image` | Image processing (BMP, GIF) |
+| `octoflow_csv` | CSV data analysis |
+
+Works with OpenClaw, Claude Desktop, Cursor, Windsurf, and any MCP client.
+
 ## Common Patterns
 
 ### Data Analysis
@@ -139,6 +169,10 @@ octoflow chat "load data.csv, compute Pearson correlation between col1 and col2"
 | Chat mode | English to code with auto-fix loop (max 3 retries) |
 | Grammar | GBNF-constrained decoding prevents syntax errors |
 | Errors | 69 structured error codes with auto-fix suggestions |
+| MCP Server | 7 structured tools via JSON-RPC 2.0 |
+| Context Engine | 169-file knowledge tree, auto-skill loading |
+| Memory | Persistent cross-session memory, OCTOFLOW.md project config |
+| Platforms | Windows, Linux, macOS (Apple Silicon via MoltenVK) |
 
 ## Domains
 
