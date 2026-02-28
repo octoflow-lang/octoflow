@@ -8,7 +8,7 @@ description: >
   No Python, no CUDA, no dependencies — single 3.2 MB binary.
   Use for: "sort a million numbers", "cluster this CSV", "blur this image",
   "plot my data", "calculate statistics", "run regression".
-version: 1.2.2
+version: 1.3.0
 metadata:
   openclaw:
     emoji: "\U0001F419"
@@ -18,9 +18,10 @@ metadata:
     install:
       - id: github-release
         kind: download
-        url: https://github.com/octoflow-lang/octoflow/releases
+        url: https://github.com/octoflow-lang/octoflow/releases/latest
         bins: [octoflow]
-        label: "Download OctoFlow binary from GitHub Releases (3.2 MB)"
+        label: "Download OctoFlow binary from GitHub Releases (~3 MB)"
+        verify: "Each release includes SHA256SUMS.txt — run: sha256sum -c SHA256SUMS.txt"
     os: [darwin, linux, win32]
     always: false
 tags: [gpu, vulkan, compute, data-analysis, image-processing, llm,
