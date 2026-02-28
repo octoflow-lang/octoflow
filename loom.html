@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GPU Virtual Machine — OctoFlow</title>
-<meta name="description" content="OctoFlow GPU VM: 5 memory regions, autonomous dispatch chains, HOST_VISIBLE polling. The GPU is the computer.">
-<meta property="og:title" content="GPU Virtual Machine — OctoFlow">
+<title>Loom Engine — OctoFlow</title>
+<meta name="description" content="OctoFlow Loom Engine: 5 memory regions, autonomous dispatch chains, HOST_VISIBLE polling. The GPU is the computer.">
+<meta property="og:title" content="Loom Engine — OctoFlow">
 <meta property="og:description" content="GPU-resident autonomous execution. 5 SSBOs. Single vkQueueSubmit. Zero CPU orchestration.">
 <meta property="og:image" content="https://octoflow-lang.github.io/octoflow/assets/logo.png">
 <meta name="theme-color" content="#1a8a8a">
@@ -444,27 +444,27 @@ footer a:hover { color: var(--text); }
   <div class="centered">
     <span class="section-label">Example</span>
     <h2>Boot, dispatch, read results.</h2>
-    <p class="section-desc">A complete GPU VM session in 8 lines. Data stays on the GPU between kernel dispatches.</p>
+    <p class="section-desc">A complete Loom Engine session in 8 lines. Data stays on the GPU between kernel dispatches.</p>
   </div>
   <div class="code-block">
-    <div class="code-block-header">gpu_vm_example.flow</div>
-    <pre><span class="c">// Boot a VM with 3 memory region sizes</span>
-<span class="k">let</span> vm = <span class="f">vm_boot</span>(<span class="n">1.0</span>, <span class="n">8.0</span>, <span class="n">16.0</span>)
+    <div class="code-block-header">loom_example.flow</div>
+    <pre><span class="c">// Boot a unit with 3 memory region sizes</span>
+<span class="k">let</span> unit = <span class="f">loom_boot</span>(<span class="n">1.0</span>, <span class="n">8.0</span>, <span class="n">16.0</span>)
 
-<span class="c">// Load data into registers (SSBO 0)</span>
+<span class="c">// Load data into VRAM (SSBO 0)</span>
 <span class="k">let</span> data = [<span class="n">1.0</span>, <span class="n">2.0</span>, <span class="n">3.0</span>, <span class="n">4.0</span>, <span class="n">5.0</span>, <span class="n">6.0</span>, <span class="n">7.0</span>, <span class="n">8.0</span>]
-<span class="k">let</span> _w = <span class="f">vm_write_register</span>(vm, <span class="n">0.0</span>, <span class="n">0.0</span>, data)
+<span class="k">let</span> _w = <span class="f">loom_write</span>(unit, <span class="n">0.0</span>, data)
 
 <span class="c">// Dispatch a compute kernel — data stays in VRAM</span>
 <span class="k">let</span> pc = [<span class="n">0.0</span>, <span class="n">3.0</span>, <span class="n">8.0</span>]
-<span class="k">let</span> _d = <span class="f">vm_dispatch</span>(vm, <span class="s">"stdlib/gpu/kernels/vm_scale.spv"</span>, pc, <span class="n">1.0</span>)
+<span class="k">let</span> _d = <span class="f">loom_dispatch</span>(unit, <span class="s">"stdlib/loom/kernels/math/scale.spv"</span>, pc, <span class="n">1.0</span>)
 
-<span class="c">// Build and execute the command buffer (single submit)</span>
-<span class="k">let</span> prog = <span class="f">vm_build</span>(vm)
-<span class="k">let</span> _e = <span class="f">vm_execute</span>(prog)
+<span class="c">// Build and run the command buffer (single submit)</span>
+<span class="k">let</span> prog = <span class="f">loom_build</span>(unit)
+<span class="k">let</span> _e = <span class="f">loom_run</span>(prog)
 
 <span class="c">// Read results back — only now does data cross PCIe</span>
-<span class="k">let</span> result = <span class="f">vm_read_register</span>(vm, <span class="n">0.0</span>, <span class="n">0.0</span>, <span class="n">8.0</span>)
+<span class="k">let</span> result = <span class="f">loom_read</span>(unit, <span class="n">0.0</span>, <span class="n">0.0</span>, <span class="n">8.0</span>)
 <span class="f">print</span>(<span class="s">"Result: {result}"</span>)
 <span class="c">// [3, 6, 9, 12, 15, 18, 21, 24]</span></pre>
   </div>
@@ -517,7 +517,7 @@ footer a:hover { color: var(--text); }
       <div class="icon-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
       </div>
-      <h3>62+ Compute Kernels</h3>
+      <h3>102 Compute Kernels</h3>
       <p>Scale, affine, matvec, reduce, WHERE, delta encode/decode, dictionary lookup, sort, scan, histogram, and more.</p>
     </div>
   </div>
@@ -558,7 +558,7 @@ footer a:hover { color: var(--text); }
       <div class="stat-label">Memory Regions</div>
     </div>
     <div class="stat-item">
-      <div class="stat-number">62+</div>
+      <div class="stat-number">102</div>
       <div class="stat-label">GPU Kernels</div>
     </div>
     <div class="stat-item">
