@@ -93,11 +93,14 @@ end
 fn test_b64_encode_bytes()
   // b64_encode works on byte arrays (f32 values 0-255)
   // "Hi" = [72, 105] -> base64 "SGk="
-  let data = [72.0, 105.0]
+  let mut data = []
+  push(data, 72.0)
+  push(data, 105.0)
   let encoded = b64_encode(data)
   assert(encoded == "SGk=", "b64_encode [72,105] -> SGk=")
   // Empty
-  let empty = b64_encode([])
+  let mut empty_arr = []
+  let empty = b64_encode(empty_arr)
   assert(empty == "", "b64_encode empty array")
   print("PASS: test_b64_encode_bytes")
   return 0.0
@@ -137,11 +140,18 @@ fn test_hex_val()
 end
 
 fn test_bytes_to_hex()
-  let data = [65.0, 66.0]
+  let mut data = []
+  push(data, 65.0)
+  push(data, 66.0)
   assert(bytes_to_hex(data) == "4142", "bytes_to_hex [65,66] -> 4142")
-  assert(bytes_to_hex([]) == "", "bytes_to_hex empty")
-  assert(bytes_to_hex([0.0]) == "00", "bytes_to_hex [0] -> 00")
-  assert(bytes_to_hex([255.0]) == "ff", "bytes_to_hex [255] -> ff")
+  let mut empty_arr = []
+  assert(bytes_to_hex(empty_arr) == "", "bytes_to_hex empty")
+  let mut zero_arr = []
+  push(zero_arr, 0.0)
+  assert(bytes_to_hex(zero_arr) == "00", "bytes_to_hex [0] -> 00")
+  let mut ff_arr = []
+  push(ff_arr, 255.0)
+  assert(bytes_to_hex(ff_arr) == "ff", "bytes_to_hex [255] -> ff")
   print("PASS: test_bytes_to_hex")
   return 0.0
 end

@@ -13,13 +13,19 @@ end
 fn json_merge(a, b)
   // Merge two maps (b overrides a)
   let mut result = map()
-  let keys_a = split(map_keys(a), ",")
-  for k in keys_a
-    map_set(result, k, map_get(a, k))
+  let raw_a = map_keys(a)
+  if raw_a != ""
+    let keys_a = split(raw_a, ",")
+    for k in keys_a
+      map_set(result, k, map_get(a, k))
+    end
   end
-  let keys_b = split(map_keys(b), ",")
-  for k in keys_b
-    map_set(result, k, map_get(b, k))
+  let raw_b = map_keys(b)
+  if raw_b != ""
+    let keys_b = split(raw_b, ",")
+    for k in keys_b
+      map_set(result, k, map_get(b, k))
+    end
   end
   return result
 end
@@ -35,7 +41,11 @@ fn json_flatten(data, prefix)
   // Prefix top-level map keys with a given string.
   // Note: only processes one level deep; nested maps are not recursed.
   let mut result = map()
-  let keys = split(map_keys(data), ",")
+  let raw_keys = map_keys(data)
+  if raw_keys == ""
+    return result
+  end
+  let keys = split(raw_keys, ",")
   for k in keys
     let full_key = prefix + k
     map_set(result, full_key, map_get(data, k))

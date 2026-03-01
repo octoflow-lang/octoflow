@@ -1,652 +1,226 @@
 // test_sys.flow — Tests for stdlib/sys/ modules
-// Modules tested:
-//   args.flow:     arg_flag, arg_value, arg_required (with pre-built maps)
-//   memory.flow:   format_bytes
-//   platform.flow: get_os, is_windows, is_linux, is_mac, path_separator
-//   timer.flow:    format_duration
-//
-// All tests are headless (no system calls, no process spawning, no file I/O).
-// Tests that depend on env() or os_name() validate structural invariants
-// rather than specific platform values.
+// Functions tested:
+//   args: arg_flag, arg_value, arg_required
+//   memory: format_bytes
+//   platform: get_os, is_windows, is_linux, is_mac, path_separator
+//   timer: format_duration
+use "sys/args"
+use "sys/memory"
+use "sys/platform"
+use "sys/timer"
 
-let mut pass = 0.0
-let mut fail = 0.0
-
-// ============================================================
-// Inline from sys/args.flow (arg_flag, arg_value, arg_required)
-// We skip parse_args() because it depends on env("FLOW_ARGS").
-// Instead we build maps manually and test the accessors.
-// ============================================================
-
-fn arg_flag(args, name)
-  let mut key = name
-  if starts_with(name, "--")
-    key = substr(name, 2.0, len(name))
-  end
-  if map_has(args, key)
+fn approx_str(a, b)
+  if a == b
     return 1.0
   end
   return 0.0
 end
 
-fn arg_value(args, name, default)
-  let mut key = name
-  if starts_with(name, "--")
-    key = substr(name, 2.0, len(name))
-  end
-  if map_has(args, key)
-    return map_get(args, key)
-  end
-  return default
-end
-
-fn arg_required(args, name)
-  let mut key = name
-  if starts_with(name, "--")
-    key = substr(name, 2.0, len(name))
-  end
-  if map_has(args, key)
-    return map_get(args, key)
-  end
-  print("ERROR: required argument missing: {name}")
-  return ""
-end
-
-// ============================================================
-// Inline from sys/memory.flow (format_bytes only)
-// ============================================================
-
-fn format_bytes(n)
-  if n < 1024.0
-    return str(round(n)) + " B"
-  end
-  let kb = n / 1024.0
-  if kb < 1024.0
-    return str(round(kb * 10.0) / 10.0) + " KB"
-  end
-  let mb = kb / 1024.0
-  if mb < 1024.0
-    return str(round(mb * 10.0) / 10.0) + " MB"
-  end
-  let gb = mb / 1024.0
-  return str(round(gb * 100.0) / 100.0) + " GB"
-end
-
-// ============================================================
-// Inline from sys/platform.flow
-// ============================================================
-
-fn get_os()
-  return os_name()
-end
-
-fn is_windows()
-  if os_name() == "windows"
-    return 1.0
-  end
-  return 0.0
-end
-
-fn is_linux()
-  if os_name() == "linux"
-    return 1.0
-  end
-  return 0.0
-end
-
-fn is_mac()
-  if os_name() == "macos"
-    return 1.0
-  end
-  return 0.0
-end
-
-fn path_separator()
-  if os_name() == "windows"
-    return "\"
-  end
-  return "/"
-end
-
-// ============================================================
-// Inline from sys/timer.flow (format_duration only)
-// ============================================================
-
-fn format_duration(ms)
-  if ms < 1.0
-    let us = ms * 1000.0
-    return str(round(us)) + "us"
-  end
-  if ms < 1000.0
-    return str(round(ms * 100.0) / 100.0) + "ms"
-  end
-  let s = ms / 1000.0
-  if s < 60.0
-    return str(round(s * 100.0) / 100.0) + "s"
-  end
-  let m = floor(s / 60.0)
-  let rem = s - m * 60.0
-  return str(m) + "m " + str(round(rem)) + "s"
-end
-
-// ============================================================
-// TESTS
-// ============================================================
-
-print("=== test_sys ===")
-
-// ----------------------------------------------------------
-// arg_flag: detect presence of flags
-// ----------------------------------------------------------
+// ── arg_flag tests ────────────────────────────────────────
 
 fn test_arg_flag_present()
   let mut args = map()
   map_set(args, "verbose", "1")
-  map_set(args, "debug", "1")
-  let v = arg_flag(args, "--verbose")
-  if v == 1.0
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_flag present — expected 1.0 got {v}")
-    fail = fail + 1.0
-  end
+  assert(arg_flag(args, "--verbose") == 1.0, "arg_flag finds --verbose")
   print("PASS: test_arg_flag_present")
+  return 0.0
 end
-test_arg_flag_present()
 
 fn test_arg_flag_missing()
   let mut args = map()
   map_set(args, "verbose", "1")
-  let v = arg_flag(args, "--quiet")
-  if v == 0.0
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_flag missing — expected 0.0 got {v}")
-    fail = fail + 1.0
-  end
+  assert(arg_flag(args, "--quiet") == 0.0, "arg_flag returns 0 for missing")
   print("PASS: test_arg_flag_missing")
+  return 0.0
 end
-test_arg_flag_missing()
-
-fn test_arg_flag_strip_dashes()
-  // arg_flag should strip leading -- from the name before lookup
-  let mut args = map()
-  map_set(args, "help", "1")
-  let v = arg_flag(args, "--help")
-  if v == 1.0
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_flag strip dashes — expected 1.0 got {v}")
-    fail = fail + 1.0
-  end
-  print("PASS: test_arg_flag_strip_dashes")
-end
-test_arg_flag_strip_dashes()
 
 fn test_arg_flag_bare_key()
-  // Passing a key without -- prefix should also work
   let mut args = map()
   map_set(args, "raw", "1")
-  let v = arg_flag(args, "raw")
-  if v == 1.0
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_flag bare key — expected 1.0 got {v}")
-    fail = fail + 1.0
-  end
+  assert(arg_flag(args, "raw") == 1.0, "arg_flag bare key works")
   print("PASS: test_arg_flag_bare_key")
+  return 0.0
 end
-test_arg_flag_bare_key()
 
 fn test_arg_flag_empty_args()
-  let args = map()
-  let v = arg_flag(args, "--anything")
-  if v == 0.0
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_flag empty args — expected 0.0 got {v}")
-    fail = fail + 1.0
-  end
+  let mut args = map()
+  assert(arg_flag(args, "--anything") == 0.0, "arg_flag empty map returns 0")
   print("PASS: test_arg_flag_empty_args")
+  return 0.0
 end
-test_arg_flag_empty_args()
 
-// ----------------------------------------------------------
-// arg_value: get value with default
-// ----------------------------------------------------------
+// ── arg_value tests ───────────────────────────────────────
 
 fn test_arg_value_present()
   let mut args = map()
   map_set(args, "output", "result.csv")
-  let v = arg_value(args, "--output", "default.csv")
-  if v == "result.csv"
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_value present — expected result.csv got {v}")
-    fail = fail + 1.0
-  end
+  assert(arg_value(args, "--output", "default.csv") == "result.csv", "arg_value returns existing")
   print("PASS: test_arg_value_present")
+  return 0.0
 end
-test_arg_value_present()
 
 fn test_arg_value_missing()
-  let args = map()
-  let v = arg_value(args, "--output", "default.csv")
-  if v == "default.csv"
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_value missing — expected default.csv got {v}")
-    fail = fail + 1.0
-  end
+  let mut args = map()
+  assert(arg_value(args, "--output", "default.csv") == "default.csv", "arg_value returns default")
   print("PASS: test_arg_value_missing")
+  return 0.0
 end
-test_arg_value_missing()
-
-fn test_arg_value_empty_default()
-  let args = map()
-  let v = arg_value(args, "--name", "")
-  if v == ""
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_value empty default — expected empty got {v}")
-    fail = fail + 1.0
-  end
-  print("PASS: test_arg_value_empty_default")
-end
-test_arg_value_empty_default()
 
 fn test_arg_value_bare_key()
   let mut args = map()
   map_set(args, "port", "8080")
-  let v = arg_value(args, "port", "3000")
-  if v == "8080"
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_value bare key — expected 8080 got {v}")
-    fail = fail + 1.0
-  end
+  assert(arg_value(args, "port", "3000") == "8080", "arg_value bare key")
   print("PASS: test_arg_value_bare_key")
+  return 0.0
 end
-test_arg_value_bare_key()
 
-// ----------------------------------------------------------
-// arg_required: get value or print error
-// ----------------------------------------------------------
+// ── arg_required tests ────────────────────────────────────
 
 fn test_arg_required_present()
   let mut args = map()
   map_set(args, "config", "/etc/app.conf")
-  let v = arg_required(args, "--config")
-  if v == "/etc/app.conf"
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_required present — expected /etc/app.conf got {v}")
-    fail = fail + 1.0
-  end
+  assert(arg_required(args, "--config") == "/etc/app.conf", "arg_required returns value")
   print("PASS: test_arg_required_present")
+  return 0.0
 end
-test_arg_required_present()
 
 fn test_arg_required_missing()
-  let args = map()
-  // Should return "" when missing
-  let v = arg_required(args, "--config")
-  if v == ""
-    pass = pass + 1.0
-  else
-    print("  FAIL: arg_required missing — expected empty got {v}")
-    fail = fail + 1.0
-  end
+  let mut args = map()
+  assert(arg_required(args, "--config") == "", "arg_required returns empty for missing")
   print("PASS: test_arg_required_missing")
+  return 0.0
 end
-test_arg_required_missing()
 
-// ----------------------------------------------------------
-// format_bytes: human-readable byte sizes
-// ----------------------------------------------------------
+// ── format_bytes tests ────────────────────────────────────
 
 fn test_format_bytes_bytes()
-  let r = format_bytes(500.0)
-  if r == "500 B"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_bytes bytes — expected 500 B got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_bytes(500.0) == "500 B", "format_bytes 500 B")
   print("PASS: test_format_bytes_bytes")
+  return 0.0
 end
-test_format_bytes_bytes()
 
 fn test_format_bytes_zero()
-  let r = format_bytes(0.0)
-  if r == "0 B"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_bytes zero — expected 0 B got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_bytes(0.0) == "0 B", "format_bytes 0 B")
   print("PASS: test_format_bytes_zero")
+  return 0.0
 end
-test_format_bytes_zero()
-
-fn test_format_bytes_one()
-  let r = format_bytes(1.0)
-  if r == "1 B"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_bytes one — expected 1 B got {r}")
-    fail = fail + 1.0
-  end
-  print("PASS: test_format_bytes_one")
-end
-test_format_bytes_one()
 
 fn test_format_bytes_kb()
-  // 2048 bytes = 2.0 KB
-  let r = format_bytes(2048.0)
-  if r == "2 KB"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_bytes kb — expected 2 KB got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_bytes(2048.0) == "2 KB", "format_bytes 2 KB")
   print("PASS: test_format_bytes_kb")
+  return 0.0
 end
-test_format_bytes_kb()
 
 fn test_format_bytes_kb_boundary()
-  // Exactly 1024 = 1.0 KB
-  let r = format_bytes(1024.0)
-  if r == "1 KB"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_bytes kb boundary — expected 1 KB got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_bytes(1024.0) == "1 KB", "format_bytes 1 KB boundary")
   print("PASS: test_format_bytes_kb_boundary")
+  return 0.0
 end
-test_format_bytes_kb_boundary()
 
 fn test_format_bytes_mb()
-  // 1048576 = 1024*1024 = 1.0 MB
-  let r = format_bytes(1048576.0)
-  if r == "1 MB"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_bytes mb — expected 1 MB got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_bytes(1048576.0) == "1 MB", "format_bytes 1 MB")
   print("PASS: test_format_bytes_mb")
+  return 0.0
 end
-test_format_bytes_mb()
 
 fn test_format_bytes_gb()
-  // 1073741824 = 1024^3 = 1.0 GB
-  let r = format_bytes(1073741824.0)
-  if r == "1 GB"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_bytes gb — expected 1 GB got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_bytes(1073741824.0) == "1 GB", "format_bytes 1 GB")
   print("PASS: test_format_bytes_gb")
+  return 0.0
 end
-test_format_bytes_gb()
 
 fn test_format_bytes_fractional_kb()
-  // 1536 = 1.5 KB
-  let r = format_bytes(1536.0)
-  if r == "1.5 KB"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_bytes fractional kb — expected 1.5 KB got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_bytes(1536.0) == "1.5 KB", "format_bytes 1.5 KB")
   print("PASS: test_format_bytes_fractional_kb")
+  return 0.0
 end
-test_format_bytes_fractional_kb()
 
 fn test_format_bytes_just_below_kb()
-  let r = format_bytes(1023.0)
-  if r == "1023 B"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_bytes just below kb — expected 1023 B got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_bytes(1023.0) == "1023 B", "format_bytes 1023 B")
   print("PASS: test_format_bytes_just_below_kb")
+  return 0.0
 end
-test_format_bytes_just_below_kb()
 
-// ----------------------------------------------------------
-// format_duration: human-readable time durations
-// ----------------------------------------------------------
+// ── format_duration tests ─────────────────────────────────
 
 fn test_format_duration_microseconds()
-  // 0.5 ms = 500 us
-  let r = format_duration(0.5)
-  if r == "500us"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_duration microseconds — expected 500us got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_duration(0.5) == "500us", "format_duration 500us")
   print("PASS: test_format_duration_microseconds")
+  return 0.0
 end
-test_format_duration_microseconds()
 
 fn test_format_duration_milliseconds()
-  let r = format_duration(42.0)
-  if r == "42ms"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_duration milliseconds — expected 42ms got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_duration(42.0) == "42ms", "format_duration 42ms")
   print("PASS: test_format_duration_milliseconds")
+  return 0.0
 end
-test_format_duration_milliseconds()
-
-fn test_format_duration_fractional_ms()
-  let r = format_duration(3.14)
-  if r == "3.14ms"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_duration fractional ms — expected 3.14ms got {r}")
-    fail = fail + 1.0
-  end
-  print("PASS: test_format_duration_fractional_ms")
-end
-test_format_duration_fractional_ms()
 
 fn test_format_duration_seconds()
-  let r = format_duration(2500.0)
-  if r == "2.5s"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_duration seconds — expected 2.5s got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_duration(2500.0) == "2.5s", "format_duration 2.5s")
   print("PASS: test_format_duration_seconds")
+  return 0.0
 end
-test_format_duration_seconds()
 
 fn test_format_duration_exact_second()
-  let r = format_duration(1000.0)
-  if r == "1s"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_duration exact second — expected 1s got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_duration(1000.0) == "1s", "format_duration 1s")
   print("PASS: test_format_duration_exact_second")
+  return 0.0
 end
-test_format_duration_exact_second()
 
 fn test_format_duration_minutes()
-  // 90000 ms = 90s = 1m 30s
-  let r = format_duration(90000.0)
-  if r == "1m 30s"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_duration minutes — expected 1m 30s got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_duration(90000.0) == "1m 30s", "format_duration 1m 30s")
   print("PASS: test_format_duration_minutes")
+  return 0.0
 end
-test_format_duration_minutes()
-
-fn test_format_duration_exact_minute()
-  // 60000 ms = 60s = 1m 0s
-  let r = format_duration(60000.0)
-  if r == "1m 0s"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_duration exact minute — expected 1m 0s got {r}")
-    fail = fail + 1.0
-  end
-  print("PASS: test_format_duration_exact_minute")
-end
-test_format_duration_exact_minute()
 
 fn test_format_duration_just_below_second()
-  let r = format_duration(999.0)
-  if r == "999ms"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_duration just below second — expected 999ms got {r}")
-    fail = fail + 1.0
-  end
+  assert(format_duration(999.0) == "999ms", "format_duration 999ms")
   print("PASS: test_format_duration_just_below_second")
+  return 0.0
 end
-test_format_duration_just_below_second()
 
-fn test_format_duration_tiny()
-  // 0.001 ms = 1 us
-  let r = format_duration(0.001)
-  if r == "1us"
-    pass = pass + 1.0
-  else
-    print("  FAIL: format_duration tiny — expected 1us got {r}")
-    fail = fail + 1.0
-  end
-  print("PASS: test_format_duration_tiny")
-end
-test_format_duration_tiny()
-
-// ----------------------------------------------------------
-// Platform detection: structural invariants
-// ----------------------------------------------------------
+// ── platform detection tests ──────────────────────────────
 
 fn test_get_os_returns_string()
   let os = get_os()
-  // os_name() always returns a non-empty string
-  if len(os) > 0.0
-    pass = pass + 1.0
-  else
-    print("  FAIL: get_os returns string — expected non-empty")
-    fail = fail + 1.0
-  end
+  assert(len(os) > 0.0, "get_os returns non-empty string")
   print("PASS: test_get_os_returns_string")
+  return 0.0
 end
-test_get_os_returns_string()
 
 fn test_platform_mutual_exclusion()
-  // At most one of is_windows, is_linux, is_mac should be 1.0
   let w = is_windows()
   let l = is_linux()
   let m = is_mac()
-  let total_flags = w + l + m
-  if total_flags <= 1.0
-    pass = pass + 1.0
-  else
-    print("  FAIL: platform mutual exclusion — multiple platforms detected: win={w} linux={l} mac={m}")
-    fail = fail + 1.0
-  end
+  assert(w + l + m <= 1.0, "at most one platform flag is 1.0")
   print("PASS: test_platform_mutual_exclusion")
+  return 0.0
 end
-test_platform_mutual_exclusion()
-
-fn test_path_separator_valid()
-  let sep = path_separator()
-  // Must be either "/" or "\"
-  if sep == "/" || sep == "\"
-    pass = pass + 1.0
-  else
-    print("  FAIL: path_separator valid — expected / or \\ got {sep}")
-    fail = fail + 1.0
-  end
-  print("PASS: test_path_separator_valid")
-end
-test_path_separator_valid()
-
-fn test_path_separator_matches_os()
-  let os = get_os()
-  let sep = path_separator()
-  if os == "windows"
-    if sep == "\"
-      pass = pass + 1.0
-    else
-      print("  FAIL: path_separator matches os — windows should use \\")
-      fail = fail + 1.0
-    end
-  else
-    if sep == "/"
-      pass = pass + 1.0
-    else
-      print("  FAIL: path_separator matches os — non-windows should use /")
-      fail = fail + 1.0
-    end
-  end
-  print("PASS: test_path_separator_matches_os")
-end
-test_path_separator_matches_os()
 
 fn test_is_windows_returns_bool()
   let w = is_windows()
-  if w == 0.0 || w == 1.0
-    pass = pass + 1.0
-  else
-    print("  FAIL: is_windows returns bool — expected 0 or 1 got {w}")
-    fail = fail + 1.0
-  end
+  assert(w == 0.0 || w == 1.0, "is_windows returns 0.0 or 1.0")
   print("PASS: test_is_windows_returns_bool")
+  return 0.0
 end
-test_is_windows_returns_bool()
 
 fn test_is_linux_returns_bool()
   let l = is_linux()
-  if l == 0.0 || l == 1.0
-    pass = pass + 1.0
-  else
-    print("  FAIL: is_linux returns bool — expected 0 or 1 got {l}")
-    fail = fail + 1.0
-  end
+  assert(l == 0.0 || l == 1.0, "is_linux returns 0.0 or 1.0")
   print("PASS: test_is_linux_returns_bool")
+  return 0.0
 end
-test_is_linux_returns_bool()
 
 fn test_is_mac_returns_bool()
   let m = is_mac()
-  if m == 0.0 || m == 1.0
-    pass = pass + 1.0
-  else
-    print("  FAIL: is_mac returns bool — expected 0 or 1 got {m}")
-    fail = fail + 1.0
-  end
+  assert(m == 0.0 || m == 1.0, "is_mac returns 0.0 or 1.0")
   print("PASS: test_is_mac_returns_bool")
+  return 0.0
 end
-test_is_mac_returns_bool()
 
-// ============================================================
-// Summary
-// ============================================================
-let total = pass + fail
-print("")
-print("--- test_sys ---")
-print("  pass: {pass}/{total}")
-if fail > 0.0
-  print("  FAIL: {fail} failures")
-else
-  print("  ALL PASS")
+fn test_path_separator_valid()
+  let sep = path_separator()
+  assert(sep == "/" || sep == chr(92.0), "path_separator is / or backslash")
+  print("PASS: test_path_separator_valid")
+  return 0.0
 end

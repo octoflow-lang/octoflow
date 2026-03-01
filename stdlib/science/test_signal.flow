@@ -95,8 +95,13 @@ end
 
 fn test_convolve_identity()
   // Convolving with [1.0] should return the same signal
-  let s = [1.0, 2.0, 3.0]
-  let r = convolve(s, [1.0])
+  let mut s = []
+  push(s, 1.0)
+  push(s, 2.0)
+  push(s, 3.0)
+  let mut kernel = []
+  push(kernel, 1.0)
+  let r = convolve(s, kernel)
   assert(len(r) == 3.0, "convolve with [1] preserves length")
   assert(approx(r[0], 1.0, 0.01) == 1.0, "convolve identity r[0]")
   assert(approx(r[1], 2.0, 0.01) == 1.0, "convolve identity r[1]")
@@ -131,8 +136,12 @@ fn test_gaussian_kernel()
 end
 
 fn test_cross_correlate()
-  let a = [1.0, 0.0, 0.0]
-  let b = [1.0]
+  let mut a = []
+  push(a, 1.0)
+  push(a, 0.0)
+  push(a, 0.0)
+  let mut b = []
+  push(b, 1.0)
   let r = cross_correlate(a, b)
   assert(len(r) > 0.0, "cross_correlate produces output")
   print("PASS: test_cross_correlate")

@@ -9,7 +9,11 @@
 fn render(template, vars)
   // Replace {key} with values from vars map — NO escaping applied
   let mut result = template
-  let keys = split(map_keys(vars), ",")
+  let raw_keys = map_keys(vars)
+  if raw_keys == ""
+    return result
+  end
+  let keys = split(raw_keys, ",")
   for key in keys
     let placeholder = "{" + key + "}"
     let value = map_get(vars, key)
@@ -39,7 +43,11 @@ end
 // Use this instead of render() when output will be served as HTML.
 fn render_safe(template, vars)
   let mut result = template
-  let keys = split(map_keys(vars), ",")
+  let raw_keys = map_keys(vars)
+  if raw_keys == ""
+    return result
+  end
+  let keys = split(raw_keys, ",")
   for key in keys
     let placeholder = "{" + key + "}"
     let raw_value = map_get(vars, key)

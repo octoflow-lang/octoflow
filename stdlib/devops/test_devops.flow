@@ -3,7 +3,8 @@
 use "template"
 
 fn test_render_basic()
-  let t = render("Hello {name}!", map())
+  let mut empty_vars = map()
+  let t = render("Hello {name}!", empty_vars)
   // With empty map, placeholder remains (no key matched)
   assert(contains(t, "{name}") == 1.0, "empty vars leaves placeholder")
   print("PASS: test_render_basic")

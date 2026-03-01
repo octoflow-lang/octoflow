@@ -54,7 +54,7 @@ end
 
 fn path_separator()
   if os_name() == "windows"
-    return "\"
+    return chr(92.0)
   end
   return "/"
 end
