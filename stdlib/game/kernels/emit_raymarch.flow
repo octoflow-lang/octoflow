@@ -14,9 +14,9 @@
 //   pc[21..26] = main light (x, y, z, r, g, b)
 //
 // Register buffer layout (binding 0):
-//   obj[i*16 + 0]  = type (1=sphere, 2=box, 3=plane)
+//   obj[i*16 + 0]  = type (1=sphere, 2=box, 3=plane, 4=cylinder, 5=torus, 6=capsule)
 //   obj[i*16 + 1..3] = position (x, y, z)
-//   obj[i*16 + 4..6] = params (radius/half-size/normal)
+//   obj[i*16 + 4..7] = params (type-dependent: radius/half-size/normal/etc)
 //   obj[i*16 + 8..10] = material color (r, g, b)
 
 use "../../compiler/ir"
@@ -39,6 +39,9 @@ fn emit_raymarch(out_path)
   let c_max_t = ir_const_f(entry, 100.0)
   let c_n1f = ir_const_f(entry, -1.0)
   let c_3f = ir_const_f(entry, 3.0)
+  let c_4f = ir_const_f(entry, 4.0)
+  let c_5f = ir_const_f(entry, 5.0)
+  let c_6f = ir_const_f(entry, 6.0)
 
   let c0u = ir_const_u(entry, 0.0)
   let c1u = ir_const_u(entry, 1.0)
@@ -50,6 +53,7 @@ fn emit_raymarch(out_path)
   let c8u = ir_const_u(entry, 8.0)
   let c9u = ir_const_u(entry, 9.0)
   let c10u = ir_const_u(entry, 10.0)
+  let c7u = ir_const_u(entry, 7.0)
   let c16u = ir_const_u(entry, 16.0)
 
   // ── Push Constants ─────────────────────────────────────
@@ -165,30 +169,74 @@ fn emit_raymarch(out_path)
   let p1 = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c4u))
   let p2 = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c5u))
   let p3 = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c6u))
+  let p4 = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c7u))
 
   // dx, dy, dz from ray point to object center
   let odx = ir_fsub(sb, rpx, ox)
   let ody = ir_fsub(sb, rpy, oy)
   let odz = ir_fsub(sb, rpz, oz)
 
-  // Sphere SDF: sqrt(dx²+dy²+dz²) - radius
+  // Type 1: Sphere SDF = sqrt(dx²+dy²+dz²) - radius
   let s_dsq = ir_fadd(sb, ir_fmul(sb, odx, odx), ir_fadd(sb, ir_fmul(sb, ody, ody), ir_fmul(sb, odz, odz)))
   let s_dist = ir_fsub(sb, ir_sqrt(sb, s_dsq), p1)
 
-  // Box SDF: max(max(|dx|-hx, |dy|-hy), |dz|-hz)
+  // Type 2: Box SDF = max(max(|dx|-hx, |dy|-hy), |dz|-hz)
   let bx = ir_fsub(sb, ir_fabs(sb, odx), p1)
   let by = ir_fsub(sb, ir_fabs(sb, ody), p2)
   let bz = ir_fsub(sb, ir_fabs(sb, odz), p3)
   let b_dist = ir_fmax(sb, ir_fmax(sb, bx, by), bz)
 
-  // Plane SDF: dot(point - origin, normal) = odx*p1 + ody*p2 + odz*p3
+  // Type 3: Plane SDF = dot(point - origin, normal)
   let p_dist = ir_fadd(sb, ir_fmul(sb, odx, p1), ir_fadd(sb, ir_fmul(sb, ody, p2), ir_fmul(sb, odz, p3)))
 
-  // Select distance by type: type==1→sphere, type==2→box, else→plane
-  let is_sph = ir_foeq(sb, obj_t, c1f)
-  let is_box = ir_foeq(sb, obj_t, c2f)
-  let inner_d = ir_select(sb, IR_TYPE_FLOAT, is_box, b_dist, p_dist)
-  let obj_d = ir_select(sb, IR_TYPE_FLOAT, is_sph, s_dist, inner_d)
+  // Type 4: Cylinder SDF = max(sqrt(dx²+dz²) - radius, |dy| - height/2)
+  // p1=radius, p2=height
+  let cyl_xz = ir_sqrt(sb, ir_fadd(sb, ir_fmul(sb, odx, odx), ir_fmul(sb, odz, odz)))
+  let cyl_rad = ir_fsub(sb, cyl_xz, p1)
+  let cyl_vert = ir_fsub(sb, ir_fabs(sb, ody), ir_fmul(sb, p2, c_half))
+  let cyl_dist = ir_fmax(sb, cyl_rad, cyl_vert)
+
+  // Type 5: Torus SDF = sqrt((sqrt(dx²+dz²) - R)² + dy²) - r
+  // p1=major R, p2=minor r
+  let tor_q = ir_fsub(sb, cyl_xz, p1)
+  let tor_dsq = ir_fadd(sb, ir_fmul(sb, tor_q, tor_q), ir_fmul(sb, ody, ody))
+  let tor_dist = ir_fsub(sb, ir_sqrt(sb, tor_dsq), p2)
+
+  // Type 6: Capsule SDF — project point onto line segment a→b, dist - radius
+  // a=(ox,oy,oz), b=(p1,p2,p3), radius=p4
+  // ba = b - a, pa = point - a
+  let cap_bax = ir_fsub(sb, p1, ox)
+  let cap_bay = ir_fsub(sb, p2, oy)
+  let cap_baz = ir_fsub(sb, p3, oz)
+  let cap_pax = ir_fsub(sb, rpx, ox)
+  let cap_pay = ir_fsub(sb, rpy, oy)
+  let cap_paz = ir_fsub(sb, rpz, oz)
+  // t = clamp(dot(pa,ba)/dot(ba,ba), 0, 1)
+  let cap_dot_pb = ir_fadd(sb, ir_fmul(sb, cap_pax, cap_bax), ir_fadd(sb, ir_fmul(sb, cap_pay, cap_bay), ir_fmul(sb, cap_paz, cap_baz)))
+  let cap_dot_bb = ir_fadd(sb, ir_fmul(sb, cap_bax, cap_bax), ir_fadd(sb, ir_fmul(sb, cap_bay, cap_bay), ir_fmul(sb, cap_baz, cap_baz)))
+  let cap_t_raw = ir_fdiv(sb, cap_dot_pb, ir_fmax(sb, cap_dot_bb, c_eps))
+  let cap_t = ir_fmin(sb, ir_fmax(sb, cap_t_raw, c0f), c1f)
+  // closest point on segment = a + t * ba
+  let cap_cx = ir_fadd(sb, ox, ir_fmul(sb, cap_t, cap_bax))
+  let cap_cy = ir_fadd(sb, oy, ir_fmul(sb, cap_t, cap_bay))
+  let cap_cz = ir_fadd(sb, oz, ir_fmul(sb, cap_t, cap_baz))
+  let cap_dx = ir_fsub(sb, rpx, cap_cx)
+  let cap_dy = ir_fsub(sb, rpy, cap_cy)
+  let cap_dz = ir_fsub(sb, rpz, cap_cz)
+  let cap_dsq = ir_fadd(sb, ir_fmul(sb, cap_dx, cap_dx), ir_fadd(sb, ir_fmul(sb, cap_dy, cap_dy), ir_fmul(sb, cap_dz, cap_dz)))
+  let cap_dist = ir_fsub(sb, ir_sqrt(sb, cap_dsq), p4)
+
+  // Select distance by type: chain of selects (innermost = default/capsule)
+  let is_t1 = ir_foeq(sb, obj_t, c1f)
+  let is_t2 = ir_foeq(sb, obj_t, c2f)
+  let is_t3 = ir_foeq(sb, obj_t, c_3f)
+  let is_t4 = ir_foeq(sb, obj_t, c_4f)
+  let is_t5 = ir_foeq(sb, obj_t, c_5f)
+  let d_5_6 = ir_select(sb, IR_TYPE_FLOAT, is_t5, tor_dist, cap_dist)
+  let d_4_6 = ir_select(sb, IR_TYPE_FLOAT, is_t4, cyl_dist, d_5_6)
+  let d_3_6 = ir_select(sb, IR_TYPE_FLOAT, is_t3, p_dist, d_4_6)
+  let d_2_6 = ir_select(sb, IR_TYPE_FLOAT, is_t2, b_dist, d_3_6)
+  let obj_d = ir_select(sb, IR_TYPE_FLOAT, is_t1, s_dist, d_2_6)
 
   // Update min distance & closest
   let new_min = ir_fmin(sb, s_min, obj_d)
@@ -258,48 +306,113 @@ fn emit_raymarch(out_path)
   let cp1 = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c4u))
   let cp2 = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c5u))
   let cp3 = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c6u))
+  let cp4 = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c7u))
   let mr = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c8u))
   let mg = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c9u))
   let mbb = ir_load_input_at(shade_b, 0.0, ir_iadd(shade_b, cb_off, c10u))
 
-  // Analytic normal
-  // Sphere: normalize(hit - center)
-  let snx = ir_fsub(shade_b, hx, ccx)
-  let sny = ir_fsub(shade_b, hy, ccy)
-  let snz = ir_fsub(shade_b, hz, ccz)
-  let snl = ir_sqrt(shade_b, ir_fadd(shade_b, ir_fmul(shade_b, snx, snx), ir_fadd(shade_b, ir_fmul(shade_b, sny, sny), ir_fmul(shade_b, snz, snz))))
-  let snli = ir_fdiv(shade_b, c1f, ir_fmax(shade_b, snl, c_eps))
-  let snnx = ir_fmul(shade_b, snx, snli)
-  let snny = ir_fmul(shade_b, sny, snli)
-  let snnz = ir_fmul(shade_b, snz, snli)
+  // ── Analytic Normals ──────────────────────────────────
+  // Hit offset from object center
+  let hdx = ir_fsub(shade_b, hx, ccx)
+  let hdy = ir_fsub(shade_b, hy, ccy)
+  let hdz = ir_fsub(shade_b, hz, ccz)
 
-  // Box: normal = direction of largest |point-center|/half component
-  let bdx = ir_fsub(shade_b, hx, ccx)
-  let bdy = ir_fsub(shade_b, hy, ccy)
-  let bdz = ir_fsub(shade_b, hz, ccz)
-  let adx = ir_fabs(shade_b, ir_fdiv(shade_b, bdx, ir_fmax(shade_b, cp1, c_eps)))
-  let ady = ir_fabs(shade_b, ir_fdiv(shade_b, bdy, ir_fmax(shade_b, cp2, c_eps)))
-  let adz = ir_fabs(shade_b, ir_fdiv(shade_b, bdz, ir_fmax(shade_b, cp3, c_eps)))
+  // Type 1: Sphere normal = normalize(hit - center)
+  let snl = ir_sqrt(shade_b, ir_fadd(shade_b, ir_fmul(shade_b, hdx, hdx), ir_fadd(shade_b, ir_fmul(shade_b, hdy, hdy), ir_fmul(shade_b, hdz, hdz))))
+  let snli = ir_fdiv(shade_b, c1f, ir_fmax(shade_b, snl, c_eps))
+  let snnx = ir_fmul(shade_b, hdx, snli)
+  let snny = ir_fmul(shade_b, hdy, snli)
+  let snnz = ir_fmul(shade_b, hdz, snli)
+
+  // Type 2: Box normal = direction of largest |offset|/half component
+  let adx = ir_fabs(shade_b, ir_fdiv(shade_b, hdx, ir_fmax(shade_b, cp1, c_eps)))
+  let ady = ir_fabs(shade_b, ir_fdiv(shade_b, hdy, ir_fmax(shade_b, cp2, c_eps)))
+  let adz = ir_fabs(shade_b, ir_fdiv(shade_b, hdz, ir_fmax(shade_b, cp3, c_eps)))
   let xdom = ir_land(shade_b, ir_foge(shade_b, adx, ady), ir_foge(shade_b, adx, adz))
   let ydom = ir_land(shade_b, ir_fogt(shade_b, ady, adx), ir_foge(shade_b, ady, adz))
-  let bsgnx = ir_select(shade_b, IR_TYPE_FLOAT, ir_fogt(shade_b, bdx, c0f), c1f, c_n1f)
-  let bsgny = ir_select(shade_b, IR_TYPE_FLOAT, ir_fogt(shade_b, bdy, c0f), c1f, c_n1f)
-  let bsgnz = ir_select(shade_b, IR_TYPE_FLOAT, ir_fogt(shade_b, bdz, c0f), c1f, c_n1f)
+  let bsgnx = ir_select(shade_b, IR_TYPE_FLOAT, ir_fogt(shade_b, hdx, c0f), c1f, c_n1f)
+  let bsgny = ir_select(shade_b, IR_TYPE_FLOAT, ir_fogt(shade_b, hdy, c0f), c1f, c_n1f)
+  let bsgnz = ir_select(shade_b, IR_TYPE_FLOAT, ir_fogt(shade_b, hdz, c0f), c1f, c_n1f)
   let bnx = ir_select(shade_b, IR_TYPE_FLOAT, xdom, bsgnx, c0f)
   let bny = ir_select(shade_b, IR_TYPE_FLOAT, ydom, bsgny, ir_select(shade_b, IR_TYPE_FLOAT, xdom, c0f, c0f))
   let bnz_cond = ir_land(shade_b, ir_foeq(shade_b, bnx, c0f), ir_foeq(shade_b, bny, c0f))
   let bnz = ir_select(shade_b, IR_TYPE_FLOAT, bnz_cond, bsgnz, c0f)
 
-  // Plane: normal = (p1, p2, p3)
-  // Select by type
+  // Type 3: Plane normal = (cp1, cp2, cp3) — already available
+
+  // Type 4: Cylinder normal — radial or cap
+  let cyl_rdx = hdx
+  let cyl_rdz = hdz
+  let cyl_rl = ir_sqrt(shade_b, ir_fadd(shade_b, ir_fmul(shade_b, cyl_rdx, cyl_rdx), ir_fmul(shade_b, cyl_rdz, cyl_rdz)))
+  let cyl_rli = ir_fdiv(shade_b, c1f, ir_fmax(shade_b, cyl_rl, c_eps))
+  // Radial normal: (dx/len, 0, dz/len)
+  let cyl_rnx = ir_fmul(shade_b, cyl_rdx, cyl_rli)
+  let cyl_rnz = ir_fmul(shade_b, cyl_rdz, cyl_rli)
+  // Cap test: if |dy| > height/2 - eps, use cap normal
+  let cyl_hh = ir_fmul(shade_b, cp2, c_half)
+  let cyl_is_cap = ir_fogt(shade_b, ir_fabs(shade_b, hdy), ir_fsub(shade_b, cyl_hh, c_eps))
+  let cyl_cap_sgn = ir_select(shade_b, IR_TYPE_FLOAT, ir_fogt(shade_b, hdy, c0f), c1f, c_n1f)
+  let cylnx = ir_select(shade_b, IR_TYPE_FLOAT, cyl_is_cap, c0f, cyl_rnx)
+  let cylny = ir_select(shade_b, IR_TYPE_FLOAT, cyl_is_cap, cyl_cap_sgn, c0f)
+  let cylnz = ir_select(shade_b, IR_TYPE_FLOAT, cyl_is_cap, c0f, cyl_rnz)
+
+  // Type 5: Torus normal = normalize(hit - closest_ring_point)
+  // Ring point at angle of hit: (center + R * normalize(dx, 0, dz))
+  let tor_rxn = ir_fmul(shade_b, cyl_rdx, cyl_rli)
+  let tor_rzn = ir_fmul(shade_b, cyl_rdz, cyl_rli)
+  let tor_rpx = ir_fadd(shade_b, ccx, ir_fmul(shade_b, cp1, tor_rxn))
+  let tor_rpz = ir_fadd(shade_b, ccz, ir_fmul(shade_b, cp1, tor_rzn))
+  let tor_nx_r = ir_fsub(shade_b, hx, tor_rpx)
+  let tor_ny_r = hdy
+  let tor_nz_r = ir_fsub(shade_b, hz, tor_rpz)
+  let tor_nl = ir_sqrt(shade_b, ir_fadd(shade_b, ir_fmul(shade_b, tor_nx_r, tor_nx_r), ir_fadd(shade_b, ir_fmul(shade_b, tor_ny_r, tor_ny_r), ir_fmul(shade_b, tor_nz_r, tor_nz_r))))
+  let tor_nli = ir_fdiv(shade_b, c1f, ir_fmax(shade_b, tor_nl, c_eps))
+  let tornx = ir_fmul(shade_b, tor_nx_r, tor_nli)
+  let torny = ir_fmul(shade_b, tor_ny_r, tor_nli)
+  let tornz = ir_fmul(shade_b, tor_nz_r, tor_nli)
+
+  // Type 6: Capsule normal = normalize(hit - closest_point_on_segment)
+  // a=(ccx,ccy,ccz), b=(cp1,cp2,cp3), project hit onto segment
+  let cap_bax2 = ir_fsub(shade_b, cp1, ccx)
+  let cap_bay2 = ir_fsub(shade_b, cp2, ccy)
+  let cap_baz2 = ir_fsub(shade_b, cp3, ccz)
+  let cap_pax2 = ir_fsub(shade_b, hx, ccx)
+  let cap_pay2 = ir_fsub(shade_b, hy, ccy)
+  let cap_paz2 = ir_fsub(shade_b, hz, ccz)
+  let cap_dp2 = ir_fadd(shade_b, ir_fmul(shade_b, cap_pax2, cap_bax2), ir_fadd(shade_b, ir_fmul(shade_b, cap_pay2, cap_bay2), ir_fmul(shade_b, cap_paz2, cap_baz2)))
+  let cap_db2 = ir_fadd(shade_b, ir_fmul(shade_b, cap_bax2, cap_bax2), ir_fadd(shade_b, ir_fmul(shade_b, cap_bay2, cap_bay2), ir_fmul(shade_b, cap_baz2, cap_baz2)))
+  let cap_t2 = ir_fmin(shade_b, ir_fmax(shade_b, ir_fdiv(shade_b, cap_dp2, ir_fmax(shade_b, cap_db2, c_eps)), c0f), c1f)
+  let cap_qx = ir_fsub(shade_b, hx, ir_fadd(shade_b, ccx, ir_fmul(shade_b, cap_t2, cap_bax2)))
+  let cap_qy = ir_fsub(shade_b, hy, ir_fadd(shade_b, ccy, ir_fmul(shade_b, cap_t2, cap_bay2)))
+  let cap_qz = ir_fsub(shade_b, hz, ir_fadd(shade_b, ccz, ir_fmul(shade_b, cap_t2, cap_baz2)))
+  let cap_ql = ir_sqrt(shade_b, ir_fadd(shade_b, ir_fmul(shade_b, cap_qx, cap_qx), ir_fadd(shade_b, ir_fmul(shade_b, cap_qy, cap_qy), ir_fmul(shade_b, cap_qz, cap_qz))))
+  let cap_qli = ir_fdiv(shade_b, c1f, ir_fmax(shade_b, cap_ql, c_eps))
+  let capnx = ir_fmul(shade_b, cap_qx, cap_qli)
+  let capny = ir_fmul(shade_b, cap_qy, cap_qli)
+  let capnz = ir_fmul(shade_b, cap_qz, cap_qli)
+
+  // Select normal by type (chain: 1=sphere, 2=box, 3=plane, 4=cyl, 5=torus, 6=capsule)
   let iss = ir_foeq(shade_b, ctype, c1f)
   let isb = ir_foeq(shade_b, ctype, c2f)
-  let ni_x = ir_select(shade_b, IR_TYPE_FLOAT, isb, bnx, cp1)
-  let nx = ir_select(shade_b, IR_TYPE_FLOAT, iss, snnx, ni_x)
-  let ni_y = ir_select(shade_b, IR_TYPE_FLOAT, isb, bny, cp2)
-  let ny = ir_select(shade_b, IR_TYPE_FLOAT, iss, snny, ni_y)
-  let ni_z = ir_select(shade_b, IR_TYPE_FLOAT, isb, bnz, cp3)
-  let nz = ir_select(shade_b, IR_TYPE_FLOAT, iss, snnz, ni_z)
+  let isp = ir_foeq(shade_b, ctype, c_3f)
+  let isc = ir_foeq(shade_b, ctype, c_4f)
+  let ist = ir_foeq(shade_b, ctype, c_5f)
+  // Default (type 6) = capsule
+  let nx_56 = ir_select(shade_b, IR_TYPE_FLOAT, ist, tornx, capnx)
+  let nx_46 = ir_select(shade_b, IR_TYPE_FLOAT, isc, cylnx, nx_56)
+  let nx_36 = ir_select(shade_b, IR_TYPE_FLOAT, isp, cp1, nx_46)
+  let nx_26 = ir_select(shade_b, IR_TYPE_FLOAT, isb, bnx, nx_36)
+  let nx = ir_select(shade_b, IR_TYPE_FLOAT, iss, snnx, nx_26)
+  let ny_56 = ir_select(shade_b, IR_TYPE_FLOAT, ist, torny, capny)
+  let ny_46 = ir_select(shade_b, IR_TYPE_FLOAT, isc, cylny, ny_56)
+  let ny_36 = ir_select(shade_b, IR_TYPE_FLOAT, isp, cp2, ny_46)
+  let ny_26 = ir_select(shade_b, IR_TYPE_FLOAT, isb, bny, ny_36)
+  let ny = ir_select(shade_b, IR_TYPE_FLOAT, iss, snny, ny_26)
+  let nz_56 = ir_select(shade_b, IR_TYPE_FLOAT, ist, tornz, capnz)
+  let nz_46 = ir_select(shade_b, IR_TYPE_FLOAT, isc, cylnz, nz_56)
+  let nz_36 = ir_select(shade_b, IR_TYPE_FLOAT, isp, cp3, nz_46)
+  let nz_26 = ir_select(shade_b, IR_TYPE_FLOAT, isb, bnz, nz_36)
+  let nz = ir_select(shade_b, IR_TYPE_FLOAT, iss, snnz, nz_26)
 
   // Diffuse lighting from main light (push constants)
   let ldx = ir_fsub(shade_b, pc_lx, hx)

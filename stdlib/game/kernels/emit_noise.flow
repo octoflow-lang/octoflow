@@ -1,0 +1,173 @@
+// emit_noise.flow — GPU Perlin Noise Compute Shader Emitter
+//
+// Generates a SPIR-V kernel for hash-based value noise with fBm octaves.
+// Each pixel computes noise independently on GPU.
+//
+// Push constants (5 floats):
+//   pc[0] = total pixels  pc[1] = width    pc[2] = height
+//   pc[3] = scale          pc[4] = octaves   pc[5] = seed
+//
+// Output: Planar RGB framebuffer with grayscale noise (R=G=B=noise*255)
+
+use "../../compiler/ir"
+
+fn emit_noise(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+
+  // Constants
+  let c0f = ir_const_f(entry, 0.0)
+  let c1f = ir_const_f(entry, 1.0)
+  let c2f = ir_const_f(entry, 2.0)
+  let c_half = ir_const_f(entry, 0.5)
+  let c255 = ir_const_f(entry, 255.0)
+  let c_6f = ir_const_f(entry, 6.0)
+  let c_15f = ir_const_f(entry, 15.0)
+  let c_10f = ir_const_f(entry, 10.0)
+  let c_3f = ir_const_f(entry, 3.0)
+
+  // Hash constants (mirroring CPU _noise_hash)
+  // hash(x,y,seed) = frac(sin(x*127.1 + y*311.7 + seed*1747.3) * 43758.5453)
+  let c_h1 = ir_const_f(entry, 127.1)
+  let c_h2 = ir_const_f(entry, 311.7)
+  let c_h3 = ir_const_f(entry, 1747.3)
+  let c_h4 = ir_const_f(entry, 43758.5453)
+
+  // Push constants
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_w = ir_push_const(entry, 1.0)
+  let pc_h = ir_push_const(entry, 2.0)
+  let pc_scale = ir_push_const(entry, 3.0)
+  let pc_octaves = ir_push_const(entry, 4.0)
+  let pc_seed = ir_push_const(entry, 5.0)
+
+  // Bounds check
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_b = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_b, work, main_m)
+
+  // Pixel coordinates
+  let wu = ir_ftou(work, pc_w)
+  let pxu = ir_umod(work, gid, wu)
+  let pyu = ir_udiv(work, gid, wu)
+  let pxf = ir_utof(work, pxu)
+  let pyf = ir_utof(work, pyu)
+
+  // Sample coords = pixel / scale
+  let sx = ir_fdiv(work, pxf, pc_scale)
+  let sy = ir_fdiv(work, pyf, pc_scale)
+
+  // fBm octave loop: accumulate noise over octaves
+  // Each octave: freq *= 2, amp *= 0.5
+  let oh = ir_block("oh")
+  let ob = ir_block("ob")
+  let oc = ir_block("oc")
+  let om = ir_block("om")
+
+  ir_term_branch(work, oh)
+  ir_loop_merge(oh, om, oc)
+
+  let phi_oct = ir_phi(oh, IR_TYPE_FLOAT)
+  let phi_val = ir_phi(oh, IR_TYPE_FLOAT)
+  let phi_amp = ir_phi(oh, IR_TYPE_FLOAT)
+  let phi_freq = ir_phi(oh, IR_TYPE_FLOAT)
+  let phi_max_a = ir_phi(oh, IR_TYPE_FLOAT)
+
+  let oct_cond = ir_folt(oh, phi_oct, pc_octaves)
+  ir_term_cond_branch(oh, oct_cond, ob, om)
+
+  // Compute noise at (sx * freq, sy * freq)
+  let nx = ir_fmul(ob, sx, phi_freq)
+  let ny = ir_fmul(ob, sy, phi_freq)
+
+  // Integer grid corners
+  let ix = ir_floor(ob, nx)
+  let iy = ir_floor(ob, ny)
+  let fx = ir_fsub(ob, nx, ix)
+  let fy = ir_fsub(ob, ny, iy)
+  let ix1 = ir_fadd(ob, ix, c1f)
+  let iy1 = ir_fadd(ob, iy, c1f)
+
+  // Smoothstep: t*t*t*(t*(t*6 - 15) + 10)
+  let sx_t = ir_fmul(ob, fx, ir_fmul(ob, fx, ir_fmul(ob, fx, ir_fadd(ob, ir_fmul(ob, fx, ir_fsub(ob, ir_fmul(ob, fx, c_6f), c_15f)), c_10f))))
+  let sy_t = ir_fmul(ob, fy, ir_fmul(ob, fy, ir_fmul(ob, fy, ir_fadd(ob, ir_fmul(ob, fy, ir_fsub(ob, ir_fmul(ob, fy, c_6f), c_15f)), c_10f))))
+
+  // Hash at 4 corners: hash(x, y, seed) = frac(sin(x*127.1 + y*311.7 + seed*1747.3) * 43758.5453)
+  // Corner (ix, iy)
+  let h00_in = ir_fadd(ob, ir_fmul(ob, ix, c_h1), ir_fadd(ob, ir_fmul(ob, iy, c_h2), ir_fmul(ob, pc_seed, c_h3)))
+  let h00_sin = ir_sin(ob, h00_in)
+  let h00_raw = ir_fmul(ob, h00_sin, c_h4)
+  let h00 = ir_fsub(ob, h00_raw, ir_floor(ob, h00_raw))
+
+  // Corner (ix+1, iy)
+  let h10_in = ir_fadd(ob, ir_fmul(ob, ix1, c_h1), ir_fadd(ob, ir_fmul(ob, iy, c_h2), ir_fmul(ob, pc_seed, c_h3)))
+  let h10_sin = ir_sin(ob, h10_in)
+  let h10_raw = ir_fmul(ob, h10_sin, c_h4)
+  let h10 = ir_fsub(ob, h10_raw, ir_floor(ob, h10_raw))
+
+  // Corner (ix, iy+1)
+  let h01_in = ir_fadd(ob, ir_fmul(ob, ix, c_h1), ir_fadd(ob, ir_fmul(ob, iy1, c_h2), ir_fmul(ob, pc_seed, c_h3)))
+  let h01_sin = ir_sin(ob, h01_in)
+  let h01_raw = ir_fmul(ob, h01_sin, c_h4)
+  let h01 = ir_fsub(ob, h01_raw, ir_floor(ob, h01_raw))
+
+  // Corner (ix+1, iy+1)
+  let h11_in = ir_fadd(ob, ir_fmul(ob, ix1, c_h1), ir_fadd(ob, ir_fmul(ob, iy1, c_h2), ir_fmul(ob, pc_seed, c_h3)))
+  let h11_sin = ir_sin(ob, h11_in)
+  let h11_raw = ir_fmul(ob, h11_sin, c_h4)
+  let h11 = ir_fsub(ob, h11_raw, ir_floor(ob, h11_raw))
+
+  // Bilinear interpolation with smoothstep weights
+  let lerp_x0 = ir_fadd(ob, h00, ir_fmul(ob, sx_t, ir_fsub(ob, h10, h00)))
+  let lerp_x1 = ir_fadd(ob, h01, ir_fmul(ob, sx_t, ir_fsub(ob, h11, h01)))
+  let noise_val = ir_fadd(ob, lerp_x0, ir_fmul(ob, sy_t, ir_fsub(ob, lerp_x1, lerp_x0)))
+
+  // Accumulate: val += noise * amp
+  let new_val = ir_fadd(ob, phi_val, ir_fmul(ob, noise_val, phi_amp))
+  let new_max = ir_fadd(ob, phi_max_a, phi_amp)
+  let new_amp = ir_fmul(ob, phi_amp, c_half)
+  let new_freq = ir_fmul(ob, phi_freq, c2f)
+
+  ir_term_branch(ob, oc)
+
+  let next_oct = ir_fadd(oc, phi_oct, c1f)
+  ir_term_branch(oc, oh)
+
+  // Wire phi
+  ir_phi_add(phi_oct, c0f, work)
+  ir_phi_add(phi_oct, next_oct, oc)
+  ir_phi_add(phi_val, c0f, work)
+  ir_phi_add(phi_val, new_val, oc)
+  ir_phi_add(phi_amp, c1f, work)
+  ir_phi_add(phi_amp, new_amp, oc)
+  ir_phi_add(phi_freq, c1f, work)
+  ir_phi_add(phi_freq, new_freq, oc)
+  ir_phi_add(phi_max_a, c0f, work)
+  ir_phi_add(phi_max_a, new_max, oc)
+
+  // Normalize: val / max_amplitude, remap to [0, 255]
+  let norm_val = ir_fdiv(om, phi_val, ir_fmax(om, phi_max_a, ir_const_f(om, 0.001)))
+  let clamped = ir_fmin(om, ir_fmax(om, norm_val, c0f), c1f)
+  let pixel = ir_fmul(om, clamped, c255)
+
+  // Write grayscale (R = G = B)
+  let totu = ir_ftou(om, pc_total)
+  ir_store_output_at(om, gid, pixel)
+  let g_ofs = ir_iadd(om, gid, totu)
+  ir_store_output_at(om, g_ofs, pixel)
+  let b_ofs = ir_iadd(om, g_ofs, totu)
+  ir_store_output_at(om, b_ofs, pixel)
+
+  ir_term_branch(om, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

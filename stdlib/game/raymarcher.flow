@@ -106,7 +106,9 @@ end
 // ── Boolean Operations ───────────────────────────────────
 
 fn sdf_union(scene, a, b)
-  return 0.0
+  // Union = default CSG min behavior (objects already unioned by default)
+  // Returns first object ID for API consistency
+  return a
 end
 
 fn sdf_subtract(scene, a, b)
@@ -202,6 +204,24 @@ fn sdf_fov(scene, degrees)
   _sdf_cam[6] = degrees
   _sdf_cfg[5] = 1.0
   return 0.0
+end
+
+// ── Accessors ─────────────────────────────────────────────
+
+fn sdf_get_vm()
+  return _sdf_cfg[2]
+end
+
+fn sdf_get_width()
+  return _sdf_cfg[3]
+end
+
+fn sdf_get_height()
+  return _sdf_cfg[4]
+end
+
+fn sdf_get_total()
+  return _sdf_cfg[3] * _sdf_cfg[4]
 end
 
 // ── GPU Rendering ────────────────────────────────────────

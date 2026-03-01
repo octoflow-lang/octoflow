@@ -1,0 +1,212 @@
+// emit_fractal.flow — GPU Fractal Compute Shader Emitter
+//
+// Generates a SPIR-V kernel for Mandelbrot/Julia/Burning Ship fractals.
+// Each pixel computes its own iteration independently on GPU.
+//
+// Push constants (10 floats):
+//   pc[0] = total pixels  pc[1] = width    pc[2] = height
+//   pc[3] = type (0=Mandelbrot, 1=Julia, 2=Burning Ship)
+//   pc[4] = center_x      pc[5] = center_y
+//   pc[6] = zoom           pc[7] = max_iter
+//   pc[8] = julia_cr       pc[9] = julia_ci
+//
+// Output: Planar RGB framebuffer (binding 2)
+
+use "../../compiler/ir"
+
+fn emit_fractal(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+
+  // Constants
+  let c0f = ir_const_f(entry, 0.0)
+  let c1f = ir_const_f(entry, 1.0)
+  let c2f = ir_const_f(entry, 2.0)
+  let c4f = ir_const_f(entry, 4.0)
+  let c_half = ir_const_f(entry, 0.5)
+  let c255 = ir_const_f(entry, 255.0)
+  let c16f = ir_const_f(entry, 16.0)
+
+  // Push constants
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_w = ir_push_const(entry, 1.0)
+  let pc_h = ir_push_const(entry, 2.0)
+  let pc_type = ir_push_const(entry, 3.0)
+  let pc_cx = ir_push_const(entry, 4.0)
+  let pc_cy = ir_push_const(entry, 5.0)
+  let pc_zoom = ir_push_const(entry, 6.0)
+  let pc_max = ir_push_const(entry, 7.0)
+  let pc_cr = ir_push_const(entry, 8.0)
+  let pc_ci = ir_push_const(entry, 9.0)
+
+  // Bounds check
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_b = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_b, work, main_m)
+
+  // Pixel → complex plane coordinates
+  let wu = ir_ftou(work, pc_w)
+  let pxu = ir_umod(work, gid, wu)
+  let pyu = ir_udiv(work, gid, wu)
+  let pxf = ir_utof(work, pxu)
+  let pyf = ir_utof(work, pyu)
+
+  // x0 = cx + (px - w/2) / zoom
+  // y0 = cy + (py - h/2) / zoom
+  let hw = ir_fmul(work, pc_w, c_half)
+  let hh = ir_fmul(work, pc_h, c_half)
+  let x0 = ir_fadd(work, pc_cx, ir_fdiv(work, ir_fsub(work, pxf, hw), pc_zoom))
+  let y0 = ir_fadd(work, pc_cy, ir_fdiv(work, ir_fsub(work, pyf, hh), pc_zoom))
+
+  // For Mandelbrot: c = (x0, y0), z starts at 0
+  // For Julia: c = (cr, ci), z starts at (x0, y0)
+  // For Burning Ship: c = (x0, y0), z starts at 0, but uses abs() on components
+  let is_julia = ir_foeq(work, pc_type, c1f)
+  let init_zr = ir_select(work, IR_TYPE_FLOAT, is_julia, x0, c0f)
+  let init_zi = ir_select(work, IR_TYPE_FLOAT, is_julia, y0, c0f)
+  let iter_cr = ir_select(work, IR_TYPE_FLOAT, is_julia, pc_cr, x0)
+  let iter_ci = ir_select(work, IR_TYPE_FLOAT, is_julia, pc_ci, y0)
+  let is_bship = ir_foeq(work, pc_type, c2f)
+
+  // Iteration loop
+  let lh = ir_block("lh")
+  let lb = ir_block("lb")
+  let lc = ir_block("lc")
+  let lm = ir_block("lm")
+
+  ir_term_branch(work, lh)
+  ir_loop_merge(lh, lm, lc)
+
+  let phi_zr = ir_phi(lh, IR_TYPE_FLOAT)
+  let phi_zi = ir_phi(lh, IR_TYPE_FLOAT)
+  let phi_i = ir_phi(lh, IR_TYPE_FLOAT)
+
+  // Condition: i < max_iter && zr*zr + zi*zi < 4
+  let mag2 = ir_fadd(lh, ir_fmul(lh, phi_zr, phi_zr), ir_fmul(lh, phi_zi, phi_zi))
+  let not_esc = ir_folt(lh, mag2, c4f)
+  let not_max = ir_folt(lh, phi_i, pc_max)
+  let loop_cond = ir_land(lh, not_esc, not_max)
+  ir_term_cond_branch(lh, loop_cond, lb, lm)
+
+  // Loop body: z = z^2 + c
+  // For burning ship: use abs(zr), abs(zi) before squaring
+  let zr_use = ir_select(lb, IR_TYPE_FLOAT, is_bship, ir_fabs(lb, phi_zr), phi_zr)
+  let zi_use = ir_select(lb, IR_TYPE_FLOAT, is_bship, ir_fabs(lb, phi_zi), phi_zi)
+  // new_zr = zr*zr - zi*zi + cr
+  // new_zi = 2*zr*zi + ci
+  let new_zr = ir_fadd(lb, ir_fsub(lb, ir_fmul(lb, zr_use, zr_use), ir_fmul(lb, zi_use, zi_use)), iter_cr)
+  let new_zi = ir_fadd(lb, ir_fmul(lb, c2f, ir_fmul(lb, zr_use, zi_use)), iter_ci)
+
+  ir_term_branch(lb, lc)
+
+  let next_i = ir_fadd(lc, phi_i, c1f)
+  ir_term_branch(lc, lh)
+
+  // Wire phi nodes
+  ir_phi_add(phi_zr, init_zr, work)
+  ir_phi_add(phi_zr, new_zr, lc)
+  ir_phi_add(phi_zi, init_zi, work)
+  ir_phi_add(phi_zi, new_zi, lc)
+  ir_phi_add(phi_i, c0f, work)
+  ir_phi_add(phi_i, next_i, lc)
+
+  // Color mapping in merge block
+  // If iter == max_iter → black (inside set)
+  // Otherwise → smooth palette from iteration count
+  let hit_max = ir_foge(lm, phi_i, pc_max)
+
+  let shade_b = ir_block("shade")
+  let black_b = ir_block("black")
+  let col_m = ir_block("col_m")
+  ir_selection_merge(lm, col_m)
+  ir_term_cond_branch(lm, hit_max, black_b, shade_b)
+
+  // Black: inside the set
+  ir_term_branch(black_b, col_m)
+
+  // Shade: smooth coloring using sinusoidal palette
+  // t = iter / max_iter (normalized)
+  let t = ir_fdiv(shade_b, phi_i, pc_max)
+  // Use a smooth palette: R = 127.5 + 127.5 * sin(pi_r * t + phase)
+  // Simple approach: use t with different frequencies for R/G/B
+  // R = (0.5 + 0.5 * cos(6.28 * (t * freq_r + phase_r))) * 255
+  // Color via iteration-count banding (16-color cycle with gradient)
+  let iter_mod = ir_fsub(shade_b, phi_i, ir_fmul(shade_b, ir_floor(shade_b, ir_fdiv(shade_b, phi_i, c16f)), c16f))
+  let band = ir_fdiv(shade_b, iter_mod, c16f)
+
+  // Tricolor gradient: band [0..0.33] = blue→cyan, [0.33..0.66] = cyan→yellow, [0.66..1] = yellow→red
+  let c_third = ir_const_f(shade_b, 0.333)
+  let c_twothird = ir_const_f(shade_b, 0.666)
+
+  let in_b1 = ir_folt(shade_b, band, c_third)
+  let in_b2 = ir_folt(shade_b, band, c_twothird)
+
+  // Band 1 (0..0.33): blue→cyan. t1 = band / 0.333
+  let t1 = ir_fdiv(shade_b, band, c_third)
+  // R: 0→0, G: 0→255, B: 128→255
+  let b1_r = c0f
+  let b1_g = ir_fmul(shade_b, t1, c255)
+  let c128 = ir_const_f(shade_b, 128.0)
+  let c127 = ir_const_f(shade_b, 127.0)
+  let b1_b = ir_fadd(shade_b, c128, ir_fmul(shade_b, t1, c127))
+
+  // Band 2 (0.33..0.66): cyan→yellow. t2 = (band - 0.333) / 0.333
+  let t2 = ir_fdiv(shade_b, ir_fsub(shade_b, band, c_third), c_third)
+  let b2_r = ir_fmul(shade_b, t2, c255)
+  let b2_g = c255
+  let b2_b = ir_fmul(shade_b, ir_fsub(shade_b, c1f, t2), c255)
+
+  // Band 3 (0.66..1): yellow→red/dark. t3 = (band - 0.666) / 0.334
+  let c_0p334 = ir_const_f(shade_b, 0.334)
+  let t3 = ir_fdiv(shade_b, ir_fsub(shade_b, band, c_twothird), c_0p334)
+  let b3_r = ir_fmul(shade_b, ir_fsub(shade_b, c1f, ir_fmul(shade_b, t3, c_half)), c255)
+  let b3_g = ir_fmul(shade_b, ir_fsub(shade_b, c1f, t3), c255)
+  let b3_b = c0f
+
+  // Select by band
+  let r_23 = ir_select(shade_b, IR_TYPE_FLOAT, in_b2, b2_r, b3_r)
+  let g_23 = ir_select(shade_b, IR_TYPE_FLOAT, in_b2, b2_g, b3_g)
+  let b_23 = ir_select(shade_b, IR_TYPE_FLOAT, in_b2, b2_b, b3_b)
+  let sh_r = ir_select(shade_b, IR_TYPE_FLOAT, in_b1, b1_r, r_23)
+  let sh_g = ir_select(shade_b, IR_TYPE_FLOAT, in_b1, b1_g, g_23)
+  let sh_b = ir_select(shade_b, IR_TYPE_FLOAT, in_b1, b1_b, b_23)
+
+  // Clamp
+  let cl_r = ir_fmin(shade_b, ir_fmax(shade_b, sh_r, c0f), c255)
+  let cl_g = ir_fmin(shade_b, ir_fmax(shade_b, sh_g, c0f), c255)
+  let cl_b = ir_fmin(shade_b, ir_fmax(shade_b, sh_b, c0f), c255)
+
+  ir_term_branch(shade_b, col_m)
+
+  // Final merge: select between black and shade
+  let phi_fr = ir_phi(col_m, IR_TYPE_FLOAT)
+  let phi_fg = ir_phi(col_m, IR_TYPE_FLOAT)
+  let phi_fb = ir_phi(col_m, IR_TYPE_FLOAT)
+  ir_phi_add(phi_fr, c0f, black_b)
+  ir_phi_add(phi_fr, cl_r, shade_b)
+  ir_phi_add(phi_fg, c0f, black_b)
+  ir_phi_add(phi_fg, cl_g, shade_b)
+  ir_phi_add(phi_fb, c0f, black_b)
+  ir_phi_add(phi_fb, cl_b, shade_b)
+
+  // Write planar RGB
+  let totu = ir_ftou(col_m, pc_total)
+  ir_store_output_at(col_m, gid, phi_fr)
+  let g_ofs = ir_iadd(col_m, gid, totu)
+  ir_store_output_at(col_m, g_ofs, phi_fg)
+  let b_ofs = ir_iadd(col_m, g_ofs, totu)
+  ir_store_output_at(col_m, b_ofs, phi_fb)
+
+  ir_term_branch(col_m, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

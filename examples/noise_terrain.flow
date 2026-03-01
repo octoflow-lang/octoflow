@@ -1,0 +1,156 @@
+// noise_terrain.flow — Perlin Noise Terrain Visualization
+//
+// Generates a 2D terrain heightmap using fBm noise, displayed with
+// color bands: deep water → shallow water → beach → grass → forest → mountain → snow
+//
+// Controls: Arrow keys to scroll, +/- to change scale, R to regenerate,
+//           O to add octaves, S to change seed
+
+use "game/game"
+use "game/input"
+use "game/noise"
+
+// [0]=scale, [1]=octaves, [2]=seed, [3]=dirty, [4]=scroll_x, [5]=scroll_y
+let mut _nt = [40.0, 4.0, 42.0, 1.0, 0.0, 0.0]
+
+let cvs = game_init(400.0, 300.0, "Noise Terrain")
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+
+  // Scroll
+  if input_key_held("left") == 1.0
+    _nt[4] = _nt[4] - dt * 60.0
+    _nt[3] = 1.0
+  end
+  if input_key_held("right") == 1.0
+    _nt[4] = _nt[4] + dt * 60.0
+    _nt[3] = 1.0
+  end
+  if input_key_held("up") == 1.0
+    _nt[5] = _nt[5] - dt * 60.0
+    _nt[3] = 1.0
+  end
+  if input_key_held("down") == 1.0
+    _nt[5] = _nt[5] + dt * 60.0
+    _nt[3] = 1.0
+  end
+
+  // Scale
+  if input_key_down("=") == 1.0
+    _nt[0] = _nt[0] + 5.0
+    _nt[3] = 1.0
+  end
+  if input_key_down("-") == 1.0
+    _nt[0] = _nt[0] - 5.0
+    if _nt[0] < 5.0
+      _nt[0] = 5.0
+    end
+    _nt[3] = 1.0
+  end
+
+  // Octaves
+  if input_key_down("o") == 1.0
+    _nt[1] = _nt[1] + 1.0
+    if _nt[1] > 8.0
+      _nt[1] = 1.0
+    end
+    _nt[3] = 1.0
+  end
+
+  // New seed
+  if input_key_down("s") == 1.0
+    _nt[2] = _nt[2] + 7.0
+    _nt[3] = 1.0
+  end
+
+  // Reset
+  if input_key_down("r") == 1.0
+    _nt[0] = 40.0
+    _nt[1] = 4.0
+    _nt[2] = 42.0
+    _nt[4] = 0.0
+    _nt[5] = 0.0
+    _nt[3] = 1.0
+  end
+
+  // Render only when dirty
+  if _nt[3] == 1.0
+    _nt[3] = 0.0
+
+    // Generate noise
+    let w = 400.0
+    let h = 280.0
+    let noise = noise_fbm_2d(w, h, _nt[0], _nt[1], 2.0, 0.5, _nt[2] + _nt[4] * 0.01 + _nt[5] * 0.007)
+
+    // Color-band terrain rendering
+    let mut py = 0.0
+    while py < h
+      let mut px = 0.0
+      while px < w
+        let idx = int(py * w + px)
+        let val = noise[idx]
+
+        // Color bands based on height
+        let mut r = 0.0
+        let mut g = 0.0
+        let mut b = 0.0
+        if val < 0.3
+          // Deep water
+          r = 20.0
+          g = 40.0 + val * 200.0
+          b = 120.0 + val * 200.0
+        elif val < 0.4
+          // Shallow water
+          let t = (val - 0.3) / 0.1
+          r = 30.0 + t * 60.0
+          g = 100.0 + t * 80.0
+          b = 180.0 - t * 40.0
+        elif val < 0.45
+          // Beach/sand
+          let t = (val - 0.4) / 0.05
+          r = 194.0 + t * 20.0
+          g = 178.0 + t * 10.0
+          b = 128.0 - t * 30.0
+        elif val < 0.65
+          // Grass
+          let t = (val - 0.45) / 0.2
+          r = 50.0 + t * 30.0
+          g = 140.0 + t * 40.0
+          b = 40.0 + t * 20.0
+        elif val < 0.8
+          // Forest
+          let t = (val - 0.65) / 0.15
+          r = 30.0 + t * 40.0
+          g = 100.0 - t * 20.0
+          b = 30.0 + t * 20.0
+        elif val < 0.9
+          // Mountain/rock
+          let t = (val - 0.8) / 0.1
+          r = 100.0 + t * 60.0
+          g = 90.0 + t * 50.0
+          b = 80.0 + t * 40.0
+        else
+          // Snow
+          let t = (val - 0.9) / 0.1
+          r = 200.0 + t * 55.0
+          g = 200.0 + t * 55.0
+          b = 210.0 + t * 45.0
+        end
+
+        gui_canvas_fill(cvs, px, py, 1.0, 1.0, r, g, b)
+        px = px + 1.0
+      end
+      py = py + 1.0
+    end
+
+    // HUD
+    let sc = _nt[0]
+    let oct = _nt[1]
+    gui_canvas_fill(cvs, 0.0, 280.0, 400.0, 20.0, 20.0, 20.0, 30.0)
+    gui_canvas_text_colored(cvs, 5.0, 283.0, "Scale:{sc} Oct:{oct} | Arrows=scroll +/-=scale O=oct S=seed R=reset", 1.2, 200.0, 200.0, 200.0)
+  end
+
+  game_frame_end()
+end

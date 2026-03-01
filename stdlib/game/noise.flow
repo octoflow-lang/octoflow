@@ -1,7 +1,7 @@
 // stdlib/game/noise.flow — Procedural noise generation
 //
 // Functions: noise_perlin_2d, noise_value_2d, noise_fbm_2d,
-//            noise_to_tilemap
+//            noise_perlin_2d_gpu, noise_to_tilemap
 //
 // CPU noise generators (value, Perlin, fBm). Returns flat float arrays (row-major).
 // Values normalized to [0, 1] range.
@@ -185,6 +185,42 @@ fn noise_fbm_2d(width, height, scale, octaves, lacunarity, gain, seed)
     py = py + 1.0
   end
   return out
+end
+
+// ── Noise to Tilemap ──────────────────────────────────────
+
+// ── GPU-Accelerated Noise ────────────────────────────────────
+// Renders noise to canvas via GPU compute shader (grayscale).
+
+// State: [vm_id, width, height]
+let mut _noise_gpu = [0.0, 0.0, 0.0]
+
+fn noise_perlin_2d_gpu(width, height, scale, octaves, seed)
+  let total = width * height
+  if _noise_gpu[0] > 0.0 && _noise_gpu[1] == width && _noise_gpu[2] == height
+    // Reuse VM
+  else
+    if _noise_gpu[0] > 0.0
+      loom_shutdown(_noise_gpu[0])
+    end
+    let vm = loom_boot(1.0, 16.0, total * 3.0)
+    _noise_gpu[0] = vm
+    _noise_gpu[1] = width
+    _noise_gpu[2] = height
+  end
+  let vm = _noise_gpu[0]
+  if vm <= 0.0
+    return 0.0
+  end
+  let wg = int((total + 255.0) / 256.0)
+  let pc = [total, width, height, scale, octaves, seed]
+  loom_dispatch(vm, "stdlib/game/kernels/noise.spv", pc, wg)
+  let prog = loom_build(vm)
+  if prog >= 0.0
+    loom_run(prog)
+    vm_present(vm, total)
+  end
+  return 1.0
 end
 
 // ── Noise to Tilemap ──────────────────────────────────────

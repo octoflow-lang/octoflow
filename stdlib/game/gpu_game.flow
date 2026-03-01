@@ -1,0 +1,223 @@
+// stdlib/game/gpu_game.flow — GPU-Accelerated Game Renderer
+//
+// Replaces CPU-based tilemap/sprite/particle rendering with GPU compute shaders.
+// Uses a dedicated Loom VM with register buffer for scene data upload.
+// All rendering done in ONE GPU submission (clear + tilemap + sprites + particles).
+//
+// Usage:
+//   gpu_game_init(w, h)                — initialize GPU renderer
+//   gpu_game_upload_tilemap()           — upload current tilemap to GPU
+//   gpu_game_upload_sprites()           — upload current sprites to GPU
+//   gpu_game_upload_particles()         — upload current particles to GPU
+//   gpu_game_render(cam_x, cam_y)       — dispatch all shaders + present
+//
+// Functions: gpu_game_init, gpu_game_upload_tilemap, gpu_game_upload_sprites,
+//   gpu_game_upload_particles, gpu_game_render, gpu_game_shutdown
+
+use "sprite"
+use "tilemap"
+use "particles"
+
+// ── VM State ──────────────────────────────────────────────
+// [vm_id, total, width, height, ready, tm_uploaded, spr_uploaded, part_uploaded]
+let mut _gg = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+// Register buffer offsets (fixed layout):
+//   0-2999:    tilemap data (grid + palette)
+//   3000-5047: sprite data (256 sprites × 8 floats)
+//   5048-9143: particle data (512 particles × 8 floats)
+let _GG_TM_OFF = 0.0
+let _GG_SPR_OFF = 3000.0
+let _GG_PART_OFF = 5048.0
+let _GG_REG_SIZE = 9200.0
+
+// ── Initialization ────────────────────────────────────────
+
+fn gpu_game_init(w, h)
+  if _gg[4] == 1.0
+    gpu_game_shutdown()
+  end
+  let total = w * h
+  let fb_size = total * 3.0
+  let vm_id = loom_boot(1.0, _GG_REG_SIZE, fb_size)
+  if vm_id <= 0.0
+    return 0.0
+  end
+  _gg[0] = vm_id
+  _gg[1] = total
+  _gg[2] = w
+  _gg[3] = h
+  _gg[4] = 1.0
+  _gg[5] = 0.0
+  _gg[6] = 0.0
+  _gg[7] = 0.0
+  return vm_id
+end
+
+fn gpu_game_shutdown()
+  if _gg[4] == 1.0
+    loom_shutdown(_gg[0])
+    _gg[4] = 0.0
+  end
+  return 0.0
+end
+
+fn _gg_wg()
+  if _gg[1] <= 0.0
+    return 1.0
+  end
+  return int((_gg[1] + 255.0) / 256.0)
+end
+
+// ── Tilemap Upload ────────────────────────────────────────
+
+fn gpu_game_upload_tilemap()
+  if _gg[4] == 0.0
+    return 0.0
+  end
+  let tw = tilemap_width()
+  let th = tilemap_height()
+  let grid_sz = tw * th
+
+  // Pack tile grid data
+  let mut grid = []
+  let mut i = 0.0
+  while i < grid_sz
+    push(grid, _tm_data[int(i)])
+    i = i + 1.0
+  end
+
+  // Pack color palette (256 × 3)
+  let mut pal = []
+  let mut c = 0.0
+  while c < 256.0
+    let ci = int(c)
+    push(pal, _tm_colors_r[ci])
+    push(pal, _tm_colors_g[ci])
+    push(pal, _tm_colors_b[ci])
+    c = c + 1.0
+  end
+
+  // Upload grid at offset 0
+  vm_write_register(_gg[0], 0.0, _GG_TM_OFF, grid)
+  // Upload palette right after grid
+  vm_write_register(_gg[0], 0.0, _GG_TM_OFF + grid_sz, pal)
+  _gg[5] = 1.0
+  return 1.0
+end
+
+// ── Sprite Upload ─────────────────────────────────────────
+
+fn gpu_game_upload_sprites()
+  if _gg[4] == 0.0
+    return 0.0
+  end
+  let cnt = sprite_count()
+
+  // Pack sprite data (8 floats per sprite)
+  let mut data = []
+  let mut i = 0.0
+  while i < cnt
+    let ii = int(i)
+    push(data, _spr_x[ii])
+    push(data, _spr_y[ii])
+    push(data, _spr_w[ii])
+    push(data, _spr_h[ii])
+    push(data, _spr_r[ii])
+    push(data, _spr_g[ii])
+    push(data, _spr_b[ii])
+    // Combined active + visible flag
+    let mut vis = 0.0
+    if _spr_visible[ii] == 1.0 && _spr_active[ii] == 1.0
+      vis = 1.0
+    end
+    push(data, vis)
+    i = i + 1.0
+  end
+
+  if len(data) > 0.0
+    vm_write_register(_gg[0], 0.0, _GG_SPR_OFF, data)
+  end
+  _gg[6] = cnt
+  return cnt
+end
+
+// ── Particle Upload ───────────────────────────────────────
+
+fn gpu_game_upload_particles()
+  if _gg[4] == 0.0
+    return 0.0
+  end
+  let cnt = particle_count()
+
+  // Pack particle data (8 floats per particle)
+  let mut data = []
+  let mut i = 0.0
+  while i < cnt
+    let ii = int(i)
+    push(data, _part_x[ii])
+    push(data, _part_y[ii])
+    push(data, _part_life[ii])
+    push(data, _part_max_life[ii])
+    push(data, _part_r[ii])
+    push(data, _part_g[ii])
+    push(data, _part_b[ii])
+    push(data, _part_size[ii])
+    i = i + 1.0
+  end
+
+  if len(data) > 0.0
+    vm_write_register(_gg[0], 0.0, _GG_PART_OFF, data)
+  end
+  _gg[7] = cnt
+  return cnt
+end
+
+// ── GPU Render ────────────────────────────────────────────
+// Dispatches clear + tilemap + sprites + particles in one submission.
+
+fn gpu_game_render(cam_x, cam_y)
+  if _gg[4] == 0.0
+    return 0.0
+  end
+
+  let vm = _gg[0]
+  let total = _gg[1]
+  let w = _gg[2]
+  let h = _gg[3]
+  let wg = _gg_wg()
+
+  // 1. Clear to black
+  let clear_pc = [total, 0.0, 0.0, 0.0]
+  loom_dispatch(vm, "stdlib/gui/kernels/clear.spv", clear_pc, wg)
+
+  // 2. Tilemap (if uploaded)
+  if _gg[5] == 1.0
+    let tw = tilemap_width()
+    let th = tilemap_height()
+    let ts = tilemap_tile_size()
+    let tm_pc = [total, w, tw, th, ts, cam_x, cam_y]
+    loom_dispatch(vm, "stdlib/game/kernels/tilemap_render.spv", tm_pc, wg)
+  end
+
+  // 3. Sprites (if any)
+  if _gg[6] > 0.0
+    let spr_pc = [total, w, _gg[6], cam_x, cam_y, _GG_SPR_OFF]
+    loom_dispatch(vm, "stdlib/game/kernels/sprite_batch.spv", spr_pc, wg)
+  end
+
+  // 4. Particles (if any)
+  if _gg[7] > 0.0
+    let part_pc = [total, w, _gg[7], _GG_PART_OFF]
+    loom_dispatch(vm, "stdlib/game/kernels/particles_render.spv", part_pc, wg)
+  end
+
+  // 5. Build + Run + Present
+  let prog = loom_build(vm)
+  if prog < 0.0
+    return 0.0
+  end
+  loom_run(prog)
+  vm_present(vm, total)
+  return 1.0
+end

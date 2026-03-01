@@ -1,0 +1,142 @@
+// emit_sprite_batch.flow — GPU sprite batch rendering kernel
+//
+// Push constants (6 floats):
+//   pc[0] = total pixels   pc[1] = screen_width   pc[2] = sprite_count
+//   pc[3] = cam_x   pc[4] = cam_y   pc[5] = data_offset
+//
+// Register buffer layout (binding 0):
+//   Per sprite (8 floats each):
+//     [i*8+0] = x   [i*8+1] = y   [i*8+2] = w   [i*8+3] = h
+//     [i*8+4] = r   [i*8+5] = g   [i*8+6] = b   [i*8+7] = active_visible
+//
+// Each pixel loops through sprites (back to front). Last matching sprite wins.
+
+use "../../compiler/ir"
+
+fn emit_sprite_batch(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let c0f = ir_const_f(entry, 0.0)
+  let c1f = ir_const_f(entry, 1.0)
+  let c8u = ir_const_u(entry, 8)
+  let c0u = ir_const_u(entry, 0)
+  let c1u = ir_const_u(entry, 1)
+  let c2u = ir_const_u(entry, 2)
+  let c3u = ir_const_u(entry, 3)
+  let c4u = ir_const_u(entry, 4)
+  let c5u = ir_const_u(entry, 5)
+  let c6u = ir_const_u(entry, 6)
+  let c7u = ir_const_u(entry, 7)
+
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_sw = ir_push_const(entry, 1.0)
+  let pc_cnt = ir_push_const(entry, 2.0)
+  let pc_cx = ir_push_const(entry, 3.0)
+  let pc_cy = ir_push_const(entry, 4.0)
+  let pc_off = ir_push_const(entry, 5.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_b = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_b, work, main_m)
+
+  // Screen pixel position
+  let swu = ir_ftou(work, pc_sw)
+  let py = ir_udiv(work, gid, swu)
+  let px = ir_umod(work, gid, swu)
+  let px_f = ir_utof(work, px)
+  let py_f = ir_utof(work, py)
+
+  // ── Sprite Loop ──────────────────────────────────────────
+  let sh = ir_block("sh")
+  let sb = ir_block("sb")
+  let sc = ir_block("sc")
+  let sm = ir_block("sm")
+
+  ir_term_branch(work, sh)
+  ir_loop_merge(sh, sm, sc)
+
+  let phi_i = ir_phi(sh, IR_TYPE_FLOAT)
+  let phi_r = ir_phi(sh, IR_TYPE_FLOAT)
+  let phi_g = ir_phi(sh, IR_TYPE_FLOAT)
+  let phi_b = ir_phi(sh, IR_TYPE_FLOAT)
+  let phi_hit = ir_phi(sh, IR_TYPE_FLOAT)
+
+  let s_cond = ir_folt(sh, phi_i, pc_cnt)
+  ir_term_cond_branch(sh, s_cond, sb, sm)
+
+  // Read sprite data from register buffer (at data_offset)
+  let iu = ir_ftou(sb, phi_i)
+  let off_u = ir_ftou(sb, pc_off)
+  let base = ir_iadd(sb, off_u, ir_imul(sb, iu, c8u))
+  let sp_x = ir_load_input_at(sb, 0.0, base)
+  let sp_y = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c1u))
+  let sp_w = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c2u))
+  let sp_h = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c3u))
+  let sp_r = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c4u))
+  let sp_g = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c5u))
+  let sp_b = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c6u))
+  let sp_vis = ir_load_input_at(sb, 0.0, ir_iadd(sb, base, c7u))
+
+  // Screen coords of sprite: sp_x - cam_x, sp_y - cam_y
+  let scr_x = ir_fsub(sb, sp_x, pc_cx)
+  let scr_y = ir_fsub(sb, sp_y, pc_cy)
+
+  // Check if pixel is inside sprite and sprite is visible
+  let in_x = ir_land(sb, ir_foge(sb, px_f, scr_x), ir_folt(sb, px_f, ir_fadd(sb, scr_x, sp_w)))
+  let in_y = ir_land(sb, ir_foge(sb, py_f, scr_y), ir_folt(sb, py_f, ir_fadd(sb, scr_y, sp_h)))
+  let inside = ir_land(sb, in_x, in_y)
+  let vis_ok = ir_foeq(sb, sp_vis, c1f)
+  let hit = ir_land(sb, inside, vis_ok)
+
+  // If hit: update color
+  let new_r = ir_select(sb, IR_TYPE_FLOAT, hit, sp_r, phi_r)
+  let new_g = ir_select(sb, IR_TYPE_FLOAT, hit, sp_g, phi_g)
+  let new_b = ir_select(sb, IR_TYPE_FLOAT, hit, sp_b, phi_b)
+  let new_hit = ir_select(sb, IR_TYPE_FLOAT, hit, c1f, phi_hit)
+
+  ir_term_branch(sb, sc)
+
+  // Continue: increment
+  let s_next = ir_fadd(sc, phi_i, c1f)
+  ir_term_branch(sc, sh)
+
+  // Wire phi nodes
+  ir_phi_add(phi_i, c0f, work)
+  ir_phi_add(phi_i, s_next, sc)
+  ir_phi_add(phi_r, c0f, work)
+  ir_phi_add(phi_r, new_r, sc)
+  ir_phi_add(phi_g, c0f, work)
+  ir_phi_add(phi_g, new_g, sc)
+  ir_phi_add(phi_b, c0f, work)
+  ir_phi_add(phi_b, new_b, sc)
+  ir_phi_add(phi_hit, c0f, work)
+  ir_phi_add(phi_hit, new_hit, sc)
+
+  // After loop: write pixel if any sprite was hit
+  let did_hit = ir_foeq(sm, phi_hit, c1f)
+  let write_blk = ir_block("write_blk")
+  let done_blk = ir_block("done_blk")
+  ir_selection_merge(sm, done_blk)
+  ir_term_cond_branch(sm, did_hit, write_blk, done_blk)
+
+  let totu = ir_ftou(write_blk, pc_total)
+  ir_store_output_at(write_blk, gid, phi_r)
+  let g_off = ir_iadd(write_blk, gid, totu)
+  ir_store_output_at(write_blk, g_off, phi_g)
+  let b_off = ir_iadd(write_blk, g_off, totu)
+  ir_store_output_at(write_blk, b_off, phi_b)
+
+  ir_term_branch(write_blk, done_blk)
+  ir_term_branch(done_blk, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

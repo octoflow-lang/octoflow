@@ -8,6 +8,11 @@ use "emit_fx_vignette"
 use "emit_fx_pixelate"
 use "emit_fx_chromatic"
 use "emit_lightmap"
+use "emit_tilemap_render"
+use "emit_sprite_batch"
+use "emit_particles_render"
+use "emit_fractal"
+use "emit_noise"
 
 let dir = "stdlib/game/kernels/"
 
@@ -28,5 +33,20 @@ print("Emitted fx_chromatic.spv")
 
 let _lm = emit_lightmap(dir + "lightmap.spv")
 print("Emitted lightmap.spv")
+
+let _tm = emit_tilemap_render(dir + "tilemap_render.spv")
+print("Emitted tilemap_render.spv")
+
+let _sb = emit_sprite_batch(dir + "sprite_batch.spv")
+print("Emitted sprite_batch.spv")
+
+let _pr = emit_particles_render(dir + "particles_render.spv")
+print("Emitted particles_render.spv")
+
+let _fr = emit_fractal(dir + "fractal.spv")
+print("Emitted fractal.spv")
+
+let _ns = emit_noise(dir + "noise.spv")
+print("Emitted noise.spv")
 
 print("All game kernels built.")

@@ -1,0 +1,156 @@
+// emit_particles_render.flow — GPU particle rendering kernel
+//
+// Push constants (4 floats):
+//   pc[0] = total pixels   pc[1] = screen_width   pc[2] = particle_count
+//   pc[3] = data_offset
+//
+// Register buffer layout (binding 0):
+//   Per particle (8 floats each):
+//     [i*8+0] = x   [i*8+1] = y   [i*8+2] = life   [i*8+3] = max_life
+//     [i*8+4] = r   [i*8+5] = g   [i*8+6] = b      [i*8+7] = size
+//
+// Each pixel loops through particles. Particles are centered squares that
+// fade (alpha = life/max_life). Additive blend onto existing framebuffer.
+
+use "../../compiler/ir"
+
+fn emit_particles_render(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let c0f = ir_const_f(entry, 0.0)
+  let c1f = ir_const_f(entry, 1.0)
+  let c2f = ir_const_f(entry, 2.0)
+  let c255 = ir_const_f(entry, 255.0)
+  let c_eps = ir_const_f(entry, 0.001)
+  let c8u = ir_const_u(entry, 8)
+  let c0u = ir_const_u(entry, 0)
+  let c1u = ir_const_u(entry, 1)
+  let c2u = ir_const_u(entry, 2)
+  let c3u = ir_const_u(entry, 3)
+  let c4u = ir_const_u(entry, 4)
+  let c5u = ir_const_u(entry, 5)
+  let c6u = ir_const_u(entry, 6)
+  let c7u = ir_const_u(entry, 7)
+
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_sw = ir_push_const(entry, 1.0)
+  let pc_cnt = ir_push_const(entry, 2.0)
+  let pc_off = ir_push_const(entry, 3.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_b = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_b, work, main_m)
+
+  // Screen pixel position
+  let swu = ir_ftou(work, pc_sw)
+  let py = ir_udiv(work, gid, swu)
+  let px = ir_umod(work, gid, swu)
+  let px_f = ir_utof(work, px)
+  let py_f = ir_utof(work, py)
+
+  // Read existing pixel for additive blend
+  let totu = ir_ftou(work, pc_total)
+  let old_r = ir_load_output_at(work, gid)
+  let g_off_pre = ir_iadd(work, gid, totu)
+  let old_g = ir_load_output_at(work, g_off_pre)
+  let b_off_pre = ir_iadd(work, g_off_pre, totu)
+  let old_b = ir_load_output_at(work, b_off_pre)
+
+  // ── Particle Loop ────────────────────────────────────────
+  let ph = ir_block("ph")
+  let pb = ir_block("pb")
+  let pc = ir_block("pc_cont")
+  let pm = ir_block("pm")
+
+  ir_term_branch(work, ph)
+  ir_loop_merge(ph, pm, pc)
+
+  let phi_i = ir_phi(ph, IR_TYPE_FLOAT)
+  let phi_r = ir_phi(ph, IR_TYPE_FLOAT)
+  let phi_g = ir_phi(ph, IR_TYPE_FLOAT)
+  let phi_b = ir_phi(ph, IR_TYPE_FLOAT)
+
+  let p_cond = ir_folt(ph, phi_i, pc_cnt)
+  ir_term_cond_branch(ph, p_cond, pb, pm)
+
+  // Read particle data (at data_offset)
+  let iu = ir_ftou(pb, phi_i)
+  let off_u = ir_ftou(pb, pc_off)
+  let base = ir_iadd(pb, off_u, ir_imul(pb, iu, c8u))
+  let pt_x = ir_load_input_at(pb, 0.0, base)
+  let pt_y = ir_load_input_at(pb, 0.0, ir_iadd(pb, base, c1u))
+  let pt_life = ir_load_input_at(pb, 0.0, ir_iadd(pb, base, c2u))
+  let pt_max = ir_load_input_at(pb, 0.0, ir_iadd(pb, base, c3u))
+  let pt_r = ir_load_input_at(pb, 0.0, ir_iadd(pb, base, c4u))
+  let pt_g = ir_load_input_at(pb, 0.0, ir_iadd(pb, base, c5u))
+  let pt_b = ir_load_input_at(pb, 0.0, ir_iadd(pb, base, c6u))
+  let pt_sz = ir_load_input_at(pb, 0.0, ir_iadd(pb, base, c7u))
+
+  // Alpha = life / max_life
+  let alpha = ir_fdiv(pb, pt_life, ir_fmax(pb, pt_max, c_eps))
+  let alive = ir_fogt(pb, pt_life, c0f)
+
+  // Scaled size and half-size
+  let ssz = ir_fmul(pb, pt_sz, alpha)
+  let half = ir_fdiv(pb, ssz, c2f)
+
+  // Particle screen rect: center at (pt_x, pt_y)
+  let lo_x = ir_fsub(pb, pt_x, half)
+  let lo_y = ir_fsub(pb, pt_y, half)
+  let hi_x = ir_fadd(pb, pt_x, half)
+  let hi_y = ir_fadd(pb, pt_y, half)
+
+  // Check if pixel inside particle
+  let in_x = ir_land(pb, ir_foge(pb, px_f, lo_x), ir_folt(pb, px_f, hi_x))
+  let in_y = ir_land(pb, ir_foge(pb, py_f, lo_y), ir_folt(pb, py_f, hi_y))
+  let inside = ir_land(pb, ir_land(pb, in_x, in_y), alive)
+
+  // Additive color contribution
+  let add_r = ir_select(pb, IR_TYPE_FLOAT, inside, ir_fmul(pb, pt_r, alpha), c0f)
+  let add_g = ir_select(pb, IR_TYPE_FLOAT, inside, ir_fmul(pb, pt_g, alpha), c0f)
+  let add_b = ir_select(pb, IR_TYPE_FLOAT, inside, ir_fmul(pb, pt_b, alpha), c0f)
+
+  let new_r = ir_fadd(pb, phi_r, add_r)
+  let new_g = ir_fadd(pb, phi_g, add_g)
+  let new_b = ir_fadd(pb, phi_b, add_b)
+
+  ir_term_branch(pb, pc)
+
+  // Continue: increment
+  let p_next = ir_fadd(pc, phi_i, c1f)
+  ir_term_branch(pc, ph)
+
+  // Wire phi nodes
+  ir_phi_add(phi_i, c0f, work)
+  ir_phi_add(phi_i, p_next, pc)
+  ir_phi_add(phi_r, old_r, work)
+  ir_phi_add(phi_r, new_r, pc)
+  ir_phi_add(phi_g, old_g, work)
+  ir_phi_add(phi_g, new_g, pc)
+  ir_phi_add(phi_b, old_b, work)
+  ir_phi_add(phi_b, new_b, pc)
+
+  // After loop: clamp and write final pixel
+  let fr = ir_fmin(pm, ir_fmax(pm, phi_r, c0f), c255)
+  let fg = ir_fmin(pm, ir_fmax(pm, phi_g, c0f), c255)
+  let fb = ir_fmin(pm, ir_fmax(pm, phi_b, c0f), c255)
+
+  ir_store_output_at(pm, gid, fr)
+  let g_off = ir_iadd(pm, gid, totu)
+  ir_store_output_at(pm, g_off, fg)
+  let b_off = ir_iadd(pm, g_off, totu)
+  ir_store_output_at(pm, b_off, fb)
+
+  ir_term_branch(pm, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

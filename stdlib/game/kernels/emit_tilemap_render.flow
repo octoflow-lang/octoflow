@@ -1,0 +1,112 @@
+// emit_tilemap_render.flow — GPU tilemap rendering kernel
+//
+// Push constants (7 floats):
+//   pc[0] = total pixels   pc[1] = screen_width   pc[2] = tile_map_width
+//   pc[3] = tile_map_height   pc[4] = tile_size   pc[5] = cam_x   pc[6] = cam_y
+//
+// Register buffer layout (binding 0):
+//   [0 .. W*H-1] = tile grid (row-major, tile IDs as floats)
+//   [W*H .. W*H+767] = color palette (256 tiles × 3 floats: r, g, b)
+//
+// Each pixel maps to a tile via world coords. Non-zero tiles write color.
+
+use "../../compiler/ir"
+
+fn emit_tilemap_render(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+  let c0 = ir_const_f(entry, 0.0)
+  let c0u = ir_const_u(entry, 0)
+  let c1u = ir_const_u(entry, 1)
+  let c2u = ir_const_u(entry, 2)
+  let c3u = ir_const_u(entry, 3)
+  let c255 = ir_const_f(entry, 255.0)
+
+  let pc_total = ir_push_const(entry, 0.0)
+  let pc_sw = ir_push_const(entry, 1.0)
+  let pc_tw = ir_push_const(entry, 2.0)
+  let pc_th = ir_push_const(entry, 3.0)
+  let pc_ts = ir_push_const(entry, 4.0)
+  let pc_cx = ir_push_const(entry, 5.0)
+  let pc_cy = ir_push_const(entry, 6.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_b = ir_folt(entry, gid_f, pc_total)
+
+  let main_m = ir_block("main_m")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_b, work, main_m)
+
+  // Screen pixel position
+  let swu = ir_ftou(work, pc_sw)
+  let py = ir_udiv(work, gid, swu)
+  let px = ir_umod(work, gid, swu)
+  let px_f = ir_utof(work, px)
+  let py_f = ir_utof(work, py)
+
+  // World position = screen + camera
+  let wx = ir_fadd(work, px_f, pc_cx)
+  let wy = ir_fadd(work, py_f, pc_cy)
+
+  // Tile coords = floor(world / tile_size)
+  let tx_f = ir_floor(work, ir_fdiv(work, wx, pc_ts))
+  let ty_f = ir_floor(work, ir_fdiv(work, wy, pc_ts))
+
+  // Bounds check: tx in [0, tw) and ty in [0, th)
+  let tx_ok_lo = ir_foge(work, tx_f, c0)
+  let tx_ok_hi = ir_folt(work, tx_f, pc_tw)
+  let ty_ok_lo = ir_foge(work, ty_f, c0)
+  let ty_ok_hi = ir_folt(work, ty_f, pc_th)
+  let x_ok = ir_land(work, tx_ok_lo, tx_ok_hi)
+  let y_ok = ir_land(work, ty_ok_lo, ty_ok_hi)
+  let bounds_ok = ir_land(work, x_ok, y_ok)
+
+  // Read tile
+  let tile_blk = ir_block("tile_blk")
+  let skip_blk = ir_block("skip_blk")
+  ir_selection_merge(work, skip_blk)
+  ir_term_cond_branch(work, bounds_ok, tile_blk, skip_blk)
+
+  // In tile_blk: read tile ID from register
+  let tw_u = ir_ftou(tile_blk, pc_tw)
+  let tx_u = ir_ftou(tile_blk, tx_f)
+  let ty_u = ir_ftou(tile_blk, ty_f)
+  let tile_idx = ir_iadd(tile_blk, ir_imul(tile_blk, ty_u, tw_u), tx_u)
+  let tile_id = ir_load_input_at(tile_blk, 0.0, tile_idx)
+
+  // Check if tile is non-zero
+  let tile_nz = ir_fone(tile_blk, tile_id, c0)
+
+  let draw_blk = ir_block("draw_blk")
+  let nodraw = ir_block("nodraw")
+  ir_selection_merge(tile_blk, nodraw)
+  ir_term_cond_branch(tile_blk, tile_nz, draw_blk, nodraw)
+
+  // Palette lookup: palette_offset = tw * th
+  let grid_size = ir_imul(draw_blk, tw_u, ir_ftou(draw_blk, pc_th))
+  let tid_u = ir_ftou(draw_blk, tile_id)
+  let pal_base = ir_iadd(draw_blk, grid_size, ir_imul(draw_blk, tid_u, c3u))
+  let col_r = ir_load_input_at(draw_blk, 0.0, pal_base)
+  let col_g = ir_load_input_at(draw_blk, 0.0, ir_iadd(draw_blk, pal_base, c1u))
+  let col_b = ir_load_input_at(draw_blk, 0.0, ir_iadd(draw_blk, pal_base, c2u))
+
+  // Write to framebuffer
+  let totu = ir_ftou(draw_blk, pc_total)
+  ir_store_output_at(draw_blk, gid, col_r)
+  let g_off = ir_iadd(draw_blk, gid, totu)
+  ir_store_output_at(draw_blk, g_off, col_g)
+  let b_off = ir_iadd(draw_blk, g_off, totu)
+  ir_store_output_at(draw_blk, b_off, col_b)
+
+  ir_term_branch(draw_blk, nodraw)
+  ir_term_branch(nodraw, skip_blk)
+  ir_term_branch(skip_blk, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

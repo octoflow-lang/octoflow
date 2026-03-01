@@ -118,10 +118,10 @@ while game_running() == 1.0
   sdf_render(scene, cvs)
 
   // Apply FX on the SDF VM
-  let sdf_vm = _sdf_cfg[2]
-  let sdf_total = _sdf_cfg[3] * _sdf_cfg[4]
-  let sdf_w = _sdf_cfg[3]
-  let sdf_h = _sdf_cfg[4]
+  let sdf_vm = sdf_get_vm()
+  let sdf_total = sdf_get_total()
+  let sdf_w = sdf_get_width()
+  let sdf_h = sdf_get_height()
 
   let mut has_fx = 0.0
   if _fd[2] == 1.0

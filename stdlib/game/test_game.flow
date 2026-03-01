@@ -15,6 +15,9 @@ use "tween"
 use "anim"
 use "noise"
 use "procgen"
+use "fx"
+use "lighting"
+use "gpu_game"
 
 // Counters in array (scalars don't propagate across fn calls)
 let mut _tc = [0.0, 0.0]
@@ -402,6 +405,209 @@ check("maze_generate length", len(maze), 121.0)
 check("maze start open", maze[int(1.0 * 11.0 + 1.0)], 0.0)
 // Corner (0,0) should be wall
 check("maze corner wall", maze[0], 1.0)
+
+// ── Raymarcher tests ────────────────────────────────────
+print("12. Raymarcher (scene manager)")
+use "raymarcher"
+
+let sc = sdf_scene()
+check("sdf_scene returns 1", sc, 1.0)
+check("sdf_cfg obj_count 0", _sdf_cfg[0], 0.0)
+check("sdf_cfg light_count 0", _sdf_cfg[1], 0.0)
+
+// Add sphere
+let sp0 = sdf_sphere(sc, 1.0, 2.0, 3.0, 0.5)
+check("sdf_sphere returns 0", sp0, 0.0)
+check("obj_count after sphere", _sdf_cfg[0], 1.0)
+check("sphere type", _sdf_objs[0], 1.0)
+check("sphere x", _sdf_objs[1], 1.0)
+check("sphere y", _sdf_objs[2], 2.0)
+check("sphere z", _sdf_objs[3], 3.0)
+check("sphere radius", _sdf_objs[4], 0.5)
+
+// Add box
+let bx0 = sdf_box(sc, 4.0, 5.0, 6.0, 1.0, 2.0, 3.0)
+check("sdf_box returns 1", bx0, 1.0)
+check("obj_count after box", _sdf_cfg[0], 2.0)
+check("box type", _sdf_objs[16], 2.0)
+check("box hw", _sdf_objs[20], 1.0)
+
+// Add plane
+let pl0 = sdf_plane(sc, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+check("sdf_plane returns 2", pl0, 2.0)
+check("obj_count after plane", _sdf_cfg[0], 3.0)
+check("plane normal y", _sdf_objs[37], 1.0)
+
+// Material
+sdf_material(sc, sp0, 0.9, 0.1, 0.2)
+check("material r", _sdf_objs[8], 0.9)
+check("material g", _sdf_objs[9], 0.1)
+check("material b", _sdf_objs[10], 0.2)
+
+// Reflective
+sdf_reflective(sc, sp0, 0.7)
+check("reflective", _sdf_objs[11], 0.7)
+
+// Emissive
+sdf_emissive(sc, sp0, 0.3)
+check("emissive", _sdf_objs[12], 0.3)
+
+// Roughness
+sdf_roughness(sc, sp0, 0.5)
+check("roughness", _sdf_objs[13], 0.5)
+
+// Light
+let lt0 = sdf_light(sc, 10.0, 20.0, 30.0, 1.0, 0.8, 0.6)
+check("sdf_light returns 0", lt0, 0.0)
+check("light_count", _sdf_cfg[1], 1.0)
+check("light x", _sdf_lights[0], 10.0)
+check("light r", _sdf_lights[3], 1.0)
+
+// Ambient
+sdf_ambient(sc, 0.1, 0.2, 0.3)
+check("ambient r", _sdf_amb[0], 0.1)
+check("ambient g", _sdf_amb[1], 0.2)
+
+// Camera
+sdf_camera(sc, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+check("camera eye_x", _sdf_cam[0], 1.0)
+check("camera look_z", _sdf_cam[5], 6.0)
+
+// FOV
+sdf_fov(sc, 90.0)
+check("fov", _sdf_cam[6], 90.0)
+
+// Scene reset
+let sc2 = sdf_scene()
+check("scene reset obj_count", _sdf_cfg[0], 0.0)
+check("scene reset light_count", _sdf_cfg[1], 0.0)
+
+// ── 13. FX Pipeline ─────────────────────────────────────────
+print("13. FX Pipeline")
+
+// fx_begin sets state
+fx_begin(42.0, 120000.0, 400.0, 300.0)
+check("fx_begin vm_id", _fx[0], 42.0)
+check("fx_begin total", _fx[1], 120000.0)
+check("fx_begin width", _fx[2], 400.0)
+check("fx_begin height", _fx[3], 300.0)
+check("fx_begin dispatch_count", _fx[4], 0.0)
+
+// fx_grayscale dispatches (won't actually dispatch since vm_id=42 is fake,
+// but the function should increment dispatch count and not crash on
+// loom_dispatch with invalid VM — we test the API logic here)
+// NOTE: We can't test actual dispatch without a real VM, so we test state only.
+
+// Reset with invalid VM to test guard
+fx_begin(0.0, 0.0, 0.0, 0.0)
+check("fx_begin zero vm", _fx[0], 0.0)
+
+// Test that fx functions guard against zero VM
+let _fg = fx_grayscale()
+check("fx_grayscale guard", _fx[4], 0.0)
+let _fi = fx_invert()
+check("fx_invert guard", _fx[4], 0.0)
+let _fcg = fx_color_grade(1.0, 1.0, 1.0)
+check("fx_color_grade guard", _fx[4], 0.0)
+let _fsl = fx_scanlines(0.5)
+check("fx_scanlines guard", _fx[4], 0.0)
+let _fv = fx_vignette(0.8, 0.5, 0.5)
+check("fx_vignette guard", _fx[4], 0.0)
+let _fpx = fx_pixelate(4.0)
+check("fx_pixelate guard", _fx[4], 0.0)
+let _fch = fx_chromatic(3.0)
+check("fx_chromatic guard", _fx[4], 0.0)
+
+// fx_apply guard with zero VM
+let _fa = fx_apply()
+check("fx_apply guard zero vm", _fa, 0.0)
+
+// fx_apply guard with zero dispatches
+fx_begin(1.0, 100.0, 10.0, 10.0)
+let _fa2 = fx_apply()
+check("fx_apply guard zero dispatches", _fa2, 0.0)
+
+// ── 14. 2D Lighting ─────────────────────────────────────────
+print("14. 2D Lighting")
+
+// Init clears all lights
+light_init(16.0)
+check("light_init count", _lt_cfg[0], 0.0)
+check("light_init max", _lt_cfg[1], 16.0)
+
+// Add lights
+let lt0 = light_add(100.0, 50.0, 200.0, 1.0, 0.5, 0.2)
+check("light_add returns 0", lt0, 0.0)
+check("light_add x", _lt_x[0], 100.0)
+check("light_add y", _lt_y[0], 50.0)
+check("light_add radius", _lt_rad[0], 200.0)
+check("light_add r", _lt_r[0], 1.0)
+check("light_add g", _lt_g[0], 0.5)
+check("light_add b", _lt_b[0], 0.2)
+check("light_add active", _lt_active[0], 1.0)
+check("light_add count", _lt_cfg[0], 1.0)
+
+let lt1 = light_add(300.0, 200.0, 150.0, 0.0, 0.0, 1.0)
+check("light_add second", lt1, 1.0)
+check("light_add count 2", _lt_cfg[0], 2.0)
+
+// Set pos
+light_set_pos(lt0, 120.0, 60.0)
+check("light_set_pos x", _lt_x[0], 120.0)
+check("light_set_pos y", _lt_y[0], 60.0)
+
+// Set color
+light_set_color(lt0, 0.8, 0.3, 0.1)
+check("light_set_color r", _lt_r[0], 0.8)
+check("light_set_color g", _lt_g[0], 0.3)
+
+// Set radius
+light_set_radius(lt1, 180.0)
+check("light_set_radius", _lt_rad[1], 180.0)
+
+// Ambient
+light_ambient(0.1, 0.1, 0.15)
+check("light_ambient r", _lt_cfg[2], 0.1)
+check("light_ambient g", _lt_cfg[3], 0.1)
+check("light_ambient b", _lt_cfg[4], 0.15)
+
+// Remove
+light_remove(lt0)
+check("light_remove active", _lt_active[0], 0.0)
+check("light_remove count", _lt_cfg[0], 1.0)
+
+// light_begin sets target
+light_begin(99.0, 12000.0, 400.0, 300.0)
+check("light_begin vm", _lt_cfg[5], 99.0)
+check("light_begin total", _lt_cfg[6], 12000.0)
+check("light_begin w", _lt_cfg[7], 400.0)
+check("light_begin h", _lt_cfg[8], 300.0)
+
+// light_apply guard with zero VM
+light_begin(0.0, 0.0, 0.0, 0.0)
+let _la = light_apply()
+check("light_apply guard zero vm", _la, 0.0)
+
+// ── 15. GPU Game Renderer ───────────────────────────────────
+print("15. GPU Game Renderer")
+
+// Test state initialization (without booting a real VM)
+check("gg initial ready", _gg[4], 0.0)
+check("gg reg layout SPR_OFF", _GG_SPR_OFF, 3000.0)
+check("gg reg layout PART_OFF", _GG_PART_OFF, 5048.0)
+check("gg reg layout REG_SIZE", _GG_REG_SIZE, 9200.0)
+
+// Test gpu_game_render guard with zero VM
+let _gr = gpu_game_render(0.0, 0.0)
+check("gpu_game_render guard", _gr, 0.0)
+
+// Test upload guards
+let _ut = gpu_game_upload_tilemap()
+check("upload_tilemap guard", _ut, 0.0)
+let _us = gpu_game_upload_sprites()
+check("upload_sprites guard", _us, 0.0)
+let _up = gpu_game_upload_particles()
+check("upload_particles guard", _up, 0.0)
 
 // ── Results ───────────────────────────────────────────────
 print("")

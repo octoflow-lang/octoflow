@@ -1,6 +1,7 @@
 // stdlib/game/fractals.flow — Fractal rendering (CPU)
 //
-// Functions: fractal_mandelbrot, fractal_julia, fractal_burning_ship
+// Functions: fractal_mandelbrot, fractal_julia, fractal_burning_ship,
+//   fractal_mandelbrot_gpu, fractal_julia_gpu, fractal_burning_ship_gpu
 //
 // Renders fractals to a canvas using gui_canvas_fill for each pixel.
 // For GPU-accelerated version, see kernels/emit_fractal.flow.
@@ -208,4 +209,84 @@ fn fractal_burning_ship(canvas_id, cx, cy, zoom, max_iter)
     py = py + 1.0
   end
   return 0.0
+end
+
+// ── GPU-Accelerated Fractals ────────────────────────────────
+// Require a Loom VM. Renders to canvas via GPU compute shader.
+
+// State: [vm_id, width, height]
+let mut _frac_gpu = [0.0, 0.0, 0.0]
+
+fn _frac_gpu_init(canvas_id)
+  let cw = _gui_w[int(canvas_id)]
+  let ch = _gui_h[int(canvas_id)]
+  let total = cw * ch
+  if _frac_gpu[0] > 0.0 && _frac_gpu[1] == cw && _frac_gpu[2] == ch
+    return _frac_gpu[0]
+  end
+  if _frac_gpu[0] > 0.0
+    loom_shutdown(_frac_gpu[0])
+  end
+  let vm = loom_boot(1.0, 16.0, total * 3.0)
+  _frac_gpu[0] = vm
+  _frac_gpu[1] = cw
+  _frac_gpu[2] = ch
+  return vm
+end
+
+fn fractal_mandelbrot_gpu(canvas_id, cx, cy, zoom, max_iter)
+  let vm = _frac_gpu_init(canvas_id)
+  if vm <= 0.0
+    return 0.0
+  end
+  let cw = _frac_gpu[1]
+  let ch = _frac_gpu[2]
+  let total = cw * ch
+  let wg = int((total + 255.0) / 256.0)
+  let pc = [total, cw, ch, 0.0, cx, cy, zoom, max_iter, 0.0, 0.0]
+  loom_dispatch(vm, "stdlib/game/kernels/fractal.spv", pc, wg)
+  let prog = loom_build(vm)
+  if prog >= 0.0
+    loom_run(prog)
+    vm_present(vm, total)
+  end
+  return 1.0
+end
+
+fn fractal_julia_gpu(canvas_id, cr, ci, zoom, max_iter)
+  let vm = _frac_gpu_init(canvas_id)
+  if vm <= 0.0
+    return 0.0
+  end
+  let cw = _frac_gpu[1]
+  let ch = _frac_gpu[2]
+  let total = cw * ch
+  let wg = int((total + 255.0) / 256.0)
+  let pc = [total, cw, ch, 1.0, 0.0, 0.0, zoom, max_iter, cr, ci]
+  loom_dispatch(vm, "stdlib/game/kernels/fractal.spv", pc, wg)
+  let prog = loom_build(vm)
+  if prog >= 0.0
+    loom_run(prog)
+    vm_present(vm, total)
+  end
+  return 1.0
+end
+
+fn fractal_burning_ship_gpu(canvas_id, cx, cy, zoom, max_iter)
+  let vm = _frac_gpu_init(canvas_id)
+  if vm <= 0.0
+    return 0.0
+  end
+  let cw = _frac_gpu[1]
+  let ch = _frac_gpu[2]
+  let total = cw * ch
+  let wg = int((total + 255.0) / 256.0)
+  let pc = [total, cw, ch, 2.0, cx, cy, zoom, max_iter, 0.0, 0.0]
+  loom_dispatch(vm, "stdlib/game/kernels/fractal.spv", pc, wg)
+  let prog = loom_build(vm)
+  if prog >= 0.0
+    loom_run(prog)
+    vm_present(vm, total)
+  end
+  return 1.0
 end

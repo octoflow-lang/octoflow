@@ -1,0 +1,262 @@
+// game_platformer.flow — Side-Scrolling Platformer
+//
+// Simple platformer with tilemap level, player sprite, gravity, jump.
+// Camera follows the player. Collect coins (yellow tiles) for score.
+//
+// Controls:
+//   Left/Right = move    Up/Space = jump    R = restart
+
+use "game/game"
+use "game/input"
+use "game/sprite"
+use "game/tilemap"
+use "game/camera"
+use "game/collision"
+
+let cvs = game_init(400.0, 300.0, "Platformer")
+
+// ── Tile colors ──────────────────────────────────────────
+// 1 = ground (brown), 2 = brick (gray), 3 = coin (yellow), 4 = spike (red)
+tilemap_create(50.0, 19.0, 16.0)
+tilemap_set_tile_color(1.0, 100.0, 70.0, 40.0)
+tilemap_set_tile_color(2.0, 120.0, 120.0, 130.0)
+tilemap_set_tile_color(3.0, 255.0, 220.0, 50.0)
+tilemap_set_tile_color(4.0, 200.0, 40.0, 40.0)
+
+// ── Build level ──────────────────────────────────────────
+// Ground floor (y=18, full width)
+let mut gx = 0.0
+while gx < 50.0
+  tilemap_set(gx, 18.0, 1.0)
+  gx = gx + 1.0
+end
+
+// Gaps in ground
+tilemap_set(12.0, 18.0, 0.0)
+tilemap_set(13.0, 18.0, 0.0)
+tilemap_set(28.0, 18.0, 0.0)
+tilemap_set(29.0, 18.0, 0.0)
+tilemap_set(30.0, 18.0, 0.0)
+
+// Platforms
+let mut px = 5.0
+while px < 8.0
+  tilemap_set(px, 14.0, 2.0)
+  px = px + 1.0
+end
+let mut px2 = 10.0
+while px2 < 13.0
+  tilemap_set(px2, 12.0, 2.0)
+  px2 = px2 + 1.0
+end
+let mut px3 = 15.0
+while px3 < 18.0
+  tilemap_set(px3, 15.0, 2.0)
+  px3 = px3 + 1.0
+end
+let mut px4 = 20.0
+while px4 < 24.0
+  tilemap_set(px4, 13.0, 2.0)
+  px4 = px4 + 1.0
+end
+let mut px5 = 26.0
+while px5 < 28.0
+  tilemap_set(px5, 16.0, 2.0)
+  px5 = px5 + 1.0
+end
+let mut px6 = 32.0
+while px6 < 36.0
+  tilemap_set(px6, 14.0, 2.0)
+  px6 = px6 + 1.0
+end
+let mut px7 = 38.0
+while px7 < 41.0
+  tilemap_set(px7, 11.0, 2.0)
+  px7 = px7 + 1.0
+end
+let mut px8 = 43.0
+while px8 < 47.0
+  tilemap_set(px8, 15.0, 2.0)
+  px8 = px8 + 1.0
+end
+
+// Coins
+tilemap_set(6.0, 13.0, 3.0)
+tilemap_set(11.0, 11.0, 3.0)
+tilemap_set(16.0, 14.0, 3.0)
+tilemap_set(21.0, 12.0, 3.0)
+tilemap_set(22.0, 12.0, 3.0)
+tilemap_set(33.0, 13.0, 3.0)
+tilemap_set(34.0, 13.0, 3.0)
+tilemap_set(39.0, 10.0, 3.0)
+tilemap_set(44.0, 14.0, 3.0)
+tilemap_set(45.0, 14.0, 3.0)
+
+// Spikes
+tilemap_set(14.0, 17.0, 4.0)
+tilemap_set(25.0, 17.0, 4.0)
+tilemap_set(37.0, 17.0, 4.0)
+
+// Walls
+tilemap_set(9.0, 17.0, 2.0)
+tilemap_set(9.0, 16.0, 2.0)
+tilemap_set(19.0, 17.0, 2.0)
+tilemap_set(19.0, 16.0, 2.0)
+tilemap_set(19.0, 15.0, 2.0)
+
+// ── Player ───────────────────────────────────────────────
+let player = sprite_create(32.0, 256.0, 12.0, 14.0, 80.0, 180.0, 255.0)
+
+// State: [vx, vy, on_ground, score, spawn_x, spawn_y, gravity, jump_vel, speed]
+let mut _pl = [0.0, 0.0, 0.0, 0.0, 32.0, 256.0, 600.0, -280.0, 140.0]
+
+// Camera
+camera_init(400.0, 300.0)
+camera_set_smooth(0.12)
+
+fn _plat_reset()
+  sprite_set_pos(player, _pl[4], _pl[5])
+  _pl[0] = 0.0
+  _pl[1] = 0.0
+  _pl[2] = 0.0
+  return 0.0
+end
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+
+  // ── Input ────────────────────────────────────────────
+  _pl[0] = 0.0
+  if input_key_held("left") == 1.0
+    _pl[0] = 0.0 - _pl[8]
+  end
+  if input_key_held("right") == 1.0
+    _pl[0] = _pl[8]
+  end
+
+  // Jump (only when on ground)
+  if _pl[2] == 1.0
+    if input_key_down("up") == 1.0
+      _pl[1] = _pl[7]
+      _pl[2] = 0.0
+    end
+    if input_key_down("space") == 1.0
+      _pl[1] = _pl[7]
+      _pl[2] = 0.0
+    end
+  end
+
+  // Restart
+  if input_key_down("r") == 1.0
+    _plat_reset()
+  end
+
+  // ── Physics ──────────────────────────────────────────
+  // Apply gravity
+  _pl[1] = _pl[1] + _pl[6] * dt
+
+  // Move X
+  let old_x = sprite_x(player)
+  let old_y = sprite_y(player)
+  let pw = sprite_w(player)
+  let ph = sprite_h(player)
+  let new_x = old_x + _pl[0] * dt
+
+  // X collision: check corners of new X position
+  let mut blocked_x = 0.0
+  if _pl[0] > 0.0
+    // Moving right: check right edge
+    if tilemap_solid_at(new_x + pw - 1.0, old_y + 2.0) == 1.0
+      blocked_x = 1.0
+    end
+    if tilemap_solid_at(new_x + pw - 1.0, old_y + ph - 2.0) == 1.0
+      blocked_x = 1.0
+    end
+  end
+  if _pl[0] < 0.0
+    // Moving left: check left edge
+    if tilemap_solid_at(new_x, old_y + 2.0) == 1.0
+      blocked_x = 1.0
+    end
+    if tilemap_solid_at(new_x, old_y + ph - 2.0) == 1.0
+      blocked_x = 1.0
+    end
+  end
+
+  let mut fx = new_x
+  if blocked_x == 1.0
+    fx = old_x
+    _pl[0] = 0.0
+  end
+
+  // Move Y
+  let new_y = old_y + _pl[1] * dt
+  let mut blocked_y = 0.0
+  _pl[2] = 0.0
+
+  if _pl[1] > 0.0
+    // Falling: check feet
+    if tilemap_solid_at(fx + 2.0, new_y + ph) == 1.0
+      blocked_y = 1.0
+    end
+    if tilemap_solid_at(fx + pw - 2.0, new_y + ph) == 1.0
+      blocked_y = 1.0
+    end
+    if blocked_y == 1.0
+      _pl[2] = 1.0
+    end
+  end
+  if _pl[1] < 0.0
+    // Rising: check head
+    if tilemap_solid_at(fx + 2.0, new_y) == 1.0
+      blocked_y = 1.0
+    end
+    if tilemap_solid_at(fx + pw - 2.0, new_y) == 1.0
+      blocked_y = 1.0
+    end
+  end
+
+  let mut fy = new_y
+  if blocked_y == 1.0
+    fy = old_y
+    _pl[1] = 0.0
+  end
+
+  sprite_set_pos(player, fx, fy)
+
+  // ── Coin collection ──────────────────────────────────
+  // Check center of player against tilemap
+  let cx = fx + pw / 2.0
+  let cy = fy + ph / 2.0
+  let tile_x = int(cx / 16.0)
+  let tile_y = int(cy / 16.0)
+  if tilemap_get(tile_x * 1.0, tile_y * 1.0) == 3.0
+    tilemap_set(tile_x * 1.0, tile_y * 1.0, 0.0)
+    _pl[3] = _pl[3] + 1.0
+  end
+
+  // ── Spike death ──────────────────────────────────────
+  if tilemap_get(tile_x * 1.0, tile_y * 1.0) == 4.0
+    _plat_reset()
+  end
+
+  // ── Fall death ───────────────────────────────────────
+  if fy > 320.0
+    _plat_reset()
+  end
+
+  // ── Camera ───────────────────────────────────────────
+  camera_follow(fx + pw / 2.0, fy + ph / 2.0)
+  camera_update(dt)
+
+  // ── Render ───────────────────────────────────────────
+  tilemap_render(cvs, camera_x(), camera_y())
+
+  // Draw player relative to camera
+  let scr_x = fx - camera_x()
+  let scr_y = fy - camera_y()
+  gui_canvas_rect_v2(cvs, scr_x, scr_y, pw, ph, 80.0, 180.0, 255.0)
+
+  game_frame_end()
+end

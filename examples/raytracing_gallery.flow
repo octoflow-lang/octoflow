@@ -1,0 +1,132 @@
+// raytracing_gallery.flow — SDF Primitive Showcase
+//
+// Displays multiple SDF primitives with different materials.
+// Auto-rotating camera. Press 1-4 to switch scenes, R to reset.
+
+use "game/game"
+use "game/input"
+use "game/raymarcher"
+
+let cvs = game_init(400.0, 300.0, "SDF Gallery")
+
+// State: [angle, scene_id, distance]
+let mut _gal = [0.0, 1.0, 7.0]
+
+fn _gal_setup_scene1(sc)
+  // Classic: spheres + ground
+  let g = sdf_plane(sc, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+  sdf_material(sc, g, 0.5, 0.5, 0.45)
+  let s1 = sdf_sphere(sc, 0.0, 1.2, 0.0, 1.2)
+  sdf_material(sc, s1, 0.9, 0.15, 0.1)
+  let s2 = sdf_sphere(sc, -2.5, 0.8, 1.5, 0.8)
+  sdf_material(sc, s2, 0.1, 0.3, 0.9)
+  let s3 = sdf_sphere(sc, 2.5, 0.6, -1.0, 0.6)
+  sdf_material(sc, s3, 0.1, 0.9, 0.2)
+  sdf_light(sc, 4.0, 6.0, -3.0, 1.0, 0.95, 0.85)
+  sdf_ambient(sc, 0.1, 0.1, 0.12)
+  return 0.0
+end
+
+fn _gal_setup_scene2(sc)
+  // Boxes + ground
+  let g = sdf_plane(sc, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+  sdf_material(sc, g, 0.4, 0.35, 0.3)
+  let b1 = sdf_box(sc, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0)
+  sdf_material(sc, b1, 0.85, 0.5, 0.15)
+  let b2 = sdf_box(sc, -2.5, 0.5, 2.0, 0.5, 0.5, 0.5)
+  sdf_material(sc, b2, 0.2, 0.7, 0.8)
+  let b3 = sdf_box(sc, 2.0, 0.75, -1.5, 0.75, 0.75, 0.75)
+  sdf_material(sc, b3, 0.7, 0.2, 0.6)
+  sdf_light(sc, -3.0, 5.0, -2.0, 0.9, 0.9, 1.0)
+  sdf_ambient(sc, 0.08, 0.08, 0.1)
+  return 0.0
+end
+
+fn _gal_setup_scene3(sc)
+  // Mixed primitives
+  let g = sdf_plane(sc, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+  sdf_material(sc, g, 0.55, 0.55, 0.5)
+  let s1 = sdf_sphere(sc, -1.5, 1.0, 0.0, 1.0)
+  sdf_material(sc, s1, 0.9, 0.3, 0.1)
+  let b1 = sdf_box(sc, 1.5, 0.8, 0.0, 0.8, 0.8, 0.8)
+  sdf_material(sc, b1, 0.1, 0.5, 0.9)
+  let s2 = sdf_sphere(sc, 0.0, 0.5, 2.5, 0.5)
+  sdf_material(sc, s2, 0.95, 0.9, 0.2)
+  let b2 = sdf_box(sc, 0.0, 0.4, -2.0, 0.4, 0.4, 0.4)
+  sdf_material(sc, b2, 0.3, 0.85, 0.3)
+  sdf_light(sc, 2.0, 5.0, -4.0, 1.0, 0.9, 0.75)
+  sdf_ambient(sc, 0.1, 0.1, 0.12)
+  return 0.0
+end
+
+fn _gal_setup_scene4(sc)
+  // Tall scene
+  let g = sdf_plane(sc, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+  sdf_material(sc, g, 0.35, 0.35, 0.4)
+  let s1 = sdf_sphere(sc, 0.0, 0.5, 0.0, 0.5)
+  sdf_material(sc, s1, 0.9, 0.1, 0.1)
+  let s2 = sdf_sphere(sc, 0.0, 1.5, 0.0, 0.4)
+  sdf_material(sc, s2, 0.1, 0.9, 0.1)
+  let s3 = sdf_sphere(sc, 0.0, 2.3, 0.0, 0.3)
+  sdf_material(sc, s3, 0.1, 0.1, 0.9)
+  let s4 = sdf_sphere(sc, 0.0, 2.9, 0.0, 0.2)
+  sdf_material(sc, s4, 0.95, 0.9, 0.2)
+  sdf_light(sc, 3.0, 4.0, -3.0, 1.0, 1.0, 0.95)
+  sdf_ambient(sc, 0.12, 0.12, 0.15)
+  return 0.0
+end
+
+fn _gal_build(scene_id)
+  let sc = sdf_scene()
+  if scene_id == 1.0
+    _gal_setup_scene1(sc)
+  elif scene_id == 2.0
+    _gal_setup_scene2(sc)
+  elif scene_id == 3.0
+    _gal_setup_scene3(sc)
+  else
+    _gal_setup_scene4(sc)
+  end
+  sdf_fov(sc, 55.0)
+  return sc
+end
+
+let mut sc = _gal_build(1.0)
+
+while game_running() == 1.0
+  let dt = game_frame_start()
+  input_update()
+
+  // Auto-rotate
+  _gal[0] = _gal[0] + dt * 0.4
+
+  // Scene switching
+  if input_key_down("1") == 1.0
+    _gal[1] = 1.0
+    sc = _gal_build(1.0)
+  end
+  if input_key_down("2") == 1.0
+    _gal[1] = 2.0
+    sc = _gal_build(2.0)
+  end
+  if input_key_down("3") == 1.0
+    _gal[1] = 3.0
+    sc = _gal_build(3.0)
+  end
+  if input_key_down("4") == 1.0
+    _gal[1] = 4.0
+    sc = _gal_build(4.0)
+  end
+  if input_key_down("r") == 1.0
+    _gal[0] = 0.0
+    _gal[2] = 7.0
+  end
+
+  // Camera orbit
+  let cx = sin(_gal[0]) * _gal[2]
+  let cz = cos(_gal[0]) * _gal[2]
+  sdf_camera(sc, cx, 3.0, cz, 0.0, 0.8, 0.0)
+
+  game_frame_end()
+  sdf_render(sc, cvs)
+end

@@ -114,6 +114,16 @@ fn light_remove(id)
   return 0.0
 end
 
+fn light_reactivate(id)
+  let ii = int(id)
+  if ii >= 0 && ii < 16
+    _lt_active[ii] = 1.0
+    _lt_cfg[0] = _lt_cfg[0] + 1.0
+    return 1.0
+  end
+  return 0.0
+end
+
 fn light_ambient(r, g, b)
   _lt_cfg[2] = r
   _lt_cfg[3] = g
@@ -160,11 +170,11 @@ fn light_apply()
     return 0.0
   end
 
-  // Collect active light indices (up to 4)
-  let mut active = [0.0, 0.0, 0.0, 0.0]
+  // Collect all active light indices (up to 16)
+  let mut active = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
   let mut act_count = 0.0
   let mut i = 0.0
-  while i < 16.0 && act_count < 4.0
+  while i < 16.0
     if _lt_active[int(i)] == 1.0
       active[int(act_count)] = i
       act_count = act_count + 1.0
@@ -172,26 +182,41 @@ fn light_apply()
     i = i + 1.0
   end
 
-  // Fill inactive slots with slot 0 but zero color (no contribution)
-  // We use a dummy slot: index 15 which has _lt_active=0, color=(0,0,0)
-  let mut s0 = 15.0
-  let mut s1 = 15.0
-  let mut s2 = 15.0
-  let mut s3 = 15.0
-  if act_count >= 1.0
-    s0 = active[0]
-  end
-  if act_count >= 2.0
-    s1 = active[1]
-  end
-  if act_count >= 3.0
-    s2 = active[2]
-  end
-  if act_count >= 4.0
-    s3 = active[3]
-  end
+  if act_count == 0.0
+    // No lights — just apply ambient darkening
+    _lt_dispatch_batch(_lt_cfg[2], _lt_cfg[3], _lt_cfg[4], 15.0, 15.0, 15.0, 15.0)
+  else
+    // Dispatch in batches of 4 lights
+    let mut batch = 0.0
+    while batch * 4.0 < act_count
+      let base = int(batch * 4.0)
+      let mut s0 = 15.0
+      let mut s1 = 15.0
+      let mut s2 = 15.0
+      let mut s3 = 15.0
+      if base + 0 < int(act_count)
+        s0 = active[base + 0]
+      end
+      if base + 1 < int(act_count)
+        s1 = active[base + 1]
+      end
+      if base + 2 < int(act_count)
+        s2 = active[base + 2]
+      end
+      if base + 3 < int(act_count)
+        s3 = active[base + 3]
+      end
 
-  _lt_dispatch_batch(_lt_cfg[2], _lt_cfg[3], _lt_cfg[4], s0, s1, s2, s3)
+      if batch == 0.0
+        // First batch: use real ambient
+        _lt_dispatch_batch(_lt_cfg[2], _lt_cfg[3], _lt_cfg[4], s0, s1, s2, s3)
+      else
+        // Subsequent batches: ambient=(1,1,1) so pixel *= (1 + new_lights)
+        _lt_dispatch_batch(1.0, 1.0, 1.0, s0, s1, s2, s3)
+      end
+      batch = batch + 1.0
+    end
+  end
 
   let prog = loom_build(_lt_cfg[5])
   if prog < 0.0
