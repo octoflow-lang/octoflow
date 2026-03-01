@@ -51,13 +51,11 @@ fn html_response(client_fd, status, body)
 end
 
 fn redirect_response(client_fd, url)
-  // Send a 302 redirect response.
-  // Limitation: http_respond does not support custom headers (Location),
-  // so the redirect URL is placed in the response body as plain text.
-  // HTTP clients that follow redirects via Location header will NOT
-  // automatically redirect. Use this for informational redirect only.
-  // For proper redirects, a runtime builtin with Location header is needed.
-  return http_respond(client_fd, 302.0, "Redirecting to " + url)
+  // Send a proper 302 redirect with Location header.
+  let headers = {}
+  headers["Location"] = url
+  headers["Content-Type"] = "text/plain"
+  return http_respond_with_headers(client_fd, 302.0, headers, "Redirecting to " + url)
 end
 
 fn error_response(client_fd, status, message)
