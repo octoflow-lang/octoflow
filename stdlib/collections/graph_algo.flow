@@ -1,0 +1,323 @@
+// stdlib/collections/graph_algo.flow — Extended graph algorithms
+//
+// Additional graph algorithms that complement graph.flow.
+// Uses the same graph data structure (map-based adjacency lists).
+//
+// Functions: graph_connected_components, graph_is_bipartite,
+//            graph_has_cycle, graph_shortest_unweighted,
+//            graph_edge_count, graph_is_connected,
+//            graph_in_degree, graph_reverse
+//
+// Usage:
+//   use "graph"
+//   use "graph_algo"
+//   let mut g = graph_create()
+//   graph_add_undirected_edge(g, "A", "B", 1.0)
+//   graph_is_connected(g)   // 1.0
+
+fn graph_connected_components(g)
+    // Find connected components in an undirected graph.
+    // Returns flat array: [component_count, node1_comp, node2_comp, ...]
+    // Component IDs are 0-based.
+    // Also returns component assignments via map.
+    let nodes = graph_nodes(g)
+    let n = len(nodes)
+    let mut visited = map()
+    let mut comp_map = map()
+    let mut comp_id = 0.0
+
+    let mut i = 0.0
+    while i < n
+        let node = nodes[i]
+        if map_has(visited, node) == 0.0
+            // BFS from this node
+            let mut queue = []
+            push(queue, node)
+            let mut qi = 0.0
+            map_set(visited, node, "1")
+            map_set(comp_map, node, str(comp_id))
+
+            while qi < len(queue)
+                let current = queue[qi]
+                qi = qi + 1.0
+
+                let neighbors = graph_neighbors(g, current)
+                let nn = len(neighbors)
+                let mut ni = 0.0
+                while ni < nn
+                    let nb = neighbors[ni]
+                    if map_has(visited, nb) == 0.0
+                        map_set(visited, nb, "1")
+                        map_set(comp_map, nb, str(comp_id))
+                        push(queue, nb)
+                    end
+                    ni = ni + 1.0
+                end
+            end
+            comp_id = comp_id + 1.0
+        end
+        i = i + 1.0
+    end
+
+    // Build result array: [count, comp_for_node0, comp_for_node1, ...]
+    let mut result = []
+    push(result, comp_id)
+    i = 0.0
+    while i < n
+        push(result, float(map_get(comp_map, nodes[i])))
+        i = i + 1.0
+    end
+    return result
+end
+
+fn graph_is_bipartite(g)
+    // Check if undirected graph is 2-colorable.
+    // Returns 1.0 if bipartite, 0.0 if not.
+    let nodes = graph_nodes(g)
+    let n = len(nodes)
+    if n == 0.0
+        return 1.0
+    end
+
+    let mut color = map()
+    let mut i = 0.0
+
+    while i < n
+        let node = nodes[i]
+        if map_has(color, node) == 0.0
+            // BFS coloring from this uncolored node
+            map_set(color, node, "0")
+            let mut queue = []
+            push(queue, node)
+            let mut qi = 0.0
+
+            while qi < len(queue)
+                let current = queue[qi]
+                qi = qi + 1.0
+                let cur_color = float(map_get(color, current))
+
+                let neighbors = graph_neighbors(g, current)
+                let nn = len(neighbors)
+                let mut ni = 0.0
+                while ni < nn
+                    let nb = neighbors[ni]
+                    if map_has(color, nb) == 0.0
+                        // Color with opposite
+                        if cur_color < 0.5
+                            map_set(color, nb, "1")
+                        else
+                            map_set(color, nb, "0")
+                        end
+                        push(queue, nb)
+                    else
+                        // Check for conflict
+                        let nb_color = float(map_get(color, nb))
+                        if nb_color == cur_color
+                            return 0.0
+                        end
+                    end
+                    ni = ni + 1.0
+                end
+            end
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn graph_has_cycle(g)
+    // Detect cycle in a directed graph using DFS coloring.
+    // Colors: 0=white (unvisited), 1=gray (in stack), 2=black (done).
+    // Returns 1.0 if cycle exists, 0.0 otherwise.
+    let nodes = graph_nodes(g)
+    let n = len(nodes)
+    let mut color = map()
+
+    let mut i = 0.0
+    while i < n
+        map_set(color, nodes[i], "0")
+        i = i + 1.0
+    end
+
+    i = 0.0
+    while i < n
+        let node = nodes[i]
+        if map_get(color, node) == "0"
+            // Iterative DFS with explicit stack
+            let mut stack = []
+            push(stack, node)
+
+            while len(stack) > 0.0
+                let current = stack[len(stack) - 1.0]
+                let cur_state = map_get(color, current)
+
+                if cur_state == "0"
+                    // Mark as gray (processing)
+                    map_set(color, current, "1")
+
+                    let neighbors = graph_neighbors(g, current)
+                    let nn = len(neighbors)
+                    let mut ni = 0.0
+                    while ni < nn
+                        let nb = neighbors[ni]
+                        let nb_state = map_get(color, nb)
+                        if nb_state == "1"
+                            // Back edge — cycle found
+                            return 1.0
+                        end
+                        if nb_state == "0"
+                            push(stack, nb)
+                        end
+                        ni = ni + 1.0
+                    end
+                elif cur_state == "1"
+                    // Done processing — mark black
+                    map_set(color, current, "2")
+                    pop(stack)
+                else
+                    // Already black — skip
+                    pop(stack)
+                end
+            end
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn graph_shortest_unweighted(g, start, target)
+    // Shortest path in unweighted graph using BFS.
+    // Returns distance as float. Returns -1.0 if unreachable.
+    let mut visited = map()
+    let mut dist = map()
+    let mut queue = []
+    push(queue, start)
+    map_set(visited, start, "1")
+    map_set(dist, start, "0")
+    let mut qi = 0.0
+
+    while qi < len(queue)
+        let current = queue[qi]
+        qi = qi + 1.0
+
+        if current == target
+            return float(map_get(dist, current))
+        end
+
+        let cur_dist = float(map_get(dist, current))
+        let neighbors = graph_neighbors(g, current)
+        let nn = len(neighbors)
+        let mut ni = 0.0
+        while ni < nn
+            let nb = neighbors[ni]
+            if map_has(visited, nb) == 0.0
+                map_set(visited, nb, "1")
+                map_set(dist, nb, str(cur_dist + 1.0))
+                push(queue, nb)
+            end
+            ni = ni + 1.0
+        end
+    end
+    return -1.0
+end
+
+fn graph_edge_count(g)
+    // Count total directed edges in the graph.
+    let nodes = graph_nodes(g)
+    let n = len(nodes)
+    let mut total = 0.0
+    let mut i = 0.0
+    while i < n
+        total = total + graph_degree(g, nodes[i])
+        i = i + 1.0
+    end
+    return total
+end
+
+fn graph_is_connected(g)
+    // Check if undirected graph is connected.
+    // Returns 1.0 if connected, 0.0 otherwise.
+    let nodes = graph_nodes(g)
+    let n = len(nodes)
+    if n <= 1.0
+        return 1.0
+    end
+
+    // BFS from first node
+    let start = nodes[0]
+    let mut visited = map()
+    let mut queue = []
+    push(queue, start)
+    map_set(visited, start, "1")
+    let mut qi = 0.0
+    let mut count = 1.0
+
+    while qi < len(queue)
+        let current = queue[qi]
+        qi = qi + 1.0
+
+        let neighbors = graph_neighbors(g, current)
+        let nn = len(neighbors)
+        let mut ni = 0.0
+        while ni < nn
+            let nb = neighbors[ni]
+            if map_has(visited, nb) == 0.0
+                map_set(visited, nb, "1")
+                count = count + 1.0
+                push(queue, nb)
+            end
+            ni = ni + 1.0
+        end
+    end
+
+    if count == n
+        return 1.0
+    end
+    return 0.0
+end
+
+fn graph_in_degree(g, node)
+    // Count incoming edges to a node.
+    let nodes = graph_nodes(g)
+    let n = len(nodes)
+    let mut count = 0.0
+    let mut i = 0.0
+    while i < n
+        if graph_has_edge(g, nodes[i], node) == 1.0
+            count = count + 1.0
+        end
+        i = i + 1.0
+    end
+    return count
+end
+
+fn graph_reverse(g)
+    // Create a new graph with all edges reversed.
+    let mut rev = graph_create()
+    let nodes = graph_nodes(g)
+    let n = len(nodes)
+
+    // Add all nodes
+    let mut i = 0.0
+    while i < n
+        graph_add_node(rev, nodes[i])
+        i = i + 1.0
+    end
+
+    // Reverse edges
+    i = 0.0
+    while i < n
+        let from = nodes[i]
+        let neighbors = graph_neighbors(g, from)
+        let nn = len(neighbors)
+        let mut ni = 0.0
+        while ni < nn
+            let to = neighbors[ni]
+            let w = graph_weight(g, from, to)
+            graph_add_edge(rev, to, from, w)
+            ni = ni + 1.0
+        end
+        i = i + 1.0
+    end
+    return rev
+end

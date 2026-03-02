@@ -1,0 +1,218 @@
+// test_ase.flow — Tests for ASE genome, evolution, and fitness libraries
+//
+// 10 tests covering genome create/randomize/clamp, mutation bounds,
+// crossover, selection, correctness evaluation, fitness scoring,
+// discretize, next_generation, and edge cases.
+//
+// Run: octoflow run stdlib/loom/ase/test_ase.flow
+
+use "genome"
+use "evolve"
+use "fitness"
+
+print("=== Test: ASE Foundation ===")
+print("")
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+fn check(name, got, expected)
+  if abs(got - expected) < 0.01
+    print("  PASS: {name}")
+    return 1.0
+  else
+    print("  FAIL: {name} got={got} expected={expected}")
+    return 0.0
+  end
+end
+
+fn check_range(name, val, lo, hi)
+  if val >= lo
+    if val <= hi
+      print("  PASS: {name} = {val} in [{lo}, {hi}]")
+      return 1.0
+    end
+  end
+  print("  FAIL: {name} = {val} not in [{lo}, {hi}]")
+  return 0.0
+end
+
+fn tally(result)
+  if result > 0.5
+    pass = pass + 1.0
+  else
+    fail = fail + 1.0
+  end
+  return 0.0
+end
+
+// ── Test 1: Genome create + randomize ───────────────────────────────
+print("Test 1: Genome create + randomize")
+
+let schema1 = [0.0, 3.0, 64.0, 512.0, 4.0, 32.0]
+let mut g1 = ase_genome_create(3.0)
+let _t = tally(check("genome length", len(g1), 3.0))
+let _t = tally(check("gene 0 initial", g1[0], 0.0))
+
+ase_genome_randomize(g1, schema1)
+let _t = tally(check_range("gene 0 randomized", g1[0], 0.0, 3.0))
+let _t = tally(check_range("gene 1 randomized", g1[1], 64.0, 512.0))
+let _t = tally(check_range("gene 2 randomized", g1[2], 4.0, 32.0))
+print("")
+
+// ── Test 2: Clamp ───────────────────────────────────────────────────
+print("Test 2: Clamp enforces bounds")
+
+g1[0] = -5.0
+g1[1] = 9999.0
+ase_genome_clamp(g1, schema1)
+let _t = tally(check("gene 0 clamped to min", g1[0], 0.0))
+let _t = tally(check("gene 1 clamped to max", g1[1], 512.0))
+print("")
+
+// ── Test 3: Mutation preserves bounds ───────────────────────────────
+print("Test 3: Mutation preserves bounds (100 iterations)")
+
+let mut mutation_ok = 1.0
+let mut mi = 0.0
+while mi < 100.0
+  ase_mutate(g1, schema1, 1.0)
+  if g1[0] < 0.0
+    mutation_ok = 0.0
+  end
+  if g1[0] > 3.0
+    mutation_ok = 0.0
+  end
+  if g1[1] < 64.0
+    mutation_ok = 0.0
+  end
+  if g1[1] > 512.0
+    mutation_ok = 0.0
+  end
+  mi = mi + 1.0
+end
+let _t = tally(check("all mutations in range", mutation_ok, 1.0))
+print("")
+
+// ── Test 4: Crossover produces valid genome ─────────────────────────
+print("Test 4: Crossover")
+
+let p1 = [1.0, 128.0, 8.0]
+let p2 = [2.0, 256.0, 16.0]
+let child = ase_crossover(p1, p2)
+let _t = tally(check("child length", len(child), 3.0))
+
+// Each gene must come from one parent (single-point crossover)
+let mut gene0_ok = 0.0
+if abs(child[0] - 1.0) < 0.01
+  gene0_ok = 1.0
+end
+if abs(child[0] - 2.0) < 0.01
+  gene0_ok = 1.0
+end
+let _t = tally(check("gene 0 from parent", gene0_ok, 1.0))
+
+let mut gene2_ok = 0.0
+if abs(child[2] - 8.0) < 0.01
+  gene2_ok = 1.0
+end
+if abs(child[2] - 16.0) < 0.01
+  gene2_ok = 1.0
+end
+let _t = tally(check("gene 2 from parent", gene2_ok, 1.0))
+print("")
+
+// ── Test 5: Selection returns correct indices ───────────────────────
+print("Test 5: Selection (top-k)")
+
+let scores5 = [0.3, 0.9, 0.1, 0.7]
+let top5 = ase_select_top(scores5, scores5, 2.0)
+let _t = tally(check("best is index 1", top5[0], 1.0))
+let _t = tally(check("second is index 3", top5[1], 3.0))
+print("")
+
+// ── Test 6: Correctness evaluator ───────────────────────────────────
+print("Test 6: Correctness evaluation")
+
+let actual6 = [1.0, 2.0, 3.0, 4.0]
+let expected6 = [1.0, 2.0, 3.0, 4.0]
+let c6 = ase_evaluate_correctness(actual6, expected6)
+let _t = tally(check("perfect match = 1.0", c6, 1.0))
+
+let wrong6 = [1.0, 2.0, 99.0, 4.0]
+let c6b = ase_evaluate_correctness(wrong6, expected6)
+let _t = tally(check("3/4 correct = 0.75", c6b, 0.75))
+print("")
+
+// ── Test 7: Fitness score — correct beats incorrect ─────────────────
+print("Test 7: Fitness scoring")
+
+let f_correct = ase_fitness_score(1.0, 5.0, 10.0)
+let f_wrong = ase_fitness_score(0.5, 1.0, 10.0)
+let mut correct_wins = 0.0
+if f_correct > f_wrong
+  correct_wins = 1.0
+end
+let _t = tally(check("correct beats incorrect", correct_wins, 1.0))
+
+// Perfect correctness + fastest speed → score = 1.0
+let f_best = ase_fitness_score(1.0, 0.0, 10.0)
+let _t = tally(check("perfect + fastest = 1.0", f_best, 1.0))
+
+// Zero correctness → score = 0.0
+let f_zero = ase_fitness_score(0.0, 0.0, 10.0)
+let _t = tally(check("zero correctness = 0.0", f_zero, 0.0))
+print("")
+
+// ── Test 8: Discretize snaps to nearest option ──────────────────────
+print("Test 8: Discretize")
+
+let mut g8 = [130.0]
+let opts8 = [64.0, 128.0, 256.0, 512.0]
+ase_genome_discretize(g8, 0.0, opts8)
+let _t = tally(check("130 snaps to 128", g8[0], 128.0))
+
+let mut g8b = [400.0]
+ase_genome_discretize(g8b, 0.0, opts8)
+let _t = tally(check("400 snaps to 512", g8b[0], 512.0))
+print("")
+
+// ── Test 9: next_generation produces right size ─────────────────────
+print("Test 9: Next generation")
+
+let pop9 = [[1.0, 128.0], [2.0, 256.0], [0.0, 64.0], [3.0, 512.0]]
+let fit9 = [0.8, 0.3, 0.9, 0.1]
+let schema9 = [0.0, 3.0, 64.0, 512.0]
+let next9 = ase_next_generation(pop9, fit9, schema9, 2.0, 0.5)
+let _t = tally(check("next gen size", len(next9), 4.0))
+
+// Top 2 should be indices 2 (0.9) and 0 (0.8)
+// next_pop[0] should be pop[2] = [0.0, 64.0]
+// next_pop[1] should be pop[0] = [1.0, 128.0]
+let winner = next9[0]
+let _t = tally(check("winner gene 0", winner[0], 0.0))
+let _t = tally(check("winner gene 1", winner[1], 64.0))
+print("")
+
+// ── Test 10: Empty expected → correctness = 0 ──────────────────────
+print("Test 10: Edge cases")
+
+let empty10 = []
+let c10 = ase_evaluate_correctness(empty10, empty10)
+let _t = tally(check("empty arrays → 0", c10, 0.0))
+
+// 400 snaps to 512 (closest: |400-256|=144, |400-512|=112 → 512)
+// Verify discretize picks 512 not 256
+let mut g10 = [400.0]
+ase_genome_discretize(g10, 0.0, opts8)
+let _t = tally(check("400 → 512 (not 256)", g10[0], 512.0))
+print("")
+
+// ── Summary ─────────────────────────────────────────────────────────
+print("Results: {pass} passed, {fail} failed")
+if fail < 0.5
+  print("ALL PASS")
+else
+  print("SOME FAILED")
+end
+print("")

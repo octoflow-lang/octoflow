@@ -1,0 +1,319 @@
+// stdlib/media/fft.flow — Fast Fourier Transform (Cooley-Tukey radix-2)
+//
+// Split-complex format: separate real[] and imag[] arrays.
+// Forward FFT: time domain → frequency domain.
+// Inverse FFT: frequency domain → time domain.
+//
+// N must be a power of 2. Use fft_next_pow2() to find valid size.
+//
+// Functions: fft_forward, fft_inverse, fft_magnitude, fft_phase,
+//            fft_power_spectrum, fft_next_pow2, fft_is_pow2,
+//            fft_stft, fft_apply_window, fft_hann_window
+//
+// Usage:
+//   use "fft"
+//   let mut real = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+//   let mut imag = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+//   fft_forward(real, imag, 8.0)
+
+let FFT_PI = 3.14159265358979
+let FFT_TWO_PI = 6.28318530717959
+
+// ── Utilities ────────────────────────────────────────
+
+fn fft_is_pow2(n)
+    // Returns 1.0 if n is a power of 2.
+    if n <= 0.0
+        return 0.0
+    end
+    let mut v = n
+    while v > 1.0
+        let half = floor(v / 2.0)
+        if half * 2.0 != v
+            return 0.0
+        end
+        v = half
+    end
+    return 1.0
+end
+
+fn fft_next_pow2(n)
+    // Return smallest power of 2 >= n.
+    if n <= 1.0
+        return 1.0
+    end
+    let mut p = 1.0
+    while p < n
+        p = p * 2.0
+    end
+    return p
+end
+
+fn _fft_log2(n)
+    // Integer log2 for powers of 2.
+    let mut v = n
+    let mut count = 0.0
+    while v > 1.0
+        v = floor(v / 2.0)
+        count = count + 1.0
+    end
+    return count
+end
+
+fn _fft_bit_reverse(x, bits)
+    // Reverse 'bits' lowest bits of integer x.
+    let mut result = 0.0
+    let mut val = x
+    let mut i = 0.0
+    while i < bits
+        result = result * 2.0 + (val - floor(val / 2.0) * 2.0)
+        val = floor(val / 2.0)
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Forward FFT ──────────────────────────────────────
+
+fn fft_forward(real, imag, n)
+    // In-place Cooley-Tukey DIT FFT. N must be power of 2.
+    // real[0..n-1] = real parts, imag[0..n-1] = imaginary parts.
+    if fft_is_pow2(n) == 0.0 || n < 2.0
+        return 0.0
+    end
+    let bits = _fft_log2(n)
+
+    // Bit-reversal permutation
+    let mut i = 0.0
+    while i < n
+        let j = _fft_bit_reverse(i, bits)
+        if j > i
+            // Swap real
+            let tmp_r = real[int(i)]
+            real[int(i)] = real[int(j)]
+            real[int(j)] = tmp_r
+            // Swap imag
+            let tmp_i = imag[int(i)]
+            imag[int(i)] = imag[int(j)]
+            imag[int(j)] = tmp_i
+        end
+        i = i + 1.0
+    end
+
+    // Butterfly stages
+    let mut stage_size = 2.0
+    while stage_size <= n
+        let half = stage_size / 2.0
+        let angle = 0.0 - FFT_TWO_PI / stage_size
+        let wn_r = cos(angle)
+        let wn_i = sin(angle)
+
+        let mut k = 0.0
+        while k < n
+            let mut w_r = 1.0
+            let mut w_i = 0.0
+            let mut j2 = 0.0
+            while j2 < half
+                let idx_top = int(k + j2)
+                let idx_bot = int(k + j2 + half)
+                // Butterfly: t = w * x[bot]
+                let t_r = w_r * real[idx_bot] - w_i * imag[idx_bot]
+                let t_i = w_r * imag[idx_bot] + w_i * real[idx_bot]
+                let u_r = real[idx_top]
+                let u_i = imag[idx_top]
+                real[idx_top] = u_r + t_r
+                imag[idx_top] = u_i + t_i
+                real[idx_bot] = u_r - t_r
+                imag[idx_bot] = u_i - t_i
+                // Advance twiddle factor
+                let new_w_r = w_r * wn_r - w_i * wn_i
+                let new_w_i = w_r * wn_i + w_i * wn_r
+                w_r = new_w_r
+                w_i = new_w_i
+                j2 = j2 + 1.0
+            end
+            k = k + stage_size
+        end
+        stage_size = stage_size * 2.0
+    end
+    return 1.0
+end
+
+// ── Inverse FFT ──────────────────────────────────────
+
+fn fft_inverse(real, imag, n)
+    // In-place inverse FFT. Divides by N.
+    if fft_is_pow2(n) == 0.0 || n < 2.0
+        return 0.0
+    end
+    // Conjugate
+    let mut i = 0.0
+    while i < n
+        imag[int(i)] = 0.0 - imag[int(i)]
+        i = i + 1.0
+    end
+    // Forward FFT
+    let _f = fft_forward(real, imag, n)
+    // Conjugate and scale
+    i = 0.0
+    while i < n
+        real[int(i)] = real[int(i)] / n
+        imag[int(i)] = 0.0 - imag[int(i)] / n
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+// ── Spectrum analysis ────────────────────────────────
+
+fn fft_magnitude(real, imag, n, result)
+    // Compute magnitude spectrum. Appends n values to result.
+    let mut i = 0.0
+    while i < n
+        let r = real[int(i)]
+        let im = imag[int(i)]
+        push(result, sqrt(r * r + im * im))
+        i = i + 1.0
+    end
+    return n
+end
+
+fn fft_phase(real, imag, n, result)
+    // Compute phase spectrum (radians). Appends n values to result.
+    let mut i = 0.0
+    while i < n
+        push(result, atan2(imag[int(i)], real[int(i)]))
+        i = i + 1.0
+    end
+    return n
+end
+
+fn fft_power_spectrum(real, imag, n, result)
+    // Compute power spectrum (magnitude²). Appends n/2 values (positive freqs).
+    let half = floor(n / 2.0)
+    let mut i = 0.0
+    while i < half
+        let r = real[int(i)]
+        let im = imag[int(i)]
+        push(result, (r * r + im * im) / n)
+        i = i + 1.0
+    end
+    return half
+end
+
+fn fft_freq_bin(bin_idx, n, sample_rate)
+    // Convert FFT bin index to frequency in Hz.
+    if n <= 0.0
+        return 0.0
+    end
+    return bin_idx * sample_rate / n
+end
+
+fn fft_dominant_freq(real, imag, n, sample_rate)
+    // Find dominant frequency (peak magnitude bin).
+    let half = floor(n / 2.0)
+    let mut max_mag = 0.0
+    let mut max_bin = 0.0
+    let mut i = 1.0
+    while i < half
+        let r = real[int(i)]
+        let im = imag[int(i)]
+        let mag = r * r + im * im
+        if mag > max_mag
+            max_mag = mag
+            max_bin = i
+        end
+        i = i + 1.0
+    end
+    return fft_freq_bin(max_bin, n, sample_rate)
+end
+
+// ── Windowing ────────────────────────────────────────
+
+fn fft_hann_window(data, n)
+    // Apply Hann window in-place.
+    if n < 2.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n
+        let w = 0.5 * (1.0 - cos(FFT_TWO_PI * i / (n - 1.0)))
+        data[int(i)] = data[int(i)] * w
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn fft_hamming_window(data, n)
+    // Apply Hamming window in-place.
+    if n < 2.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n
+        let w = 0.54 - 0.46 * cos(FFT_TWO_PI * i / (n - 1.0))
+        data[int(i)] = data[int(i)] * w
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn fft_blackman_window(data, n)
+    // Apply Blackman window in-place.
+    if n < 2.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n
+        let nm1 = n - 1.0
+        let w = 0.42 - 0.5 * cos(FFT_TWO_PI * i / nm1) + 0.08 * cos(2.0 * FFT_TWO_PI * i / nm1)
+        data[int(i)] = data[int(i)] * w
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── STFT (Short-Time Fourier Transform) ──────────────
+
+fn fft_stft(samples, n_samples, window_size, hop_size, result)
+    // Compute STFT. Appends magnitude frames to result (flat).
+    // Each frame = window_size/2 magnitude values.
+    // Returns number of frames.
+    if window_size < 2.0 || hop_size < 1.0 || n_samples < window_size
+        return 0.0
+    end
+    let ws = fft_next_pow2(window_size)
+    let half = floor(ws / 2.0)
+    let mut frame_count = 0.0
+    let mut pos = 0.0
+    while pos + ws <= n_samples
+        // Extract windowed frame
+        let mut frame_r = []
+        let mut frame_i = []
+        let mut i = 0.0
+        while i < ws
+            if pos + i < n_samples
+                push(frame_r, samples[int(pos + i)])
+            else
+                push(frame_r, 0.0)
+            end
+            push(frame_i, 0.0)
+            i = i + 1.0
+        end
+        // Apply Hann window
+        let _w = fft_hann_window(frame_r, ws)
+        // FFT
+        let _f = fft_forward(frame_r, frame_i, ws)
+        // Magnitude of positive frequencies
+        i = 0.0
+        while i < half
+            let r = frame_r[int(i)]
+            let im = frame_i[int(i)]
+            push(result, sqrt(r * r + im * im))
+            i = i + 1.0
+        end
+        frame_count = frame_count + 1.0
+        pos = pos + hop_size
+    end
+    return frame_count
+end

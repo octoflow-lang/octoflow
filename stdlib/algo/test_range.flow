@@ -1,0 +1,146 @@
+// test_range.flow — Tests for stdlib/algo/range.flow
+use "range"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.001
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Range ───────────────────────────────────────────────────────
+
+fn test_range_basic()
+    let mut r = range(0.0, 5.0)
+    check("range len", len(r) == 5.0)
+    check("range values", r[0] == 0.0 && r[4] == 4.0)
+    return 0.0
+end
+
+fn test_range_offset()
+    let mut r = range(3.0, 7.0)
+    check("range offset", len(r) == 4.0 && r[0] == 3.0 && r[3] == 6.0)
+    return 0.0
+end
+
+fn test_range_empty()
+    let mut r = range(5.0, 5.0)
+    check("range empty", len(r) == 0.0)
+    return 0.0
+end
+
+fn test_range_step()
+    let mut r = range_step(0.0, 10.0, 2.0)
+    check("range_step len", len(r) == 5.0)
+    check("range_step values", r[0] == 0.0 && r[1] == 2.0 && r[4] == 8.0)
+    return 0.0
+end
+
+fn test_range_step_negative()
+    let mut r = range_step(10.0, 0.0, -3.0)
+    check("range_step negative", len(r) == 4.0 && r[0] == 10.0 && r[3] == 1.0)
+    return 0.0
+end
+
+// ── Linspace ────────────────────────────────────────────────────
+
+fn test_linspace()
+    let mut r = linspace(0.0, 1.0, 5.0)
+    check("linspace len", len(r) == 5.0)
+    check("linspace start", approx(r[0], 0.0) == 1.0)
+    check("linspace end", approx(r[4], 1.0) == 1.0)
+    check("linspace mid", approx(r[2], 0.5) == 1.0)
+    return 0.0
+end
+
+fn test_linspace_single()
+    let mut r = linspace(5.0, 10.0, 1.0)
+    check("linspace single", len(r) == 1.0 && r[0] == 5.0)
+    return 0.0
+end
+
+// ── Iota ────────────────────────────────────────────────────────
+
+fn test_iota()
+    let mut r = iota(4.0)
+    check("iota", len(r) == 4.0 && r[0] == 0.0 && r[3] == 3.0)
+    return 0.0
+end
+
+// ── Array Utilities ─────────────────────────────────────────────
+
+fn test_reverse_array()
+    let mut arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+    reverse_array(arr)
+    check("reverse", arr[0] == 5.0 && arr[4] == 1.0)
+    return 0.0
+end
+
+fn test_array_slice()
+    let mut arr = [10.0, 20.0, 30.0, 40.0, 50.0]
+    let mut s = array_slice(arr, 1.0, 4.0)
+    check("slice", len(s) == 3.0 && s[0] == 20.0 && s[2] == 40.0)
+    return 0.0
+end
+
+fn test_array_concat()
+    let mut a = [1.0, 2.0]
+    let mut b = [3.0, 4.0, 5.0]
+    let mut c = array_concat(a, b)
+    check("concat", len(c) == 5.0 && c[0] == 1.0 && c[4] == 5.0)
+    return 0.0
+end
+
+fn test_array_fill()
+    let mut arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+    array_fill(arr, 0.0, 1.0, 4.0)
+    check("fill", arr[0] == 1.0 && arr[1] == 0.0 && arr[3] == 0.0 && arr[4] == 5.0)
+    return 0.0
+end
+
+fn test_array_swap()
+    let mut arr = [1.0, 2.0, 3.0]
+    array_swap(arr, 0.0, 2.0)
+    check("swap", arr[0] == 3.0 && arr[2] == 1.0)
+    return 0.0
+end
+
+fn test_array_equals()
+    let mut a = [1.0, 2.0, 3.0]
+    let mut b = [1.0, 2.0, 3.0]
+    let mut c = [1.0, 2.0, 4.0]
+    let mut d = [1.0, 2.0]
+    check("equals same", array_equals(a, b) == 1.0)
+    check("equals diff val", array_equals(a, c) == 0.0)
+    check("equals diff len", array_equals(a, d) == 0.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_range_basic()
+test_range_offset()
+test_range_empty()
+test_range_step()
+test_range_step_negative()
+test_linspace()
+test_linspace_single()
+test_iota()
+test_reverse_array()
+test_array_slice()
+test_array_concat()
+test_array_fill()
+test_array_swap()
+test_array_equals()
+print("")
+print("All range tests passed (14 tests)")

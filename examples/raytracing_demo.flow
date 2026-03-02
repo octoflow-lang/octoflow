@@ -3,9 +3,9 @@
 // GPU-accelerated ray marching with reflective spheres, box, and ground plane.
 // Controls: Arrow keys to orbit camera, +/- to zoom, R to reset
 
-use "game/game"
-use "game/input"
-use "game/raymarcher"
+use "../stdlib/game/game"
+use "../stdlib/game/input"
+use "../stdlib/game/raymarcher"
 
 let cvs = game_init(400.0, 300.0, "Ray Tracing Demo")
 

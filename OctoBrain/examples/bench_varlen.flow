@@ -1,0 +1,753 @@
+// OctoBrain Variable-Length Pattern Discrimination Benchmark
+// Tests whether the brain can discriminate between patterns of different
+// repeat lengths using prediction accuracy from second-order Markov tables.
+//
+// Three patterns with different repeat periods:
+//   Pattern S (short):  AB repeat        (period 2)
+//   Pattern M (medium): ABCD repeat      (period 4)
+//   Pattern L (long):   ABCDEF repeat    (period 6)
+//
+// Encoding: 6D one-hot vectors:
+//   A=[1,0,0,0,0,0], B=[0,1,0,0,0,0], C=[0,0,1,0,0,0]
+//   D=[0,0,0,1,0,0], E=[0,0,0,0,1,0], F=[0,0,0,0,0,1]
+//
+// Protocol (prediction accuracy discrimination):
+//   1. Train brain_S on 200 obs of pattern S, build Markov table
+//   2. Train brain_M on 200 obs of pattern M, build Markov table
+//   3. Train brain_L on 200 obs of pattern L, build Markov table
+//   4. For each brain: feed 50 obs of own pattern (should predict well)
+//   5. For each brain: feed 50 obs of each other pattern (should predict worse)
+//   6. PASS if each brain's own-pattern accuracy > both other-pattern accuracies
+//      and own-pattern accuracy > 0.80
+//
+// NOTE: When feeding a foreign pattern to a brain, new protos may be created
+// beyond the training proto count. Markov table lookups are bounds-checked:
+// if prev_pid or curr_pid >= training pc, the step counts as a miss.
+
+use "../lib/octobrain"
+
+print("=== OctoBrain Variable-Length Pattern Discrimination Benchmark ===")
+print("")
+
+// ── Helper: make_onehot6 ─────────────────────────────────────────────
+fn make_onehot6(letter_idx)
+  let mut vec = []
+  let mut i = 0.0
+  while i < 6.0
+    if i == letter_idx
+      push(vec, 1.0)
+    else
+      push(vec, 0.0)
+    end
+    i = i + 1.0
+  end
+  return vec
+end
+
+// ── Helper: letter_for_pattern ───────────────────────────────────────
+fn letter_for_pattern(step, pattern_period)
+  let pos = step - floor(step / pattern_period) * pattern_period
+  let mut letter = 0.0
+  if pos < 0.5
+    letter = 0.0
+  elif pos < 1.5
+    letter = 1.0
+  elif pos < 2.5
+    letter = 2.0
+  elif pos < 3.5
+    letter = 3.0
+  elif pos < 4.5
+    letter = 4.0
+  else
+    letter = 5.0
+  end
+  return letter
+end
+
+// =====================================================================
+// PHASE 1: Create and train three brains
+// =====================================================================
+
+// ── Brain S: trained on pattern S (AB, period 2) ─────────────────────
+print("--- Training Brain S: AB pattern (period 2, 200 obs) ---")
+
+let mut brain_S = octobrain_new(2.0)
+let mut p_state_S = proto_new()
+let mut p_embs_S = []
+let mut p_mc_S = []
+let mut e_state_S = embed_new()
+let mut W_embed_S = []
+let mut obs_buffer_S = []
+let mut edge_state_S = edges_new()
+let mut en_S = []
+let mut ea_S = []
+let mut eo_S = []
+let mut ep_S = []
+let mut ew_S = []
+let mut eact_S = []
+let mut window_S = []
+let mut W_score_S = []
+
+let mut train_seq_S = []
+let mut step_s = 0.0
+while step_s < 200.0
+  let letter_s = letter_for_pattern(step_s, 2.0)
+  let data_s = make_onehot6(letter_s)
+  let _obs_s = octobrain_observe(brain_S, p_state_S, p_embs_S, p_mc_S, e_state_S, W_embed_S, obs_buffer_S, edge_state_S, en_S, ea_S, eo_S, ep_S, ew_S, eact_S, window_S, W_score_S, data_s)
+  let pid_s = map_get(p_state_S, "last_match_id")
+  push(train_seq_S, pid_s)
+  step_s = step_s + 1.0
+end
+
+let stats_S = octobrain_stats(brain_S, p_state_S, edge_state_S)
+let pc_S = map_get(stats_S, "proto_count")
+let tc_S = map_get(stats_S, "transition_count")
+print("Brain S: protos={pc_S}, transitions={tc_S}")
+
+// Build second-order Markov table for brain S
+let mut trans2_S = []
+let t2s_size = pc_S * pc_S * pc_S
+let mut t2s_i = 0.0
+while t2s_i < t2s_size
+  push(trans2_S, 0.0)
+  t2s_i = t2s_i + 1.0
+end
+let seqlen_S = len(train_seq_S)
+let mut si_s = 2.0
+while si_s < seqlen_S
+  let pp_s = train_seq_S[si_s - 2.0]
+  let cp_s = train_seq_S[si_s - 1.0]
+  let np_s = train_seq_S[si_s]
+  let idx2_s = pp_s * pc_S * pc_S + cp_s * pc_S + np_s
+  trans2_S[idx2_s] = trans2_S[idx2_s] + 1.0
+  si_s = si_s + 1.0
+end
+
+// ── Brain M: trained on pattern M (ABCD, period 4) ──────────────────
+print("--- Training Brain M: ABCD pattern (period 4, 200 obs) ---")
+
+let mut brain_M = octobrain_new(2.0)
+let mut p_state_M = proto_new()
+let mut p_embs_M = []
+let mut p_mc_M = []
+let mut e_state_M = embed_new()
+let mut W_embed_M = []
+let mut obs_buffer_M = []
+let mut edge_state_M = edges_new()
+let mut en_M = []
+let mut ea_M = []
+let mut eo_M = []
+let mut ep_M = []
+let mut ew_M = []
+let mut eact_M = []
+let mut window_M = []
+let mut W_score_M = []
+
+let mut train_seq_M = []
+let mut step_m = 0.0
+while step_m < 200.0
+  let letter_m = letter_for_pattern(step_m, 4.0)
+  let data_m = make_onehot6(letter_m)
+  let _obs_m = octobrain_observe(brain_M, p_state_M, p_embs_M, p_mc_M, e_state_M, W_embed_M, obs_buffer_M, edge_state_M, en_M, ea_M, eo_M, ep_M, ew_M, eact_M, window_M, W_score_M, data_m)
+  let pid_m = map_get(p_state_M, "last_match_id")
+  push(train_seq_M, pid_m)
+  step_m = step_m + 1.0
+end
+
+let stats_M = octobrain_stats(brain_M, p_state_M, edge_state_M)
+let pc_M = map_get(stats_M, "proto_count")
+let tc_M = map_get(stats_M, "transition_count")
+print("Brain M: protos={pc_M}, transitions={tc_M}")
+
+// Build second-order Markov table for brain M
+let mut trans2_M = []
+let t2m_size = pc_M * pc_M * pc_M
+let mut t2m_i = 0.0
+while t2m_i < t2m_size
+  push(trans2_M, 0.0)
+  t2m_i = t2m_i + 1.0
+end
+let seqlen_M = len(train_seq_M)
+let mut si_m = 2.0
+while si_m < seqlen_M
+  let pp_m = train_seq_M[si_m - 2.0]
+  let cp_m = train_seq_M[si_m - 1.0]
+  let np_m = train_seq_M[si_m]
+  let idx2_m = pp_m * pc_M * pc_M + cp_m * pc_M + np_m
+  trans2_M[idx2_m] = trans2_M[idx2_m] + 1.0
+  si_m = si_m + 1.0
+end
+
+// ── Brain L: trained on pattern L (ABCDEF, period 6) ────────────────
+print("--- Training Brain L: ABCDEF pattern (period 6, 200 obs) ---")
+
+let mut brain_L = octobrain_new(2.0)
+let mut p_state_L = proto_new()
+let mut p_embs_L = []
+let mut p_mc_L = []
+let mut e_state_L = embed_new()
+let mut W_embed_L = []
+let mut obs_buffer_L = []
+let mut edge_state_L = edges_new()
+let mut en_L = []
+let mut ea_L = []
+let mut eo_L = []
+let mut ep_L = []
+let mut ew_L = []
+let mut eact_L = []
+let mut window_L = []
+let mut W_score_L = []
+
+let mut train_seq_L = []
+let mut step_l = 0.0
+while step_l < 200.0
+  let letter_l = letter_for_pattern(step_l, 6.0)
+  let data_l = make_onehot6(letter_l)
+  let _obs_l = octobrain_observe(brain_L, p_state_L, p_embs_L, p_mc_L, e_state_L, W_embed_L, obs_buffer_L, edge_state_L, en_L, ea_L, eo_L, ep_L, ew_L, eact_L, window_L, W_score_L, data_l)
+  let pid_l = map_get(p_state_L, "last_match_id")
+  push(train_seq_L, pid_l)
+  step_l = step_l + 1.0
+end
+
+let stats_L = octobrain_stats(brain_L, p_state_L, edge_state_L)
+let pc_L = map_get(stats_L, "proto_count")
+let tc_L = map_get(stats_L, "transition_count")
+print("Brain L: protos={pc_L}, transitions={tc_L}")
+
+// Build second-order Markov table for brain L
+let mut trans2_L = []
+let t2l_size = pc_L * pc_L * pc_L
+let mut t2l_i = 0.0
+while t2l_i < t2l_size
+  push(trans2_L, 0.0)
+  t2l_i = t2l_i + 1.0
+end
+let seqlen_L = len(train_seq_L)
+let mut si_l = 2.0
+while si_l < seqlen_L
+  let pp_l = train_seq_L[si_l - 2.0]
+  let cp_l = train_seq_L[si_l - 1.0]
+  let np_l = train_seq_L[si_l]
+  let idx2_l = pp_l * pc_L * pc_L + cp_l * pc_L + np_l
+  trans2_L[idx2_l] = trans2_L[idx2_l] + 1.0
+  si_l = si_l + 1.0
+end
+
+print("")
+print("=== PHASE 2: Prediction Accuracy Discrimination ===")
+print("")
+
+// =====================================================================
+// Brain S: test on all 3 patterns
+// =====================================================================
+print("--- Brain S: testing prediction accuracy ---")
+
+// Test S on Pattern S (own pattern, period 2)
+let mut correct_SS = 0.0
+let mut total_SS = 0.0
+let mut prev_pid_SS = -1.0
+let mut curr_pid_SS = -1.0
+let mut ts_SS = 0.0
+while ts_SS < 50.0
+  let letter_SS = letter_for_pattern(ts_SS, 2.0)
+  let data_SS = make_onehot6(letter_SS)
+
+  if ts_SS >= 2.0
+    // Bounds check: both prev and curr must be within training proto range
+    if prev_pid_SS >= 0.0 && prev_pid_SS < pc_S && curr_pid_SS >= 0.0 && curr_pid_SS < pc_S
+      let mut best_SS = 0.0
+      let mut best_cnt_SS = -1.0
+      let mut c_SS = 0.0
+      while c_SS < pc_S
+        let ci_SS = prev_pid_SS * pc_S * pc_S + curr_pid_SS * pc_S + c_SS
+        if trans2_S[ci_SS] > best_cnt_SS
+          best_cnt_SS = trans2_S[ci_SS]
+          best_SS = c_SS
+        end
+        c_SS = c_SS + 1.0
+      end
+      let _t_SS = octobrain_observe(brain_S, p_state_S, p_embs_S, p_mc_S, e_state_S, W_embed_S, obs_buffer_S, edge_state_S, en_S, ea_S, eo_S, ep_S, ew_S, eact_S, window_S, W_score_S, data_SS)
+      let actual_SS = map_get(p_state_S, "last_match_id")
+      if best_SS == actual_SS
+        correct_SS = correct_SS + 1.0
+      end
+      total_SS = total_SS + 1.0
+      prev_pid_SS = curr_pid_SS
+      curr_pid_SS = actual_SS
+    else
+      // Out of bounds: feed but count as miss
+      let _t_SS2 = octobrain_observe(brain_S, p_state_S, p_embs_S, p_mc_S, e_state_S, W_embed_S, obs_buffer_S, edge_state_S, en_S, ea_S, eo_S, ep_S, ew_S, eact_S, window_S, W_score_S, data_SS)
+      let actual_SS2 = map_get(p_state_S, "last_match_id")
+      total_SS = total_SS + 1.0
+      prev_pid_SS = curr_pid_SS
+      curr_pid_SS = actual_SS2
+    end
+  else
+    let _t0_SS = octobrain_observe(brain_S, p_state_S, p_embs_S, p_mc_S, e_state_S, W_embed_S, obs_buffer_S, edge_state_S, en_S, ea_S, eo_S, ep_S, ew_S, eact_S, window_S, W_score_S, data_SS)
+    let fed_SS = map_get(p_state_S, "last_match_id")
+    prev_pid_SS = curr_pid_SS
+    curr_pid_SS = fed_SS
+  end
+  ts_SS = ts_SS + 1.0
+end
+let acc_SS = correct_SS / total_SS
+let pct_SS = floor(acc_SS * 1000.0) / 10.0
+print("  Brain S on Pattern S (own):  {correct_SS}/{total_SS} = {pct_SS}%")
+
+// Test S on Pattern M (period 4)
+let mut correct_SM = 0.0
+let mut total_SM = 0.0
+let mut prev_pid_SM = curr_pid_SS
+let mut curr_pid_SM = curr_pid_SS
+let mut ts_SM = 0.0
+while ts_SM < 50.0
+  let letter_SM = letter_for_pattern(ts_SM, 4.0)
+  let data_SM = make_onehot6(letter_SM)
+
+  if ts_SM >= 2.0
+    if prev_pid_SM >= 0.0 && prev_pid_SM < pc_S && curr_pid_SM >= 0.0 && curr_pid_SM < pc_S
+      let mut best_SM = 0.0
+      let mut best_cnt_SM = -1.0
+      let mut c_SM = 0.0
+      while c_SM < pc_S
+        let ci_SM = prev_pid_SM * pc_S * pc_S + curr_pid_SM * pc_S + c_SM
+        if trans2_S[ci_SM] > best_cnt_SM
+          best_cnt_SM = trans2_S[ci_SM]
+          best_SM = c_SM
+        end
+        c_SM = c_SM + 1.0
+      end
+      let _t_SM = octobrain_observe(brain_S, p_state_S, p_embs_S, p_mc_S, e_state_S, W_embed_S, obs_buffer_S, edge_state_S, en_S, ea_S, eo_S, ep_S, ew_S, eact_S, window_S, W_score_S, data_SM)
+      let actual_SM = map_get(p_state_S, "last_match_id")
+      if best_SM == actual_SM
+        correct_SM = correct_SM + 1.0
+      end
+      total_SM = total_SM + 1.0
+      prev_pid_SM = curr_pid_SM
+      curr_pid_SM = actual_SM
+    else
+      let _t_SM2 = octobrain_observe(brain_S, p_state_S, p_embs_S, p_mc_S, e_state_S, W_embed_S, obs_buffer_S, edge_state_S, en_S, ea_S, eo_S, ep_S, ew_S, eact_S, window_S, W_score_S, data_SM)
+      let actual_SM2 = map_get(p_state_S, "last_match_id")
+      total_SM = total_SM + 1.0
+      prev_pid_SM = curr_pid_SM
+      curr_pid_SM = actual_SM2
+    end
+  else
+    let _t0_SM = octobrain_observe(brain_S, p_state_S, p_embs_S, p_mc_S, e_state_S, W_embed_S, obs_buffer_S, edge_state_S, en_S, ea_S, eo_S, ep_S, ew_S, eact_S, window_S, W_score_S, data_SM)
+    let fed_SM = map_get(p_state_S, "last_match_id")
+    prev_pid_SM = curr_pid_SM
+    curr_pid_SM = fed_SM
+  end
+  ts_SM = ts_SM + 1.0
+end
+let acc_SM = correct_SM / total_SM
+let pct_SM = floor(acc_SM * 1000.0) / 10.0
+print("  Brain S on Pattern M (other): {correct_SM}/{total_SM} = {pct_SM}%")
+
+// Test S on Pattern L (period 6)
+let mut correct_SL = 0.0
+let mut total_SL = 0.0
+let mut prev_pid_SL = curr_pid_SM
+let mut curr_pid_SL = curr_pid_SM
+let mut ts_SL = 0.0
+while ts_SL < 50.0
+  let letter_SL = letter_for_pattern(ts_SL, 6.0)
+  let data_SL = make_onehot6(letter_SL)
+
+  if ts_SL >= 2.0
+    if prev_pid_SL >= 0.0 && prev_pid_SL < pc_S && curr_pid_SL >= 0.0 && curr_pid_SL < pc_S
+      let mut best_SL = 0.0
+      let mut best_cnt_SL = -1.0
+      let mut c_SL = 0.0
+      while c_SL < pc_S
+        let ci_SL = prev_pid_SL * pc_S * pc_S + curr_pid_SL * pc_S + c_SL
+        if trans2_S[ci_SL] > best_cnt_SL
+          best_cnt_SL = trans2_S[ci_SL]
+          best_SL = c_SL
+        end
+        c_SL = c_SL + 1.0
+      end
+      let _t_SL = octobrain_observe(brain_S, p_state_S, p_embs_S, p_mc_S, e_state_S, W_embed_S, obs_buffer_S, edge_state_S, en_S, ea_S, eo_S, ep_S, ew_S, eact_S, window_S, W_score_S, data_SL)
+      let actual_SL = map_get(p_state_S, "last_match_id")
+      if best_SL == actual_SL
+        correct_SL = correct_SL + 1.0
+      end
+      total_SL = total_SL + 1.0
+      prev_pid_SL = curr_pid_SL
+      curr_pid_SL = actual_SL
+    else
+      let _t_SL2 = octobrain_observe(brain_S, p_state_S, p_embs_S, p_mc_S, e_state_S, W_embed_S, obs_buffer_S, edge_state_S, en_S, ea_S, eo_S, ep_S, ew_S, eact_S, window_S, W_score_S, data_SL)
+      let actual_SL2 = map_get(p_state_S, "last_match_id")
+      total_SL = total_SL + 1.0
+      prev_pid_SL = curr_pid_SL
+      curr_pid_SL = actual_SL2
+    end
+  else
+    let _t0_SL = octobrain_observe(brain_S, p_state_S, p_embs_S, p_mc_S, e_state_S, W_embed_S, obs_buffer_S, edge_state_S, en_S, ea_S, eo_S, ep_S, ew_S, eact_S, window_S, W_score_S, data_SL)
+    let fed_SL = map_get(p_state_S, "last_match_id")
+    prev_pid_SL = curr_pid_SL
+    curr_pid_SL = fed_SL
+  end
+  ts_SL = ts_SL + 1.0
+end
+let acc_SL = correct_SL / total_SL
+let pct_SL = floor(acc_SL * 1000.0) / 10.0
+print("  Brain S on Pattern L (other): {correct_SL}/{total_SL} = {pct_SL}%")
+
+let mut pass_S = 0.0
+if acc_SS > acc_SM && acc_SS > acc_SL && acc_SS >= 0.80
+  print("  PASS: Brain S best on own pattern ({pct_SS}% > {pct_SM}%, {pct_SL}%)")
+  pass_S = 1.0
+else
+  print("  FAIL: Brain S discrimination failed (own={pct_SS}%, M={pct_SM}%, L={pct_SL}%)")
+end
+print("")
+
+// =====================================================================
+// Brain M: test on all 3 patterns
+// =====================================================================
+print("--- Brain M: testing prediction accuracy ---")
+
+// Test M on Pattern S (period 2)
+let mut correct_MS = 0.0
+let mut total_MS = 0.0
+let mut prev_pid_MS = -1.0
+let mut curr_pid_MS = -1.0
+let mut ts_MS = 0.0
+while ts_MS < 50.0
+  let letter_MS = letter_for_pattern(ts_MS, 2.0)
+  let data_MS = make_onehot6(letter_MS)
+
+  if ts_MS >= 2.0
+    if prev_pid_MS >= 0.0 && prev_pid_MS < pc_M && curr_pid_MS >= 0.0 && curr_pid_MS < pc_M
+      let mut best_MS = 0.0
+      let mut best_cnt_MS = -1.0
+      let mut c_MS = 0.0
+      while c_MS < pc_M
+        let ci_MS = prev_pid_MS * pc_M * pc_M + curr_pid_MS * pc_M + c_MS
+        if trans2_M[ci_MS] > best_cnt_MS
+          best_cnt_MS = trans2_M[ci_MS]
+          best_MS = c_MS
+        end
+        c_MS = c_MS + 1.0
+      end
+      let _t_MS = octobrain_observe(brain_M, p_state_M, p_embs_M, p_mc_M, e_state_M, W_embed_M, obs_buffer_M, edge_state_M, en_M, ea_M, eo_M, ep_M, ew_M, eact_M, window_M, W_score_M, data_MS)
+      let actual_MS = map_get(p_state_M, "last_match_id")
+      if best_MS == actual_MS
+        correct_MS = correct_MS + 1.0
+      end
+      total_MS = total_MS + 1.0
+      prev_pid_MS = curr_pid_MS
+      curr_pid_MS = actual_MS
+    else
+      let _t_MS2 = octobrain_observe(brain_M, p_state_M, p_embs_M, p_mc_M, e_state_M, W_embed_M, obs_buffer_M, edge_state_M, en_M, ea_M, eo_M, ep_M, ew_M, eact_M, window_M, W_score_M, data_MS)
+      let actual_MS2 = map_get(p_state_M, "last_match_id")
+      total_MS = total_MS + 1.0
+      prev_pid_MS = curr_pid_MS
+      curr_pid_MS = actual_MS2
+    end
+  else
+    let _t0_MS = octobrain_observe(brain_M, p_state_M, p_embs_M, p_mc_M, e_state_M, W_embed_M, obs_buffer_M, edge_state_M, en_M, ea_M, eo_M, ep_M, ew_M, eact_M, window_M, W_score_M, data_MS)
+    let fed_MS = map_get(p_state_M, "last_match_id")
+    prev_pid_MS = curr_pid_MS
+    curr_pid_MS = fed_MS
+  end
+  ts_MS = ts_MS + 1.0
+end
+let acc_MS = correct_MS / total_MS
+let pct_MS = floor(acc_MS * 1000.0) / 10.0
+print("  Brain M on Pattern S (other): {correct_MS}/{total_MS} = {pct_MS}%")
+
+// Test M on Pattern M (own pattern, period 4)
+let mut correct_MM = 0.0
+let mut total_MM = 0.0
+let mut prev_pid_MM = curr_pid_MS
+let mut curr_pid_MM = curr_pid_MS
+let mut ts_MM = 0.0
+while ts_MM < 50.0
+  let letter_MM = letter_for_pattern(ts_MM, 4.0)
+  let data_MM = make_onehot6(letter_MM)
+
+  if ts_MM >= 2.0
+    if prev_pid_MM >= 0.0 && prev_pid_MM < pc_M && curr_pid_MM >= 0.0 && curr_pid_MM < pc_M
+      let mut best_MM = 0.0
+      let mut best_cnt_MM = -1.0
+      let mut c_MM = 0.0
+      while c_MM < pc_M
+        let ci_MM = prev_pid_MM * pc_M * pc_M + curr_pid_MM * pc_M + c_MM
+        if trans2_M[ci_MM] > best_cnt_MM
+          best_cnt_MM = trans2_M[ci_MM]
+          best_MM = c_MM
+        end
+        c_MM = c_MM + 1.0
+      end
+      let _t_MM = octobrain_observe(brain_M, p_state_M, p_embs_M, p_mc_M, e_state_M, W_embed_M, obs_buffer_M, edge_state_M, en_M, ea_M, eo_M, ep_M, ew_M, eact_M, window_M, W_score_M, data_MM)
+      let actual_MM = map_get(p_state_M, "last_match_id")
+      if best_MM == actual_MM
+        correct_MM = correct_MM + 1.0
+      end
+      total_MM = total_MM + 1.0
+      prev_pid_MM = curr_pid_MM
+      curr_pid_MM = actual_MM
+    else
+      let _t_MM2 = octobrain_observe(brain_M, p_state_M, p_embs_M, p_mc_M, e_state_M, W_embed_M, obs_buffer_M, edge_state_M, en_M, ea_M, eo_M, ep_M, ew_M, eact_M, window_M, W_score_M, data_MM)
+      let actual_MM2 = map_get(p_state_M, "last_match_id")
+      total_MM = total_MM + 1.0
+      prev_pid_MM = curr_pid_MM
+      curr_pid_MM = actual_MM2
+    end
+  else
+    let _t0_MM = octobrain_observe(brain_M, p_state_M, p_embs_M, p_mc_M, e_state_M, W_embed_M, obs_buffer_M, edge_state_M, en_M, ea_M, eo_M, ep_M, ew_M, eact_M, window_M, W_score_M, data_MM)
+    let fed_MM = map_get(p_state_M, "last_match_id")
+    prev_pid_MM = curr_pid_MM
+    curr_pid_MM = fed_MM
+  end
+  ts_MM = ts_MM + 1.0
+end
+let acc_MM = correct_MM / total_MM
+let pct_MM = floor(acc_MM * 1000.0) / 10.0
+print("  Brain M on Pattern M (own):  {correct_MM}/{total_MM} = {pct_MM}%")
+
+// Test M on Pattern L (period 6)
+let mut correct_ML = 0.0
+let mut total_ML = 0.0
+let mut prev_pid_ML = curr_pid_MM
+let mut curr_pid_ML = curr_pid_MM
+let mut ts_ML = 0.0
+while ts_ML < 50.0
+  let letter_ML = letter_for_pattern(ts_ML, 6.0)
+  let data_ML = make_onehot6(letter_ML)
+
+  if ts_ML >= 2.0
+    if prev_pid_ML >= 0.0 && prev_pid_ML < pc_M && curr_pid_ML >= 0.0 && curr_pid_ML < pc_M
+      let mut best_ML = 0.0
+      let mut best_cnt_ML = -1.0
+      let mut c_ML = 0.0
+      while c_ML < pc_M
+        let ci_ML = prev_pid_ML * pc_M * pc_M + curr_pid_ML * pc_M + c_ML
+        if trans2_M[ci_ML] > best_cnt_ML
+          best_cnt_ML = trans2_M[ci_ML]
+          best_ML = c_ML
+        end
+        c_ML = c_ML + 1.0
+      end
+      let _t_ML = octobrain_observe(brain_M, p_state_M, p_embs_M, p_mc_M, e_state_M, W_embed_M, obs_buffer_M, edge_state_M, en_M, ea_M, eo_M, ep_M, ew_M, eact_M, window_M, W_score_M, data_ML)
+      let actual_ML = map_get(p_state_M, "last_match_id")
+      if best_ML == actual_ML
+        correct_ML = correct_ML + 1.0
+      end
+      total_ML = total_ML + 1.0
+      prev_pid_ML = curr_pid_ML
+      curr_pid_ML = actual_ML
+    else
+      let _t_ML2 = octobrain_observe(brain_M, p_state_M, p_embs_M, p_mc_M, e_state_M, W_embed_M, obs_buffer_M, edge_state_M, en_M, ea_M, eo_M, ep_M, ew_M, eact_M, window_M, W_score_M, data_ML)
+      let actual_ML2 = map_get(p_state_M, "last_match_id")
+      total_ML = total_ML + 1.0
+      prev_pid_ML = curr_pid_ML
+      curr_pid_ML = actual_ML2
+    end
+  else
+    let _t0_ML = octobrain_observe(brain_M, p_state_M, p_embs_M, p_mc_M, e_state_M, W_embed_M, obs_buffer_M, edge_state_M, en_M, ea_M, eo_M, ep_M, ew_M, eact_M, window_M, W_score_M, data_ML)
+    let fed_ML = map_get(p_state_M, "last_match_id")
+    prev_pid_ML = curr_pid_ML
+    curr_pid_ML = fed_ML
+  end
+  ts_ML = ts_ML + 1.0
+end
+let acc_ML = correct_ML / total_ML
+let pct_ML = floor(acc_ML * 1000.0) / 10.0
+print("  Brain M on Pattern L (other): {correct_ML}/{total_ML} = {pct_ML}%")
+
+let mut pass_M = 0.0
+if acc_MM > acc_MS && acc_MM > acc_ML && acc_MM >= 0.80
+  print("  PASS: Brain M best on own pattern ({pct_MM}% > {pct_MS}%, {pct_ML}%)")
+  pass_M = 1.0
+else
+  print("  FAIL: Brain M discrimination failed (S={pct_MS}%, own={pct_MM}%, L={pct_ML}%)")
+end
+print("")
+
+// =====================================================================
+// Brain L: test on all 3 patterns
+// =====================================================================
+print("--- Brain L: testing prediction accuracy ---")
+
+// Test L on Pattern S (period 2)
+let mut correct_LS = 0.0
+let mut total_LS = 0.0
+let mut prev_pid_LS = -1.0
+let mut curr_pid_LS = -1.0
+let mut ts_LS = 0.0
+while ts_LS < 50.0
+  let letter_LS = letter_for_pattern(ts_LS, 2.0)
+  let data_LS = make_onehot6(letter_LS)
+
+  if ts_LS >= 2.0
+    if prev_pid_LS >= 0.0 && prev_pid_LS < pc_L && curr_pid_LS >= 0.0 && curr_pid_LS < pc_L
+      let mut best_LS = 0.0
+      let mut best_cnt_LS = -1.0
+      let mut c_LS = 0.0
+      while c_LS < pc_L
+        let ci_LS = prev_pid_LS * pc_L * pc_L + curr_pid_LS * pc_L + c_LS
+        if trans2_L[ci_LS] > best_cnt_LS
+          best_cnt_LS = trans2_L[ci_LS]
+          best_LS = c_LS
+        end
+        c_LS = c_LS + 1.0
+      end
+      let _t_LS = octobrain_observe(brain_L, p_state_L, p_embs_L, p_mc_L, e_state_L, W_embed_L, obs_buffer_L, edge_state_L, en_L, ea_L, eo_L, ep_L, ew_L, eact_L, window_L, W_score_L, data_LS)
+      let actual_LS = map_get(p_state_L, "last_match_id")
+      if best_LS == actual_LS
+        correct_LS = correct_LS + 1.0
+      end
+      total_LS = total_LS + 1.0
+      prev_pid_LS = curr_pid_LS
+      curr_pid_LS = actual_LS
+    else
+      let _t_LS2 = octobrain_observe(brain_L, p_state_L, p_embs_L, p_mc_L, e_state_L, W_embed_L, obs_buffer_L, edge_state_L, en_L, ea_L, eo_L, ep_L, ew_L, eact_L, window_L, W_score_L, data_LS)
+      let actual_LS2 = map_get(p_state_L, "last_match_id")
+      total_LS = total_LS + 1.0
+      prev_pid_LS = curr_pid_LS
+      curr_pid_LS = actual_LS2
+    end
+  else
+    let _t0_LS = octobrain_observe(brain_L, p_state_L, p_embs_L, p_mc_L, e_state_L, W_embed_L, obs_buffer_L, edge_state_L, en_L, ea_L, eo_L, ep_L, ew_L, eact_L, window_L, W_score_L, data_LS)
+    let fed_LS = map_get(p_state_L, "last_match_id")
+    prev_pid_LS = curr_pid_LS
+    curr_pid_LS = fed_LS
+  end
+  ts_LS = ts_LS + 1.0
+end
+let acc_LS = correct_LS / total_LS
+let pct_LS = floor(acc_LS * 1000.0) / 10.0
+print("  Brain L on Pattern S (other): {correct_LS}/{total_LS} = {pct_LS}%")
+
+// Test L on Pattern M (period 4)
+let mut correct_LM = 0.0
+let mut total_LM = 0.0
+let mut prev_pid_LM = curr_pid_LS
+let mut curr_pid_LM = curr_pid_LS
+let mut ts_LM = 0.0
+while ts_LM < 50.0
+  let letter_LM = letter_for_pattern(ts_LM, 4.0)
+  let data_LM = make_onehot6(letter_LM)
+
+  if ts_LM >= 2.0
+    if prev_pid_LM >= 0.0 && prev_pid_LM < pc_L && curr_pid_LM >= 0.0 && curr_pid_LM < pc_L
+      let mut best_LM = 0.0
+      let mut best_cnt_LM = -1.0
+      let mut c_LM = 0.0
+      while c_LM < pc_L
+        let ci_LM = prev_pid_LM * pc_L * pc_L + curr_pid_LM * pc_L + c_LM
+        if trans2_L[ci_LM] > best_cnt_LM
+          best_cnt_LM = trans2_L[ci_LM]
+          best_LM = c_LM
+        end
+        c_LM = c_LM + 1.0
+      end
+      let _t_LM = octobrain_observe(brain_L, p_state_L, p_embs_L, p_mc_L, e_state_L, W_embed_L, obs_buffer_L, edge_state_L, en_L, ea_L, eo_L, ep_L, ew_L, eact_L, window_L, W_score_L, data_LM)
+      let actual_LM = map_get(p_state_L, "last_match_id")
+      if best_LM == actual_LM
+        correct_LM = correct_LM + 1.0
+      end
+      total_LM = total_LM + 1.0
+      prev_pid_LM = curr_pid_LM
+      curr_pid_LM = actual_LM
+    else
+      let _t_LM2 = octobrain_observe(brain_L, p_state_L, p_embs_L, p_mc_L, e_state_L, W_embed_L, obs_buffer_L, edge_state_L, en_L, ea_L, eo_L, ep_L, ew_L, eact_L, window_L, W_score_L, data_LM)
+      let actual_LM2 = map_get(p_state_L, "last_match_id")
+      total_LM = total_LM + 1.0
+      prev_pid_LM = curr_pid_LM
+      curr_pid_LM = actual_LM2
+    end
+  else
+    let _t0_LM = octobrain_observe(brain_L, p_state_L, p_embs_L, p_mc_L, e_state_L, W_embed_L, obs_buffer_L, edge_state_L, en_L, ea_L, eo_L, ep_L, ew_L, eact_L, window_L, W_score_L, data_LM)
+    let fed_LM = map_get(p_state_L, "last_match_id")
+    prev_pid_LM = curr_pid_LM
+    curr_pid_LM = fed_LM
+  end
+  ts_LM = ts_LM + 1.0
+end
+let acc_LM = correct_LM / total_LM
+let pct_LM = floor(acc_LM * 1000.0) / 10.0
+print("  Brain L on Pattern M (other): {correct_LM}/{total_LM} = {pct_LM}%")
+
+// Test L on Pattern L (own pattern, period 6)
+let mut correct_LL = 0.0
+let mut total_LL = 0.0
+let mut prev_pid_LL = curr_pid_LM
+let mut curr_pid_LL = curr_pid_LM
+let mut ts_LL = 0.0
+while ts_LL < 50.0
+  let letter_LL = letter_for_pattern(ts_LL, 6.0)
+  let data_LL = make_onehot6(letter_LL)
+
+  if ts_LL >= 2.0
+    if prev_pid_LL >= 0.0 && prev_pid_LL < pc_L && curr_pid_LL >= 0.0 && curr_pid_LL < pc_L
+      let mut best_LL = 0.0
+      let mut best_cnt_LL = -1.0
+      let mut c_LL = 0.0
+      while c_LL < pc_L
+        let ci_LL = prev_pid_LL * pc_L * pc_L + curr_pid_LL * pc_L + c_LL
+        if trans2_L[ci_LL] > best_cnt_LL
+          best_cnt_LL = trans2_L[ci_LL]
+          best_LL = c_LL
+        end
+        c_LL = c_LL + 1.0
+      end
+      let _t_LL = octobrain_observe(brain_L, p_state_L, p_embs_L, p_mc_L, e_state_L, W_embed_L, obs_buffer_L, edge_state_L, en_L, ea_L, eo_L, ep_L, ew_L, eact_L, window_L, W_score_L, data_LL)
+      let actual_LL = map_get(p_state_L, "last_match_id")
+      if best_LL == actual_LL
+        correct_LL = correct_LL + 1.0
+      end
+      total_LL = total_LL + 1.0
+      prev_pid_LL = curr_pid_LL
+      curr_pid_LL = actual_LL
+    else
+      let _t_LL2 = octobrain_observe(brain_L, p_state_L, p_embs_L, p_mc_L, e_state_L, W_embed_L, obs_buffer_L, edge_state_L, en_L, ea_L, eo_L, ep_L, ew_L, eact_L, window_L, W_score_L, data_LL)
+      let actual_LL2 = map_get(p_state_L, "last_match_id")
+      total_LL = total_LL + 1.0
+      prev_pid_LL = curr_pid_LL
+      curr_pid_LL = actual_LL2
+    end
+  else
+    let _t0_LL = octobrain_observe(brain_L, p_state_L, p_embs_L, p_mc_L, e_state_L, W_embed_L, obs_buffer_L, edge_state_L, en_L, ea_L, eo_L, ep_L, ew_L, eact_L, window_L, W_score_L, data_LL)
+    let fed_LL = map_get(p_state_L, "last_match_id")
+    prev_pid_LL = curr_pid_LL
+    curr_pid_LL = fed_LL
+  end
+  ts_LL = ts_LL + 1.0
+end
+let acc_LL = correct_LL / total_LL
+let pct_LL = floor(acc_LL * 1000.0) / 10.0
+print("  Brain L on Pattern L (own):  {correct_LL}/{total_LL} = {pct_LL}%")
+
+let mut pass_L = 0.0
+if acc_LL > acc_LS && acc_LL > acc_LM && acc_LL >= 0.80
+  print("  PASS: Brain L best on own pattern ({pct_LL}% > {pct_LS}%, {pct_LM}%)")
+  pass_L = 1.0
+else
+  print("  FAIL: Brain L discrimination failed (S={pct_LS}%, M={pct_LM}%, own={pct_LL}%)")
+end
+print("")
+
+// =====================================================================
+// Summary
+// =====================================================================
+print("=== Variable-Length Pattern Discrimination Summary ===")
+print("")
+print("Brain S (period 2):  own={pct_SS}%  M={pct_SM}%  L={pct_SL}%")
+print("Brain M (period 4):  S={pct_MS}%  own={pct_MM}%  L={pct_ML}%")
+print("Brain L (period 6):  S={pct_LS}%  M={pct_LM}%  own={pct_LL}%")
+print("")
+
+let total_pass = pass_S + pass_M + pass_L
+print("Result: {total_pass}/3 brains correctly discriminated own pattern")
+print("")
+if total_pass >= 3.0
+  print("BENCHMARK PASSED: All 3 brains discriminate variable-length patterns")
+else
+  print("BENCHMARK PARTIAL: {total_pass}/3 brains passed discrimination")
+end
+print("")
+print("--- variable-length pattern discrimination benchmark complete ---")

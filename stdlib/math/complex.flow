@@ -1,0 +1,206 @@
+// stdlib/math/complex.flow — Complex number operations
+//
+// Complex numbers stored as [real, imag] arrays.
+// Functions return new arrays.
+//
+// Functions: complex, complex_real, complex_imag,
+//            complex_add, complex_sub, complex_mul, complex_div,
+//            complex_conjugate, complex_magnitude, complex_magnitude_sq,
+//            complex_phase, complex_from_polar, complex_to_polar,
+//            complex_pow_int, complex_sqrt, complex_exp,
+//            complex_eq, complex_neg, complex_inv,
+//            complex_scale, complex_to_string
+//
+// Usage:
+//   use "complex"
+//   let mut a = complex(3.0, 4.0)       // 3 + 4i
+//   let mut b = complex(1.0, -2.0)      // 1 - 2i
+//   let mut c = complex_mul(a, b)       // (3+4i)(1-2i) = 11 - 2i
+//   let mag = complex_magnitude(a)      // 5.0
+
+fn complex(real, imag)
+    let mut c = [real, imag]
+    return c
+end
+
+fn complex_real(c)
+    return c[0]
+end
+
+fn complex_imag(c)
+    return c[1]
+end
+
+// ── Arithmetic ──────────────────────────────────────────────────
+
+fn complex_add(a, b)
+    let mut c = [a[0] + b[0], a[1] + b[1]]
+    return c
+end
+
+fn complex_sub(a, b)
+    let mut c = [a[0] - b[0], a[1] - b[1]]
+    return c
+end
+
+fn complex_mul(a, b)
+    // (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+    let mut c = [
+        a[0] * b[0] - a[1] * b[1],
+        a[0] * b[1] + a[1] * b[0]
+    ]
+    return c
+end
+
+fn complex_div(a, b)
+    // (a+bi)/(c+di) = ((ac+bd) + (bc-ad)i) / (c²+d²)
+    let denom = b[0] * b[0] + b[1] * b[1]
+    if denom < 0.0001 && denom > -0.0001
+        // Division by zero — return [0, 0]
+        let mut c = [0.0, 0.0]
+        return c
+    end
+    let mut c = [
+        (a[0] * b[0] + a[1] * b[1]) / denom,
+        (a[1] * b[0] - a[0] * b[1]) / denom
+    ]
+    return c
+end
+
+fn complex_neg(a)
+    let mut c = [0.0 - a[0], 0.0 - a[1]]
+    return c
+end
+
+fn complex_scale(a, s)
+    // Multiply by real scalar.
+    let mut c = [a[0] * s, a[1] * s]
+    return c
+end
+
+fn complex_inv(a)
+    // Multiplicative inverse: 1/z = conj(z) / |z|²
+    let mag_sq = a[0] * a[0] + a[1] * a[1]
+    if mag_sq < 0.0001
+        let mut c = [0.0, 0.0]
+        return c
+    end
+    let mut c = [a[0] / mag_sq, (0.0 - a[1]) / mag_sq]
+    return c
+end
+
+// ── Conjugate / Magnitude ───────────────────────────────────────
+
+fn complex_conjugate(a)
+    let mut c = [a[0], 0.0 - a[1]]
+    return c
+end
+
+fn complex_magnitude(a)
+    return sqrt(a[0] * a[0] + a[1] * a[1])
+end
+
+fn complex_magnitude_sq(a)
+    return a[0] * a[0] + a[1] * a[1]
+end
+
+fn complex_phase(a)
+    // Phase angle in radians [-PI, PI].
+    return atan2(a[1], a[0])
+end
+
+// ── Polar Form ──────────────────────────────────────────────────
+
+fn complex_from_polar(r, theta)
+    // Create complex from polar: r * (cos(θ) + i*sin(θ))
+    let mut c = [r * cos(theta), r * sin(theta)]
+    return c
+end
+
+fn complex_to_polar(a)
+    // Return [magnitude, phase].
+    let mag = complex_magnitude(a)
+    let phase = atan2(a[1], a[0])
+    let mut p = [mag, phase]
+    return p
+end
+
+// ── Powers / Roots ──────────────────────────────────────────────
+
+fn complex_pow_int(a, n)
+    // Raise complex to integer power using repeated multiplication.
+    if n == 0.0
+        let mut c = [1.0, 0.0]
+        return c
+    end
+
+    let mut result = [1.0, 0.0]
+    let mut base = [a[0], a[1]]
+    let mut exp = n
+
+    if exp < 0.0
+        base = complex_inv(base)
+        exp = 0.0 - exp
+    end
+
+    while exp > 0.5
+        if exp - floor(exp / 2.0) * 2.0 > 0.5
+            result = complex_mul(result, base)
+        end
+        base = complex_mul(base, base)
+        exp = floor(exp / 2.0)
+    end
+
+    return result
+end
+
+fn complex_sqrt(a)
+    // Principal square root.
+    let mag = complex_magnitude(a)
+    if mag < 0.0001
+        let mut c = [0.0, 0.0]
+        return c
+    end
+
+    let r = sqrt(mag)
+    let theta = atan2(a[1], a[0]) / 2.0
+    let mut c = [r * cos(theta), r * sin(theta)]
+    return c
+end
+
+fn complex_exp(a)
+    // e^(a+bi) = e^a * (cos(b) + i*sin(b))
+    let ea = exp(a[0])
+    let mut c = [ea * cos(a[1]), ea * sin(a[1])]
+    return c
+end
+
+// ── Comparison ──────────────────────────────────────────────────
+
+fn complex_eq(a, b)
+    // Approximate equality.
+    let dr = a[0] - b[0]
+    let di = a[1] - b[1]
+    if dr < 0.0
+        let mut dr = 0.0 - dr
+    end
+    if di < 0.0
+        let mut di = 0.0 - di
+    end
+    if dr < 0.0001 && di < 0.0001
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Display ─────────────────────────────────────────────────────
+
+fn complex_to_string(a)
+    // Format as "a + bi" or "a - bi".
+    let r = a[0]
+    let i = a[1]
+    if i >= 0.0
+        return str(r) + " + " + str(i) + "i"
+    end
+    return str(r) + " - " + str(0.0 - i) + "i"
+end

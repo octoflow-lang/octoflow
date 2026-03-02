@@ -1,0 +1,344 @@
+// stdlib/llm/prompt_builder.flow — Structured prompt building
+//
+// Build and manage multi-turn prompts with role tracking, token budgets,
+// truncation, and template formatting. Compatible with chat.flow templates.
+//
+// Message storage: flat parallel arrays (role[], content[], token_count[]).
+// Roles: 0.0=system, 1.0=user, 2.0=assistant, 3.0=tool
+//
+// Functions: pb_create, pb_system, pb_user, pb_assistant, pb_tool,
+//            pb_count, pb_role, pb_content, pb_tokens,
+//            pb_total_tokens, pb_set_budget, pb_truncate,
+//            pb_format_chatml, pb_format_llama, pb_format_raw,
+//            pb_clear, pb_pop, pb_last_role,
+//            pb_estimate_tokens, pb_fits
+//
+// Usage:
+//   use "prompt_builder"
+//   let pb = pb_create(4096.0)
+//   let _s = pb_system(pb, "You are helpful.")
+//   let _u = pb_user(pb, "Hello!")
+//   let prompt = pb_format_chatml(pb)
+
+// ── Storage ─────────────────────────────────────────────
+let mut _pb_roles = []
+let mut _pb_content = []
+let mut _pb_tokens = []
+let mut _pb_start = []
+let mut _pb_msg_count = []
+let mut _pb_budget = []
+
+// Role constants
+let PB_SYSTEM = 0.0
+let PB_USER = 1.0
+let PB_ASSISTANT = 2.0
+let PB_TOOL = 3.0
+
+// ── Token estimation ────────────────────────────────────
+// Simple heuristic: ~4 chars per token (English average).
+// For exact counting, use tokenizer.flow with actual BPE.
+
+fn pb_estimate_tokens(text)
+    // Estimate token count from text length.
+    let chars = str_len(text)
+    return floor(chars / 4.0) + 1.0
+end
+
+// ── Core API ────────────────────────────────────────────
+
+fn pb_create(budget)
+    // Create prompt builder with token budget. Returns builder ID.
+    let id = len(_pb_start)
+    push(_pb_start, len(_pb_roles))
+    push(_pb_msg_count, 0.0)
+    let mut b = budget
+    if b <= 0.0
+        b = 4096.0
+    end
+    push(_pb_budget, b)
+    return id
+end
+
+fn _pb_add_msg(pb_id, role, content)
+    let pi = int(pb_id)
+    push(_pb_roles, role)
+    push(_pb_content, content)
+    push(_pb_tokens, pb_estimate_tokens(content))
+    _pb_msg_count[pi] = _pb_msg_count[pi] + 1.0
+    return _pb_msg_count[pi] - 1.0
+end
+
+fn pb_system(pb_id, content)
+    // Add system message.
+    return _pb_add_msg(pb_id, PB_SYSTEM, content)
+end
+
+fn pb_user(pb_id, content)
+    // Add user message.
+    return _pb_add_msg(pb_id, PB_USER, content)
+end
+
+fn pb_assistant(pb_id, content)
+    // Add assistant message.
+    return _pb_add_msg(pb_id, PB_ASSISTANT, content)
+end
+
+fn pb_tool(pb_id, content)
+    // Add tool/function result message.
+    return _pb_add_msg(pb_id, PB_TOOL, content)
+end
+
+// ── Queries ─────────────────────────────────────────────
+
+fn pb_count(pb_id)
+    // Number of messages in builder.
+    return _pb_msg_count[int(pb_id)]
+end
+
+fn pb_role(pb_id, msg_idx)
+    // Get role of message at index.
+    if msg_idx < 0.0 || msg_idx >= _pb_msg_count[int(pb_id)]
+        return -1.0
+    end
+    let start = int(_pb_start[int(pb_id)])
+    return _pb_roles[int(start + msg_idx)]
+end
+
+fn pb_content(pb_id, msg_idx)
+    // Get content of message at index.
+    if msg_idx < 0.0 || msg_idx >= _pb_msg_count[int(pb_id)]
+        return ""
+    end
+    let start = int(_pb_start[int(pb_id)])
+    return _pb_content[int(start + msg_idx)]
+end
+
+fn pb_tokens(pb_id, msg_idx)
+    // Get estimated token count of message at index.
+    if msg_idx < 0.0 || msg_idx >= _pb_msg_count[int(pb_id)]
+        return 0.0
+    end
+    let start = int(_pb_start[int(pb_id)])
+    return _pb_tokens[int(start + msg_idx)]
+end
+
+fn pb_total_tokens(pb_id)
+    // Total estimated tokens across all messages.
+    let pi = int(pb_id)
+    let start = int(_pb_start[pi])
+    let count = int(_pb_msg_count[pi])
+    let mut total = 0.0
+    let mut i = 0.0
+    while i < count
+        total = total + _pb_tokens[int(start + i)]
+        // Add overhead per message (role markers, newlines ~4 tokens)
+        total = total + 4.0
+        i = i + 1.0
+    end
+    return total
+end
+
+fn pb_fits(pb_id, new_text)
+    // Returns 1.0 if adding new_text would fit within budget.
+    let current = pb_total_tokens(pb_id)
+    let new_tokens = pb_estimate_tokens(new_text) + 4.0
+    if current + new_tokens <= _pb_budget[int(pb_id)]
+        return 1.0
+    end
+    return 0.0
+end
+
+fn pb_set_budget(pb_id, budget)
+    // Update token budget.
+    _pb_budget[int(pb_id)] = budget
+    return 0.0
+end
+
+fn pb_last_role(pb_id)
+    // Get role of last message. Returns -1.0 if empty.
+    let count = _pb_msg_count[int(pb_id)]
+    if count == 0.0
+        return -1.0
+    end
+    return pb_role(pb_id, count - 1.0)
+end
+
+// ── Truncation ──────────────────────────────────────────
+
+fn pb_truncate(pb_id)
+    // Remove oldest non-system messages until within budget.
+    // Preserves system messages (role=0). Returns messages removed.
+    let pi = int(pb_id)
+    let budget = _pb_budget[pi]
+    let mut removed = 0.0
+    let mut total = pb_total_tokens(pb_id)
+    let start = int(_pb_start[pi])
+    // Find first non-system message to remove
+    while total > budget
+        let count = int(_pb_msg_count[pi])
+        if count <= 1.0
+            break
+        end
+        // Find earliest non-system message
+        let mut found = -1.0
+        let mut i = 0.0
+        while i < count
+            if _pb_roles[int(start + i)] != PB_SYSTEM
+                found = i
+                i = count
+            end
+            if i < count
+                i = i + 1.0
+            end
+        end
+        if found < 0.0
+            break
+        end
+        // Remove by shifting
+        let rem_tokens = _pb_tokens[int(start + found)] + 4.0
+        let mut j = found
+        while j < count - 1.0
+            _pb_roles[int(start + j)] = _pb_roles[int(start + j + 1.0)]
+            _pb_content[int(start + j)] = _pb_content[int(start + j + 1.0)]
+            _pb_tokens[int(start + j)] = _pb_tokens[int(start + j + 1.0)]
+            j = j + 1.0
+        end
+        _pb_msg_count[pi] = count - 1.0
+        total = total - rem_tokens
+        removed = removed + 1.0
+    end
+    return removed
+end
+
+// ── Clear ───────────────────────────────────────────────
+
+fn pb_clear(pb_id)
+    // Remove all messages.
+    _pb_msg_count[int(pb_id)] = 0.0
+    return 0.0
+end
+
+fn pb_pop(pb_id)
+    // Remove last message.
+    let pi = int(pb_id)
+    if _pb_msg_count[pi] > 0.0
+        _pb_msg_count[pi] = _pb_msg_count[pi] - 1.0
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Formatting ──────────────────────────────────────────
+
+fn _pb_role_name(role)
+    if role == PB_SYSTEM
+        return "system"
+    elif role == PB_USER
+        return "user"
+    elif role == PB_ASSISTANT
+        return "assistant"
+    elif role == PB_TOOL
+        return "tool"
+    end
+    return "user"
+end
+
+fn pb_format_chatml(pb_id)
+    // Format as ChatML template.
+    // <|im_start|>role\ncontent<|im_end|>\n
+    let pi = int(pb_id)
+    let start = int(_pb_start[pi])
+    let count = int(_pb_msg_count[pi])
+    let mut result = ""
+    let mut i = 0.0
+    while i < count
+        let role = _pb_role_name(_pb_roles[int(start + i)])
+        let content = _pb_content[int(start + i)]
+        result = result + "<|im_start|>" + role + "\n" + content + "<|im_end|>\n"
+        i = i + 1.0
+    end
+    // Add assistant prompt
+    result = result + "<|im_start|>assistant\n"
+    return result
+end
+
+fn pb_format_llama(pb_id)
+    // Format as LLaMA 2/3 chat template.
+    // [INST] <<SYS>> system <</SYS>> user [/INST] assistant
+    let pi = int(pb_id)
+    let start = int(_pb_start[pi])
+    let count = int(_pb_msg_count[pi])
+    let mut result = ""
+    let mut sys_content = ""
+    let mut i = 0.0
+    // Extract system message
+    while i < count
+        if _pb_roles[int(start + i)] == PB_SYSTEM
+            sys_content = _pb_content[int(start + i)]
+        end
+        i = i + 1.0
+    end
+    // Build conversation
+    i = 0.0
+    while i < count
+        let role = _pb_roles[int(start + i)]
+        let content = _pb_content[int(start + i)]
+        if role == PB_USER
+            result = result + "[INST] "
+            if str_len(sys_content) > 0.0 && i < 2.0
+                result = result + "<<SYS>>\n" + sys_content + "\n<</SYS>>\n\n"
+                sys_content = ""
+            end
+            result = result + content + " [/INST] "
+        elif role == PB_ASSISTANT
+            result = result + content + " "
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn pb_format_raw(pb_id)
+    // Format as simple role: content lines.
+    let pi = int(pb_id)
+    let start = int(_pb_start[pi])
+    let count = int(_pb_msg_count[pi])
+    let mut result = ""
+    let mut i = 0.0
+    while i < count
+        let role = _pb_role_name(_pb_roles[int(start + i)])
+        let content = _pb_content[int(start + i)]
+        result = result + role + ": " + content + "\n"
+        i = i + 1.0
+    end
+    result = result + "assistant: "
+    return result
+end
+
+// ── Conversation utilities ──────────────────────────────
+
+fn pb_from_pairs(pb_id, pairs, n_pairs)
+    // Add alternating user/assistant pairs from flat array.
+    // pairs: [user_text, assistant_text, user_text, assistant_text, ...]
+    let mut i = 0.0
+    while i < n_pairs
+        let ui = int(i * 2.0)
+        let ai = int(i * 2.0 + 1.0)
+        if ui < len(pairs)
+            let _u = pb_user(pb_id, pairs[ui])
+        end
+        if ai < len(pairs)
+            let _a = pb_assistant(pb_id, pairs[ai])
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn pb_summary(pb_id)
+    // Return summary string: "N messages, ~T tokens / B budget"
+    let count = pb_count(pb_id)
+    let tokens = pb_total_tokens(pb_id)
+    let budget = _pb_budget[int(pb_id)]
+    return str(count) + " messages, ~" + str(tokens) + " tokens / " + str(budget) + " budget"
+end

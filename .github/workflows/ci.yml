@@ -1,0 +1,194 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      VULKAN_SDK: C:\VulkanSDK\1.4.341.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        run: |
+          $url = "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/VulkanSDK-1.4.341.1-Installer.exe"
+          Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe
+          .\VulkanSDK.exe --accept-licenses --default-answer --confirm-command install
+          echo "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" >> $env:GITHUB_ENV
+          echo "C:\VulkanSDK\1.4.341.1\Bin" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: Build compiler
+        run: cargo build --release --bin octoflow
+
+      - name: Test parser
+        run: cargo test --release -p octoflow-parser
+
+      - name: Test vulkan (no GPU)
+        run: cargo test --release -p octoflow-vulkan
+
+      - name: Test CLI lib
+        run: cargo test --release -p octoflow-cli --lib
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: octoflow-windows-x86_64
+          path: target/release/octoflow.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        run: |
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list https://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
+          sudo apt-get update
+          sudo apt-get install -y vulkan-sdk
+
+      - name: Build compiler
+        run: cargo build --release --bin octoflow
+
+      - name: Test parser
+        run: cargo test --release -p octoflow-parser
+
+      - name: Test vulkan (no GPU)
+        run: cargo test --release -p octoflow-vulkan
+
+      - name: Test CLI lib
+        run: cargo test --release -p octoflow-cli --lib
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: octoflow-linux-x86_64
+          path: target/release/octoflow
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK (MoltenVK via Homebrew)
+        run: |
+          brew install molten-vk vulkan-loader vulkan-headers
+          echo "VULKAN_SDK=$(brew --prefix)" >> $GITHUB_ENV
+
+      - name: Build compiler
+        run: cargo build --release --bin octoflow
+
+      - name: Test parser
+        run: cargo test --release -p octoflow-parser
+
+      - name: Test vulkan (no GPU)
+        run: cargo test --release -p octoflow-vulkan
+
+      - name: Test CLI lib
+        run: cargo test --release -p octoflow-cli --lib
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: octoflow-macos-aarch64
+          path: target/release/octoflow
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: octoflow-windows-x86_64
+          path: release-windows
+
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: octoflow-linux-x86_64
+          path: release-linux
+
+      - name: Download macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: octoflow-macos-aarch64
+          path: release-macos
+
+      - name: Package Windows release
+        run: |
+          mkdir -p pkg-win/octoflow
+          cp release-windows/octoflow.exe pkg-win/octoflow/
+          cp -r stdlib pkg-win/octoflow/
+          cp -r examples pkg-win/octoflow/
+          cp README.md LICENSE pkg-win/octoflow/ 2>/dev/null || cp README.md pkg-win/octoflow/
+          cd pkg-win && zip -r ../octoflow-${GITHUB_REF_NAME}-x86_64-windows.zip octoflow/
+
+      - name: Package Linux release
+        run: |
+          mkdir -p pkg-linux/octoflow
+          cp release-linux/octoflow pkg-linux/octoflow/
+          chmod +x pkg-linux/octoflow/octoflow
+          cp -r stdlib pkg-linux/octoflow/
+          cp -r examples pkg-linux/octoflow/
+          cp README.md LICENSE pkg-linux/octoflow/ 2>/dev/null || cp README.md pkg-linux/octoflow/
+          cd pkg-linux && tar czf ../octoflow-${GITHUB_REF_NAME}-x86_64-linux.tar.gz octoflow/
+
+      - name: Package macOS release
+        run: |
+          mkdir -p pkg-macos/octoflow
+          cp release-macos/octoflow pkg-macos/octoflow/
+          chmod +x pkg-macos/octoflow/octoflow
+          cp -r stdlib pkg-macos/octoflow/
+          cp -r examples pkg-macos/octoflow/
+          cp README.md LICENSE pkg-macos/octoflow/ 2>/dev/null || cp README.md pkg-macos/octoflow/
+          cd pkg-macos && tar czf ../octoflow-${GITHUB_REF_NAME}-aarch64-macos.tar.gz octoflow/
+
+      - name: Generate SHA-256 checksums
+        run: |
+          sha256sum octoflow-*-x86_64-windows.zip \
+                    octoflow-*-x86_64-linux.tar.gz \
+                    octoflow-*-aarch64-macos.tar.gz \
+            > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            octoflow-*-x86_64-windows.zip
+            octoflow-*-x86_64-linux.tar.gz
+            octoflow-*-aarch64-macos.tar.gz
+            SHA256SUMS.txt
+          body: |
+            ## Downloads
+
+            | Platform | File |
+            |----------|------|
+            | **Windows** | `octoflow-${{ github.ref_name }}-x86_64-windows.zip` |
+            | **Linux** | `octoflow-${{ github.ref_name }}-x86_64-linux.tar.gz` |
+            | **macOS (Apple Silicon)** | `octoflow-${{ github.ref_name }}-aarch64-macos.tar.gz` |
+
+            Verify with `SHA256SUMS.txt`:
+            ```
+            sha256sum -c SHA256SUMS.txt
+            ```
+
+            Unzip/extract, run `octoflow --version`. GPU detected automatically via Vulkan (MoltenVK on macOS). Works without GPU too.
+
+            See [CHANGELOG.md](https://github.com/octoflow-lang/octoflow/blob/main/CHANGELOG.md) for full release notes.

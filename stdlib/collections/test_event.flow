@@ -1,0 +1,174 @@
+// test_event.flow — Tests for stdlib/collections/event.flow
+use "event"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic Registration ─────────────────────────────────────────
+
+fn test_emitter_create()
+    let mut em = emitter_create()
+    let events = emitter_events(em)
+    check("create empty", len(events) == 0.0)
+    check("log empty", emitter_log_count(em) == 0.0)
+    return 0.0
+end
+
+fn test_emitter_on()
+    let mut em = emitter_create()
+    let id1 = emitter_on(em, "click", "handler_a")
+    let id2 = emitter_on(em, "click", "handler_b")
+    check("on returns id", float(id1) > 0.0)
+    check("on unique ids", id1 != id2)
+    check("has listener", emitter_has_listener(em, "click") == 1.0)
+    check("listener count", emitter_listener_count(em, "click") == 2.0)
+    return 0.0
+end
+
+fn test_emitter_label()
+    let mut em = emitter_create()
+    let id = emitter_on(em, "save", "disk_writer")
+    check("label", emitter_listener_label(em, id) == "disk_writer")
+    return 0.0
+end
+
+fn test_emitter_events()
+    let mut em = emitter_create()
+    emitter_on(em, "click", "h1")
+    emitter_on(em, "hover", "h2")
+    emitter_on(em, "click", "h3")
+    let events = emitter_events(em)
+    check("events count", len(events) == 2.0)
+    return 0.0
+end
+
+// ── Emit ──────────────────────────────────────────────────────
+
+fn test_emitter_emit()
+    let mut em = emitter_create()
+    emitter_on(em, "tick", "handler")
+    let count = emitter_emit(em, "tick")
+    check("emit count", count == 1.0)
+    return 0.0
+end
+
+fn test_emitter_emit_multi()
+    let mut em = emitter_create()
+    emitter_on(em, "update", "h1")
+    emitter_on(em, "update", "h2")
+    emitter_on(em, "update", "h3")
+    let count = emitter_emit(em, "update")
+    check("emit multi", count == 3.0)
+    return 0.0
+end
+
+fn test_emitter_emit_no_listeners()
+    let mut em = emitter_create()
+    let count = emitter_emit(em, "phantom")
+    check("emit no listeners", count == 0.0)
+    return 0.0
+end
+
+// ── Off (Remove) ──────────────────────────────────────────────
+
+fn test_emitter_off()
+    let mut em = emitter_create()
+    let id1 = emitter_on(em, "click", "h1")
+    let _id2 = emitter_on(em, "click", "h2")
+    emitter_off(em, "click", id1)
+    check("off count", emitter_listener_count(em, "click") == 1.0)
+    check("off label gone", emitter_listener_label(em, id1) == "")
+    return 0.0
+end
+
+// ── Once ──────────────────────────────────────────────────────
+
+fn test_emitter_once()
+    let mut em = emitter_create()
+    let id = emitter_on(em, "init", "setup")
+    emitter_once_mark(em, id)
+
+    let c1 = emitter_emit(em, "init")
+    check("once first emit", c1 == 1.0)
+
+    // After first emit, once-listener should be removed
+    let c2 = emitter_emit(em, "init")
+    check("once second emit", c2 == 0.0)
+    return 0.0
+end
+
+// ── Clear ─────────────────────────────────────────────────────
+
+fn test_emitter_clear_event()
+    let mut em = emitter_create()
+    emitter_on(em, "a", "h1")
+    emitter_on(em, "a", "h2")
+    emitter_on(em, "b", "h3")
+    emitter_clear_event(em, "a")
+    check("clear event a", emitter_listener_count(em, "a") == 0.0)
+    check("clear event b kept", emitter_listener_count(em, "b") == 1.0)
+    return 0.0
+end
+
+fn test_emitter_clear()
+    let mut em = emitter_create()
+    emitter_on(em, "x", "h1")
+    emitter_on(em, "y", "h2")
+    emitter_clear(em)
+    check("clear all no x", emitter_has_listener(em, "x") == 0.0)
+    check("clear all no y", emitter_has_listener(em, "y") == 0.0)
+    check("clear log", emitter_log_count(em) == 0.0)
+    return 0.0
+end
+
+// ── Event Log ─────────────────────────────────────────────────
+
+fn test_emitter_log()
+    let mut em = emitter_create()
+    emitter_on(em, "a", "h")
+    emitter_on(em, "b", "h")
+    emitter_emit(em, "a")
+    emitter_emit(em, "b")
+    emitter_emit(em, "a")
+    let log = emitter_log(em)
+    check("log count", len(log) == 3.0)
+    check("log order", log[0] == "a" && log[1] == "b" && log[2] == "a")
+    check("log count fn", emitter_log_count(em) == 3.0)
+    return 0.0
+end
+
+fn test_emitter_listeners_list()
+    let mut em = emitter_create()
+    let id1 = emitter_on(em, "ev", "first")
+    let id2 = emitter_on(em, "ev", "second")
+    let ids = emitter_listeners(em, "ev")
+    check("listeners list", len(ids) == 2.0)
+    check("listeners id1", ids[0] == id1)
+    check("listeners id2", ids[1] == id2)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_emitter_create()
+test_emitter_on()
+test_emitter_label()
+test_emitter_events()
+test_emitter_emit()
+test_emitter_emit_multi()
+test_emitter_emit_no_listeners()
+test_emitter_off()
+test_emitter_once()
+test_emitter_clear_event()
+test_emitter_clear()
+test_emitter_log()
+test_emitter_listeners_list()
+print("")
+print("All event emitter tests passed (13 tests)")

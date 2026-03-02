@@ -1,0 +1,425 @@
+// stdlib/gui/chart.flow — Chart rendering utilities
+//
+// Data visualization: bar charts, line charts, scatter plots, pie charts,
+// sparklines, and histograms. All rendering outputs to flat arrays
+// suitable for GUI canvas or GPU upload.
+//
+// Chart data format: flat arrays (x_data[], y_data[]).
+// Render output: draw commands in flat array [cmd_type, x, y, w, h, r, g, b, ...].
+// Command types: 0=rect, 1=line, 2=circle
+//
+// Functions: chart_bar, chart_line, chart_scatter, chart_pie,
+//            chart_sparkline, chart_histogram,
+//            chart_axis_labels, chart_auto_range, chart_normalize
+//
+// Usage:
+//   use "chart"
+//   let mut data = [10.0, 25.0, 15.0, 30.0, 20.0]
+//   let cmds = chart_bar(data, 0.0, 0.0, 400.0, 300.0)
+
+// ── Draw command constants ──────────────────────────────
+let CHART_CMD_RECT = 0.0
+let CHART_CMD_LINE = 1.0
+let CHART_CMD_CIRCLE = 2.0
+// Fields per command: [type, x, y, w, h, r, g, b] = 8 floats
+let CHART_CMD_SIZE = 8.0
+
+// ── Default colors (flat array: [r,g,b, r,g,b, ...]) ───
+let mut _chart_palette = [
+    0.33, 0.55, 0.83,
+    0.90, 0.40, 0.30,
+    0.35, 0.75, 0.45,
+    0.95, 0.70, 0.20,
+    0.60, 0.40, 0.80,
+    0.85, 0.55, 0.70,
+    0.40, 0.80, 0.80,
+    0.70, 0.70, 0.70
+]
+
+fn _chart_color_r(idx)
+    let ci = int(idx) * 3
+    let n = len(_chart_palette)
+    if ci >= n
+        return 0.5
+    end
+    return _chart_palette[ci]
+end
+
+fn _chart_color_g(idx)
+    let ci = int(idx) * 3 + 1
+    let n = len(_chart_palette)
+    if ci >= n
+        return 0.5
+    end
+    return _chart_palette[ci]
+end
+
+fn _chart_color_b(idx)
+    let ci = int(idx) * 3 + 2
+    let n = len(_chart_palette)
+    if ci >= n
+        return 0.5
+    end
+    return _chart_palette[ci]
+end
+
+fn _chart_add_rect(cmds, x, y, w, h, r, g, b)
+    push(cmds, CHART_CMD_RECT)
+    push(cmds, x)
+    push(cmds, y)
+    push(cmds, w)
+    push(cmds, h)
+    push(cmds, r)
+    push(cmds, g)
+    push(cmds, b)
+    return 0.0
+end
+
+fn _chart_add_line(cmds, x1, y1, x2, y2, r, g, b)
+    push(cmds, CHART_CMD_LINE)
+    push(cmds, x1)
+    push(cmds, y1)
+    push(cmds, x2)
+    push(cmds, y2)
+    push(cmds, r)
+    push(cmds, g)
+    push(cmds, b)
+    return 0.0
+end
+
+fn _chart_add_circle(cmds, cx, cy, radius, unused, r, g, b)
+    push(cmds, CHART_CMD_CIRCLE)
+    push(cmds, cx)
+    push(cmds, cy)
+    push(cmds, radius)
+    push(cmds, 0.0)
+    push(cmds, r)
+    push(cmds, g)
+    push(cmds, b)
+    return 0.0
+end
+
+// ── Utility functions ───────────────────────────────────
+
+fn chart_auto_range(data)
+    // Returns [min, max] for data array.
+    let n = len(data)
+    if n == 0.0
+        let mut r = [0.0, 1.0]
+        return r
+    end
+    let mut mn = data[0]
+    let mut mx = data[0]
+    let mut i = 1.0
+    while i < n
+        if data[int(i)] < mn
+            mn = data[int(i)]
+        end
+        if data[int(i)] > mx
+            mx = data[int(i)]
+        end
+        i = i + 1.0
+    end
+    if mn == mx
+        mn = mn - 1.0
+        mx = mx + 1.0
+    end
+    let mut r = [mn, mx]
+    return r
+end
+
+fn chart_normalize(data, min_val, max_val)
+    // Normalize data to [0, 1] range. Returns new array.
+    let range = max_val - min_val
+    let n = len(data)
+    let mut result = []
+    if range == 0.0
+        let mut i = 0.0
+        while i < n
+            push(result, 0.5)
+            i = i + 1.0
+        end
+        return result
+    end
+    let mut i = 0.0
+    while i < n
+        push(result, (data[int(i)] - min_val) / range)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn chart_cmd_count(cmds)
+    // Return number of draw commands in command array.
+    return len(cmds) / CHART_CMD_SIZE
+end
+
+fn chart_cmd_type(cmds, idx)
+    return cmds[int(idx * CHART_CMD_SIZE)]
+end
+
+fn chart_cmd_x(cmds, idx)
+    return cmds[int(idx * CHART_CMD_SIZE + 1.0)]
+end
+
+fn chart_cmd_y(cmds, idx)
+    return cmds[int(idx * CHART_CMD_SIZE + 2.0)]
+end
+
+fn chart_cmd_w(cmds, idx)
+    return cmds[int(idx * CHART_CMD_SIZE + 3.0)]
+end
+
+fn chart_cmd_h(cmds, idx)
+    return cmds[int(idx * CHART_CMD_SIZE + 4.0)]
+end
+
+fn chart_cmd_r(cmds, idx)
+    return cmds[int(idx * CHART_CMD_SIZE + 5.0)]
+end
+
+fn chart_cmd_g(cmds, idx)
+    return cmds[int(idx * CHART_CMD_SIZE + 6.0)]
+end
+
+fn chart_cmd_b(cmds, idx)
+    return cmds[int(idx * CHART_CMD_SIZE + 7.0)]
+end
+
+// ── Bar chart ───────────────────────────────────────────
+
+fn chart_bar(data, ox, oy, width, height)
+    // Render vertical bar chart. Returns draw command array.
+    // Bars grow upward from bottom. Auto-scales to data range.
+    let mut cmds = []
+    let n = len(data)
+    if n == 0.0
+        return cmds
+    end
+    let r = chart_auto_range(data)
+    let data_min = r[0]
+    let data_max = r[1]
+    let mut use_min = data_min
+    if use_min > 0.0
+        use_min = 0.0
+    end
+    let range = data_max - use_min
+    if range <= 0.0
+        return cmds
+    end
+    let bar_gap = 2.0
+    let mut bar_w = (width - bar_gap * (n + 1.0)) / n
+    if bar_w < 1.0
+        bar_w = 1.0
+    end
+    let mut i = 0.0
+    while i < n
+        let val = data[int(i)]
+        let bar_h = ((val - use_min) / range) * height
+        let bx = ox + bar_gap + i * (bar_w + bar_gap)
+        let by = oy + height - bar_h
+        let ci = i - floor(i / 8.0) * 8.0
+        let _a = _chart_add_rect(cmds, bx, by, bar_w, bar_h, _chart_color_r(ci), _chart_color_g(ci), _chart_color_b(ci))
+        i = i + 1.0
+    end
+    return cmds
+end
+
+// ── Line chart ──────────────────────────────────────────
+
+fn chart_line(data, ox, oy, width, height)
+    // Render line chart. Returns draw command array (line segments).
+    let mut cmds = []
+    let n = len(data)
+    if n < 2.0
+        return cmds
+    end
+    let r = chart_auto_range(data)
+    let data_min = r[0]
+    let data_max = r[1]
+    let range = data_max - data_min
+    let step_x = width / (n - 1.0)
+    let mut i = 0.0
+    while i < n - 1.0
+        let v1 = (data[int(i)] - data_min) / range
+        let v2 = (data[int(i + 1.0)] - data_min) / range
+        let x1 = ox + i * step_x
+        let y1 = oy + height - v1 * height
+        let x2 = ox + (i + 1.0) * step_x
+        let y2 = oy + height - v2 * height
+        let _a = _chart_add_line(cmds, x1, y1, x2, y2, _chart_color_r(0.0), _chart_color_g(0.0), _chart_color_b(0.0))
+        i = i + 1.0
+    end
+    return cmds
+end
+
+// ── Scatter plot ────────────────────────────────────────
+
+fn chart_scatter(x_data, y_data, ox, oy, width, height, radius)
+    // Render scatter plot. Returns draw commands (circles).
+    let mut cmds = []
+    let n = len(x_data)
+    let ny = len(y_data)
+    let mut count = n
+    if ny < count
+        count = ny
+    end
+    if count == 0.0
+        return cmds
+    end
+    let rx = chart_auto_range(x_data)
+    let ry = chart_auto_range(y_data)
+    let x_range = rx[1] - rx[0]
+    let y_range = ry[1] - ry[0]
+    let mut i = 0.0
+    while i < count
+        let px = ox + ((x_data[int(i)] - rx[0]) / x_range) * width
+        let py = oy + height - ((y_data[int(i)] - ry[0]) / y_range) * height
+        let ci = i - floor(i / 8.0) * 8.0
+        let _a = _chart_add_circle(cmds, px, py, radius, 0.0, _chart_color_r(ci), _chart_color_g(ci), _chart_color_b(ci))
+        i = i + 1.0
+    end
+    return cmds
+end
+
+// ── Pie chart ───────────────────────────────────────────
+
+fn chart_pie(data, cx, cy, radius)
+    // Render pie chart as colored arc segments (approximated with rects).
+    // Returns draw commands. Each slice = wedge approximated by thin rects.
+    let mut cmds = []
+    let n = len(data)
+    if n == 0.0
+        return cmds
+    end
+    // Compute total
+    let mut total = 0.0
+    let mut i = 0.0
+    while i < n
+        total = total + abs(data[int(i)])
+        i = i + 1.0
+    end
+    if total <= 0.0
+        return cmds
+    end
+    // Draw wedges as radial rectangles
+    let PI = 3.14159265358979
+    let mut angle = 0.0
+    i = 0.0
+    while i < n
+        let slice_angle = (abs(data[int(i)]) / total) * 2.0 * PI
+        let steps = floor(slice_angle * 10.0) + 1.0
+        let step_a = slice_angle / steps
+        let ci = i - floor(i / 8.0) * 8.0
+        let mut j = 0.0
+        while j < steps
+            let a = angle + j * step_a
+            let px = cx + cos(a) * radius * 0.7
+            let py = cy + sin(a) * radius * 0.7
+            let _c = _chart_add_rect(cmds, px - 2.0, py - 2.0, 4.0, 4.0, _chart_color_r(ci), _chart_color_g(ci), _chart_color_b(ci))
+            j = j + 1.0
+        end
+        angle = angle + slice_angle
+        i = i + 1.0
+    end
+    return cmds
+end
+
+// ── Sparkline ───────────────────────────────────────────
+
+fn chart_sparkline(data, ox, oy, width, height)
+    // Compact inline chart (no axes, no labels). Returns line commands.
+    return chart_line(data, ox, oy, width, height)
+end
+
+// ── Histogram ───────────────────────────────────────────
+
+fn chart_histogram(data, bins, ox, oy, width, height)
+    // Bin data into histogram and render as bar chart.
+    // Returns draw command array.
+    let n = len(data)
+    if n == 0.0 || bins <= 0.0
+        let mut empty = []
+        return empty
+    end
+    let r = chart_auto_range(data)
+    let data_min = r[0]
+    let data_max = r[1]
+    let range = data_max - data_min
+    let bin_width = range / bins
+    // Count bins
+    let mut bin_counts = []
+    let mut i = 0.0
+    while i < bins
+        push(bin_counts, 0.0)
+        i = i + 1.0
+    end
+    i = 0.0
+    while i < n
+        let mut bi = floor((data[int(i)] - data_min) / bin_width)
+        if bi >= bins
+            bi = bins - 1.0
+        end
+        if bi < 0.0
+            bi = 0.0
+        end
+        bin_counts[int(bi)] = bin_counts[int(bi)] + 1.0
+        i = i + 1.0
+    end
+    return chart_bar(bin_counts, ox, oy, width, height)
+end
+
+// ── Stacked bar chart ───────────────────────────────────
+
+fn chart_stacked_bar(series, series_count, categories, ox, oy, width, height)
+    // Render stacked bar chart from flat series data.
+    // series: flat array [s0_c0, s0_c1, ..., s1_c0, s1_c1, ...]
+    // series_count: number of series
+    // categories: number of categories per series
+    let mut cmds = []
+    if series_count <= 0.0 || categories <= 0.0
+        return cmds
+    end
+    // Validate series has enough data
+    let expected = series_count * categories
+    if len(series) < expected
+        return cmds
+    end
+    // Find max stack height
+    let mut max_stack = 0.0
+    let mut c = 0.0
+    while c < categories
+        let mut stack = 0.0
+        let mut s = 0.0
+        while s < series_count
+            stack = stack + abs(series[int(s * categories + c)])
+            s = s + 1.0
+        end
+        if stack > max_stack
+            max_stack = stack
+        end
+        c = c + 1.0
+    end
+    if max_stack <= 0.0
+        return cmds
+    end
+    let bar_gap = 2.0
+    let bar_w = (width - bar_gap * (categories + 1.0)) / categories
+    c = 0.0
+    while c < categories
+        let bx = ox + bar_gap + c * (bar_w + bar_gap)
+        let mut stack_y = 0.0
+        let mut s = 0.0
+        while s < series_count
+            let val = abs(series[int(s * categories + c)])
+            let bar_h = (val / max_stack) * height
+            let by = oy + height - stack_y - bar_h
+            let ci = s - floor(s / 8.0) * 8.0
+            let _a = _chart_add_rect(cmds, bx, by, bar_w, bar_h, _chart_color_r(ci), _chart_color_g(ci), _chart_color_b(ci))
+            stack_y = stack_y + bar_h
+            s = s + 1.0
+        end
+        c = c + 1.0
+    end
+    return cmds
+end

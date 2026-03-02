@@ -1,0 +1,294 @@
+// stdlib/math/signal.flow — Signal processing utilities
+//
+// DFT, convolution, window functions, filters, peak detection.
+// All signals are flat arrays of f64 values.
+//
+// Functions: sig_dft_real, sig_dft_imag, sig_convolve,
+//            sig_cross_correlate, sig_auto_correlate,
+//            sig_hamming, sig_hanning, sig_blackman,
+//            sig_low_pass, sig_moving_median,
+//            sig_peak_detect, sig_zero_crossings,
+//            sig_energy, sig_rms, sig_normalize
+//
+// Usage:
+//   use "signal"
+//   let mut data = [1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0]
+//   let win = sig_hamming(8.0)
+//   let e = sig_energy(data)
+
+// ── DFT ─────────────────────────────────────────────────────
+
+fn sig_dft_real(x)
+    // Compute real part of DFT. Returns array of length n.
+    let n = len(x)
+    let mut result = []
+    let pi2 = 2.0 * 3.14159265358979
+    let mut k = 0.0
+    while k < n
+        let mut sum = 0.0
+        let mut t = 0.0
+        while t < n
+            sum = sum + x[t] * cos(pi2 * k * t / n)
+            t = t + 1.0
+        end
+        push(result, sum)
+        k = k + 1.0
+    end
+    return result
+end
+
+fn sig_dft_imag(x)
+    // Compute imaginary part of DFT. Returns array of length n.
+    let n = len(x)
+    let mut result = []
+    let pi2 = 2.0 * 3.14159265358979
+    let mut k = 0.0
+    while k < n
+        let mut sum = 0.0
+        let mut t = 0.0
+        while t < n
+            sum = sum - x[t] * sin(pi2 * k * t / n)
+            t = t + 1.0
+        end
+        push(result, sum)
+        k = k + 1.0
+    end
+    return result
+end
+
+// ── Convolution ─────────────────────────────────────────────
+
+fn sig_convolve(x, h)
+    // Linear convolution of signals x and h.
+    // Output length = len(x) + len(h) - 1.
+    let nx = len(x)
+    let nh = len(h)
+    let ny = nx + nh - 1.0
+    let mut y = []
+    let mut i = 0.0
+    while i < ny
+        push(y, 0.0)
+        i = i + 1.0
+    end
+
+    i = 0.0
+    while i < nx
+        let mut j = 0.0
+        while j < nh
+            y[i + j] = y[i + j] + x[i] * h[j]
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+    return y
+end
+
+fn sig_cross_correlate(x, y)
+    // Cross-correlation of x and y (same as convolve with y reversed).
+    let ny = len(y)
+    let mut y_rev = []
+    let mut i = ny - 1.0
+    while i >= 0.0
+        push(y_rev, y[i])
+        i = i - 1.0
+    end
+    return sig_convolve(x, y_rev)
+end
+
+fn sig_auto_correlate(x)
+    // Auto-correlation of signal x.
+    return sig_cross_correlate(x, x)
+end
+
+// ── Window Functions ────────────────────────────────────────
+
+fn sig_hamming(n)
+    // Hamming window of length n.
+    let mut w = []
+    let pi2 = 2.0 * 3.14159265358979
+    let mut i = 0.0
+    while i < n
+        push(w, 0.54 - 0.46 * cos(pi2 * i / (n - 1.0)))
+        i = i + 1.0
+    end
+    return w
+end
+
+fn sig_hanning(n)
+    // Hanning (Hann) window of length n.
+    let mut w = []
+    let pi2 = 2.0 * 3.14159265358979
+    let mut i = 0.0
+    while i < n
+        push(w, 0.5 * (1.0 - cos(pi2 * i / (n - 1.0))))
+        i = i + 1.0
+    end
+    return w
+end
+
+fn sig_blackman(n)
+    // Blackman window of length n.
+    let mut w = []
+    let pi2 = 2.0 * 3.14159265358979
+    let pi4 = 4.0 * 3.14159265358979
+    let mut i = 0.0
+    while i < n
+        let t = i / (n - 1.0)
+        push(w, 0.42 - 0.5 * cos(pi2 * t) + 0.08 * cos(pi4 * t))
+        i = i + 1.0
+    end
+    return w
+end
+
+// ── Filters ─────────────────────────────────────────────────
+
+fn sig_low_pass(x, alpha)
+    // Simple first-order low-pass filter (EMA).
+    // alpha in (0, 1): smaller = smoother.
+    let n = len(x)
+    if n == 0.0
+        let mut empty = []
+        return empty
+    end
+    let mut y = []
+    push(y, x[0])
+    let mut i = 1.0
+    while i < n
+        let v = alpha * x[i] + (1.0 - alpha) * y[i - 1.0]
+        push(y, v)
+        i = i + 1.0
+    end
+    return y
+end
+
+fn sig_moving_median(x, window)
+    // Moving median filter with given window size.
+    // Uses insertion sort on each window.
+    let n = len(x)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        // Gather window
+        let mut start = i - floor(window / 2.0)
+        if start < 0.0
+            start = 0.0
+        end
+        let mut end_pos = start + window
+        if end_pos > n
+            end_pos = n
+        end
+
+        // Copy and sort window
+        let mut win = []
+        let mut j = start
+        while j < end_pos
+            push(win, x[j])
+            j = j + 1.0
+        end
+
+        // Insertion sort
+        let wn = len(win)
+        j = 1.0
+        while j < wn
+            let key = win[j]
+            let mut k = j - 1.0
+            while k >= 0.0 && win[k] > key
+                win[k + 1.0] = win[k]
+                k = k - 1.0
+            end
+            win[k + 1.0] = key
+            j = j + 1.0
+        end
+
+        // Median
+        let mid = floor(wn / 2.0)
+        push(result, win[mid])
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Analysis ────────────────────────────────────────────────
+
+fn sig_peak_detect(x, threshold)
+    // Find peaks above threshold. Returns array of peak indices.
+    let n = len(x)
+    let mut peaks = []
+    let mut i = 1.0
+    while i < n - 1.0
+        if x[i] > x[i - 1.0] && x[i] > x[i + 1.0] && x[i] > threshold
+            push(peaks, i)
+        end
+        i = i + 1.0
+    end
+    return peaks
+end
+
+fn sig_zero_crossings(x)
+    // Find indices where signal crosses zero.
+    let n = len(x)
+    let mut crossings = []
+    let mut i = 1.0
+    while i < n
+        if (x[i - 1.0] >= 0.0 && x[i] < 0.0) || (x[i - 1.0] < 0.0 && x[i] >= 0.0)
+            push(crossings, i)
+        end
+        i = i + 1.0
+    end
+    return crossings
+end
+
+fn sig_energy(x)
+    // Signal energy: sum of x[i]^2.
+    let n = len(x)
+    let mut e = 0.0
+    let mut i = 0.0
+    while i < n
+        e = e + x[i] * x[i]
+        i = i + 1.0
+    end
+    return e
+end
+
+fn sig_rms(x)
+    // Root mean square of signal.
+    let n = len(x)
+    if n == 0.0
+        return 0.0
+    end
+    return sqrt(sig_energy(x) / n)
+end
+
+fn sig_normalize(x)
+    // Normalize signal to [-1, 1] range.
+    let n = len(x)
+    if n == 0.0
+        let mut empty = []
+        return empty
+    end
+    let mut mx = abs(x[0])
+    let mut i = 1.0
+    while i < n
+        let a = abs(x[i])
+        if a > mx
+            mx = a
+        end
+        i = i + 1.0
+    end
+    if mx < 0.0001
+        let mut result = []
+        i = 0.0
+        while i < n
+            push(result, 0.0)
+            i = i + 1.0
+        end
+        return result
+    end
+    let mut result = []
+    i = 0.0
+    while i < n
+        push(result, x[i] / mx)
+        i = i + 1.0
+    end
+    return result
+end

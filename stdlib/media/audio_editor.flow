@@ -1,0 +1,865 @@
+// audio_editor.flow — Audio waveform editor
+// Selection, cut/copy/paste, effects chain, undo stack, markers, zoom/scroll.
+// Operates on PCM buffers. Uses parallel-array storage for editor instances.
+// Depends on: pcm.flow, audio_fx.flow
+
+// ── Tool modes ───────────────────────────────────────────
+let AE_TOOL_SELECT  = 0.0
+let AE_TOOL_DRAW    = 1.0
+let AE_TOOL_ZOOM    = 2.0
+let AE_TOOL_MARKER  = 3.0
+
+// ── Undo action types ────────────────────────────────────
+let AE_UNDO_CUT      = 1.0
+let AE_UNDO_PASTE    = 2.0
+let AE_UNDO_DELETE   = 3.0
+let AE_UNDO_GAIN     = 4.0
+let AE_UNDO_FADE     = 5.0
+let AE_UNDO_REVERSE  = 6.0
+let AE_UNDO_NORMALIZE = 7.0
+let AE_UNDO_SILENCE  = 8.0
+let AE_UNDO_DRAW     = 9.0
+
+// ── Internal storage ─────────────────────────────────────
+let mut _ae_pcm_id     = []   // PCM buffer ID
+let mut _ae_sel_start  = []   // Selection start (sample)
+let mut _ae_sel_end    = []   // Selection end (sample)
+let mut _ae_cursor     = []   // Cursor position (sample)
+let mut _ae_zoom       = []   // Samples per pixel
+let mut _ae_scroll     = []   // Scroll offset (sample)
+let mut _ae_tool       = []   // Current tool
+let mut _ae_view_w     = []   // View width in pixels
+let mut _ae_view_h     = []   // View height in pixels
+let mut _ae_alive      = []   // 1.0 = active
+
+// Clipboard (per editor, flat array of samples)
+let mut _ae_clip_data  = []   // Flat: all clipboards concatenated
+let mut _ae_clip_off   = []   // Offset into _ae_clip_data per editor
+let mut _ae_clip_len   = []   // Length of clipboard per editor
+
+// Undo stack (flat): [editor_id, action_type, param1, param2, ...] per entry
+// Each undo entry is 8 floats: [editor_id, type, start, end, 0, 0, 0, 0]
+let AE_UNDO_STRIDE = 8.0
+let AE_MAX_UNDO = 50.0
+let mut _ae_undo_data  = []   // Flat undo stack
+let mut _ae_undo_count = []   // Per editor
+let mut _ae_undo_off   = []   // Offset into _ae_undo_data per editor
+
+// Markers (flat): [editor_id, position, type] per marker
+let mut _ae_marker_data  = []
+let mut _ae_marker_count = []
+let mut _ae_marker_off   = []
+
+// Effects chain (flat): [editor_id, fx_type, param1, param2, param3] per slot
+let AE_FX_STRIDE = 5.0
+let mut _ae_fx_data  = []
+let mut _ae_fx_count = []
+let mut _ae_fx_off   = []
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn ae_create(pcm_id, view_w, view_h)
+    let id = len(_ae_alive)
+    push(_ae_pcm_id, pcm_id)
+    push(_ae_sel_start, 0.0)
+    push(_ae_sel_end, 0.0)
+    push(_ae_cursor, 0.0)
+    let total = pcm_sample_count(pcm_id)
+    let mut spp = 1.0
+    if view_w > 0.0 && total > 0.0
+        spp = total / view_w
+        if spp < 1.0
+            spp = 1.0
+        end
+    end
+    push(_ae_zoom, spp)
+    push(_ae_scroll, 0.0)
+    push(_ae_tool, AE_TOOL_SELECT)
+    let mut vw = view_w
+    let mut vh = view_h
+    if vw < 1.0
+        vw = 800.0
+    end
+    if vh < 1.0
+        vh = 200.0
+    end
+    push(_ae_view_w, vw)
+    push(_ae_view_h, vh)
+    push(_ae_alive, 1.0)
+    push(_ae_clip_off, len(_ae_clip_data))
+    push(_ae_clip_len, 0.0)
+    push(_ae_undo_count, 0.0)
+    push(_ae_undo_off, len(_ae_undo_data))
+    push(_ae_marker_count, 0.0)
+    push(_ae_marker_off, len(_ae_marker_data))
+    push(_ae_fx_count, 0.0)
+    push(_ae_fx_off, len(_ae_fx_data))
+    return id
+end
+
+fn ae_destroy(id)
+    if id < 0.0 || id >= len(_ae_alive)
+        return -1.0
+    end
+    _ae_alive[id] = 0.0
+    return 0.0
+end
+
+fn _ae_valid(id)
+    if id < 0.0 || id >= len(_ae_alive)
+        return 0.0
+    end
+    if _ae_alive[id] < 0.5
+        return 0.0
+    end
+    return 1.0
+end
+
+// ── Undo helper ──────────────────────────────────────────
+
+fn _ae_push_undo(id, action_type, start, end_pos)
+    let cnt = _ae_undo_count[id]
+    if cnt >= AE_MAX_UNDO
+        return 0.0  // Undo stack full — silently drop oldest would need shift
+    end
+    push(_ae_undo_data, id)
+    push(_ae_undo_data, action_type)
+    push(_ae_undo_data, start)
+    push(_ae_undo_data, end_pos)
+    push(_ae_undo_data, 0.0)
+    push(_ae_undo_data, 0.0)
+    push(_ae_undo_data, 0.0)
+    push(_ae_undo_data, 0.0)
+    _ae_undo_count[id] = cnt + 1.0
+    return 1.0
+end
+
+// ── Selection ────────────────────────────────────────────
+
+fn ae_select(id, start, end_pos)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    let total = pcm_sample_count(_ae_pcm_id[id])
+    let mut s = start
+    let mut e = end_pos
+    if s < 0.0
+        s = 0.0
+    end
+    if e < 0.0
+        e = 0.0
+    end
+    if s > total
+        s = total
+    end
+    if e > total
+        e = total
+    end
+    if s > e
+        // Swap
+        let tmp = s
+        s = e
+        e = tmp
+    end
+    _ae_sel_start[id] = s
+    _ae_sel_end[id] = e
+    return e - s
+end
+
+fn ae_select_all(id)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    let total = pcm_sample_count(_ae_pcm_id[id])
+    _ae_sel_start[id] = 0.0
+    _ae_sel_end[id] = total
+    return total
+end
+
+fn ae_deselect(id)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    _ae_sel_start[id] = 0.0
+    _ae_sel_end[id] = 0.0
+    return 0.0
+end
+
+fn ae_has_selection(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    if _ae_sel_end[id] - _ae_sel_start[id] > 0.5
+        return 1.0
+    end
+    return 0.0
+end
+
+fn ae_selection_start(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_sel_start[id]
+end
+
+fn ae_selection_end(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_sel_end[id]
+end
+
+fn ae_selection_length(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_sel_end[id] - _ae_sel_start[id]
+end
+
+// ── Cursor ───────────────────────────────────────────────
+
+fn ae_set_cursor(id, pos)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    let total = pcm_sample_count(_ae_pcm_id[id])
+    let mut p = pos
+    if p < 0.0
+        p = 0.0
+    end
+    if p > total
+        p = total
+    end
+    _ae_cursor[id] = p
+    return p
+end
+
+fn ae_cursor(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_cursor[id]
+end
+
+// ── Copy / Cut / Paste / Delete ──────────────────────────
+
+fn ae_copy(id)
+    // Copy selected samples to clipboard
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if ae_has_selection(id) < 0.5
+        return 0.0
+    end
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let s = _ae_sel_start[id]
+    let e = _ae_sel_end[id]
+    // Store clipboard offset
+    _ae_clip_off[id] = len(_ae_clip_data)
+    _ae_clip_len[id] = e - s
+    let mut i = s
+    while i < e
+        let idx = floor(i)
+        if idx >= 0.0 && idx < len(samples)
+            push(_ae_clip_data, samples[idx])
+        else
+            push(_ae_clip_data, 0.0)
+        end
+        i = i + 1.0
+    end
+    return e - s
+end
+
+fn ae_cut(id)
+    // Copy then silence the selection
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if ae_has_selection(id) < 0.5
+        return 0.0
+    end
+    ae_copy(id)
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let s = _ae_sel_start[id]
+    let e = _ae_sel_end[id]
+    _ae_push_undo(id, AE_UNDO_CUT, s, e)
+    // Silence the selection
+    let mut i = s
+    while i < e
+        let idx = floor(i)
+        if idx >= 0.0 && idx < len(samples)
+            samples[idx] = 0.0
+        end
+        i = i + 1.0
+    end
+    return e - s
+end
+
+fn ae_paste(id)
+    // Overwrite at cursor from clipboard
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    let clip_len = _ae_clip_len[id]
+    if clip_len < 1.0
+        return 0.0
+    end
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let total = len(samples)
+    let pos = _ae_cursor[id]
+    let clip_off = _ae_clip_off[id]
+    _ae_push_undo(id, AE_UNDO_PASTE, pos, pos + clip_len)
+    let mut i = 0.0
+    while i < clip_len
+        let dst = floor(pos + i)
+        if dst >= 0.0 && dst < total && clip_off + i < len(_ae_clip_data)
+            samples[dst] = _ae_clip_data[clip_off + i]
+        end
+        i = i + 1.0
+    end
+    return clip_len
+end
+
+fn ae_delete(id)
+    // Silence the selection (no clipboard)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if ae_has_selection(id) < 0.5
+        return 0.0
+    end
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let s = _ae_sel_start[id]
+    let e = _ae_sel_end[id]
+    _ae_push_undo(id, AE_UNDO_DELETE, s, e)
+    let mut i = s
+    while i < e
+        let idx = floor(i)
+        if idx >= 0.0 && idx < len(samples)
+            samples[idx] = 0.0
+        end
+        i = i + 1.0
+    end
+    ae_deselect(id)
+    return e - s
+end
+
+// ── Edit operations ──────────────────────────────────────
+
+fn ae_silence(id)
+    // Silence the selection
+    return ae_delete(id)
+end
+
+fn ae_gain(id, gain_db)
+    // Apply gain to selection (dB)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if ae_has_selection(id) < 0.5
+        return 0.0
+    end
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let s = _ae_sel_start[id]
+    let e = _ae_sel_end[id]
+    _ae_push_undo(id, AE_UNDO_GAIN, s, e)
+    // Convert dB to linear: 10^(dB/20) ≈ iterative
+    // Approximate: each 6dB ≈ 2x
+    let mut linear = 1.0
+    let mut db = gain_db
+    while db > 6.0
+        linear = linear * 2.0
+        db = db - 6.0
+    end
+    while db < -6.0
+        linear = linear * 0.5
+        db = db + 6.0
+    end
+    // Remaining dB: linear approximation for small range
+    linear = linear * (1.0 + db * 0.115)  // ~ln(10)/20 ≈ 0.115
+    let mut i = s
+    while i < e
+        let idx = floor(i)
+        if idx >= 0.0 && idx < len(samples)
+            samples[idx] = samples[idx] * linear
+        end
+        i = i + 1.0
+    end
+    return e - s
+end
+
+fn ae_fade_in(id)
+    // Apply fade-in to selection
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if ae_has_selection(id) < 0.5
+        return 0.0
+    end
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let s = _ae_sel_start[id]
+    let e = _ae_sel_end[id]
+    let duration = e - s
+    if duration < 1.0
+        return 0.0
+    end
+    _ae_push_undo(id, AE_UNDO_FADE, s, e)
+    let mut i = s
+    while i < e
+        let idx = floor(i)
+        let t = (i - s) / duration
+        if idx >= 0.0 && idx < len(samples)
+            samples[idx] = samples[idx] * t
+        end
+        i = i + 1.0
+    end
+    return duration
+end
+
+fn ae_fade_out(id)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if ae_has_selection(id) < 0.5
+        return 0.0
+    end
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let s = _ae_sel_start[id]
+    let e = _ae_sel_end[id]
+    let duration = e - s
+    if duration < 1.0
+        return 0.0
+    end
+    _ae_push_undo(id, AE_UNDO_FADE, s, e)
+    let mut i = s
+    while i < e
+        let idx = floor(i)
+        let t = 1.0 - (i - s) / duration
+        if idx >= 0.0 && idx < len(samples)
+            samples[idx] = samples[idx] * t
+        end
+        i = i + 1.0
+    end
+    return duration
+end
+
+fn ae_reverse(id)
+    // Reverse the selection
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if ae_has_selection(id) < 0.5
+        return 0.0
+    end
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let s = floor(_ae_sel_start[id])
+    let e = floor(_ae_sel_end[id]) - 1.0
+    _ae_push_undo(id, AE_UNDO_REVERSE, s, e + 1.0)
+    let mut lo = s
+    let mut hi = e
+    while lo < hi
+        if lo >= 0.0 && hi < len(samples)
+            let tmp = samples[lo]
+            samples[lo] = samples[hi]
+            samples[hi] = tmp
+        end
+        lo = lo + 1.0
+        hi = hi - 1.0
+    end
+    return e - s + 1.0
+end
+
+fn ae_normalize(id)
+    // Normalize selection to peak = 1.0
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if ae_has_selection(id) < 0.5
+        return 0.0
+    end
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let s = _ae_sel_start[id]
+    let e = _ae_sel_end[id]
+    // Find peak
+    let mut peak = 0.0
+    let mut i = s
+    while i < e
+        let idx = floor(i)
+        if idx >= 0.0 && idx < len(samples)
+            let a = abs(samples[idx])
+            if a > peak
+                peak = a
+            end
+        end
+        i = i + 1.0
+    end
+    if peak < 0.0001
+        return 0.0
+    end
+    _ae_push_undo(id, AE_UNDO_NORMALIZE, s, e)
+    let scale = 1.0 / peak
+    i = s
+    while i < e
+        let idx = floor(i)
+        if idx >= 0.0 && idx < len(samples)
+            samples[idx] = samples[idx] * scale
+        end
+        i = i + 1.0
+    end
+    return e - s
+end
+
+// ── Zoom / Scroll ────────────────────────────────────────
+
+fn ae_set_zoom(id, samples_per_pixel)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    let mut spp = samples_per_pixel
+    if spp < 1.0
+        spp = 1.0
+    end
+    let total = pcm_sample_count(_ae_pcm_id[id])
+    if spp > total
+        spp = total
+    end
+    _ae_zoom[id] = spp
+    return spp
+end
+
+fn ae_zoom_in(id)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    return ae_set_zoom(id, _ae_zoom[id] / 2.0)
+end
+
+fn ae_zoom_out(id)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    return ae_set_zoom(id, _ae_zoom[id] * 2.0)
+end
+
+fn ae_zoom_to_fit(id)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    let total = pcm_sample_count(_ae_pcm_id[id])
+    let vw = _ae_view_w[id]
+    if vw < 1.0
+        return -1.0
+    end
+    _ae_zoom[id] = total / vw
+    _ae_scroll[id] = 0.0
+    return _ae_zoom[id]
+end
+
+fn ae_zoom_to_selection(id)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if ae_has_selection(id) < 0.5
+        return -1.0
+    end
+    let sel_len = _ae_sel_end[id] - _ae_sel_start[id]
+    let vw = _ae_view_w[id]
+    if vw < 1.0 || sel_len < 1.0
+        return -1.0
+    end
+    _ae_zoom[id] = sel_len / vw
+    _ae_scroll[id] = _ae_sel_start[id]
+    return _ae_zoom[id]
+end
+
+fn ae_get_zoom(id)
+    if _ae_valid(id) < 0.5
+        return 1.0
+    end
+    return _ae_zoom[id]
+end
+
+fn ae_set_scroll(id, sample_offset)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    let total = pcm_sample_count(_ae_pcm_id[id])
+    let mut s = sample_offset
+    if s < 0.0
+        s = 0.0
+    end
+    if s > total
+        s = total
+    end
+    _ae_scroll[id] = s
+    return s
+end
+
+fn ae_get_scroll(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_scroll[id]
+end
+
+// ── Tool ─────────────────────────────────────────────────
+
+fn ae_set_tool(id, tool)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if tool < 0.0 || tool > 3.0
+        return -1.0
+    end
+    _ae_tool[id] = tool
+    return tool
+end
+
+fn ae_get_tool(id)
+    if _ae_valid(id) < 0.5
+        return AE_TOOL_SELECT
+    end
+    return _ae_tool[id]
+end
+
+// ── Draw tool ────────────────────────────────────────────
+
+fn ae_draw_sample(id, sample_idx, value)
+    // Set a single sample value (pencil tool)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let idx = floor(sample_idx)
+    if idx < 0.0 || idx >= len(samples)
+        return -1.0
+    end
+    let mut v = value
+    if v < -1.0
+        v = -1.0
+    end
+    if v > 1.0
+        v = 1.0
+    end
+    samples[idx] = v
+    return 0.0
+end
+
+// ── Markers ──────────────────────────────────────────────
+
+fn ae_add_marker(id, position, marker_type)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    let total = pcm_sample_count(_ae_pcm_id[id])
+    if position < 0.0 || position > total
+        return -1.0
+    end
+    push(_ae_marker_data, id)
+    push(_ae_marker_data, position)
+    push(_ae_marker_data, marker_type)
+    let cnt = _ae_marker_count[id]
+    _ae_marker_count[id] = cnt + 1.0
+    return cnt
+end
+
+fn ae_marker_count(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_marker_count[id]
+end
+
+fn ae_get_marker(id, index, result)
+    // result[0] = position, result[1] = type
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    if len(result) < 2.0
+        return -1.0
+    end
+    let off = _ae_marker_off[id]
+    let cnt = _ae_marker_count[id]
+    if index < 0.0 || index >= cnt
+        return -1.0
+    end
+    // Find the index-th marker belonging to this editor
+    let mut found = 0.0
+    let mut i = 0.0
+    while i * 3.0 + 2.0 < len(_ae_marker_data)
+        let base = i * 3.0
+        if _ae_marker_data[base] == id
+            if found == index
+                result[0] = _ae_marker_data[base + 1.0]
+                result[1] = _ae_marker_data[base + 2.0]
+                return 0.0
+            end
+            found = found + 1.0
+        end
+        i = i + 1.0
+    end
+    return -1.0
+end
+
+// ── Effects chain ────────────────────────────────────────
+
+fn ae_add_fx(id, fx_type, p1, p2, p3)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    push(_ae_fx_data, id)
+    push(_ae_fx_data, fx_type)
+    push(_ae_fx_data, p1)
+    push(_ae_fx_data, p2)
+    push(_ae_fx_data, p3)
+    let cnt = _ae_fx_count[id]
+    _ae_fx_count[id] = cnt + 1.0
+    return cnt
+end
+
+fn ae_fx_count(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_fx_count[id]
+end
+
+fn ae_clear_fx(id)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    _ae_fx_count[id] = 0.0
+    return 0.0
+end
+
+// ── Undo ─────────────────────────────────────────────────
+
+fn ae_undo_count(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_undo_count[id]
+end
+
+fn ae_can_undo(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    if _ae_undo_count[id] > 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Waveform data for display ────────────────────────────
+
+fn ae_get_waveform(id, min_arr, max_arr, n_pixels)
+    // Fill min_arr and max_arr with per-pixel min/max sample values
+    // for the current zoom/scroll view. Returns pixels filled.
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    if n_pixels <= 0.0
+        return 0.0
+    end
+    let pcm = _ae_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let total = len(samples)
+    let spp = _ae_zoom[id]
+    let scroll = _ae_scroll[id]
+    let mut px = 0.0
+    while px < n_pixels
+        let start = floor(scroll + px * spp)
+        let end_s = floor(scroll + (px + 1.0) * spp)
+        let mut mn = 1.0
+        let mut mx = -1.0
+        let mut j = start
+        while j < end_s && j < total
+            if j >= 0.0
+                let v = samples[j]
+                if v < mn
+                    mn = v
+                end
+                if v > mx
+                    mx = v
+                end
+            end
+            j = j + 1.0
+        end
+        if start >= total
+            mn = 0.0
+            mx = 0.0
+        end
+        push(min_arr, mn)
+        push(max_arr, mx)
+        px = px + 1.0
+    end
+    return n_pixels
+end
+
+// ── Pixel-to-sample / sample-to-pixel ────────────────────
+
+fn ae_pixel_to_sample(id, pixel_x)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_scroll[id] + pixel_x * _ae_zoom[id]
+end
+
+fn ae_sample_to_pixel(id, sample)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    let spp = _ae_zoom[id]
+    if spp < 0.001
+        return 0.0
+    end
+    return (sample - _ae_scroll[id]) / spp
+end
+
+// ── Query ────────────────────────────────────────────────
+
+fn ae_pcm_id(id)
+    if _ae_valid(id) < 0.5
+        return -1.0
+    end
+    return _ae_pcm_id[id]
+end
+
+fn ae_sample_count(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return pcm_sample_count(_ae_pcm_id[id])
+end
+
+fn ae_view_width(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_view_w[id]
+end
+
+fn ae_view_height(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_view_h[id]
+end
+
+fn ae_clipboard_length(id)
+    if _ae_valid(id) < 0.5
+        return 0.0
+    end
+    return _ae_clip_len[id]
+end

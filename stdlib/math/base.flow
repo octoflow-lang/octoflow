@@ -1,0 +1,215 @@
+// stdlib/math/base.flow — Base/radix conversion utilities
+//
+// Convert numbers between bases (2-36), including binary, octal, hex.
+// Also includes Roman numeral conversion.
+//
+// Functions: to_base, from_base, to_binary, from_binary, to_octal,
+//            from_octal, to_hex_str, from_hex_str, to_roman, from_roman,
+//            is_palindrome_base, digit_to_char, char_to_digit
+//
+// Usage:
+//   use "base"
+//   to_binary(42.0)           // "101010"
+//   from_binary("101010")     // 42.0
+//   to_hex_str(255.0)         // "FF"
+//   to_roman(2024.0)          // "MMXXIV"
+//   to_base(255.0, 16.0)      // "FF"
+//   from_base("1A", 16.0)     // 26.0
+
+fn digit_to_char(d)
+    // Convert digit value (0-35) to character.
+    if d < 10.0
+        return chr(48.0 + d)  // '0'-'9'
+    end
+    return chr(65.0 + d - 10.0)  // 'A'-'Z'
+end
+
+fn char_to_digit(c)
+    // Convert character to digit value. Returns -1.0 for invalid.
+    let code = ord(c)
+    if code >= 48.0 && code <= 57.0
+        return code - 48.0
+    end
+    if code >= 65.0 && code <= 90.0
+        return code - 65.0 + 10.0
+    end
+    if code >= 97.0 && code <= 122.0
+        return code - 97.0 + 10.0
+    end
+    return -1.0
+end
+
+fn to_base(n, base)
+    // Convert non-negative integer to string in given base (2-36).
+    if base < 2.0 || base > 36.0
+        return "0"
+    end
+    let mut num = floor(abs(n))
+    if num == 0.0
+        return "0"
+    end
+    let mut result = ""
+    while num > 0.0
+        let rem = num - floor(num / base) * base
+        result = digit_to_char(rem) + result
+        num = floor(num / base)
+    end
+    if n < 0.0
+        result = "-" + result
+    end
+    return result
+end
+
+fn from_base(s, base)
+    // Convert string in given base (2-36) to number.
+    if base < 2.0 || base > 36.0
+        return 0.0
+    end
+    let n = len(s)
+    if n == 0.0
+        return 0.0
+    end
+    let mut start = 0.0
+    let mut neg = 0.0
+    if char_at(s, 0.0) == "-"
+        neg = 1.0
+        start = 1.0
+    end
+    let mut result = 0.0
+    let mut i = start
+    while i < n
+        let d = char_to_digit(char_at(s, i))
+        if d < 0.0 || d >= base
+            return result
+        end
+        result = result * base + d
+        i = i + 1.0
+    end
+    if neg == 1.0
+        return 0.0 - result
+    end
+    return result
+end
+
+fn to_binary(n)
+    // Convert number to binary string.
+    return to_base(n, 2.0)
+end
+
+fn from_binary(s)
+    // Parse binary string to number.
+    return from_base(s, 2.0)
+end
+
+fn to_octal(n)
+    // Convert number to octal string.
+    return to_base(n, 8.0)
+end
+
+fn from_octal(s)
+    // Parse octal string to number.
+    return from_base(s, 8.0)
+end
+
+fn to_hex_str(n)
+    // Convert number to hexadecimal string (uppercase).
+    return to_base(n, 16.0)
+end
+
+fn from_hex_str(s)
+    // Parse hexadecimal string to number.
+    return from_base(s, 16.0)
+end
+
+fn to_roman(n)
+    // Convert positive integer (1-3999) to Roman numeral string.
+    let mut num = floor(n)
+    if num <= 0.0 || num >= 4000.0
+        return ""
+    end
+    let mut result = ""
+    // Values and symbols in descending order
+    let mut vals = [1000.0, 900.0, 500.0, 400.0, 100.0, 90.0, 50.0, 40.0, 10.0, 9.0, 5.0, 4.0, 1.0]
+    let mut syms = ["M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"]
+    let mut i = 0.0
+    while i < 13.0
+        while num >= vals[i]
+            result = result + syms[i]
+            num = num - vals[i]
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn from_roman(s)
+    // Parse Roman numeral string to number.
+    let n = len(s)
+    if n == 0.0
+        return 0.0
+    end
+    let mut result = 0.0
+    let mut i = 0.0
+    while i < n
+        let c = char_at(s, i)
+        let mut val = 0.0
+        if c == "M"
+            val = 1000.0
+        elif c == "D"
+            val = 500.0
+        elif c == "C"
+            val = 100.0
+        elif c == "L"
+            val = 50.0
+        elif c == "X"
+            val = 10.0
+        elif c == "V"
+            val = 5.0
+        elif c == "I"
+            val = 1.0
+        end
+        // Check for subtractive notation
+        let mut next_val = 0.0
+        if i + 1.0 < n
+            let nc = char_at(s, i + 1.0)
+            if nc == "M"
+                next_val = 1000.0
+            elif nc == "D"
+                next_val = 500.0
+            elif nc == "C"
+                next_val = 100.0
+            elif nc == "L"
+                next_val = 50.0
+            elif nc == "X"
+                next_val = 10.0
+            elif nc == "V"
+                next_val = 5.0
+            elif nc == "I"
+                next_val = 1.0
+            end
+        end
+        if next_val > val
+            result = result + next_val - val
+            i = i + 2.0
+        else
+            result = result + val
+            i = i + 1.0
+        end
+    end
+    return result
+end
+
+fn is_palindrome_base(n, base)
+    // Check if number is a palindrome in the given base.
+    let s = to_base(n, base)
+    let slen = len(s)
+    let half = floor(slen / 2.0)
+    let mut i = 0.0
+    while i < half
+        if char_at(s, i) != char_at(s, slen - 1.0 - i)
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end

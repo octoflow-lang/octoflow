@@ -1,0 +1,48 @@
+// GPU Pipeline Chain Benchmark — OctoFlow
+// Tests chained GPU operations without intermediate CPU copies
+// 10M element pipeline: fill -> add -> mul -> scale -> abs -> sum
+
+print("=== OctoFlow GPU Pipeline Chain Benchmark ===")
+
+let n = 10000000.0
+
+// Create data
+let t0 = now_ms()
+let a = gpu_fill(3.0, n)
+let b = gpu_fill(2.0, n)
+let t1 = now_ms()
+let fill_ms = t1 - t0
+print("gpu_fill (2x10M): {fill_ms:.1} ms")
+
+// Warmup
+let warm = gpu_add(a, b)
+
+// Pipeline: add -> mul -> scale -> abs -> sum
+let t2 = now_ms()
+let c = gpu_add(a, b)
+let t3 = now_ms()
+let d = gpu_mul(c, a)
+let t4 = now_ms()
+let e = gpu_scale(d, 0.5)
+let t5 = now_ms()
+let f = gpu_abs(e)
+let t6 = now_ms()
+let total = gpu_sum(f)
+let t7 = now_ms()
+
+let add_ms = t3 - t2
+let mul_ms = t4 - t3
+let scale_ms = t5 - t4
+let abs_ms = t6 - t5
+let sum_ms = t7 - t6
+let pipeline_ms = t7 - t2
+
+print("Step 1 gpu_add:   {add_ms:.1} ms")
+print("Step 2 gpu_mul:   {mul_ms:.1} ms")
+print("Step 3 gpu_scale: {scale_ms:.1} ms")
+print("Step 4 gpu_abs:   {abs_ms:.1} ms")
+print("Step 5 gpu_sum:   {sum_ms:.1} ms")
+print("Total pipeline:   {pipeline_ms:.1} ms")
+print("Result:           {total}")
+// Expected: (3+2)*3*0.5 = 7.5, abs = 7.5, sum = 75000000
+print("--- done ---")

@@ -1,0 +1,200 @@
+// test_graph.flow — Tests for graph algorithms in stdlib/collections/graph.flow
+use "graph"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic Operations ────────────────────────────────────────────
+
+fn test_graph_create()
+    let mut g = graph_create()
+    graph_add_node(g, "A")
+    graph_add_node(g, "B")
+    let nodes = graph_nodes(g)
+    check("graph_create nodes", len(nodes) == 2.0)
+    return 0.0
+end
+
+fn test_graph_edges()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "B", "C", 2.0)
+    check("has_edge A->B", graph_has_edge(g, "A", "B") == 1.0)
+    check("no edge B->A", graph_has_edge(g, "B", "A") == 0.0)
+    check("weight A->B", graph_weight(g, "A", "B") == 1.0)
+    return 0.0
+end
+
+fn test_undirected_edge()
+    let mut g = graph_create()
+    graph_add_undirected_edge(g, "A", "B", 5.0)
+    check("undirected A->B", graph_has_edge(g, "A", "B") == 1.0)
+    check("undirected B->A", graph_has_edge(g, "B", "A") == 1.0)
+    check("undirected weight", graph_weight(g, "A", "B") == 5.0)
+    return 0.0
+end
+
+fn test_graph_degree()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "A", "C", 1.0)
+    graph_add_edge(g, "A", "D", 1.0)
+    check("degree A = 3", graph_degree(g, "A") == 3.0)
+    check("degree B = 0", graph_degree(g, "B") == 0.0)
+    return 0.0
+end
+
+// ── BFS ─────────────────────────────────────────────────────────
+
+fn test_bfs()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "A", "C", 1.0)
+    graph_add_edge(g, "B", "D", 1.0)
+    graph_add_edge(g, "C", "D", 1.0)
+    let order = graph_bfs(g, "A")
+    // BFS from A should visit A first
+    check("bfs starts with A", starts_with(order, "A"))
+    // All 4 nodes should be visited
+    check("bfs visits all", contains(order, "B") && contains(order, "C") && contains(order, "D"))
+    return 0.0
+end
+
+// ── DFS ─────────────────────────────────────────────────────────
+
+fn test_dfs()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "A", "C", 1.0)
+    graph_add_edge(g, "B", "D", 1.0)
+    graph_add_edge(g, "C", "E", 1.0)
+    let order = graph_dfs(g, "A")
+    // DFS from A should visit A first
+    check("dfs starts with A", starts_with(order, "A"))
+    // All 5 nodes should be visited
+    check("dfs visits all", contains(order, "B") && contains(order, "D") && contains(order, "E"))
+    return 0.0
+end
+
+fn test_dfs_disconnected()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_node(g, "C")
+    let order = graph_dfs(g, "A")
+    // DFS from A should NOT visit disconnected C
+    check("dfs no disconnected", contains(order, "C") == 0.0)
+    check("dfs visits A,B", contains(order, "A") && contains(order, "B"))
+    return 0.0
+end
+
+// ── Dijkstra ────────────────────────────────────────────────────
+
+fn test_dijkstra_basic()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "B", "C", 2.0)
+    graph_add_edge(g, "A", "C", 5.0)
+    let result = graph_dijkstra(g, "A", "C")
+    let dist = float(map_get(result, "distance"))
+    let path = map_get(result, "path")
+    check("dijkstra distance A->C = 3", dist == 3.0)
+    check("dijkstra path A->B->C", path == "A,B,C")
+    return 0.0
+end
+
+fn test_dijkstra_direct_shorter()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 10.0)
+    graph_add_edge(g, "A", "C", 1.0)
+    graph_add_edge(g, "B", "C", 1.0)
+    let result = graph_dijkstra(g, "A", "C")
+    let dist = float(map_get(result, "distance"))
+    check("dijkstra direct shorter = 1", dist == 1.0)
+    return 0.0
+end
+
+fn test_dijkstra_unreachable()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_node(g, "C")
+    let result = graph_dijkstra(g, "A", "C")
+    let dist = map_get(result, "distance")
+    check("dijkstra unreachable", dist == "inf")
+    return 0.0
+end
+
+fn test_dijkstra_same_node()
+    let mut g = graph_create()
+    graph_add_node(g, "A")
+    let result = graph_dijkstra(g, "A", "A")
+    let dist = float(map_get(result, "distance"))
+    check("dijkstra same node = 0", dist == 0.0)
+    return 0.0
+end
+
+// ── Topological Sort ────────────────────────────────────────────
+
+fn test_topological_sort()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "A", "C", 1.0)
+    graph_add_edge(g, "B", "D", 1.0)
+    graph_add_edge(g, "C", "D", 1.0)
+    let order = graph_topological_sort(g)
+    // A must come before B and C, B and C before D
+    let parts = split(order, ",")
+    check("topo has 4 nodes", len(parts) == 4.0)
+    // A must be first (only zero in-degree node)
+    check("topo A first", parts[0] == "A")
+    // D must be last
+    check("topo D last", parts[3] == "D")
+    return 0.0
+end
+
+fn test_topological_sort_cycle()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "B", "C", 1.0)
+    graph_add_edge(g, "C", "A", 1.0)
+    let order = graph_topological_sort(g)
+    check("topo cycle = empty", len(order) == 0.0)
+    return 0.0
+end
+
+// ── Has Path ────────────────────────────────────────────────────
+
+fn test_has_path()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "B", "C", 1.0)
+    graph_add_node(g, "D")
+    check("has_path A->C", graph_has_path(g, "A", "C") == 1.0)
+    check("no path A->D", graph_has_path(g, "A", "D") == 0.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_graph_create()
+test_graph_edges()
+test_undirected_edge()
+test_graph_degree()
+test_bfs()
+test_dfs()
+test_dfs_disconnected()
+test_dijkstra_basic()
+test_dijkstra_direct_shorter()
+test_dijkstra_unreachable()
+test_dijkstra_same_node()
+test_topological_sort()
+test_topological_sort_cycle()
+test_has_path()
+print("")
+print("All graph tests passed (14 tests)")

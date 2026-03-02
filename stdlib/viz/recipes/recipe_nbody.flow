@@ -1,0 +1,434 @@
+// recipe_nbody.flow — N-Body Gravitational Simulation Recipe
+//
+// Simulates N gravitating particles using Euler integration.
+// Renders as particles with optional energy overlay.
+// Softened gravity to prevent singularities.
+//
+// Usage:
+//   use "viz/recipes/recipe_nbody"
+//   recipe_nbody_run(50)
+
+use "../../gui/gui_core"
+use "../../gui/window"
+use "../../gui/canvas"
+use "../viz_data"
+use "../viz_config"
+use "../viz_render"
+use "../viz_window"
+use "../viz_palette"
+
+// === N-Body State ===
+// State layout: flat array [n, G, softening, ...body_data...]
+// Each body: [x, y, vx, vy, mass] → 5 floats per body
+// Total: 3 header + n * 5 body values
+
+let NBODY_FIELDS = 5.0
+
+fn recipe_nbody_init(n)
+  // Guard: at least 2 bodies, max 500
+  let mut nb = n
+  if nb < 2.0
+    nb = 2.0
+  end
+  if nb > 500.0
+    nb = 500.0
+  end
+
+  let mut state = []
+  push(state, nb)
+  push(state, 1.0)     // G — gravitational constant
+  push(state, 0.5)     // softening — prevents singularities
+
+  // Initialize bodies in a disk
+  let mut i = 0.0
+  while i < nb
+    // Position: circular arrangement + random offset
+    let angle = i / nb * 6.283185
+    let radius = 3.0 + (i / nb) * 5.0
+    let x = radius * cos(angle)
+    let y = radius * sin(angle)
+
+    // Velocity: tangential for approximate orbits
+    let speed = 0.3 * sqrt(nb / radius)
+    let vx = 0.0 - speed * sin(angle)
+    let vy = speed * cos(angle)
+
+    // Mass: small variation
+    let mass = 1.0
+
+    push(state, x)
+    push(state, y)
+    push(state, vx)
+    push(state, vy)
+    push(state, mass)
+
+    i = i + 1.0
+  end
+
+  // Add a central massive body
+  // Overwrite first body as central attractor
+  state[3] = 0.0    // x
+  state[4] = 0.0    // y
+  state[5] = 0.0    // vx
+  state[6] = 0.0    // vy
+  state[7] = nb * 2.0  // mass proportional to N
+
+  return state
+end
+
+fn recipe_nbody_step(state, dt)
+  let n_state = len(state)
+  if n_state < 4.0
+    return state
+  end
+
+  let n = state[0]
+  let big_g = state[1]
+  let soft = state[2]
+  let soft_sq = soft * soft
+
+  // Guard: state large enough
+  let expected = 3.0 + n * NBODY_FIELDS
+  if n_state < expected
+    return state
+  end
+
+  // Guard: valid dt
+  if dt <= 0.0
+    return state
+  end
+
+  // Compute accelerations
+  // Flat array: [ax0, ay0, ax1, ay1, ...]
+  let mut acc = []
+  let mut i = 0.0
+  while i < n
+    push(acc, 0.0)
+    push(acc, 0.0)
+    i = i + 1.0
+  end
+
+  // O(N^2) force computation with softening
+  i = 0.0
+  while i < n
+    let i_base = int(3.0 + i * NBODY_FIELDS)
+    let xi = state[i_base]
+    let yi = state[i_base + 1]
+
+    let mut j = i + 1.0
+    while j < n
+      let j_base = int(3.0 + j * NBODY_FIELDS)
+      let xj = state[j_base]
+      let yj = state[j_base + 1]
+      let mj = state[j_base + 4]
+      let mi = state[i_base + 4]
+
+      let dx = xj - xi
+      let dy = yj - yi
+      let dist_sq = dx * dx + dy * dy + soft_sq
+
+      // Guard: prevent division by zero (should not happen with softening)
+      if dist_sq > 0.0001
+        let inv_dist = 1.0 / sqrt(dist_sq)
+        let inv_dist3 = inv_dist * inv_dist * inv_dist
+
+        let fx = big_g * dx * inv_dist3
+        let fy = big_g * dy * inv_dist3
+
+        // Update accelerations (Newton's third law)
+        let ai = int(i * 2.0)
+        let aj = int(j * 2.0)
+        acc[ai] = acc[ai] + fx * mj
+        acc[ai + 1] = acc[ai + 1] + fy * mj
+        acc[aj] = acc[aj] - fx * mi
+        acc[aj + 1] = acc[aj + 1] - fy * mi
+      end
+
+      j = j + 1.0
+    end
+    i = i + 1.0
+  end
+
+  // Euler integration: update velocities and positions
+  let mut next = []
+  push(next, n)
+  push(next, big_g)
+  push(next, soft)
+
+  i = 0.0
+  while i < n
+    let i_base = int(3.0 + i * NBODY_FIELDS)
+    let ai = int(i * 2.0)
+
+    let x = state[i_base]
+    let y = state[i_base + 1]
+    let vx = state[i_base + 2]
+    let vy = state[i_base + 3]
+    let mass = state[i_base + 4]
+
+    let new_vx = vx + acc[ai] * dt
+    let new_vy = vy + acc[ai + 1] * dt
+    let new_x = x + new_vx * dt
+    let new_y = y + new_vy * dt
+
+    push(next, new_x)
+    push(next, new_y)
+    push(next, new_vx)
+    push(next, new_vy)
+    push(next, mass)
+
+    i = i + 1.0
+  end
+
+  return next
+end
+
+fn recipe_nbody_get_positions(state)
+  // Extract [x0,y0, x1,y1, ...] for particle rendering
+  let n_state = len(state)
+  if n_state < 4.0
+    return []
+  end
+
+  let n = state[0]
+  let mut positions = []
+
+  let mut i = 0.0
+  while i < n
+    let base = int(3.0 + i * NBODY_FIELDS)
+    if base + 1 < n_state
+      push(positions, state[base])      // x
+      push(positions, state[base + 1])  // y
+    end
+    i = i + 1.0
+  end
+
+  return positions
+end
+
+fn recipe_nbody_energy(state)
+  // Compute total energy (kinetic + potential) for diagnostics
+  let n_state = len(state)
+  if n_state < 4.0
+    return 0.0
+  end
+
+  let n = state[0]
+  let big_g = state[1]
+  let soft = state[2]
+  let soft_sq = soft * soft
+
+  let mut ke = 0.0
+  let mut pe = 0.0
+
+  let mut i = 0.0
+  while i < n
+    let base = int(3.0 + i * NBODY_FIELDS)
+    let vx = state[base + 2]
+    let vy = state[base + 3]
+    let mi = state[base + 4]
+    ke = ke + 0.5 * mi * (vx * vx + vy * vy)
+
+    let mut j = i + 1.0
+    while j < n
+      let jbase = int(3.0 + j * NBODY_FIELDS)
+      let dx = state[jbase] - state[base]
+      let dy = state[jbase + 1] - state[base + 1]
+      let dist = sqrt(dx * dx + dy * dy + soft_sq)
+      if dist > 0.0001
+        let mj = state[jbase + 4]
+        pe = pe - big_g * mi * mj / dist
+      end
+      j = j + 1.0
+    end
+    i = i + 1.0
+  end
+
+  return ke + pe
+end
+
+fn recipe_nbody_render(cvs, state, config, cw, ch)
+  // Custom particle renderer with mass-based sizing
+  let n_state = len(state)
+  if n_state < 4.0
+    return 0.0
+  end
+
+  let n = state[0]
+  let _c = gui_canvas_clear(cvs)
+
+  // Background
+  let _bg = gui_canvas_fill(cvs, 0.0, 0.0, cw, ch, 5.0, 5.0, 15.0)
+
+  // Find bounding box
+  let mut x_min = 0.0
+  let mut x_max = 0.0
+  let mut y_min = 0.0
+  let mut y_max = 0.0
+  let mut first = 1.0
+  let mut i = 0.0
+  while i < n
+    let base = int(3.0 + i * NBODY_FIELDS)
+    if base + 1 < n_state
+      let px = state[base]
+      let py = state[base + 1]
+      if first == 1.0
+        x_min = px
+        x_max = px
+        y_min = py
+        y_max = py
+        first = 0.0
+      else
+        if px < x_min
+          x_min = px
+        end
+        if px > x_max
+          x_max = px
+        end
+        if py < y_min
+          y_min = py
+        end
+        if py > y_max
+          y_max = py
+        end
+      end
+    end
+    i = i + 1.0
+  end
+
+  let x_range = x_max - x_min
+  let y_range = y_max - y_min
+  let mut x_pad = x_range * 0.15
+  let mut y_pad = y_range * 0.15
+  if x_pad < 1.0
+    x_pad = 1.0
+  end
+  if y_pad < 1.0
+    y_pad = 1.0
+  end
+  x_min = x_min - x_pad
+  x_max = x_max + x_pad
+  y_min = y_min - y_pad
+  y_max = y_max + y_pad
+  let mut x_total = x_max - x_min
+  let mut y_total = y_max - y_min
+
+  // Guard: non-zero range
+  if x_total <= 0.0
+    x_total = 1.0
+  end
+  if y_total <= 0.0
+    y_total = 1.0
+  end
+
+  let margin = 20.0
+  let pw = cw - margin * 2.0
+  let ph = ch - margin * 2.0
+
+  // Draw particles
+  i = 0.0
+  while i < n
+    let base = int(3.0 + i * NBODY_FIELDS)
+    if base + 4 < n_state
+      let px = state[base]
+      let py = state[base + 1]
+      let mass = state[base + 4]
+
+      let sx = margin + (px - x_min) / x_total * pw
+      let sy = margin + ph - (py - y_min) / y_total * ph
+
+      // Radius proportional to mass (log scale)
+      let mut radius = 2.0 + sqrt(mass) * 0.5
+      if radius > 15.0
+        radius = 15.0
+      end
+
+      // Color by mass: small=blue, large=yellow
+      let mut cr = 80.0
+      let mut cg = 150.0
+      let mut cb = 255.0
+      if mass > 5.0
+        cr = 255.0
+        cg = 220.0
+        cb = 80.0
+      elif mass > 2.0
+        cr = 200.0
+        cg = 100.0
+        cb = 200.0
+      end
+
+      let _d = gui_canvas_fill_circle(cvs, sx, sy, radius, cr, cg, cb)
+    end
+    i = i + 1.0
+  end
+
+  return 1.0
+end
+
+fn recipe_nbody_run(n)
+  // Full recipe: init + window + simulation loop
+  let mut nb = n
+  if nb < 2.0
+    nb = 2.0
+  end
+  if nb > 500.0
+    nb = 500.0
+  end
+
+  print("LoomView Recipe: N-Body Simulation ({nb} bodies)")
+
+  let mut state = recipe_nbody_init(nb)
+
+  let _cvs = viz_window_open("LoomView - N-Body Simulation", 900.0, 600.0)
+  viz_window_transport()
+
+  // Add gravity slider
+  let _g_s = viz_window_add_slider("Gravity", 0.1, 5.0, 1.0)
+  // Add softening slider
+  let _soft_s = viz_window_add_slider("Softening", 0.1, 2.0, 0.5)
+
+  let canvas = viz_window_canvas()
+  let cs = viz_window_canvas_size()
+  let canvas_w = cs[0]
+  let canvas_h = cs[1]
+
+  // Config (unused for custom renderer, but needed for interface)
+  let mut config = []
+
+  // Initial render
+  let _r = recipe_nbody_render(canvas, state, config, canvas_w, canvas_h)
+
+  // Simulation loop
+  let mut step_count = 0.0
+  while gui_running() == 1.0
+    gui_update()
+
+    let playing = viz_window_is_playing()
+    let speed = viz_window_speed()
+
+    if playing == 1.0
+      // Update params from sliders
+      let g_val = viz_window_get_slider(0.0)
+      let soft_val = viz_window_get_slider(1.0)
+      if g_val > 0.0
+        state[1] = g_val
+      end
+      if soft_val > 0.0
+        state[2] = soft_val
+      end
+
+      // Timestep scaled by speed
+      let dt = 0.02 * speed
+      state = recipe_nbody_step(state, dt)
+      step_count = step_count + 1.0
+
+      // Render
+      let _r2 = recipe_nbody_render(canvas, state, config, canvas_w, canvas_h)
+    end
+  end
+
+  let energy = recipe_nbody_energy(state)
+  print("N-body simulation ended after {step_count} steps")
+  print("  Final energy: {energy}")
+  return state
+end

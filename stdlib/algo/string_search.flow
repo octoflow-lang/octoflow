@@ -1,0 +1,275 @@
+// stdlib/algo/string_search.flow — String pattern matching algorithms
+//
+// Classical string search: KMP, Rabin-Karp, naive, and derived utilities.
+//
+// Functions: naive_search, kmp_search, kmp_build_table, rabin_karp_search,
+//            count_occurrences, find_all_occurrences, longest_common_substring,
+//            longest_repeated_substring
+//
+// Usage:
+//   use "string_search"
+//   kmp_search("hello world hello", "hello")   // 0.0 (first match position)
+//   count_occurrences("abcabc", "abc")          // 2.0
+//   find_all_occurrences("aaaa", "aa")          // [0.0, 1.0, 2.0]
+
+fn naive_search(text, pattern)
+    // Brute-force O(n*m) search. Returns first match position or -1.0.
+    let n = len(text)
+    let m = len(pattern)
+    if m == 0.0
+        return 0.0
+    end
+    if m > n
+        return -1.0
+    end
+    let mut i = 0.0
+    while i <= n - m
+        let mut j = 0.0
+        let mut match = 1.0
+        while j < m && match == 1.0
+            if char_at(text, i + j) != char_at(pattern, j)
+                match = 0.0
+            end
+            j = j + 1.0
+        end
+        if match == 1.0
+            return i
+        end
+        i = i + 1.0
+    end
+    return -1.0
+end
+
+fn kmp_build_table(pattern)
+    // Build KMP failure function (partial match table).
+    let m = len(pattern)
+    let mut table = []
+    push(table, 0.0)
+    if m <= 1.0
+        return table
+    end
+    let mut length = 0.0
+    let mut i = 1.0
+    while i < m
+        if char_at(pattern, i) == char_at(pattern, length)
+            length = length + 1.0
+            push(table, length)
+            i = i + 1.0
+        else
+            if length > 0.0
+                length = table[length - 1.0]
+            else
+                push(table, 0.0)
+                i = i + 1.0
+            end
+        end
+    end
+    return table
+end
+
+fn kmp_search(text, pattern)
+    // KMP O(n+m) search. Returns first match position or -1.0.
+    let n = len(text)
+    let m = len(pattern)
+    if m == 0.0
+        return 0.0
+    end
+    if m > n
+        return -1.0
+    end
+    let table = kmp_build_table(pattern)
+    let mut i = 0.0
+    let mut j = 0.0
+    while i < n
+        if char_at(text, i) == char_at(pattern, j)
+            i = i + 1.0
+            j = j + 1.0
+            if j == m
+                return i - m
+            end
+        else
+            if j > 0.0
+                j = table[j - 1.0]
+            else
+                i = i + 1.0
+            end
+        end
+    end
+    return -1.0
+end
+
+fn _rk_hash(s, start, length)
+    // Simple rolling hash for Rabin-Karp.
+    let BASE = 31.0
+    let MOD = 1000000007.0
+    let mut hash = 0.0
+    let mut i = 0.0
+    while i < length
+        let c = ord(char_at(s, start + i))
+        hash = hash * BASE + c
+        hash = hash - floor(hash / MOD) * MOD
+        i = i + 1.0
+    end
+    return hash
+end
+
+fn rabin_karp_search(text, pattern)
+    // Rabin-Karp O(n+m) average search. Returns first match position or -1.0.
+    let n = len(text)
+    let m = len(pattern)
+    if m == 0.0
+        return 0.0
+    end
+    if m > n
+        return -1.0
+    end
+    let BASE = 31.0
+    let MOD = 1000000007.0
+
+    // Compute hash of pattern and first window
+    let pat_hash = _rk_hash(pattern, 0.0, m)
+    let mut win_hash = _rk_hash(text, 0.0, m)
+
+    // Compute BASE^(m-1) mod MOD
+    let mut pow = 1.0
+    let mut pi = 0.0
+    while pi < m - 1.0
+        pow = pow * BASE
+        pow = pow - floor(pow / MOD) * MOD
+        pi = pi + 1.0
+    end
+
+    let mut i = 0.0
+    while i <= n - m
+        if win_hash == pat_hash
+            // Verify character by character
+            let mut j = 0.0
+            let mut match = 1.0
+            while j < m && match == 1.0
+                if char_at(text, i + j) != char_at(pattern, j)
+                    match = 0.0
+                end
+                j = j + 1.0
+            end
+            if match == 1.0
+                return i
+            end
+        end
+        // Slide window
+        if i < n - m
+            let old_c = ord(char_at(text, i))
+            let new_c = ord(char_at(text, i + m))
+            win_hash = (win_hash - old_c * pow) * BASE + new_c
+            win_hash = win_hash - floor(win_hash / MOD) * MOD
+            if win_hash < 0.0
+                win_hash = win_hash + MOD
+            end
+        end
+        i = i + 1.0
+    end
+    return -1.0
+end
+
+fn count_occurrences(text, pattern)
+    // Count non-overlapping occurrences of pattern in text.
+    let n = len(text)
+    let m = len(pattern)
+    if m == 0.0 || m > n
+        return 0.0
+    end
+    let table = kmp_build_table(pattern)
+    let mut count = 0.0
+    let mut i = 0.0
+    let mut j = 0.0
+    while i < n
+        if char_at(text, i) == char_at(pattern, j)
+            i = i + 1.0
+            j = j + 1.0
+            if j == m
+                count = count + 1.0
+                j = table[j - 1.0]
+            end
+        else
+            if j > 0.0
+                j = table[j - 1.0]
+            else
+                i = i + 1.0
+            end
+        end
+    end
+    return count
+end
+
+fn find_all_occurrences(text, pattern)
+    // Find all (possibly overlapping) start positions of pattern in text.
+    let n = len(text)
+    let m = len(pattern)
+    let mut positions = []
+    if m == 0.0 || m > n
+        return positions
+    end
+    let table = kmp_build_table(pattern)
+    let mut i = 0.0
+    let mut j = 0.0
+    while i < n
+        if char_at(text, i) == char_at(pattern, j)
+            i = i + 1.0
+            j = j + 1.0
+            if j == m
+                push(positions, i - m)
+                j = table[j - 1.0]
+            end
+        else
+            if j > 0.0
+                j = table[j - 1.0]
+            else
+                i = i + 1.0
+            end
+        end
+    end
+    return positions
+end
+
+fn longest_common_substring(s1, s2)
+    // Find length of longest common substring using DP.
+    // Returns the length (not the substring itself).
+    let n = len(s1)
+    let m = len(s2)
+    if n == 0.0 || m == 0.0
+        return 0.0
+    end
+    // DP: only need current and previous row
+    let mut prev = []
+    let mut curr = []
+    let mut k = 0.0
+    while k <= m
+        push(prev, 0.0)
+        push(curr, 0.0)
+        k = k + 1.0
+    end
+    let mut max_len = 0.0
+    let mut i = 1.0
+    while i <= n
+        let mut j = 1.0
+        while j <= m
+            if char_at(s1, i - 1.0) == char_at(s2, j - 1.0)
+                curr[j] = prev[j - 1.0] + 1.0
+                if curr[j] > max_len
+                    max_len = curr[j]
+                end
+            else
+                curr[j] = 0.0
+            end
+            j = j + 1.0
+        end
+        // Swap rows
+        let mut c = 0.0
+        while c <= m
+            prev[c] = curr[c]
+            curr[c] = 0.0
+            c = c + 1.0
+        end
+        i = i + 1.0
+    end
+    return max_len
+end

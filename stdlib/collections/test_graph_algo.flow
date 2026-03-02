@@ -1,0 +1,176 @@
+// test_graph_algo.flow — Tests for stdlib/collections/graph_algo.flow
+use "graph"
+use "graph_algo"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Connected Components ────────────────────────────────────
+
+fn test_connected_components()
+    let mut g = graph_create()
+    // Component 1: A-B-C
+    graph_add_undirected_edge(g, "A", "B", 1.0)
+    graph_add_undirected_edge(g, "B", "C", 1.0)
+    // Component 2: D-E
+    graph_add_undirected_edge(g, "D", "E", 1.0)
+
+    let cc = graph_connected_components(g)
+    check("cc count", cc[0] == 2.0)
+    // A and B should be same component
+    check("cc A==B", cc[1] == cc[2])
+    // D should be different component from A
+    check("cc A!=D", cc[1] != cc[4])
+    return 0.0
+end
+
+fn test_single_component()
+    let mut g = graph_create()
+    graph_add_undirected_edge(g, "A", "B", 1.0)
+    graph_add_undirected_edge(g, "B", "C", 1.0)
+    graph_add_undirected_edge(g, "C", "A", 1.0)
+    let cc = graph_connected_components(g)
+    check("single cc", cc[0] == 1.0)
+    return 0.0
+end
+
+// ── Bipartite ───────────────────────────────────────────────
+
+fn test_bipartite_yes()
+    // Square: A-B-C-D-A is bipartite (even cycle)
+    let mut g = graph_create()
+    graph_add_undirected_edge(g, "A", "B", 1.0)
+    graph_add_undirected_edge(g, "B", "C", 1.0)
+    graph_add_undirected_edge(g, "C", "D", 1.0)
+    graph_add_undirected_edge(g, "D", "A", 1.0)
+    check("bipartite even cycle", graph_is_bipartite(g) == 1.0)
+    return 0.0
+end
+
+fn test_bipartite_no()
+    // Triangle: A-B-C-A is NOT bipartite (odd cycle)
+    let mut g = graph_create()
+    graph_add_undirected_edge(g, "A", "B", 1.0)
+    graph_add_undirected_edge(g, "B", "C", 1.0)
+    graph_add_undirected_edge(g, "C", "A", 1.0)
+    check("not bipartite triangle", graph_is_bipartite(g) == 0.0)
+    return 0.0
+end
+
+// ── Cycle Detection ─────────────────────────────────────────
+
+fn test_cycle_yes()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "B", "C", 1.0)
+    graph_add_edge(g, "C", "A", 1.0)
+    check("cycle detected", graph_has_cycle(g) == 1.0)
+    return 0.0
+end
+
+fn test_cycle_no()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "B", "C", 1.0)
+    graph_add_edge(g, "A", "C", 1.0)
+    check("no cycle DAG", graph_has_cycle(g) == 0.0)
+    return 0.0
+end
+
+// ── Shortest Unweighted ─────────────────────────────────────
+
+fn test_shortest_unweighted()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "B", "C", 1.0)
+    graph_add_edge(g, "A", "C", 1.0)
+    check("shortest direct", graph_shortest_unweighted(g, "A", "C") == 1.0)
+    check("shortest 2hop", graph_shortest_unweighted(g, "A", "B") == 1.0)
+    return 0.0
+end
+
+fn test_shortest_unreachable()
+    let mut g = graph_create()
+    graph_add_node(g, "A")
+    graph_add_node(g, "B")
+    check("unreachable", graph_shortest_unweighted(g, "A", "B") == -1.0)
+    return 0.0
+end
+
+// ── Edge Count ──────────────────────────────────────────────
+
+fn test_edge_count()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 1.0)
+    graph_add_edge(g, "B", "C", 1.0)
+    graph_add_edge(g, "C", "A", 1.0)
+    check("edge count", graph_edge_count(g) == 3.0)
+    return 0.0
+end
+
+// ── Is Connected ────────────────────────────────────────────
+
+fn test_connected()
+    let mut g = graph_create()
+    graph_add_undirected_edge(g, "A", "B", 1.0)
+    graph_add_undirected_edge(g, "B", "C", 1.0)
+    check("connected", graph_is_connected(g) == 1.0)
+    return 0.0
+end
+
+fn test_disconnected()
+    let mut g = graph_create()
+    graph_add_node(g, "A")
+    graph_add_node(g, "B")
+    check("disconnected", graph_is_connected(g) == 0.0)
+    return 0.0
+end
+
+// ── In Degree ───────────────────────────────────────────────
+
+fn test_in_degree()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "C", 1.0)
+    graph_add_edge(g, "B", "C", 1.0)
+    check("in degree C", graph_in_degree(g, "C") == 2.0)
+    check("in degree A", graph_in_degree(g, "A") == 0.0)
+    return 0.0
+end
+
+// ── Reverse ─────────────────────────────────────────────────
+
+fn test_reverse()
+    let mut g = graph_create()
+    graph_add_edge(g, "A", "B", 5.0)
+    graph_add_edge(g, "B", "C", 3.0)
+    let mut rev = graph_reverse(g)
+    check("rev edge B->A", graph_has_edge(rev, "B", "A") == 1.0)
+    check("rev no A->B", graph_has_edge(rev, "A", "B") == 0.0)
+    check("rev weight", graph_weight(rev, "B", "A") == 5.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_connected_components()
+test_single_component()
+test_bipartite_yes()
+test_bipartite_no()
+test_cycle_yes()
+test_cycle_no()
+test_shortest_unweighted()
+test_shortest_unreachable()
+test_edge_count()
+test_connected()
+test_disconnected()
+test_in_degree()
+test_reverse()
+print("")
+print("All graph_algo tests passed (13 tests)")

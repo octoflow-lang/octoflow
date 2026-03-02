@@ -1,0 +1,528 @@
+// media_player.flow — Unified media player
+// Combines audio playback, video playback, and playlist into one interface.
+// Handles A/V sync, transport controls, and subtitle overlay.
+// Depends on: audio_player.flow, video_player.flow, playlist.flow, timeline.flow
+
+// ── Player type ──────────────────────────────────────────
+let MP_TYPE_AUDIO = 0.0
+let MP_TYPE_VIDEO = 1.0
+
+// ── Subtitle storage ─────────────────────────────────────
+// Flat: [mp_id, start_time, end_time, text_id] per entry
+// text_id is a numeric reference to external text storage
+let mut _mp_sub_data  = []
+let mut _mp_sub_count = []   // Per player
+let mut _mp_sub_off   = []   // Offset into _mp_sub_data per player
+
+// ── Internal storage ─────────────────────────────────────
+let mut _mp_type      = []   // MP_TYPE_AUDIO or MP_TYPE_VIDEO
+let mut _mp_ap_id     = []   // Audio player ID (-1 if none)
+let mut _mp_vp_id     = []   // Video player ID (-1 if none)
+let mut _mp_pl_id     = []   // Playlist ID (-1 if none)
+let mut _mp_volume    = []   // Master volume
+let mut _mp_muted     = []   // 1.0 = muted
+let mut _mp_sub_on    = []   // 1.0 = subtitles enabled
+let mut _mp_alive     = []   // 1.0 = active
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn mp_create(player_type)
+    let id = len(_mp_alive)
+    let mut typ = player_type
+    if typ < 0.0 || typ > 1.0
+        typ = MP_TYPE_AUDIO
+    end
+    push(_mp_type, typ)
+    push(_mp_ap_id, -1.0)
+    push(_mp_vp_id, -1.0)
+    push(_mp_pl_id, -1.0)
+    push(_mp_volume, 1.0)
+    push(_mp_muted, 0.0)
+    push(_mp_sub_on, 0.0)
+    push(_mp_sub_count, 0.0)
+    push(_mp_sub_off, len(_mp_sub_data))
+    push(_mp_alive, 1.0)
+    return id
+end
+
+fn mp_destroy(id)
+    if id < 0.0 || id >= len(_mp_alive)
+        return -1.0
+    end
+    _mp_alive[id] = 0.0
+    // Destroy child players
+    if _mp_ap_id[id] >= 0.0
+        ap_destroy(_mp_ap_id[id])
+    end
+    if _mp_vp_id[id] >= 0.0
+        vp_destroy(_mp_vp_id[id])
+    end
+    if _mp_pl_id[id] >= 0.0
+        pl_destroy(_mp_pl_id[id])
+    end
+    return 0.0
+end
+
+fn _mp_valid(id)
+    if id < 0.0 || id >= len(_mp_alive)
+        return 0.0
+    end
+    if _mp_alive[id] < 0.5
+        return 0.0
+    end
+    return 1.0
+end
+
+// ── Attach components ────────────────────────────────────
+
+fn mp_set_audio(id, ap_id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    _mp_ap_id[id] = ap_id
+    return 0.0
+end
+
+fn mp_set_video(id, vp_id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    _mp_vp_id[id] = vp_id
+    return 0.0
+end
+
+fn mp_set_playlist(id, pl_id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    _mp_pl_id[id] = pl_id
+    return 0.0
+end
+
+fn mp_get_audio(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    return _mp_ap_id[id]
+end
+
+fn mp_get_video(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    return _mp_vp_id[id]
+end
+
+fn mp_get_playlist(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    return _mp_pl_id[id]
+end
+
+// ── Transport controls (unified) ─────────────────────────
+
+fn mp_play(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_ap_id[id] >= 0.0
+        ap_play(_mp_ap_id[id])
+    end
+    if _mp_vp_id[id] >= 0.0
+        vp_play(_mp_vp_id[id])
+    end
+    return 0.0
+end
+
+fn mp_pause(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_ap_id[id] >= 0.0
+        ap_pause(_mp_ap_id[id])
+    end
+    if _mp_vp_id[id] >= 0.0
+        vp_pause(_mp_vp_id[id])
+    end
+    return 0.0
+end
+
+fn mp_stop(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_ap_id[id] >= 0.0
+        ap_stop(_mp_ap_id[id])
+    end
+    if _mp_vp_id[id] >= 0.0
+        vp_stop(_mp_vp_id[id])
+    end
+    return 0.0
+end
+
+fn mp_toggle(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    // Check if playing (either component)
+    let mut playing = 0.0
+    if _mp_ap_id[id] >= 0.0
+        if ap_is_playing(_mp_ap_id[id]) > 0.5
+            playing = 1.0
+        end
+    end
+    if _mp_vp_id[id] >= 0.0
+        if vp_is_playing(_mp_vp_id[id]) > 0.5
+            playing = 1.0
+        end
+    end
+    if playing > 0.5
+        mp_pause(id)
+    else
+        mp_play(id)
+    end
+    return 0.0
+end
+
+// ── Seek (unified) ───────────────────────────────────────
+
+fn mp_seek(id, time_sec)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_ap_id[id] >= 0.0
+        ap_seek_seconds(_mp_ap_id[id], time_sec)
+    end
+    if _mp_vp_id[id] >= 0.0
+        vp_seek(_mp_vp_id[id], time_sec)
+    end
+    return 0.0
+end
+
+fn mp_seek_percent(id, pct)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_ap_id[id] >= 0.0
+        ap_seek_percent(_mp_ap_id[id], pct)
+    end
+    if _mp_vp_id[id] >= 0.0
+        vp_seek_percent(_mp_vp_id[id], pct)
+    end
+    return 0.0
+end
+
+// ── Volume (unified) ─────────────────────────────────────
+
+fn mp_set_volume(id, vol)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    let mut v = vol
+    if v < 0.0
+        v = 0.0
+    end
+    if v > 1.0
+        v = 1.0
+    end
+    _mp_volume[id] = v
+    // Apply to audio player (if not muted)
+    if _mp_muted[id] < 0.5 && _mp_ap_id[id] >= 0.0
+        ap_set_volume(_mp_ap_id[id], v)
+    end
+    if _mp_vp_id[id] >= 0.0
+        vp_set_volume(_mp_vp_id[id], v)
+    end
+    return v
+end
+
+fn mp_get_volume(id)
+    if _mp_valid(id) < 0.5
+        return 1.0
+    end
+    return _mp_volume[id]
+end
+
+fn mp_mute(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    _mp_muted[id] = 1.0
+    if _mp_ap_id[id] >= 0.0
+        ap_set_volume(_mp_ap_id[id], 0.0)
+    end
+    return 0.0
+end
+
+fn mp_unmute(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    _mp_muted[id] = 0.0
+    if _mp_ap_id[id] >= 0.0
+        ap_set_volume(_mp_ap_id[id], _mp_volume[id])
+    end
+    return 0.0
+end
+
+fn mp_toggle_mute(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_muted[id] > 0.5
+        mp_unmute(id)
+    else
+        mp_mute(id)
+    end
+    return _mp_muted[id]
+end
+
+fn mp_is_muted(id)
+    if _mp_valid(id) < 0.5
+        return 0.0
+    end
+    return _mp_muted[id]
+end
+
+// ── Speed ────────────────────────────────────────────────
+
+fn mp_set_speed(id, spd)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_ap_id[id] >= 0.0
+        ap_set_speed(_mp_ap_id[id], spd)
+    end
+    if _mp_vp_id[id] >= 0.0
+        vp_set_speed(_mp_vp_id[id], spd)
+    end
+    return 0.0
+end
+
+// ── Loop ─────────────────────────────────────────────────
+
+fn mp_set_loop(id, on)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_ap_id[id] >= 0.0
+        ap_set_loop(_mp_ap_id[id], on)
+    end
+    if _mp_vp_id[id] >= 0.0
+        vp_set_loop(_mp_vp_id[id], on)
+    end
+    return 0.0
+end
+
+// ── Advance (unified tick) ───────────────────────────────
+
+fn mp_advance(id, dt)
+    // Advance both audio and video by dt seconds
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if dt <= 0.0
+        return 0.0
+    end
+    let mut audio_time = 0.0
+    if _mp_ap_id[id] >= 0.0
+        let sr = 44100.0   // Default sample rate assumption
+        let samples = dt * sr
+        ap_advance(_mp_ap_id[id], samples)
+        audio_time = ap_position_seconds(_mp_ap_id[id])
+    end
+    if _mp_vp_id[id] >= 0.0
+        vp_advance(_mp_vp_id[id], dt)
+        // A/V sync: update video's audio clock reference
+        if _mp_ap_id[id] >= 0.0
+            vp_set_audio_clock(_mp_vp_id[id], audio_time)
+        end
+    end
+    return 0.0
+end
+
+// ── Playlist integration ─────────────────────────────────
+
+fn mp_playlist_next(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_pl_id[id] < 0.0
+        return -1.0
+    end
+    let r = pl_next(_mp_pl_id[id])
+    if r >= 0.0
+        mp_stop(id)
+    end
+    return r
+end
+
+fn mp_playlist_prev(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_pl_id[id] < 0.0
+        return -1.0
+    end
+    let r = pl_prev(_mp_pl_id[id])
+    if r >= 0.0
+        mp_stop(id)
+    end
+    return r
+end
+
+fn mp_playlist_current(id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_pl_id[id] < 0.0
+        return -1.0
+    end
+    return pl_current_item(_mp_pl_id[id])
+end
+
+// ── Subtitles ────────────────────────────────────────────
+
+fn mp_add_subtitle(id, start_time, end_time, text_id)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if start_time < 0.0 || end_time <= start_time
+        return -1.0
+    end
+    push(_mp_sub_data, id)
+    push(_mp_sub_data, start_time)
+    push(_mp_sub_data, end_time)
+    push(_mp_sub_data, text_id)
+    _mp_sub_count[id] = _mp_sub_count[id] + 1.0
+    return _mp_sub_count[id] - 1.0
+end
+
+fn mp_set_subtitles(id, on)
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if on > 0.5
+        _mp_sub_on[id] = 1.0
+    else
+        _mp_sub_on[id] = 0.0
+    end
+    return _mp_sub_on[id]
+end
+
+fn mp_get_subtitle_at(id, time_sec)
+    // Get the text_id of the subtitle active at time_sec
+    // Returns -1 if no subtitle is active
+    if _mp_valid(id) < 0.5
+        return -1.0
+    end
+    if _mp_sub_on[id] < 0.5
+        return -1.0
+    end
+    let off = _mp_sub_off[id]
+    let cnt = _mp_sub_count[id]
+    let mut i = 0.0
+    while i < cnt
+        let base = off + i * 4.0
+        if base + 3.0 < len(_mp_sub_data)
+            if _mp_sub_data[base] == id
+                let st = _mp_sub_data[base + 1.0]
+                let et = _mp_sub_data[base + 2.0]
+                if time_sec >= st && time_sec < et
+                    return _mp_sub_data[base + 3.0]
+                end
+            end
+        end
+        i = i + 1.0
+    end
+    return -1.0
+end
+
+fn mp_subtitle_count(id)
+    if _mp_valid(id) < 0.5
+        return 0.0
+    end
+    return _mp_sub_count[id]
+end
+
+// ── Query state ──────────────────────────────────────────
+
+fn mp_is_playing(id)
+    if _mp_valid(id) < 0.5
+        return 0.0
+    end
+    if _mp_ap_id[id] >= 0.0
+        if ap_is_playing(_mp_ap_id[id]) > 0.5
+            return 1.0
+        end
+    end
+    if _mp_vp_id[id] >= 0.0
+        if vp_is_playing(_mp_vp_id[id]) > 0.5
+            return 1.0
+        end
+    end
+    return 0.0
+end
+
+fn mp_is_paused(id)
+    if _mp_valid(id) < 0.5
+        return 0.0
+    end
+    if _mp_ap_id[id] >= 0.0
+        if ap_is_paused(_mp_ap_id[id]) > 0.5
+            return 1.0
+        end
+    end
+    if _mp_vp_id[id] >= 0.0
+        if vp_is_paused(_mp_vp_id[id]) > 0.5
+            return 1.0
+        end
+    end
+    return 0.0
+end
+
+fn mp_current_time(id)
+    if _mp_valid(id) < 0.5
+        return 0.0
+    end
+    // Prefer video time, fall back to audio
+    if _mp_vp_id[id] >= 0.0
+        return vp_current_time(_mp_vp_id[id])
+    end
+    if _mp_ap_id[id] >= 0.0
+        return ap_position_seconds(_mp_ap_id[id])
+    end
+    return 0.0
+end
+
+fn mp_duration(id)
+    if _mp_valid(id) < 0.5
+        return 0.0
+    end
+    if _mp_vp_id[id] >= 0.0
+        return vp_duration(_mp_vp_id[id])
+    end
+    if _mp_ap_id[id] >= 0.0
+        return ap_duration(_mp_ap_id[id])
+    end
+    return 0.0
+end
+
+fn mp_position_percent(id)
+    if _mp_valid(id) < 0.5
+        return 0.0
+    end
+    let dur = mp_duration(id)
+    if dur < 0.01
+        return 0.0
+    end
+    return mp_current_time(id) / dur
+end
+
+fn mp_type(id)
+    if _mp_valid(id) < 0.5
+        return MP_TYPE_AUDIO
+    end
+    return _mp_type[id]
+end

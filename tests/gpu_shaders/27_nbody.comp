@@ -1,0 +1,84 @@
+#version 450
+// nbody — Gravitational N-body force computation (all-pairs)
+//
+// Each thread computes the total force on one particle from all others.
+// Uses shared memory tiling for coalesced reads.
+//
+// Input layout (4 floats per particle, interleaved):
+//   positions: [x0, y0, vx0, vy0, x1, y1, vx1, vy1, ...]
+// Output: updated positions+velocities after one timestep
+//
+// Push constants: N (number of particles), dt (timestep), softening
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Input  { float data[]; } inp;
+layout(set=0, binding=1) buffer Output { float data[]; } out_;
+layout(push_constant) uniform PC {
+    float n_particles;
+    float dt;
+    float softening;
+} pc;
+
+shared float tile[1024];  // 256 particles × 4 floats (x, y, vx, vy)
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint gid = gl_GlobalInvocationID.x;
+    uint N = uint(pc.n_particles);
+
+    if (gid >= N) return;
+
+    // Load my particle
+    float px = inp.data[gid * 4u];
+    float py = inp.data[gid * 4u + 1u];
+    float vx = inp.data[gid * 4u + 2u];
+    float vy = inp.data[gid * 4u + 3u];
+
+    float ax = 0.0;
+    float ay = 0.0;
+    float eps2 = pc.softening * pc.softening;
+
+    // Process all particles in tiles of 256
+    uint num_tiles = (N + 255u) / 256u;
+    for (uint t = 0u; t < num_tiles; t++) {
+        // Load tile into shared memory
+        uint load_idx = t * 256u + tid;
+        if (load_idx < N) {
+            tile[tid * 4u]     = inp.data[load_idx * 4u];
+            tile[tid * 4u + 1u] = inp.data[load_idx * 4u + 1u];
+            tile[tid * 4u + 2u] = inp.data[load_idx * 4u + 2u];
+            tile[tid * 4u + 3u] = inp.data[load_idx * 4u + 3u];
+        } else {
+            tile[tid * 4u]     = 0.0;
+            tile[tid * 4u + 1u] = 0.0;
+            tile[tid * 4u + 2u] = 0.0;
+            tile[tid * 4u + 3u] = 0.0;
+        }
+        barrier();
+
+        // Compute forces from all particles in this tile
+        uint tile_count = min(256u, N - t * 256u);
+        for (uint j = 0u; j < tile_count; j++) {
+            float dx = tile[j * 4u]     - px;
+            float dy = tile[j * 4u + 1u] - py;
+            float dist2 = dx * dx + dy * dy + eps2;
+            float inv_dist = inversesqrt(dist2);
+            float inv_dist3 = inv_dist * inv_dist * inv_dist;
+            ax += dx * inv_dist3;
+            ay += dy * inv_dist3;
+        }
+        barrier();
+    }
+
+    // Leapfrog integration: update velocity then position
+    vx += ax * pc.dt;
+    vy += ay * pc.dt;
+    px += vx * pc.dt;
+    py += vy * pc.dt;
+
+    // Write updated state
+    out_.data[gid * 4u]     = px;
+    out_.data[gid * 4u + 1u] = py;
+    out_.data[gid * 4u + 2u] = vx;
+    out_.data[gid * 4u + 3u] = vy;
+}

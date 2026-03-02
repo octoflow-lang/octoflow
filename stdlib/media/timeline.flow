@@ -1,0 +1,604 @@
+// stdlib/media/timeline.flow — Video/audio timeline and transitions
+//
+// Non-linear editing timeline with tracks, clips, transitions, and keyframes.
+// Manages temporal arrangement of media (video frames, audio samples).
+//
+// Track types: TL_VIDEO=0, TL_AUDIO=1
+// Transition types: TL_CUT=0, TL_FADE=1, TL_DISSOLVE=2, TL_WIPE_H=3, TL_WIPE_V=4
+//
+// Functions: tl_create, tl_add_track, tl_add_clip, tl_set_transition,
+//            tl_add_keyframe, tl_get_frame, tl_get_clip_at,
+//            tl_duration, tl_track_count, tl_clip_count,
+//            tl_move_clip, tl_trim_clip, tl_remove_clip,
+//            tl_compute_transition, tl_render_frame
+//
+// Usage:
+//   use "timeline"
+//   let tl = tl_create(30.0)  // 30 fps
+//   let track = tl_add_track(tl, TL_VIDEO)
+//   tl_add_clip(tl, track, 0.0, 5.0, 100.0)  // clip at t=0, dur=5s, source_id=100
+
+// Track types
+let TL_VIDEO = 0.0
+let TL_AUDIO = 1.0
+
+// Transition types
+let TL_CUT = 0.0
+let TL_FADE = 1.0
+let TL_DISSOLVE = 2.0
+let TL_WIPE_H = 3.0
+let TL_WIPE_V = 4.0
+
+// Keyframe interpolation
+let TL_LERP = 0.0
+let TL_STEP = 1.0
+let TL_SMOOTH = 2.0
+
+// ── Timeline storage ───────────────────────────────────
+
+let mut _tl_fps = []
+let mut _tl_track_count = []
+let mut _tl_track_start = []
+
+// Track storage
+let mut _tk_timeline = []
+let mut _tk_type = []
+let mut _tk_clip_count = []
+let mut _tk_clip_start = []
+let mut _tk_volume = []
+let mut _tk_opacity = []
+let mut _tk_mute = []
+
+// Clip storage
+let mut _cl_track = []
+let mut _cl_start_time = []
+let mut _cl_duration = []
+let mut _cl_source_id = []
+let mut _cl_source_offset = []
+let mut _cl_speed = []
+let mut _cl_trans_type = []
+let mut _cl_trans_dur = []
+
+// Keyframe storage: flat [clip_id, time, property, value, interp, ...]
+let mut _kf_clip = []
+let mut _kf_time = []
+let mut _kf_prop = []
+let mut _kf_value = []
+let mut _kf_interp = []
+
+// ── Timeline API ───────────────────────────────────────
+
+fn tl_create(fps)
+    // Create a timeline. Returns timeline ID.
+    let id = len(_tl_fps)
+    let mut f = fps
+    if f <= 0.0
+        f = 30.0
+    end
+    push(_tl_fps, f)
+    push(_tl_track_count, 0.0)
+    push(_tl_track_start, len(_tk_timeline))
+    return id
+end
+
+fn tl_fps(tl_id)
+    let ti = int(tl_id)
+    if ti < 0 || ti >= len(_tl_fps)
+        return 30.0
+    end
+    return _tl_fps[ti]
+end
+
+fn tl_track_count(tl_id)
+    let ti = int(tl_id)
+    if ti < 0 || ti >= len(_tl_fps)
+        return 0.0
+    end
+    return _tl_track_count[ti]
+end
+
+// ── Track API ──────────────────────────────────────────
+
+fn tl_add_track(tl_id, track_type)
+    // Add track to timeline. Returns local track ID.
+    let ti = int(tl_id)
+    if ti < 0 || ti >= len(_tl_fps)
+        return -1.0
+    end
+    let local_id = _tl_track_count[ti]
+    _tl_track_count[ti] = local_id + 1.0
+    push(_tk_timeline, tl_id)
+    push(_tk_type, track_type)
+    push(_tk_clip_count, 0.0)
+    push(_tk_clip_start, len(_cl_track))
+    push(_tk_volume, 1.0)
+    push(_tk_opacity, 1.0)
+    push(_tk_mute, 0.0)
+    return local_id
+end
+
+fn _tk_global(tl_id, track_id)
+    let ti = int(tl_id)
+    if ti < 0 || ti >= len(_tl_fps)
+        return -1.0
+    end
+    if track_id < 0.0 || track_id >= _tl_track_count[ti]
+        return -1.0
+    end
+    return _tl_track_start[ti] + track_id
+end
+
+fn tl_set_track_volume(tl_id, track_id, volume)
+    let gi = _tk_global(tl_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    let mut v = volume
+    if v < 0.0
+        v = 0.0
+    end
+    _tk_volume[int(gi)] = v
+    return 0.0
+end
+
+fn tl_set_track_opacity(tl_id, track_id, opacity)
+    let gi = _tk_global(tl_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    let mut o = opacity
+    if o < 0.0
+        o = 0.0
+    end
+    if o > 1.0
+        o = 1.0
+    end
+    _tk_opacity[int(gi)] = o
+    return 0.0
+end
+
+fn tl_mute_track(tl_id, track_id)
+    let gi = _tk_global(tl_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    _tk_mute[int(gi)] = 1.0
+    return 0.0
+end
+
+fn tl_unmute_track(tl_id, track_id)
+    let gi = _tk_global(tl_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    _tk_mute[int(gi)] = 0.0
+    return 0.0
+end
+
+// ── Clip API ───────────────────────────────────────────
+
+fn tl_add_clip(tl_id, track_id, start_time, duration, source_id)
+    // Add clip to track. Returns clip ID (global).
+    // start_time: timeline position in seconds
+    // duration: clip length in seconds
+    // source_id: reference to source media (user-managed)
+    let gi = _tk_global(tl_id, track_id)
+    if gi < 0.0
+        return -1.0
+    end
+    if duration <= 0.0
+        return -1.0
+    end
+    let gii = int(gi)
+    let clip_id = len(_cl_track)
+    _tk_clip_count[gii] = _tk_clip_count[gii] + 1.0
+    push(_cl_track, gi)
+    let mut st = start_time
+    if st < 0.0
+        st = 0.0
+    end
+    push(_cl_start_time, st)
+    push(_cl_duration, duration)
+    push(_cl_source_id, source_id)
+    push(_cl_source_offset, 0.0)
+    push(_cl_speed, 1.0)
+    push(_cl_trans_type, TL_CUT)
+    push(_cl_trans_dur, 0.0)
+    return clip_id
+end
+
+fn tl_clip_count(tl_id, track_id)
+    let gi = _tk_global(tl_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    return _tk_clip_count[int(gi)]
+end
+
+fn tl_clip_start(clip_id)
+    if clip_id < 0.0 || clip_id >= len(_cl_track)
+        return 0.0
+    end
+    return _cl_start_time[int(clip_id)]
+end
+
+fn tl_clip_duration(clip_id)
+    if clip_id < 0.0 || clip_id >= len(_cl_track)
+        return 0.0
+    end
+    return _cl_duration[int(clip_id)]
+end
+
+fn tl_clip_source(clip_id)
+    if clip_id < 0.0 || clip_id >= len(_cl_track)
+        return -1.0
+    end
+    return _cl_source_id[int(clip_id)]
+end
+
+fn tl_set_clip_speed(clip_id, speed)
+    if clip_id < 0.0 || clip_id >= len(_cl_track)
+        return 0.0
+    end
+    let mut s = speed
+    if s < 0.1
+        s = 0.1
+    end
+    if s > 10.0
+        s = 10.0
+    end
+    _cl_speed[int(clip_id)] = s
+    return 0.0
+end
+
+fn tl_set_source_offset(clip_id, offset)
+    if clip_id < 0.0 || clip_id >= len(_cl_track)
+        return 0.0
+    end
+    let mut o = offset
+    if o < 0.0
+        o = 0.0
+    end
+    _cl_source_offset[int(clip_id)] = o
+    return 0.0
+end
+
+// ── Clip editing ───────────────────────────────────────
+
+fn tl_move_clip(clip_id, new_start)
+    if clip_id < 0.0 || clip_id >= len(_cl_track)
+        return 0.0
+    end
+    let mut s = new_start
+    if s < 0.0
+        s = 0.0
+    end
+    _cl_start_time[int(clip_id)] = s
+    return 0.0
+end
+
+fn tl_trim_clip(clip_id, new_duration)
+    if clip_id < 0.0 || clip_id >= len(_cl_track)
+        return 0.0
+    end
+    let mut d = new_duration
+    if d < 0.01
+        d = 0.01
+    end
+    _cl_duration[int(clip_id)] = d
+    return 0.0
+end
+
+fn tl_remove_clip(clip_id)
+    // "Remove" by zeroing duration (can't truly delete from flat storage).
+    if clip_id < 0.0 || clip_id >= len(_cl_track)
+        return 0.0
+    end
+    _cl_duration[int(clip_id)] = 0.0
+    return 0.0
+end
+
+// ── Transitions ────────────────────────────────────────
+
+fn tl_set_transition(clip_id, trans_type, trans_duration)
+    // Set transition at the start of a clip (from previous clip).
+    if clip_id < 0.0 || clip_id >= len(_cl_track)
+        return 0.0
+    end
+    let mut td = trans_duration
+    if td < 0.0
+        td = 0.0
+    end
+    _cl_trans_type[int(clip_id)] = trans_type
+    _cl_trans_dur[int(clip_id)] = td
+    return 0.0
+end
+
+fn tl_compute_transition(trans_type, progress, width, height, result)
+    // Compute transition blend factor for each pixel.
+    // progress: 0.0 (start) to 1.0 (end).
+    // result: flat array of blend values [0,1] per pixel (w*h).
+    // 0.0 = show clip A, 1.0 = show clip B.
+    if width <= 0.0 || height <= 0.0
+        return 0.0
+    end
+    let mut p = progress
+    if p < 0.0
+        p = 0.0
+    end
+    if p > 1.0
+        p = 1.0
+    end
+    if trans_type == TL_CUT
+        // Instant cut at 0.5
+        let val = 0.0
+        if p >= 0.5
+            let mut y = 0.0
+            while y < height
+                let mut x = 0.0
+                while x < width
+                    push(result, 1.0)
+                    x = x + 1.0
+                end
+                y = y + 1.0
+            end
+        else
+            let mut y = 0.0
+            while y < height
+                let mut x = 0.0
+                while x < width
+                    push(result, 0.0)
+                    x = x + 1.0
+                end
+                y = y + 1.0
+            end
+        end
+    elif trans_type == TL_FADE
+        // Uniform fade
+        let mut y = 0.0
+        while y < height
+            let mut x = 0.0
+            while x < width
+                push(result, p)
+                x = x + 1.0
+            end
+            y = y + 1.0
+        end
+    elif trans_type == TL_DISSOLVE
+        // Cross-dissolve (same as fade for now, can add noise later)
+        let mut y = 0.0
+        while y < height
+            let mut x = 0.0
+            while x < width
+                push(result, p)
+                x = x + 1.0
+            end
+            y = y + 1.0
+        end
+    elif trans_type == TL_WIPE_H
+        // Horizontal wipe: left to right
+        let threshold = p * width
+        let mut y = 0.0
+        while y < height
+            let mut x = 0.0
+            while x < width
+                if x < threshold
+                    push(result, 1.0)
+                else
+                    push(result, 0.0)
+                end
+                x = x + 1.0
+            end
+            y = y + 1.0
+        end
+    elif trans_type == TL_WIPE_V
+        // Vertical wipe: top to bottom
+        let threshold = p * height
+        let mut y = 0.0
+        while y < height
+            let mut x = 0.0
+            while x < width
+                if y < threshold
+                    push(result, 1.0)
+                else
+                    push(result, 0.0)
+                end
+                x = x + 1.0
+            end
+            y = y + 1.0
+        end
+    else
+        // Default: uniform blend
+        let mut y = 0.0
+        while y < height
+            let mut x = 0.0
+            while x < width
+                push(result, p)
+                x = x + 1.0
+            end
+            y = y + 1.0
+        end
+    end
+    return width * height
+end
+
+// ── Keyframes ──────────────────────────────────────────
+
+fn tl_add_keyframe(clip_id, time, property, value, interp)
+    // Add keyframe to clip. property: user-defined numeric ID.
+    // Returns keyframe index.
+    if clip_id < 0.0 || clip_id >= len(_cl_track)
+        return -1.0
+    end
+    let kf_id = len(_kf_clip)
+    push(_kf_clip, clip_id)
+    push(_kf_time, time)
+    push(_kf_prop, property)
+    push(_kf_value, value)
+    push(_kf_interp, interp)
+    return kf_id
+end
+
+fn tl_get_keyframe_value(clip_id, property, time)
+    // Get interpolated keyframe value at time for a clip+property.
+    // Returns interpolated value, or 0.0 if no keyframes.
+    let n_kf = len(_kf_clip)
+    if n_kf <= 0.0
+        return 0.0
+    end
+    // Find surrounding keyframes for this clip+property
+    let mut prev_time = -1.0
+    let mut prev_val = 0.0
+    let mut next_time = 999999.0
+    let mut next_val = 0.0
+    let mut next_interp = TL_LERP
+    let mut found = 0.0
+    let mut i = 0.0
+    while i < n_kf
+        if _kf_clip[int(i)] == clip_id && _kf_prop[int(i)] == property
+            let kt = _kf_time[int(i)]
+            if kt <= time && kt > prev_time
+                prev_time = kt
+                prev_val = _kf_value[int(i)]
+                found = 1.0
+            end
+            if kt > time && kt < next_time
+                next_time = kt
+                next_val = _kf_value[int(i)]
+                next_interp = _kf_interp[int(i)]
+            end
+        end
+        i = i + 1.0
+    end
+    if found == 0.0
+        return 0.0
+    end
+    if next_time >= 999999.0
+        return prev_val
+    end
+    // Interpolate
+    let range = next_time - prev_time
+    if range <= 0.0
+        return prev_val
+    end
+    let t = (time - prev_time) / range
+    if next_interp == TL_STEP
+        return prev_val
+    elif next_interp == TL_SMOOTH
+        // Smoothstep
+        let s = t * t * (3.0 - 2.0 * t)
+        return prev_val + (next_val - prev_val) * s
+    end
+    // Default: linear
+    return prev_val + (next_val - prev_val) * t
+end
+
+// ── Query ──────────────────────────────────────────────
+
+fn tl_get_clip_at(tl_id, track_id, time)
+    // Find clip at given time on a track. Returns clip_id or -1.0.
+    let gi = _tk_global(tl_id, track_id)
+    if gi < 0.0
+        return -1.0
+    end
+    let n_clips = len(_cl_track)
+    let mut i = 0.0
+    while i < n_clips
+        if _cl_track[int(i)] == gi
+            let cs = _cl_start_time[int(i)]
+            let cd = _cl_duration[int(i)]
+            if cd > 0.0 && time >= cs && time < cs + cd
+                return i
+            end
+        end
+        i = i + 1.0
+    end
+    return -1.0
+end
+
+fn tl_duration(tl_id)
+    // Total timeline duration (max end time of all clips).
+    let ti = int(tl_id)
+    if ti < 0 || ti >= len(_tl_fps)
+        return 0.0
+    end
+    let n_tracks = _tl_track_count[ti]
+    let start = int(_tl_track_start[ti])
+    let n_clips = len(_cl_track)
+    let mut max_end = 0.0
+    let mut c = 0.0
+    while c < n_clips
+        let ct = _cl_track[int(c)]
+        // Check if clip belongs to this timeline
+        if ct >= start && ct < start + n_tracks
+            let end_time = _cl_start_time[int(c)] + _cl_duration[int(c)]
+            if end_time > max_end
+                max_end = end_time
+            end
+        end
+        c = c + 1.0
+    end
+    return max_end
+end
+
+fn tl_time_to_frame(tl_id, time)
+    // Convert time (seconds) to frame number.
+    let fps = tl_fps(tl_id)
+    return floor(time * fps)
+end
+
+fn tl_frame_to_time(tl_id, frame)
+    // Convert frame number to time (seconds).
+    let fps = tl_fps(tl_id)
+    if fps <= 0.0
+        return 0.0
+    end
+    return frame / fps
+end
+
+fn tl_total_frames(tl_id)
+    // Total number of frames in timeline.
+    let dur = tl_duration(tl_id)
+    let fps = tl_fps(tl_id)
+    return floor(dur * fps)
+end
+
+// ── Render helpers ─────────────────────────────────────
+
+fn tl_render_frame_blend(src_a_r, src_a_g, src_a_b, src_b_r, src_b_g, src_b_b, blend, dst_r, dst_g, dst_b, n_pixels)
+    // Blend two frames using per-pixel blend map. Appends to dst arrays.
+    if n_pixels <= 0.0
+        return 0.0
+    end
+    let a_len = len(src_a_r)
+    let b_len = len(src_b_r)
+    let bl_len = len(blend)
+    let mut i = 0.0
+    while i < n_pixels
+        let mut ar = 0.0
+        let mut ag = 0.0
+        let mut ab = 0.0
+        let mut br = 0.0
+        let mut bg = 0.0
+        let mut bb = 0.0
+        let mut t = 0.5
+        if i < a_len
+            ar = src_a_r[int(i)]
+            ag = src_a_g[int(i)]
+            ab = src_a_b[int(i)]
+        end
+        if i < b_len
+            br = src_b_r[int(i)]
+            bg = src_b_g[int(i)]
+            bb = src_b_b[int(i)]
+        end
+        if i < bl_len
+            t = blend[int(i)]
+        end
+        push(dst_r, ar * (1.0 - t) + br * t)
+        push(dst_g, ag * (1.0 - t) + bg * t)
+        push(dst_b, ab * (1.0 - t) + bb * t)
+        i = i + 1.0
+    end
+    return n_pixels
+end

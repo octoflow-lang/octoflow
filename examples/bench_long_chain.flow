@@ -1,0 +1,46 @@
+// Long GPU Chain Benchmark — demonstrates deferred dispatch scaling
+// 10 element-wise operations in a chain (vs 3 in the standard benchmark)
+
+// Warmup
+let w = gpu_fill(1.0, 1000)
+let w2 = gpu_add(w, w)
+let w3 = gpu_sum(w2)
+
+print("=== Long GPU Chain Benchmark (10M elements, 10-step chain) ===")
+print("")
+
+// 10-step element-wise chain
+print("--- 10-step chain ---")
+for i in range(1, 4)
+    let t0 = now_ms()
+    let a = gpu_fill(1.0, 10000000)
+    let b = gpu_fill(2.0, 10000000)
+    let c = gpu_add(a, b)
+    let d = gpu_mul(c, c)
+    let e = gpu_scale(d, 0.5)
+    let f = gpu_add(e, a)
+    let g = gpu_mul(f, b)
+    let h = gpu_scale(g, 0.1)
+    let j = gpu_add(h, c)
+    let k = gpu_mul(j, a)
+    let s = gpu_sum(k)
+    let t1 = now_ms()
+    let ms = t1 - t0
+    print("  run {i}: {ms} ms  result={s}")
+end
+print("")
+
+// Same but only 3-step for comparison
+print("--- 3-step chain ---")
+for i in range(1, 4)
+    let t0 = now_ms()
+    let a = gpu_fill(1.0, 10000000)
+    let b = gpu_fill(2.0, 10000000)
+    let c = gpu_add(a, b)
+    let d = gpu_mul(c, c)
+    let e = gpu_scale(d, 0.5)
+    let s = gpu_sum(e)
+    let t1 = now_ms()
+    let ms = t1 - t0
+    print("  run {i}: {ms} ms  result={s}")
+end

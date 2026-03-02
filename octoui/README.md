@@ -5,7 +5,7 @@
 ![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)
 ![Tests: 82 passing](https://img.shields.io/badge/tests-82%20passing-brightgreen)
 ![Kernels: 3 SPIR-V](https://img.shields.io/badge/kernels-3%20SPIR--V-blue)
-![Widgets: 21](https://img.shields.io/badge/widgets-21-blue)
+![Widgets: 29](https://img.shields.io/badge/widgets-29-blue)
 
 A GPU-native rendering engine — not a widget toolkit wrapper. Layout, render, and
 text rendering execute as GPU dispatch chains through
@@ -46,7 +46,7 @@ octoflow run octoui/examples/counter.flow --allow-read --allow-write --allow-ffi
 | Text       | TextArea (multi-line, cursor, scroll, readonly)                                  |
 | Data       | Table (virtual-list, fixed header), TreeView (hierarchical, expand/collapse), ListView (virtual rendering — thousands of items) |
 
-21 widget types total. All composable.
+29 widget types total. All composable.
 
 ## Examples
 
@@ -59,7 +59,7 @@ octoflow run octoui/examples/counter.flow --allow-read --allow-write --allow-ffi
 | `dashboard.flow`  | Multi-widget layout: progress, labels, buttons           |
 | `timer.flow`      | Reactive timer with start/stop/reset                     |
 | `tabs.flow`       | Tab container with switchable content panels             |
-| `kitchen.flow`    | All 20 widgets in one app                                |
+| `kitchen.flow`    | All 29 widgets in one app                                |
 | `long_list.flow`  | ListView: 1000 items, 12 display widgets (virtual)       |
 | `dialog.flow`     | Modal dialog: alert, confirm, custom                     |
 | `table.flow`      | Data table: 100 rows, keyboard navigation                |

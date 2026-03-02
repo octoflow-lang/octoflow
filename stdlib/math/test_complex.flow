@@ -1,0 +1,210 @@
+// test_complex.flow — Tests for stdlib/math/complex.flow
+use "complex"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Construction ────────────────────────────────────────────────
+
+fn test_complex_create()
+    let mut c = complex(3.0, 4.0)
+    check("create real", complex_real(c) == 3.0)
+    check("create imag", complex_imag(c) == 4.0)
+    return 0.0
+end
+
+// ── Arithmetic ──────────────────────────────────────────────────
+
+fn test_complex_add()
+    let mut a = complex(1.0, 2.0)
+    let mut b = complex(3.0, 4.0)
+    let mut c = complex_add(a, b)
+    check("add real", c[0] == 4.0)
+    check("add imag", c[1] == 6.0)
+    return 0.0
+end
+
+fn test_complex_sub()
+    let mut a = complex(5.0, 7.0)
+    let mut b = complex(2.0, 3.0)
+    let mut c = complex_sub(a, b)
+    check("sub real", c[0] == 3.0)
+    check("sub imag", c[1] == 4.0)
+    return 0.0
+end
+
+fn test_complex_mul()
+    // (3+4i)(1-2i) = 3-6i+4i-8i² = 3-2i+8 = 11-2i
+    let mut a = complex(3.0, 4.0)
+    let mut b = complex(1.0, -2.0)
+    let mut c = complex_mul(a, b)
+    check("mul real", approx(c[0], 11.0) == 1.0)
+    check("mul imag", approx(c[1], -2.0) == 1.0)
+    return 0.0
+end
+
+fn test_complex_div()
+    // (3+4i)/(1-2i) = (3+4i)(1+2i)/(1+4) = (-5+10i)/5 = -1+2i
+    let mut a = complex(3.0, 4.0)
+    let mut b = complex(1.0, -2.0)
+    let mut c = complex_div(a, b)
+    check("div real", approx(c[0], -1.0) == 1.0)
+    check("div imag", approx(c[1], 2.0) == 1.0)
+    return 0.0
+end
+
+fn test_complex_scale()
+    let mut a = complex(3.0, 4.0)
+    let mut c = complex_scale(a, 2.0)
+    check("scale real", c[0] == 6.0)
+    check("scale imag", c[1] == 8.0)
+    return 0.0
+end
+
+// ── Conjugate / Magnitude ───────────────────────────────────────
+
+fn test_conjugate()
+    let mut a = complex(3.0, 4.0)
+    let mut c = complex_conjugate(a)
+    check("conj real", c[0] == 3.0)
+    check("conj imag", c[1] == -4.0)
+    return 0.0
+end
+
+fn test_magnitude()
+    let mut a = complex(3.0, 4.0)
+    check("magnitude", approx(complex_magnitude(a), 5.0) == 1.0)
+    check("magnitude_sq", complex_magnitude_sq(a) == 25.0)
+    return 0.0
+end
+
+fn test_phase()
+    let pi = 3.14159265358979
+    let mut a = complex(1.0, 0.0)
+    check("phase 0", approx(complex_phase(a), 0.0) == 1.0)
+    let mut b = complex(0.0, 1.0)
+    check("phase pi/2", approx(complex_phase(b), pi / 2.0) == 1.0)
+    return 0.0
+end
+
+// ── Polar ───────────────────────────────────────────────────────
+
+fn test_polar()
+    let pi = 3.14159265358979
+    let mut c = complex_from_polar(5.0, pi / 4.0)
+    check("polar real", approx(c[0], 3.535) == 1.0)
+    check("polar imag", approx(c[1], 3.535) == 1.0)
+
+    let mut p = complex_to_polar(complex(3.0, 4.0))
+    check("to_polar mag", approx(p[0], 5.0) == 1.0)
+    return 0.0
+end
+
+fn test_polar_roundtrip()
+    let mut orig = complex(3.0, 4.0)
+    let mut p = complex_to_polar(orig)
+    let mut back = complex_from_polar(p[0], p[1])
+    check("polar rt real", approx(back[0], 3.0) == 1.0)
+    check("polar rt imag", approx(back[1], 4.0) == 1.0)
+    return 0.0
+end
+
+// ── Power / Sqrt / Exp ──────────────────────────────────────────
+
+fn test_pow_int()
+    let mut a = complex(0.0, 1.0)  // i
+    let mut i2 = complex_pow_int(a, 2.0)
+    // i^2 = -1
+    check("i^2 real", approx(i2[0], -1.0) == 1.0)
+    check("i^2 imag", approx(i2[1], 0.0) == 1.0)
+
+    let mut i4 = complex_pow_int(a, 4.0)
+    // i^4 = 1
+    check("i^4 real", approx(i4[0], 1.0) == 1.0)
+    check("i^4 imag", approx(i4[1], 0.0) == 1.0)
+    return 0.0
+end
+
+fn test_sqrt()
+    // sqrt(3+4i) ≈ 2 + i
+    let mut a = complex(3.0, 4.0)
+    let mut s = complex_sqrt(a)
+    check("sqrt real", approx(s[0], 2.0) == 1.0)
+    check("sqrt imag", approx(s[1], 1.0) == 1.0)
+
+    // Verify: (2+i)^2 = 4 + 4i - 1 = 3 + 4i
+    let mut sq = complex_mul(s, s)
+    check("sqrt verify", approx(sq[0], 3.0) == 1.0 && approx(sq[1], 4.0) == 1.0)
+    return 0.0
+end
+
+fn test_exp()
+    let pi = 3.14159265358979
+    // e^(i*pi) = -1
+    let mut a = complex(0.0, pi)
+    let mut c = complex_exp(a)
+    check("euler real", approx(c[0], -1.0) == 1.0)
+    check("euler imag", approx(c[1], 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Equality ────────────────────────────────────────────────────
+
+fn test_eq()
+    let mut a = complex(1.0, 2.0)
+    let mut b = complex(1.0, 2.0)
+    let mut c = complex(1.0, 3.0)
+    check("eq yes", complex_eq(a, b) == 1.0)
+    check("eq no", complex_eq(a, c) == 0.0)
+    return 0.0
+end
+
+// ── Inverse ─────────────────────────────────────────────────────
+
+fn test_inv()
+    // 1/(3+4i) = (3-4i)/25
+    let mut a = complex(3.0, 4.0)
+    let mut inv = complex_inv(a)
+    check("inv real", approx(inv[0], 0.12) == 1.0)
+    check("inv imag", approx(inv[1], -0.16) == 1.0)
+
+    // a * inv(a) ≈ 1
+    let mut prod = complex_mul(a, inv)
+    check("inv verify", approx(prod[0], 1.0) == 1.0 && approx(prod[1], 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_complex_create()
+test_complex_add()
+test_complex_sub()
+test_complex_mul()
+test_complex_div()
+test_complex_scale()
+test_conjugate()
+test_magnitude()
+test_phase()
+test_polar()
+test_polar_roundtrip()
+test_pow_int()
+test_sqrt()
+test_exp()
+test_eq()
+test_inv()
+print("")
+print("All complex number tests passed (16 tests)")

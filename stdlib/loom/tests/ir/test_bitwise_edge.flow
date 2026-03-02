@@ -1,0 +1,196 @@
+// test_bitwise_edge.flow — Edge case tests for bitwise IR ops
+//
+// Covers gaps not in test_bitwise_ir.flow:
+//   1. Explicit XOR verification (self-cancel, identity, complementary)
+//   2. Shift by 0 (identity)
+//   3. Shift by 31 (maximum safe shift)
+//   4. Round-trip pack/unpack of 16-bit values
+//
+// Kernel: push A, B → R0[0]=XOR, R0[1]=SHL, R0[2]=SHR,
+//         R0[3]=(A<<16)|B, R0[4]=packed>>16, R0[5]=packed&0xFFFF
+//
+// Run: octoflow run stdlib/loom/tests/ir/test_bitwise_edge.flow --allow-ffi --allow-read --allow-write
+
+use "../../../compiler/ir"
+
+print("=== Test: Bitwise IR Edge Cases ===")
+print("")
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+fn check(name, got, expected)
+  if abs(got - expected) < 0.5
+    print("  PASS: {name} = {got}")
+    return 1.0
+  else
+    print("  FAIL: {name} = {got} (expected {expected})")
+    return 0.0
+  end
+end
+
+fn tally(result)
+  if result > 0.5
+    pass = pass + 1.0
+  else
+    fail = fail + 1.0
+  end
+  return 0.0
+end
+
+// ── Emit kernel ─────────────────────────────────────────────────────
+
+fn emit_bitwise_edge(out_path)
+  ir_new()
+  ir_input_count = 3.0
+  push(ir_uint_bindings, 0.0)
+
+  let entry      = ir_block("entry")
+  let body       = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // Thread 0 guard
+  let gid    = ir_load_gid(entry)
+  let one_u  = ir_const_u(entry, 1.0)
+  let not_t0 = ir_ugte(entry, gid, one_u)
+  let _sm    = ir_selection_merge(entry, exit_block)
+  let _br    = ir_term_cond_branch(entry, not_t0, exit_block, body)
+
+  // Load A and B from push constants
+  let pc_a = ir_push_const(body, 0.0)
+  let pc_b = ir_push_const(body, 1.0)
+  let a    = ir_ftou(body, pc_a)
+  let b    = ir_ftou(body, pc_b)
+
+  // Basic ops
+  let r_xor = ir_ixor(body, a, b)
+  let r_shl = ir_ishl(body, a, b)
+  let r_shr = ir_ishr(body, a, b)
+
+  // Pack: (A << 16) | B
+  let c16      = ir_const_u(body, 16.0)
+  let a_hi     = ir_ishl(body, a, c16)
+  let packed   = ir_ior(body, a_hi, b)
+
+  // Unpack: high = packed >> 16, low = packed & 0xFFFF
+  let unpack_hi = ir_ishr(body, packed, c16)
+  let mask_ffff = ir_const_u(body, 65535.0)
+  let unpack_lo = ir_iand(body, packed, mask_ffff)
+
+  // Store results R0[0..5]
+  let idx0 = ir_const_u(body, 0.0)
+  let idx1 = ir_const_u(body, 1.0)
+  let idx2 = ir_const_u(body, 2.0)
+  let idx3 = ir_const_u(body, 3.0)
+  let idx4 = ir_const_u(body, 4.0)
+  let idx5 = ir_const_u(body, 5.0)
+  let _s0 = ir_buf_store_u(body, 0.0, idx0, r_xor)
+  let _s1 = ir_buf_store_u(body, 0.0, idx1, r_shl)
+  let _s2 = ir_buf_store_u(body, 0.0, idx2, r_shr)
+  let _s3 = ir_buf_store_u(body, 0.0, idx3, packed)
+  let _s4 = ir_buf_store_u(body, 0.0, idx4, unpack_hi)
+  let _s5 = ir_buf_store_u(body, 0.0, idx5, unpack_lo)
+
+  let _br2 = ir_term_branch(body, exit_block)
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let spv_path = "stdlib/loom/kernels/ops/test_bitwise_edge.spv"
+let _e = emit_bitwise_edge(spv_path)
+print("  Emitted: {spv_path}")
+
+// ── Boot VM ─────────────────────────────────────────────────────────
+
+let vm = vm_boot(1.0, 16.0, 4.0)
+
+// ── Test 1: XOR verification ────────────────────────────────────────
+print("")
+print("  Test 1: XOR verification")
+
+// 1a: 0xFF XOR 0xFF = 0x00 (self-cancel)
+let pc1a = [255.0, 255.0, 0.0, 0.0]
+let _d = vm_dispatch(vm, spv_path, pc1a, 1.0)
+let prog1a = vm_build(vm)
+let _x = vm_execute(prog1a)
+let r1a = vm_read_register(vm, 0.0, 0.0, 6.0)
+let _t = tally(check("XOR 0xFF^0xFF", float_to_bits(r1a[0]), 0.0))
+
+// 1b: 0x00 XOR 0xFF = 0xFF (identity)
+let pc1b = [0.0, 255.0, 0.0, 0.0]
+let _d = vm_dispatch(vm, spv_path, pc1b, 1.0)
+let prog1b = vm_build(vm)
+let _x = vm_execute(prog1b)
+let r1b = vm_read_register(vm, 0.0, 0.0, 6.0)
+let _t = tally(check("XOR 0x00^0xFF", float_to_bits(r1b[0]), 255.0))
+
+// 1c: 0xAA XOR 0x55 = 0xFF (complementary)
+let pc1c = [170.0, 85.0, 0.0, 0.0]
+let _d = vm_dispatch(vm, spv_path, pc1c, 1.0)
+let prog1c = vm_build(vm)
+let _x = vm_execute(prog1c)
+let r1c = vm_read_register(vm, 0.0, 0.0, 6.0)
+let _t = tally(check("XOR 0xAA^0x55", float_to_bits(r1c[0]), 255.0))
+
+// ── Test 2: Shift by 0 (identity) ──────────────────────────────────
+print("")
+print("  Test 2: Shift by 0 (identity)")
+
+// A=12345, B=0 → SHL should be 12345, SHR should be 12345
+let pc2 = [12345.0, 0.0, 0.0, 0.0]
+let _d = vm_dispatch(vm, spv_path, pc2, 1.0)
+let prog2 = vm_build(vm)
+let _x = vm_execute(prog2)
+let r2 = vm_read_register(vm, 0.0, 0.0, 6.0)
+let _t = tally(check("SHL(12345,0)", float_to_bits(r2[1]), 12345.0))
+let _t = tally(check("SHR(12345,0)", float_to_bits(r2[2]), 12345.0))
+
+// ── Test 3: Shift by 31 (max safe shift) ────────────────────────────
+print("")
+print("  Test 3: Shift by 31 (maximum safe shift)")
+
+// 3a: 1 << 31 = 0x80000000 = 2147483648
+let pc3a = [1.0, 31.0, 0.0, 0.0]
+let _d = vm_dispatch(vm, spv_path, pc3a, 1.0)
+let prog3a = vm_build(vm)
+let _x = vm_execute(prog3a)
+let r3a = vm_read_register(vm, 0.0, 0.0, 6.0)
+let _t = tally(check("SHL(1,31)", float_to_bits(r3a[1]), 2147483648.0))
+
+// 3b: 0x80000000 >> 31 = 1
+let pc3b = [2147483648.0, 31.0, 0.0, 0.0]
+let _d = vm_dispatch(vm, spv_path, pc3b, 1.0)
+let prog3b = vm_build(vm)
+let _x = vm_execute(prog3b)
+let r3b = vm_read_register(vm, 0.0, 0.0, 6.0)
+let _t = tally(check("SHR(0x80000000,31)", float_to_bits(r3b[2]), 1.0))
+
+// ── Test 4: Round-trip pack/unpack ──────────────────────────────────
+print("")
+print("  Test 4: Pack/unpack round-trip")
+
+// A=0x1234 (4660), B=0x5678 (22136)
+// packed = (0x1234 << 16) | 0x5678 = 0x12345678
+// unpack_hi = packed >> 16 = 0x1234 = 4660
+// unpack_lo = packed & 0xFFFF = 0x5678 = 22136
+let pc4 = [4660.0, 22136.0, 0.0, 0.0]
+let _d = vm_dispatch(vm, spv_path, pc4, 1.0)
+let prog4 = vm_build(vm)
+let _x = vm_execute(prog4)
+let r4 = vm_read_register(vm, 0.0, 0.0, 6.0)
+let _t = tally(check("unpack_hi", float_to_bits(r4[4]), 4660.0))
+let _t = tally(check("unpack_lo", float_to_bits(r4[5]), 22136.0))
+
+let _s = vm_shutdown(vm)
+
+// ── Summary ─────────────────────────────────────────────────────────
+print("")
+print("  Results: {pass} passed, {fail} failed")
+if fail < 0.5
+  print("  ALL PASS")
+else
+  print("  SOME FAILED")
+end
+print("")

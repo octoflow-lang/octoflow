@@ -3,9 +3,9 @@
 // Displays multiple SDF primitives with different materials.
 // Auto-rotating camera. Press 1-4 to switch scenes, R to reset.
 
-use "game/game"
-use "game/input"
-use "game/raymarcher"
+use "../stdlib/game/game"
+use "../stdlib/game/input"
+use "../stdlib/game/raymarcher"
 
 let cvs = game_init(400.0, 300.0, "SDF Gallery")
 

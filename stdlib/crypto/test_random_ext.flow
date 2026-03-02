@@ -1,0 +1,141 @@
+// test_random_ext.flow — Tests for extended random functions in crypto/random.flow
+use "random"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── random_sample ───────────────────────────────────────────
+
+fn test_sample()
+    let mut data = [10.0, 20.0, 30.0, 40.0, 50.0]
+    let s = random_sample(data, 3.0)
+    check("sample len", len(s) == 3.0)
+    // Original unchanged
+    check("original intact", len(data) == 5.0)
+    return 0.0
+end
+
+fn test_sample_all()
+    let mut data = [1.0, 2.0, 3.0]
+    let s = random_sample(data, 5.0)
+    // Can't sample more than available
+    check("sample capped", len(s) == 3.0)
+    return 0.0
+end
+
+// ── random_bool ─────────────────────────────────────────────
+
+fn test_random_bool()
+    let b = random_bool()
+    check("bool 0 or 1", b == 0.0 || b == 1.0)
+    return 0.0
+end
+
+// ── dice_roll ───────────────────────────────────────────────
+
+fn test_dice_roll()
+    let mut i = 0.0
+    let mut all_valid = 1.0
+    while i < 20.0
+        let d = dice_roll(6.0)
+        if d < 1.0 || d > 6.0
+            all_valid = 0.0
+        end
+        i = i + 1.0
+    end
+    check("dice range", all_valid == 1.0)
+    return 0.0
+end
+
+// ── coin_flip ───────────────────────────────────────────────
+
+fn test_coin_flip()
+    let c = coin_flip()
+    check("coin valid", c == "heads" || c == "tails")
+    return 0.0
+end
+
+// ── weighted_choice ─────────────────────────────────────────
+
+fn test_weighted_choice()
+    let mut vals = [10.0, 20.0, 30.0]
+    let mut weights = [0.0, 0.0, 1.0]
+    // With weight only on 30, should always return 30
+    let c = weighted_choice(vals, weights)
+    check("weighted all-on-one", c == 30.0)
+    return 0.0
+end
+
+// ── random_normal ───────────────────────────────────────────
+
+fn test_random_normal()
+    // Generate several and check they're not all the same
+    let mut samples = []
+    let mut i = 0.0
+    while i < 10.0
+        push(samples, random_normal(0.0, 1.0))
+        i = i + 1.0
+    end
+    // Check that we got at least 2 different values
+    let mut diff = 0.0
+    i = 1.0
+    while i < 10.0
+        if samples[i] != samples[0]
+            diff = 1.0
+        end
+        i = i + 1.0
+    end
+    check("normal variance", diff == 1.0)
+    return 0.0
+end
+
+// ── random_float / random_int ───────────────────────────────
+
+fn test_random_float_range()
+    let mut all_valid = 1.0
+    let mut i = 0.0
+    while i < 20.0
+        let f = random_float(5.0, 10.0)
+        if f < 5.0 || f > 10.0
+            all_valid = 0.0
+        end
+        i = i + 1.0
+    end
+    check("float range", all_valid == 1.0)
+    return 0.0
+end
+
+fn test_random_int_range()
+    let mut all_valid = 1.0
+    let mut i = 0.0
+    while i < 20.0
+        let n = random_int(1.0, 10.0)
+        if n < 1.0 || n > 10.0
+            all_valid = 0.0
+        end
+        i = i + 1.0
+    end
+    check("int range", all_valid == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_sample()
+test_sample_all()
+test_random_bool()
+test_dice_roll()
+test_coin_flip()
+test_weighted_choice()
+test_random_normal()
+test_random_float_range()
+test_random_int_range()
+print("")
+print("All random_ext tests passed (9 tests)")

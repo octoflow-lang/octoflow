@@ -1,0 +1,103 @@
+// test_graph_weighted.flow — Tests for stdlib/algo/graph_weighted.flow
+use "graph_weighted"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.1
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Bellman-Ford ──────────────────────────────────────────
+
+fn test_bellman_ford()
+    // Graph: 0->1(4), 0->2(1), 2->1(2), 1->3(1), 2->3(5)
+    let mut edges = [0.0, 1.0, 4.0, 0.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 3.0, 1.0, 2.0, 3.0, 5.0]
+    let dist = gw_bellman_ford(edges, 5.0, 4.0, 0.0)
+    check("bf dist[0]", dist[0] == 0.0)
+    check("bf dist[1]", dist[1] == 3.0)  // 0->2->1
+    check("bf dist[2]", dist[2] == 1.0)  // 0->2
+    check("bf dist[3]", dist[3] == 4.0)  // 0->2->1->3
+    return 0.0
+end
+
+fn test_negative_cycle()
+    // No negative cycle: 0->1(1), 1->2(-1), 2->0(1)
+    let mut edges1 = [0.0, 1.0, 1.0, 1.0, 2.0, -1.0, 2.0, 0.0, 1.0]
+    check("no neg cycle", gw_has_negative_cycle(edges1, 3.0, 3.0, 0.0) == 0.0)
+
+    // Negative cycle: 0->1(1), 1->2(-1), 2->0(-1) (sum = -1)
+    let mut edges2 = [0.0, 1.0, 1.0, 1.0, 2.0, -1.0, 2.0, 0.0, -1.0]
+    check("has neg cycle", gw_has_negative_cycle(edges2, 3.0, 3.0, 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Floyd-Warshall ────────────────────────────────────────
+
+fn test_floyd_warshall()
+    // Triangle: 0->1(3), 0->2(8), 1->2(2)
+    let mut edges = [0.0, 1.0, 3.0, 0.0, 2.0, 8.0, 1.0, 2.0, 2.0]
+    let dist = gw_floyd_warshall(edges, 3.0, 3.0)
+    check("fw 0->0", dist[0] == 0.0)
+    check("fw 0->1", dist[1] == 3.0)
+    check("fw 0->2", dist[2] == 5.0)  // 0->1->2
+    check("fw 1->2", dist[5] == 2.0)
+    return 0.0
+end
+
+// ── Prim's MST ────────────────────────────────────────────
+
+fn test_prim()
+    // Triangle graph: 0-1(1), 1-2(2), 0-2(3)
+    let mut edges = [0.0, 1.0, 1.0, 1.0, 2.0, 2.0, 0.0, 2.0, 3.0]
+    let mst = gw_prim_mst(edges, 3.0, 3.0)
+    let total = mst[len(mst) - 1.0]
+    check("prim total", total == 3.0)  // edges 0-1(1) and 1-2(2)
+    return 0.0
+end
+
+// ── Kruskal's MST ─────────────────────────────────────────
+
+fn test_kruskal()
+    // 4-node graph: 0-1(10), 0-2(6), 0-3(5), 1-3(15), 2-3(4)
+    let mut edges = [0.0, 1.0, 10.0, 0.0, 2.0, 6.0, 0.0, 3.0, 5.0, 1.0, 3.0, 15.0, 2.0, 3.0, 4.0]
+    let mst = gw_kruskal_mst(edges, 5.0, 4.0)
+    let total = mst[len(mst) - 1.0]
+    check("kruskal total", total == 19.0)  // 2-3(4) + 0-3(5) + 0-1(10)
+    return 0.0
+end
+
+// ── DAG shortest path ─────────────────────────────────────
+
+fn test_dag_shortest()
+    // DAG: 0->1(5), 0->2(3), 1->3(6), 1->2(2), 2->3(7), 2->4(4), 3->4(-1)
+    let mut edges = [0.0, 1.0, 5.0, 0.0, 2.0, 3.0, 1.0, 3.0, 6.0, 1.0, 2.0, 2.0, 2.0, 3.0, 7.0, 2.0, 4.0, 4.0, 3.0, 4.0, -1.0]
+    let mut topo = [0.0, 1.0, 2.0, 3.0, 4.0]
+    let dist = gw_shortest_path_dag(edges, 7.0, 5.0, topo, 0.0)
+    check("dag dist[0]", dist[0] == 0.0)
+    check("dag dist[1]", dist[1] == 5.0)
+    check("dag dist[2]", dist[2] == 3.0)
+    check("dag dist[4]", dist[4] == 7.0)  // 0->2->4
+    return 0.0
+end
+
+// ── Run all ───────────────────────────────────────────────
+
+test_bellman_ford()
+test_negative_cycle()
+test_floyd_warshall()
+test_prim()
+test_kruskal()
+test_dag_shortest()
+print("")
+print("All graph_weighted tests passed (6 tests)")

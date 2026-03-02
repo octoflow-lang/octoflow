@@ -1,0 +1,44 @@
+#version 450
+// bfs_expand — BFS frontier expansion (one level)
+//
+// For each vertex i: if frontier[i] == 1.0 and visited[i] == 0.0,
+//   mark visited[i] = level, and set next_frontier[j] = 1.0
+//   for all neighbors j in adjacency list.
+//
+// CSR graph format:
+//   offsets[i] = start index into edges[] for vertex i
+//   offsets[i+1] = end index (exclusive)
+//   edges[k] = neighbor vertex index (as float)
+//
+// 5 bindings, 1 push constant (current BFS level).
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Offsets       { float data[]; } offsets;
+layout(set=0, binding=1) buffer Edges         { float data[]; } edges;
+layout(set=0, binding=2) buffer Frontier      { float data[]; } frontier;
+layout(set=0, binding=3) buffer NextFrontier  { float data[]; } next_frontier;
+layout(set=0, binding=4) buffer Visited       { float data[]; } visited;
+layout(push_constant) uniform PC { float level; } pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+
+    // Only process active frontier vertices that haven't been visited
+    if (frontier.data[i] != 1.0) return;
+    if (visited.data[i] != 0.0) return;
+
+    // Mark as visited at current level
+    visited.data[i] = pc.level;
+
+    // Expand: set all neighbors in next_frontier
+    uint start = uint(offsets.data[i]);
+    uint end   = uint(offsets.data[i + 1u]);
+
+    for (uint e = start; e < end; e++) {
+        uint neighbor = uint(edges.data[e]);
+        // Only add unvisited neighbors to next frontier
+        if (visited.data[neighbor] == 0.0) {
+            next_frontier.data[neighbor] = 1.0;
+        }
+    }
+}

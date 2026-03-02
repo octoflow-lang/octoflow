@@ -2,26 +2,19 @@
 //
 // "BFS as frontier expansion. 1 dispatch per level. 0 CPU vertex iterations."
 //
-// Graph: 64×64 grid (4096 vertices), each connected to 4 neighbors (up/down/left/right).
+// Graph: 64x64 grid (4096 vertices), each connected to 4 neighbors.
 // BFS from vertex 0 (top-left corner).
 // Expected max distance = 126 (Manhattan distance to bottom-right = 63+63).
 //
-// CSR format. Multi-submit: 1 dispatch per BFS level.
+// CSR format. Multi-dispatch: 1 dispatch per BFS level.
 //
 // Run: octoflow run examples/gpu_bfs.flow --allow-ffi --allow-read
-
-use "../stdlib/loom/ops/runtime"
 
 let GRID = 64.0
 let N = GRID * GRID
 let PAD = 4096.0
 
-rt_init()
-
-let pipe_expand = rt_load_pipeline("tests/gpu_shaders/25_bfs_expand.spv", 5.0, 4.0)
-
-// ── Build CSR for 64×64 grid ─────────────────────────────────────────
-// Each vertex (r,c) connects to up to 4 neighbors
+// ── Build CSR for 64x64 grid ─────────────────────────────────────────
 let mut csr_offsets = []
 let mut csr_edges = []
 let mut edge_count = 0.0
@@ -32,22 +25,18 @@ while v < N
   let r = floor(v / GRID)
   let c = v - r * GRID
 
-  // Up
   if r > 0.0
     push(csr_edges, (r - 1.0) * GRID + c)
     edge_count = edge_count + 1.0
   end
-  // Down
   if r < GRID - 1.0
     push(csr_edges, (r + 1.0) * GRID + c)
     edge_count = edge_count + 1.0
   end
-  // Left
   if c > 0.0
     push(csr_edges, r * GRID + c - 1.0)
     edge_count = edge_count + 1.0
   end
-  // Right
   if c < GRID - 1.0
     push(csr_edges, r * GRID + c + 1.0)
     edge_count = edge_count + 1.0
@@ -57,17 +46,12 @@ while v < N
 end
 push(csr_offsets, edge_count)
 
-// ── Upload graph ─────────────────────────────────────────────────────
-let buf_offsets = rt_create_buffer((N + 1.0) * 4.0)
-let buf_edges = rt_create_buffer(edge_count * 4.0)
-rt_upload(buf_offsets, csr_offsets)
-rt_upload(buf_edges, csr_edges)
+// ── Boot VM: 5 bindings (offsets, edges, frontier, next, visited) ────
+let vm = loom_boot(1.0, 5.0, N + 1.0 + edge_count)
+loom_prefetch("tests/gpu_shaders/25_bfs_expand.spv")
 
-// Frontier/visited buffers (PAD = 4096 = 16 workgroups)
-let WGS = PAD / 256.0
-let buf_frontier = rt_create_buffer(PAD * 4.0)
-let buf_next = rt_create_buffer(PAD * 4.0)
-let buf_visited = rt_create_buffer(PAD * 4.0)
+vm_write_register(vm, 0.0, 0.0, csr_offsets)
+vm_write_register(vm, 0.0, 1.0, csr_edges)
 
 // Initialize frontier: vertex 0 = 1.0, rest = 0.0
 let mut frontier = []
@@ -80,6 +64,7 @@ while i < PAD
   end
   i = i + 1.0
 end
+vm_write_register(vm, 0.0, 2.0, frontier)
 
 let mut zeros = []
 let mut i = 0.0
@@ -87,33 +72,28 @@ while i < PAD
   push(zeros, 0.0)
   i = i + 1.0
 end
-
-rt_upload(buf_frontier, frontier)
-rt_upload(buf_next, zeros)
-rt_upload(buf_visited, zeros)
+vm_write_register(vm, 0.0, 3.0, zeros)
+vm_write_register(vm, 0.0, 4.0, zeros)
 
 // ── BFS loop ─────────────────────────────────────────────────────────
+let WGS = PAD / 256.0
 let t0 = time()
 let mut level = 1.0
 let mut total_dispatches = 0.0
 
 while level < 200.0
-  // Expand frontier
-  rt_chain_begin(1.0, 5.0)
-  let mut pc = [level]
-  rt_chain_push_constants(pipe_expand, pc)
-  let mut bufs = [buf_offsets, buf_edges, buf_frontier, buf_next, buf_visited]
-  rt_chain_dispatch(pipe_expand, bufs, WGS)
-  rt_chain_end()
-  rt_chain_submit_wait()
+  loom_dispatch(vm, "tests/gpu_shaders/25_bfs_expand.spv", [level], WGS)
+  let prog = loom_build(vm)
+  loom_run(prog)
+  loom_free(prog)
   total_dispatches = total_dispatches + 1.0
 
   // Check if next frontier has any active vertices
-  rt_download(buf_next, N)
+  let next = loom_read(vm, 0.0, 3.0, N)
   let mut has_next = 0.0
   let mut i = 0.0
   while i < N
-    if rt_result[int(i)] == 1.0
+    if next[int(i)] == 1.0
       has_next = 1.0
     end
     i = i + 1.0
@@ -122,19 +102,9 @@ while level < 200.0
   if has_next == 0.0
     level = 999.0
   else
-    // Swap frontier ← next, clear next
-    let mut new_frontier = []
-    let mut i = 0.0
-    while i < PAD
-      if i < N
-        push(new_frontier, rt_result[int(i)])
-      else
-        push(new_frontier, 0.0)
-      end
-      i = i + 1.0
-    end
-    rt_upload(buf_frontier, new_frontier)
-    rt_upload(buf_next, zeros)
+    // Swap frontier <- next, clear next
+    vm_write_register(vm, 0.0, 2.0, next)
+    vm_write_register(vm, 0.0, 3.0, zeros)
     level = level + 1.0
   end
 end
@@ -143,34 +113,27 @@ let t1 = time()
 let total_ms = (t1 - t0) * 1000.0
 
 // ── Download and verify ──────────────────────────────────────────────
-rt_download(buf_visited, N)
+let visited = loom_read(vm, 0.0, 4.0, N)
 
-// Find max level and count vertices per level
 let mut max_level = 0.0
 let mut visited_count = 0.0
 let mut i = 0.0
 while i < N
-  let v = rt_result[int(i)]
-  if v > max_level
-    max_level = v
+  let lv = visited[int(i)]
+  if lv > max_level
+    max_level = lv
   end
-  if v > 0.0
+  if lv > 0.0
     visited_count = visited_count + 1.0
   end
   i = i + 1.0
 end
 
-// Verify: corner vertices should have known distances
-// Vertex 0 (0,0) → level 1
-let v_00 = rt_result[0]
-// Vertex 63 (0,63) → level 64
-let v_063 = rt_result[63]
-// Vertex 4032 (63,0) → level 64
-let v_630 = rt_result[4032]
-// Vertex 4095 (63,63) → level 127
-let v_6363 = rt_result[4095]
+let v_00 = visited[0]
+let v_063 = visited[63]
+let v_630 = visited[4032]
+let v_6363 = visited[4095]
 
-// Expected: Manhattan distance + 1 (level starts at 1)
 let exp_00 = 1.0
 let exp_063 = 64.0
 let exp_630 = 64.0
@@ -206,15 +169,14 @@ print("  BFS source: vertex 0 (top-left)")
 print("  Max BFS level: {max_level}")
 print("  Vertices visited: {visited_count}/{N}")
 print("  BFS levels (dispatches): {total_dispatches}")
-print("  Submissions: {total_dispatches}")
 print("  CPU vertex iterations: 0")
 print("  Total time: {total_ms} ms")
 print("")
 print("  Corner verification:")
-print("    (0,0)   → level {v_00} (expected {exp_00})")
-print("    (0,63)  → level {v_063} (expected {exp_063})")
-print("    (63,0)  → level {v_630} (expected {exp_630})")
-print("    (63,63) → level {v_6363} (expected {exp_6363})")
+print("    (0,0)   -> level {v_00} (expected {exp_00})")
+print("    (0,63)  -> level {v_063} (expected {exp_063})")
+print("    (63,0)  -> level {v_630} (expected {exp_630})")
+print("    (63,63) -> level {v_6363} (expected {exp_6363})")
 
 if pass == 1.0
   print("  PASS: all {N} vertices reached, corner distances BIT EXACT")
@@ -223,4 +185,4 @@ else
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm)

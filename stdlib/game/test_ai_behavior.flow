@@ -1,0 +1,190 @@
+// test_ai_behavior.flow — Tests for stdlib/game/ai_behavior.flow
+use "ai_behavior"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 1.0
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Create agent ────────────────────────────────────────
+
+fn test_create()
+    let a = ai_create(100.0, 200.0, 50.0)
+    check("create x", ai_get_x(a) == 100.0)
+    check("create y", ai_get_y(a) == 200.0)
+    check("create state", ai_get_state(a) == AI_IDLE)
+    return 0.0
+end
+
+// ── Idle state ──────────────────────────────────────────
+
+fn test_idle()
+    let a = ai_create(50.0, 50.0, 100.0)
+    let _u = ai_update(a, 0.1)
+    // Should not move
+    check("idle x", ai_get_x(a) == 50.0)
+    check("idle y", ai_get_y(a) == 50.0)
+    return 0.0
+end
+
+// ── Chase behavior ──────────────────────────────────────
+
+fn test_chase()
+    let a = ai_create(0.0, 0.0, 100.0)
+    let _t = ai_set_target(a, 100.0, 0.0)
+    let _s = ai_set_state(a, AI_CHASE)
+    let _u = ai_update(a, 0.1)
+    // Should move toward target (positive x)
+    check("chase moved x", ai_get_x(a) > 0.0)
+    check("chase y unchanged", approx(ai_get_y(a), 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Flee behavior ───────────────────────────────────────
+
+fn test_flee()
+    let a = ai_create(50.0, 50.0, 100.0)
+    let _t = ai_set_target(a, 0.0, 0.0)
+    let _s = ai_set_state(a, AI_FLEE)
+    let _u = ai_update(a, 0.1)
+    // Should move away from (0,0) — both x,y should increase
+    check("flee x", ai_get_x(a) > 50.0)
+    check("flee y", ai_get_y(a) > 50.0)
+    return 0.0
+end
+
+// ── Patrol behavior ─────────────────────────────────────
+
+fn test_patrol()
+    let a = ai_create(0.0, 0.0, 200.0)
+    let _w1 = ai_patrol_add_waypoint(a, 100.0, 0.0)
+    let _w2 = ai_patrol_add_waypoint(a, 100.0, 100.0)
+    let _w3 = ai_patrol_add_waypoint(a, 0.0, 0.0)
+    let _s = ai_set_state(a, AI_PATROL)
+    // Move toward first waypoint
+    let _u1 = ai_update(a, 0.1)
+    check("patrol moving", ai_get_x(a) > 0.0)
+    // Move many steps to reach first waypoint
+    let mut i = 0.0
+    while i < 10.0
+        let _u = ai_update(a, 0.1)
+        i = i + 1.0
+    end
+    check("patrol progressed", ai_get_x(a) > 50.0)
+    return 0.0
+end
+
+// ── Wander behavior ─────────────────────────────────────
+
+fn test_wander()
+    let a = ai_create(100.0, 100.0, 50.0)
+    let _s = ai_set_state(a, AI_WANDER)
+    let _u = ai_update(a, 0.1)
+    // Should have moved somewhere
+    let dx = ai_get_x(a) - 100.0
+    let dy = ai_get_y(a) - 100.0
+    let dist = sqrt(dx * dx + dy * dy)
+    check("wander moved", dist > 0.0)
+    return 0.0
+end
+
+// ── Arrive behavior ─────────────────────────────────────
+
+fn test_arrive()
+    let a = ai_create(0.0, 0.0, 100.0)
+    let _t = ai_set_target(a, 30.0, 0.0)
+    let _s = ai_set_state(a, AI_ARRIVE)
+    let _u = ai_update(a, 0.1)
+    // Should move toward target but slow down (within slow_radius=50)
+    let x1 = ai_get_x(a)
+    check("arrive moved", x1 > 0.0)
+    // Should be slower than full speed would give
+    // Full speed: 100 * 0.1 = 10. With arrive slowdown at 30 dist: 100*(30/50)*0.1 = 6
+    check("arrive slowed", x1 < 10.0)
+    return 0.0
+end
+
+// ── Obstacle avoidance ──────────────────────────────────
+
+fn test_avoid()
+    let a = ai_create(50.0, 0.0, 100.0)
+    // Obstacle at (60, 0) with radius 20 — agent is within range
+    let triggered = ai_avoid(a, 60.0, 0.0, 20.0, 0.1)
+    check("avoid triggered", triggered == 1.0)
+    // Agent should move away from obstacle (x should decrease)
+    check("avoid pushed", ai_get_x(a) < 50.0)
+    // Test not triggered when far away
+    let a2 = ai_create(0.0, 0.0, 100.0)
+    let triggered2 = ai_avoid(a2, 200.0, 200.0, 10.0, 0.1)
+    check("avoid not triggered", triggered2 == 0.0)
+    return 0.0
+end
+
+// ── Chase or flee ───────────────────────────────────────
+
+fn test_chase_or_flee()
+    let a = ai_create(50.0, 50.0, 100.0)
+    // Far from target — should idle
+    let state1 = ai_chase_or_flee(a, 500.0, 500.0, 200.0, 50.0)
+    check("cof idle", state1 == AI_IDLE)
+    // Within chase range
+    let state2 = ai_chase_or_flee(a, 150.0, 50.0, 200.0, 50.0)
+    check("cof chase", state2 == AI_CHASE)
+    // Within flee range
+    let state3 = ai_chase_or_flee(a, 60.0, 50.0, 200.0, 50.0)
+    check("cof flee", state3 == AI_FLEE)
+    return 0.0
+end
+
+// ── Distance ────────────────────────────────────────────
+
+fn test_distance()
+    let a = ai_create(0.0, 0.0, 50.0)
+    let d = ai_distance_to(a, 3.0, 4.0)
+    check("distance", approx(d, 5.0) == 1.0)
+    return 0.0
+end
+
+// ── Speed change ────────────────────────────────────────
+
+fn test_speed()
+    let a = ai_create(0.0, 0.0, 100.0)
+    let _t = ai_set_target(a, 1000.0, 0.0)
+    let _s = ai_set_state(a, AI_CHASE)
+    let _u1 = ai_update(a, 0.1)
+    let x1 = ai_get_x(a)
+    // Change speed
+    let _sp = ai_set_speed(a, 200.0)
+    let _u2 = ai_update(a, 0.1)
+    let x2 = ai_get_x(a) - x1
+    check("speed doubled", x2 > x1 * 1.5)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────
+
+test_create()
+test_idle()
+test_chase()
+test_flee()
+test_patrol()
+test_wander()
+test_arrive()
+test_avoid()
+test_chase_or_flee()
+test_distance()
+test_speed()
+print("")
+print("All ai_behavior tests passed (11 tests)")

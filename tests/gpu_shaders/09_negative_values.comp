@@ -1,0 +1,10 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set=0, binding=0) buffer Input  { float data[]; } inp;
+layout(set=0, binding=1) buffer Output { float data[]; } out_;
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    // Test negative values: abs(x) + sign(x)
+    float val = inp.data[gid];
+    out_.data[gid] = abs(val) + sign(val);
+}

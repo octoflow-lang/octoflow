@@ -1,0 +1,402 @@
+// stdlib/math/matrix_ext.flow — Extended matrix operations
+//
+// Advanced linear algebra: inverse, LU decomposition, linear system solver,
+// eigenvalue approximation (power iteration), rank, row echelon form.
+//
+// Matrix format: flat array [rows, cols, data...] (same as matrix.flow).
+// Access: mat[2 + row * cols + col]
+//
+// Functions: mat_inverse, mat_solve, mat_lu_decompose, mat_eigenvalue_power,
+//            mat_rank, mat_is_singular, mat_frobenius_norm, mat_row_echelon,
+//            mat_copy
+//
+// Usage:
+//   use "matrix_ext"
+//   let mut A = [2.0, 2.0, 4.0, 7.0, 2.0, 6.0]  // 2x2: [[4,7],[2,6]]
+//   let inv = mat_inverse(A)
+//   let mut b = [2.0, 1.0, 1.0, 2.0]  // 2x1: [[1],[2]]
+//   let x = mat_solve(A, b)    // Solve Ax = b
+
+fn mat_copy(m)
+    // Deep copy a matrix.
+    let mut result = []
+    let n = len(m)
+    let mut i = 0.0
+    while i < n
+        push(result, m[i])
+        i = i + 1.0
+    end
+    return result
+end
+
+fn mat_inverse(m)
+    // Compute inverse of a square matrix using Gauss-Jordan elimination.
+    // Returns inverse matrix or empty array if singular.
+    let rows = m[0]
+    let cols = m[1]
+    if rows != cols
+        let mut empty = []
+        return empty
+    end
+    let n = rows
+
+    // Build augmented matrix [A | I]
+    let mut aug = []
+    push(aug, n)
+    push(aug, n * 2.0)
+    let mut i = 0.0
+    while i < n
+        let mut j = 0.0
+        while j < n
+            push(aug, m[2.0 + i * n + j])
+            j = j + 1.0
+        end
+        j = 0.0
+        while j < n
+            if j == i
+                push(aug, 1.0)
+            else
+                push(aug, 0.0)
+            end
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+
+    let aug_cols = n * 2.0
+
+    // Forward elimination with partial pivoting
+    let mut col = 0.0
+    while col < n
+        // Find pivot
+        let mut max_val = abs(aug[2.0 + col * aug_cols + col])
+        let mut max_row = col
+        let mut r = col + 1.0
+        while r < n
+            let v = abs(aug[2.0 + r * aug_cols + col])
+            if v > max_val
+                max_val = v
+                max_row = r
+            end
+            r = r + 1.0
+        end
+        if max_val < 0.000001
+            let mut empty = []
+            return empty
+        end
+        // Swap rows
+        if max_row != col
+            let mut c = 0.0
+            while c < aug_cols
+                let tmp = aug[2.0 + col * aug_cols + c]
+                aug[2.0 + col * aug_cols + c] = aug[2.0 + max_row * aug_cols + c]
+                aug[2.0 + max_row * aug_cols + c] = tmp
+                c = c + 1.0
+            end
+        end
+        // Scale pivot row
+        let pivot = aug[2.0 + col * aug_cols + col]
+        let mut c = 0.0
+        while c < aug_cols
+            aug[2.0 + col * aug_cols + c] = aug[2.0 + col * aug_cols + c] / pivot
+            c = c + 1.0
+        end
+        // Eliminate column
+        r = 0.0
+        while r < n
+            if r != col
+                let factor = aug[2.0 + r * aug_cols + col]
+                c = 0.0
+                while c < aug_cols
+                    aug[2.0 + r * aug_cols + c] = aug[2.0 + r * aug_cols + c] - factor * aug[2.0 + col * aug_cols + c]
+                    c = c + 1.0
+                end
+            end
+            r = r + 1.0
+        end
+        col = col + 1.0
+    end
+
+    // Extract right half (inverse)
+    let mut inv = []
+    push(inv, n)
+    push(inv, n)
+    i = 0.0
+    while i < n
+        let mut j = 0.0
+        while j < n
+            push(inv, aug[2.0 + i * aug_cols + n + j])
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+    return inv
+end
+
+fn mat_solve(A, b)
+    // Solve Ax = b using Gauss-Jordan elimination.
+    // A is n x n, b is n x 1. Returns x as n x 1 matrix.
+    let n = A[0]
+    let inv = mat_inverse(A)
+    if len(inv) == 0.0
+        let mut empty = []
+        return empty
+    end
+
+    // Multiply inv * b
+    let mut x = []
+    push(x, n)
+    push(x, 1.0)
+    let mut i = 0.0
+    while i < n
+        let mut sum = 0.0
+        let mut j = 0.0
+        while j < n
+            sum = sum + inv[2.0 + i * n + j] * b[2.0 + j]
+            j = j + 1.0
+        end
+        push(x, sum)
+        i = i + 1.0
+    end
+    return x
+end
+
+fn mat_lu_decompose(m)
+    // LU decomposition (Doolittle's method). Returns [L, U] packed into one flat array.
+    // Output format: [n, L_data..., U_data...] where each is n*n values.
+    let n = m[0]
+    let mut L = []
+    let mut U = []
+    let mut i = 0.0
+    while i < n * n
+        push(L, 0.0)
+        push(U, 0.0)
+        i = i + 1.0
+    end
+
+    i = 0.0
+    while i < n
+        // Upper triangular
+        let mut j = i
+        while j < n
+            let mut sum = 0.0
+            let mut k = 0.0
+            while k < i
+                sum = sum + L[i * n + k] * U[k * n + j]
+                k = k + 1.0
+            end
+            U[i * n + j] = m[2.0 + i * n + j] - sum
+            j = j + 1.0
+        end
+        // Lower triangular
+        j = i
+        while j < n
+            if i == j
+                L[i * n + i] = 1.0
+            else
+                let mut sum = 0.0
+                let mut k = 0.0
+                while k < i
+                    sum = sum + L[j * n + k] * U[k * n + i]
+                    k = k + 1.0
+                end
+                if abs(U[i * n + i]) > 0.000001
+                    L[j * n + i] = (m[2.0 + j * n + i] - sum) / U[i * n + i]
+                end
+            end
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+
+    // Pack result: [n, L_flat, U_flat]
+    let mut result = []
+    push(result, n)
+    i = 0.0
+    while i < n * n
+        push(result, L[i])
+        i = i + 1.0
+    end
+    i = 0.0
+    while i < n * n
+        push(result, U[i])
+        i = i + 1.0
+    end
+    return result
+end
+
+fn mat_eigenvalue_power(m, max_iter)
+    // Dominant eigenvalue via power iteration.
+    // Returns [eigenvalue, eigenvector...] where eigenvector has n elements.
+    let n = m[0]
+
+    // Initial vector [1, 1, ..., 1]
+    let mut v = []
+    let mut i = 0.0
+    while i < n
+        push(v, 1.0)
+        i = i + 1.0
+    end
+
+    let mut eigenvalue = 0.0
+    let mut iter = 0.0
+    while iter < max_iter
+        // w = A * v
+        let mut w = []
+        i = 0.0
+        while i < n
+            let mut sum = 0.0
+            let mut j = 0.0
+            while j < n
+                sum = sum + m[2.0 + i * n + j] * v[j]
+                j = j + 1.0
+            end
+            push(w, sum)
+            i = i + 1.0
+        end
+        // Find max abs component
+        let mut max_abs = 0.0
+        i = 0.0
+        while i < n
+            let a = abs(w[i])
+            if a > max_abs
+                max_abs = a
+            end
+            i = i + 1.0
+        end
+        if max_abs < 0.000001
+            break
+        end
+        // Rayleigh quotient for eigenvalue (preserves sign)
+        let mut dot_vw = 0.0
+        let mut dot_vv = 0.0
+        i = 0.0
+        while i < n
+            dot_vw = dot_vw + v[i] * w[i]
+            dot_vv = dot_vv + v[i] * v[i]
+            i = i + 1.0
+        end
+        if dot_vv > 0.000001
+            eigenvalue = dot_vw / dot_vv
+        end
+        // Normalize
+        i = 0.0
+        while i < n
+            v[i] = w[i] / max_abs
+            i = i + 1.0
+        end
+        iter = iter + 1.0
+    end
+
+    let mut result = []
+    push(result, eigenvalue)
+    i = 0.0
+    while i < n
+        push(result, v[i])
+        i = i + 1.0
+    end
+    return result
+end
+
+fn mat_row_echelon(m)
+    // Reduce to row echelon form (REF). Returns new matrix.
+    let rows = m[0]
+    let cols = m[1]
+    let mut ref_m = mat_copy(m)
+
+    let mut pivot_row = 0.0
+    let mut pivot_col = 0.0
+    while pivot_row < rows && pivot_col < cols
+        // Find pivot in this column
+        let mut max_val = abs(ref_m[2.0 + pivot_row * cols + pivot_col])
+        let mut max_r = pivot_row
+        let mut r = pivot_row + 1.0
+        while r < rows
+            let v = abs(ref_m[2.0 + r * cols + pivot_col])
+            if v > max_val
+                max_val = v
+                max_r = r
+            end
+            r = r + 1.0
+        end
+        if max_val < 0.000001
+            pivot_col = pivot_col + 1.0
+        else
+            // Swap rows
+            if max_r != pivot_row
+                let mut c = 0.0
+                while c < cols
+                    let tmp = ref_m[2.0 + pivot_row * cols + c]
+                    ref_m[2.0 + pivot_row * cols + c] = ref_m[2.0 + max_r * cols + c]
+                    ref_m[2.0 + max_r * cols + c] = tmp
+                    c = c + 1.0
+                end
+            end
+            // Eliminate below
+            r = pivot_row + 1.0
+            while r < rows
+                let factor = ref_m[2.0 + r * cols + pivot_col] / ref_m[2.0 + pivot_row * cols + pivot_col]
+                let mut c = pivot_col
+                while c < cols
+                    ref_m[2.0 + r * cols + c] = ref_m[2.0 + r * cols + c] - factor * ref_m[2.0 + pivot_row * cols + c]
+                    c = c + 1.0
+                end
+                r = r + 1.0
+            end
+            pivot_row = pivot_row + 1.0
+            pivot_col = pivot_col + 1.0
+        end
+    end
+    return ref_m
+end
+
+fn mat_rank(m)
+    // Matrix rank via row echelon form.
+    let ref_m = mat_row_echelon(m)
+    let rows = ref_m[0]
+    let cols = ref_m[1]
+    let mut rank = 0.0
+    let mut i = 0.0
+    while i < rows
+        let mut has_nonzero = 0.0
+        let mut j = 0.0
+        while j < cols
+            if abs(ref_m[2.0 + i * cols + j]) > 0.000001
+                has_nonzero = 1.0
+            end
+            j = j + 1.0
+        end
+        if has_nonzero == 1.0
+            rank = rank + 1.0
+        end
+        i = i + 1.0
+    end
+    return rank
+end
+
+fn mat_is_singular(m)
+    // Returns 1.0 if matrix is singular (non-invertible).
+    let n = m[0]
+    if m[1] != n
+        return 1.0
+    end
+    let r = mat_rank(m)
+    if r < n
+        return 1.0
+    end
+    return 0.0
+end
+
+fn mat_frobenius_norm(m)
+    // Frobenius norm: sqrt(sum of squares of all elements).
+    let rows = m[0]
+    let cols = m[1]
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i < rows * cols
+        let v = m[2.0 + i]
+        sum = sum + v * v
+        i = i + 1.0
+    end
+    return sqrt(sum)
+end

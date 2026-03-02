@@ -1,0 +1,187 @@
+// test_spatial_hash.flow — Tests for stdlib/game/spatial_hash.flow
+use "spatial_hash"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Create grid ─────────────────────────────────────────
+
+fn test_create()
+    let sh = sh_create(800.0, 600.0, 50.0)
+    check("create cols", sh_grid_cols(sh) == 17.0)
+    check("create rows", sh_grid_rows(sh) == 13.0)
+    check("create width", sh_world_width(sh) == 800.0)
+    check("create height", sh_world_height(sh) == 600.0)
+    return 0.0
+end
+
+// ── Insert and query ────────────────────────────────────
+
+fn test_insert_query()
+    let sh = sh_create(200.0, 200.0, 50.0)
+    let _i1 = sh_insert(sh, 10.0, 25.0, 25.0)
+    let _i2 = sh_insert(sh, 20.0, 30.0, 30.0)
+    let _i3 = sh_insert(sh, 30.0, 75.0, 75.0)
+    // Query cell containing (25, 25) — should find entities 10 and 20
+    let mut result = []
+    let n = sh_query_point(sh, 25.0, 25.0, result)
+    check("query point count", n == 2.0)
+    check("query has 10", result[0] == 10.0 || result[1] == 10.0)
+    check("query has 20", result[0] == 20.0 || result[1] == 20.0)
+    // Entity 30 is in different cell
+    let mut result2 = []
+    let n2 = sh_query_point(sh, 75.0, 75.0, result2)
+    check("query other cell", n2 == 1.0)
+    check("query other id", result2[0] == 30.0)
+    return 0.0
+end
+
+// ── Remove ──────────────────────────────────────────────
+
+fn test_remove()
+    let sh = sh_create(200.0, 200.0, 50.0)
+    let _i1 = sh_insert(sh, 1.0, 10.0, 10.0)
+    let _i2 = sh_insert(sh, 2.0, 20.0, 20.0)
+    let removed = sh_remove(sh, 1.0, 10.0, 10.0)
+    check("remove found", removed == 1.0)
+    let mut result = []
+    let n = sh_query_point(sh, 10.0, 10.0, result)
+    check("remove count", n == 1.0)
+    check("remove correct", result[0] == 2.0)
+    // Remove non-existent
+    let r2 = sh_remove(sh, 99.0, 10.0, 10.0)
+    check("remove miss", r2 == 0.0)
+    return 0.0
+end
+
+// ── Move ────────────────────────────────────────────────
+
+fn test_move()
+    let sh = sh_create(200.0, 200.0, 50.0)
+    let _i = sh_insert(sh, 5.0, 10.0, 10.0)
+    // Move within same cell — no change
+    let r1 = sh_move(sh, 5.0, 10.0, 10.0, 15.0, 15.0)
+    check("move same cell", r1 == 0.0)
+    // Move to different cell
+    let r2 = sh_move(sh, 5.0, 15.0, 15.0, 75.0, 75.0)
+    check("move diff cell", r2 == 1.0)
+    // Verify new position
+    let mut result = []
+    let n = sh_query_point(sh, 75.0, 75.0, result)
+    check("move found new", n == 1.0)
+    // Verify old position empty
+    let mut result2 = []
+    let n2 = sh_query_point(sh, 10.0, 10.0, result2)
+    check("move old empty", n2 == 0.0)
+    return 0.0
+end
+
+// ── Rect query ──────────────────────────────────────────
+
+fn test_rect_query()
+    let sh = sh_create(200.0, 200.0, 50.0)
+    let _i1 = sh_insert(sh, 1.0, 25.0, 25.0)
+    let _i2 = sh_insert(sh, 2.0, 75.0, 25.0)
+    let _i3 = sh_insert(sh, 3.0, 125.0, 125.0)
+    // Query rect covering first two cells
+    let mut result = []
+    let n = sh_query_rect(sh, 0.0, 0.0, 100.0, 50.0, result)
+    check("rect query count", n == 2.0)
+    // Large rect should find all
+    let mut result2 = []
+    let n2 = sh_query_rect(sh, 0.0, 0.0, 200.0, 200.0, result2)
+    check("rect query all", n2 == 3.0)
+    return 0.0
+end
+
+// ── Radius query ────────────────────────────────────────
+
+fn test_radius_query()
+    let sh = sh_create(200.0, 200.0, 50.0)
+    let _i1 = sh_insert(sh, 1.0, 100.0, 100.0)
+    let _i2 = sh_insert(sh, 2.0, 110.0, 110.0)
+    let _i3 = sh_insert(sh, 3.0, 10.0, 10.0)
+    // Radius query centered at (100, 100) with radius 30
+    let mut result = []
+    let n = sh_query_radius(sh, 100.0, 100.0, 30.0, result)
+    check("radius found", n >= 2.0)
+    return 0.0
+end
+
+// ── Clear ───────────────────────────────────────────────
+
+fn test_clear()
+    let sh = sh_create(200.0, 200.0, 50.0)
+    let _i1 = sh_insert(sh, 1.0, 25.0, 25.0)
+    let _i2 = sh_insert(sh, 2.0, 75.0, 75.0)
+    let _c = sh_clear(sh)
+    let mut result = []
+    let n = sh_query_point(sh, 25.0, 25.0, result)
+    check("clear empty 1", n == 0.0)
+    let n2 = sh_query_point(sh, 75.0, 75.0, result)
+    check("clear empty 2", n2 == 0.0)
+    return 0.0
+end
+
+// ── Debug stats ─────────────────────────────────────────
+
+fn test_stats()
+    let sh = sh_create(200.0, 200.0, 50.0)
+    let _i1 = sh_insert(sh, 1.0, 10.0, 10.0)
+    let _i2 = sh_insert(sh, 2.0, 15.0, 15.0)
+    let _i3 = sh_insert(sh, 3.0, 75.0, 75.0)
+    let stats = sh_debug_stats(sh)
+    check("stats total", stats[0] == 3.0)
+    check("stats occupied", stats[1] == 2.0)
+    check("stats max", stats[2] == 2.0)
+    return 0.0
+end
+
+// ── Out of bounds ───────────────────────────────────────
+
+fn test_bounds()
+    let sh = sh_create(100.0, 100.0, 50.0)
+    let r1 = sh_insert(sh, 1.0, -10.0, 50.0)
+    check("oob negative", r1 == 0.0)
+    let r2 = sh_insert(sh, 2.0, 200.0, 50.0)
+    check("oob overflow", r2 == 0.0)
+    return 0.0
+end
+
+// ── Cell count ──────────────────────────────────────────
+
+fn test_cell_count()
+    let sh = sh_create(200.0, 200.0, 50.0)
+    let _i1 = sh_insert(sh, 1.0, 10.0, 10.0)
+    let _i2 = sh_insert(sh, 2.0, 20.0, 20.0)
+    let _i3 = sh_insert(sh, 3.0, 30.0, 30.0)
+    // Cell (0,0) should have 3 entities
+    let count = sh_cell_count(sh, 0.0)
+    check("cell count", count == 3.0)
+    // Invalid cell
+    let count2 = sh_cell_count(sh, -1.0)
+    check("cell count invalid", count2 == 0.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────
+
+test_create()
+test_insert_query()
+test_remove()
+test_move()
+test_rect_query()
+test_radius_query()
+test_clear()
+test_stats()
+test_bounds()
+test_cell_count()
+print("")
+print("All spatial_hash tests passed (10 tests)")

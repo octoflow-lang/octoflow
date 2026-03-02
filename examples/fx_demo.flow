@@ -8,10 +8,10 @@
 //   4 = Scanlines       5 = Vignette       6 = Pixelate
 //   7 = Chromatic       R = Reset all      Arrow keys = orbit camera
 
-use "game/game"
-use "game/input"
-use "game/raymarcher"
-use "game/fx"
+use "../stdlib/game/game"
+use "../stdlib/game/input"
+use "../stdlib/game/raymarcher"
+use "../stdlib/game/fx"
 
 let cvs = game_init(400.0, 300.0, "FX Demo")
 

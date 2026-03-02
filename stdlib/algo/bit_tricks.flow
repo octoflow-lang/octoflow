@@ -1,0 +1,274 @@
+// stdlib/algo/bit_tricks.flow — Bit manipulation tricks
+//
+// All operations simulate bit manipulation on float-encoded integers.
+// Uses floor/modulo arithmetic since OctoFlow has no native integer type.
+// Values are treated as non-negative integers up to 2^32.
+//
+// Functions: popcount, clz, ctz, is_power_of_2, next_power_of_2,
+//            bit_reverse_n, bit_parity, gray_code, from_gray_code,
+//            bit_interleave, bit_deinterleave, highest_bit, lowest_bit,
+//            bit_swap, bit_rotate_left, bit_rotate_right
+//
+// Usage:
+//   use "bit_tricks"
+//   popcount(7.0)          // 3.0 (binary 111)
+//   is_power_of_2(8.0)     // 1.0
+//   gray_code(5.0)         // 7.0 (binary 111)
+
+fn popcount(n)
+    // Count number of set bits (population count / Hamming weight).
+    let mut count = 0.0
+    let mut x = floor(abs(n))
+    while x > 0.0
+        let rem = x - floor(x / 2.0) * 2.0
+        if rem > 0.5
+            count = count + 1.0
+        end
+        x = floor(x / 2.0)
+    end
+    return count
+end
+
+fn clz(n)
+    // Count leading zeros (for 32-bit representation).
+    let mut x = floor(abs(n))
+    if x == 0.0
+        return 32.0
+    end
+    let mut bits = 0.0
+    let mut temp = x
+    while temp > 0.0
+        bits = bits + 1.0
+        temp = floor(temp / 2.0)
+    end
+    return 32.0 - bits
+end
+
+fn ctz(n)
+    // Count trailing zeros.
+    let mut x = floor(abs(n))
+    if x == 0.0
+        return 32.0
+    end
+    let mut count = 0.0
+    while x - floor(x / 2.0) * 2.0 < 0.5
+        count = count + 1.0
+        x = floor(x / 2.0)
+    end
+    return count
+end
+
+fn is_power_of_2(n)
+    // Check if n is a power of 2 (and n > 0).
+    let x = floor(n)
+    if x <= 0.0
+        return 0.0
+    end
+    // A power of 2 has exactly one bit set
+    if popcount(x) == 1.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn next_power_of_2(n)
+    // Smallest power of 2 >= n.
+    let x = floor(n)
+    if x <= 1.0
+        return 1.0
+    end
+    let mut p = 1.0
+    while p < x
+        p = p * 2.0
+    end
+    return p
+end
+
+fn highest_bit(n)
+    // Position of highest set bit (0-indexed). Returns -1.0 for n=0.
+    let mut x = floor(abs(n))
+    if x == 0.0
+        return -1.0
+    end
+    let mut pos = -1.0
+    while x > 0.0
+        pos = pos + 1.0
+        x = floor(x / 2.0)
+    end
+    return pos
+end
+
+fn lowest_bit(n)
+    // Position of lowest set bit (0-indexed). Returns -1.0 for n=0.
+    let mut x = floor(abs(n))
+    if x == 0.0
+        return -1.0
+    end
+    let mut pos = 0.0
+    while x - floor(x / 2.0) * 2.0 < 0.5
+        pos = pos + 1.0
+        x = floor(x / 2.0)
+    end
+    return pos
+end
+
+fn bit_reverse_n(n, width)
+    // Reverse the lowest 'width' bits of n.
+    let mut x = floor(abs(n))
+    let mut result = 0.0
+    let mut i = 0.0
+    while i < width
+        let bit = x - floor(x / 2.0) * 2.0
+        result = result * 2.0 + bit
+        x = floor(x / 2.0)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn bit_parity(n)
+    // Parity: 1 if odd number of set bits, 0 if even.
+    let c = popcount(n)
+    return c - floor(c / 2.0) * 2.0
+end
+
+fn gray_code(n)
+    // Convert binary to Gray code: G = n XOR (n >> 1).
+    // Simulated since OctoFlow has no native XOR on integers.
+    let mut x = floor(abs(n))
+    let mut shifted = floor(x / 2.0)
+    // XOR bit by bit
+    let mut result = 0.0
+    let mut place = 1.0
+    let mut i = 0.0
+    while i < 32.0 && (x > 0.0 || shifted > 0.0)
+        let bx = x - floor(x / 2.0) * 2.0
+        let bs = shifted - floor(shifted / 2.0) * 2.0
+        // XOR: different bits = 1
+        if (bx > 0.5 && bs < 0.5) || (bx < 0.5 && bs > 0.5)
+            result = result + place
+        end
+        place = place * 2.0
+        x = floor(x / 2.0)
+        shifted = floor(shifted / 2.0)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn from_gray_code(g)
+    // Convert Gray code back to binary.
+    let mut x = floor(abs(g))
+    let mut result = 0.0
+    while x > 0.0
+        // result = result XOR x
+        let mut temp_r = result
+        let mut temp_x = x
+        let mut new_result = 0.0
+        let mut place = 1.0
+        let mut i = 0.0
+        while i < 32.0 && (temp_r > 0.0 || temp_x > 0.0)
+            let br = temp_r - floor(temp_r / 2.0) * 2.0
+            let bx = temp_x - floor(temp_x / 2.0) * 2.0
+            if (br > 0.5 && bx < 0.5) || (br < 0.5 && bx > 0.5)
+                new_result = new_result + place
+            end
+            place = place * 2.0
+            temp_r = floor(temp_r / 2.0)
+            temp_x = floor(temp_x / 2.0)
+            i = i + 1.0
+        end
+        result = new_result
+        x = floor(x / 2.0)
+    end
+    return result
+end
+
+fn bit_interleave(x, y)
+    // Interleave bits of x and y (Morton code / Z-order curve).
+    // Result: ...y2 x2 y1 x1 y0 x0
+    let mut xv = floor(abs(x))
+    let mut yv = floor(abs(y))
+    let mut result = 0.0
+    let mut place = 1.0
+    let mut i = 0.0
+    while i < 16.0 && (xv > 0.0 || yv > 0.0)
+        let bx = xv - floor(xv / 2.0) * 2.0
+        let by = yv - floor(yv / 2.0) * 2.0
+        if bx > 0.5
+            result = result + place
+        end
+        place = place * 2.0
+        if by > 0.5
+            result = result + place
+        end
+        place = place * 2.0
+        xv = floor(xv / 2.0)
+        yv = floor(yv / 2.0)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn bit_deinterleave(z)
+    // Extract x and y from interleaved (Morton) code. Returns [x, y].
+    let mut zv = floor(abs(z))
+    let mut x = 0.0
+    let mut y = 0.0
+    let mut place = 1.0
+    let mut i = 0.0
+    while i < 16.0 && zv > 0.0
+        let b0 = zv - floor(zv / 2.0) * 2.0
+        zv = floor(zv / 2.0)
+        let b1 = zv - floor(zv / 2.0) * 2.0
+        zv = floor(zv / 2.0)
+        if b0 > 0.5
+            x = x + place
+        end
+        if b1 > 0.5
+            y = y + place
+        end
+        place = place * 2.0
+        i = i + 1.0
+    end
+    let mut result = [x, y]
+    return result
+end
+
+fn bit_swap(n, i, j)
+    // Swap bits at positions i and j.
+    let mut x = floor(abs(n))
+    let pi = 1.0
+    let pj = 1.0
+    let mut pw_i = 1.0
+    let mut k = 0.0
+    while k < i
+        pw_i = pw_i * 2.0
+        k = k + 1.0
+    end
+    let mut pw_j = 1.0
+    k = 0.0
+    while k < j
+        pw_j = pw_j * 2.0
+        k = k + 1.0
+    end
+    // Get bits at positions i and j
+    let bi = floor(x / pw_i) - floor(floor(x / pw_i) / 2.0) * 2.0
+    let bj = floor(x / pw_j) - floor(floor(x / pw_j) / 2.0) * 2.0
+    // If bits are different, flip both
+    if (bi > 0.5 && bj < 0.5) || (bi < 0.5 && bj > 0.5)
+        // Toggle bit i
+        if bi > 0.5
+            x = x - pw_i
+        else
+            x = x + pw_i
+        end
+        // Toggle bit j
+        if bj > 0.5
+            x = x - pw_j
+        else
+            x = x + pw_j
+        end
+    end
+    return x
+end

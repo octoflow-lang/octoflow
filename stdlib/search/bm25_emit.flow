@@ -1,0 +1,117 @@
+// stdlib/search/bm25_emit.flow — BM25 SPIR-V Kernel Emitter
+//
+// Emits a BM25 scoring kernel using the IR builder.
+// Each GPU thread scores one document. Query terms are compile-time unrolled.
+//
+// Binding layout (ir_input_count = 3):
+//   Binding 0: tf_query  [n_docs x max_query_terms] — TF values for query terms
+//   Binding 1: doc_info  [n_docs x 2] — [doc_length, 0] per document
+//   Binding 2: params    [16] — [n_docs, n_query, k1, b, avgdl, 0, 0, 0, idf0..idf7]
+//   Binding 3: scores    [n_docs] — output BM25 scores
+//
+// Push constants: none (all params in binding 2)
+// Dispatch: ceil(n_docs / 256) workgroups
+//
+// Usage:
+//   use "bm25_emit"
+//   let _r = emit_bm25_kernel("stdlib/search/bm25.spv", 8.0)
+
+use "../../stdlib/compiler/ir"
+
+fn emit_bm25_kernel(out_path, max_query_terms)
+    // Emit BM25 scoring kernel — one thread per document
+    ir_new()
+    ir_input_count = 3.0
+
+    let entry = ir_block("entry")
+    let body = ir_block("body")
+    let exit_block = ir_block("exit")
+
+    // ── Entry: load gid, bounds check ─────────────────────────────
+    let gid = ir_load_gid(entry)
+
+    // Load n_docs from params[0] for bounds check
+    let idx0 = ir_const_u(entry, 0.0)
+    let n_docs_f = ir_load_input_at(entry, 2.0, idx0)
+    let n_docs_u = ir_ftou(entry, n_docs_f)
+
+    // Guard: if gid >= n_docs, skip to exit
+    let oob = ir_ugte(entry, gid, n_docs_u)
+    let _sm = ir_selection_merge(entry, exit_block)
+    let _br = ir_term_cond_branch(entry, oob, exit_block, body)
+
+    // ── Body: BM25 scoring ────────────────────────────────────────
+
+    // Load params from binding 2
+    let p1 = ir_const_u(body, 1.0)
+    let n_query_f = ir_load_input_at(body, 2.0, p1)
+    let p2 = ir_const_u(body, 2.0)
+    let k1 = ir_load_input_at(body, 2.0, p2)
+    let p3 = ir_const_u(body, 3.0)
+    let b_param = ir_load_input_at(body, 2.0, p3)
+    let p4 = ir_const_u(body, 4.0)
+    let avgdl = ir_load_input_at(body, 2.0, p4)
+
+    // Load doc length from binding 1: doc_info[gid * 2]
+    let two_u = ir_const_u(body, 2.0)
+    let dl_idx = ir_imul(body, gid, two_u)
+    let dl = ir_load_input_at(body, 1.0, dl_idx)
+
+    // BM25 denominator base: k1 * (1 - b + b * dl / avgdl)
+    let one_f = ir_const_f(body, 1.0)
+    let dl_ratio = ir_fdiv(body, dl, avgdl)
+    let b_dl = ir_fmul(body, b_param, dl_ratio)
+    let one_minus_b = ir_fsub(body, one_f, b_param)
+    let denom_inner = ir_fadd(body, one_minus_b, b_dl)
+    let k1_denom = ir_fmul(body, k1, denom_inner)
+    let k1_plus_1 = ir_fadd(body, k1, one_f)
+
+    let zero_f = ir_const_f(body, 0.0)
+    let mut score = ir_const_f(body, 0.0)
+
+    // Max query terms as uint for indexing
+    let mq_u = ir_const_u(body, max_query_terms)
+
+    // ── Compile-time unrolled query term loop ─────────────────────
+    // Each iteration emits IR for one query term with conditional skip
+
+    let mut q = 0.0
+    while q < max_query_terms
+        // Check if this term is active: q < n_query (float comparison)
+        let q_f = ir_const_f(body, q)
+        let is_active = ir_folt(body, q_f, n_query_f)
+
+        // Load TF: tf_query[gid * max_query + q]
+        let q_u = ir_const_u(body, q)
+        let tf_base = ir_imul(body, gid, mq_u)
+        let tf_idx = ir_iadd(body, tf_base, q_u)
+        let tf = ir_load_input_at(body, 0.0, tf_idx)
+
+        // Load IDF: params[8 + q]
+        let idf_slot = ir_const_u(body, 8.0 + q)
+        let idf_val = ir_load_input_at(body, 2.0, idf_slot)
+
+        // BM25: idf * (tf * (k1 + 1)) / (tf + k1_denom)
+        let num = ir_fmul(body, tf, k1_plus_1)
+        let denom = ir_fadd(body, tf, k1_denom)
+        let ratio = ir_fdiv(body, num, denom)
+        let partial = ir_fmul(body, idf_val, ratio)
+
+        // Conditional: only add if q < n_query
+        let contribution = ir_select(body, 1.0, is_active, partial, zero_f)
+        score = ir_fadd(body, score, contribution)
+
+        q = q + 1.0
+    end
+
+    // Store final score to output binding
+    let _st = ir_store_output_at(body, gid, score)
+    let _br2 = ir_term_branch(body, exit_block)
+
+    // ── Exit ──────────────────────────────────────────────────────
+    let _ret = ir_term_return(exit_block)
+
+    ir_emit_spirv(out_path)
+    print("BM25 kernel emitted: {out_path}")
+    return 0.0
+end

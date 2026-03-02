@@ -5,9 +5,9 @@
 //
 // Demonstrates GPU-accelerated 2D lighting with quadratic falloff.
 
-use "game/game"
-use "game/input"
-use "game/lighting"
+use "../stdlib/game/game"
+use "../stdlib/game/input"
+use "../stdlib/game/lighting"
 
 let cvs = game_init(400.0, 300.0, "2D Lighting Demo")
 

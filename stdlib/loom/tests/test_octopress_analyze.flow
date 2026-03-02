@@ -1,0 +1,199 @@
+// test_octopress_analyze.flow — Tests for OctoPress block analysis kernel
+//
+// Emits the analysis kernel, dispatches it on test data, verifies metrics.
+//
+// Run: octoflow run stdlib/loom/tests/test_octopress_analyze.flow --allow-ffi --allow-read --allow-write
+
+use "../emit/emit_octopress_analyze"
+
+let BS = 256.0
+let METRICS = 6.0
+
+// ── Emit the kernel ────────────────────────────────────────────────
+emit_octopress_analyze("test_octopress_analyze.spv", BS)
+loom_prefetch("test_octopress_analyze.spv")
+
+// ── Test 1: Constant block (all 42.0) ──────────────────────────────
+// Expected: min=42, max=42, mean=42, variance=0, similarity=1.0
+print("")
+print("Test 1: Constant block (all 42.0)")
+
+let mut data1 = []
+let mut i = 0.0
+while i < BS
+  push(data1, 42.0)
+  i = i + 1.0
+end
+
+let mut out1z = []
+let mut i = 0.0
+while i < METRICS
+  push(out1z, 0.0)
+  i = i + 1.0
+end
+
+let vm1 = loom_boot(1.0, 2.0, BS)
+vm_write_register(vm1, 0.0, 0.0, data1)
+vm_write_register(vm1, 0.0, 1.0, out1z)
+loom_dispatch(vm1, "test_octopress_analyze.spv", [], 1.0)
+let p1 = loom_build(vm1)
+loom_run(p1)
+loom_free(p1)
+let r1 = loom_read(vm1, 0.0, 1.0, METRICS)
+
+let r1_min = r1[0]
+let r1_max = r1[1]
+let r1_mean = r1[2]
+let r1_var = r1[3]
+let r1_sim = r1[5]
+
+print("  min={r1_min} max={r1_max} mean={r1_mean} var={r1_var} sim={r1_sim}")
+
+let mut t1_pass = 1.0
+if abs(r1_min - 42.0) > 0.01
+  print("  FAIL: min expected 42.0, got {r1_min}")
+  t1_pass = 0.0
+end
+if abs(r1_max - 42.0) > 0.01
+  print("  FAIL: max expected 42.0, got {r1_max}")
+  t1_pass = 0.0
+end
+if abs(r1_mean - 42.0) > 0.01
+  print("  FAIL: mean expected 42.0, got {r1_mean}")
+  t1_pass = 0.0
+end
+if abs(r1_var) > 0.01
+  print("  FAIL: variance expected 0.0, got {r1_var}")
+  t1_pass = 0.0
+end
+if r1_sim < 0.99
+  print("  FAIL: similarity expected ~1.0, got {r1_sim}")
+  t1_pass = 0.0
+end
+if t1_pass == 1.0
+  print("  PASS")
+end
+loom_shutdown(vm1)
+
+// ── Test 2: Incrementing block (0..255) ────────────────────────────
+// Expected: min=0, max=255, mean=127.5, variance≈5461.25, similarity<0.5
+print("")
+print("Test 2: Incrementing block (0..255)")
+
+let mut data2 = []
+let mut i = 0.0
+while i < BS
+  push(data2, i)
+  i = i + 1.0
+end
+
+let mut out2z = []
+let mut i = 0.0
+while i < METRICS
+  push(out2z, 0.0)
+  i = i + 1.0
+end
+
+let vm2 = loom_boot(1.0, 2.0, BS)
+vm_write_register(vm2, 0.0, 0.0, data2)
+vm_write_register(vm2, 0.0, 1.0, out2z)
+loom_dispatch(vm2, "test_octopress_analyze.spv", [], 1.0)
+let p2 = loom_build(vm2)
+loom_run(p2)
+loom_free(p2)
+let r2 = loom_read(vm2, 0.0, 1.0, METRICS)
+
+let r2_min = r2[0]
+let r2_max = r2[1]
+let r2_mean = r2[2]
+let r2_var = r2[3]
+let r2_sim = r2[5]
+
+print("  min={r2_min} max={r2_max} mean={r2_mean} var={r2_var} sim={r2_sim}")
+
+let mut t2_pass = 1.0
+if abs(r2_min) > 0.01
+  print("  FAIL: min expected 0.0, got {r2_min}")
+  t2_pass = 0.0
+end
+if abs(r2_max - 255.0) > 0.01
+  print("  FAIL: max expected 255.0, got {r2_max}")
+  t2_pass = 0.0
+end
+if abs(r2_mean - 127.5) > 0.5
+  print("  FAIL: mean expected 127.5, got {r2_mean}")
+  t2_pass = 0.0
+end
+if r2_var < 100.0
+  print("  FAIL: variance expected >100, got {r2_var}")
+  t2_pass = 0.0
+end
+if r2_sim > 0.5
+  print("  FAIL: similarity expected <0.5 for linear data, got {r2_sim}")
+  t2_pass = 0.0
+end
+if t2_pass == 1.0
+  print("  PASS")
+end
+loom_shutdown(vm2)
+
+// ── Test 3: Self-similar block (repeating pattern) ─────────────────
+// First 64 and second 64 elements are identical → high similarity
+print("")
+print("Test 3: Self-similar block (repeating 64-element pattern)")
+
+let mut data3 = []
+let mut i = 0.0
+while i < BS
+  let idx = i - floor(i / 64.0) * 64.0
+  push(data3, idx * idx)
+  i = i + 1.0
+end
+
+let mut out3z = []
+let mut i = 0.0
+while i < METRICS
+  push(out3z, 0.0)
+  i = i + 1.0
+end
+
+let vm3 = loom_boot(1.0, 2.0, BS)
+vm_write_register(vm3, 0.0, 0.0, data3)
+vm_write_register(vm3, 0.0, 1.0, out3z)
+loom_dispatch(vm3, "test_octopress_analyze.spv", [], 1.0)
+let p3 = loom_build(vm3)
+loom_run(p3)
+loom_free(p3)
+let r3 = loom_read(vm3, 0.0, 1.0, METRICS)
+
+let r3_sim = r3[5]
+let r3_var = r3[3]
+
+print("  variance={r3_var} similarity={r3_sim}")
+
+let mut t3_pass = 1.0
+if r3_sim < 0.9
+  print("  FAIL: similarity expected >0.9 for repeating pattern, got {r3_sim}")
+  t3_pass = 0.0
+end
+if t3_pass == 1.0
+  print("  PASS")
+end
+loom_shutdown(vm3)
+
+// ── Summary ────────────────────────────────────────────────────────
+print("")
+if t1_pass == 1.0
+  if t2_pass == 1.0
+    if t3_pass == 1.0
+      print("All OctoPress analysis tests passed.")
+    else
+      print("SOME TESTS FAILED")
+    end
+  else
+    print("SOME TESTS FAILED")
+  end
+else
+  print("SOME TESTS FAILED")
+end
+print("")

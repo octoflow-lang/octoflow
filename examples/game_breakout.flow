@@ -3,10 +3,10 @@
 // Controls: Left/Right arrows to move paddle, Space to restart
 // Features: 5x8 brick grid, ball physics, score, speed-up on paddle hit
 
-use "game/game"
-use "game/sprite"
-use "game/collision"
-use "game/input"
+use "../stdlib/game/game"
+use "../stdlib/game/sprite"
+use "../stdlib/game/collision"
+use "../stdlib/game/input"
 
 // ── Constants (stored in array for fn access) ─────────────
 // [0]=screen_w, [1]=screen_h, [2]=paddle_speed, [3]=ball_speed_init

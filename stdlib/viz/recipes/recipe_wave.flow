@@ -1,0 +1,252 @@
+// recipe_wave.flow — 2D Wave Propagation Visualization Recipe
+//
+// Simulates the wave equation on a 2D grid using finite differences.
+// Three-buffer rotation (current, previous, next) for second-order PDE.
+// CFL condition: c * dt/dx <= 1/sqrt(2) for 2D stability.
+//
+// Usage:
+//   use "viz/recipes/recipe_wave"
+//   recipe_wave_run(40, 30)
+
+use "../../gui/gui_core"
+use "../../gui/window"
+use "../../gui/canvas"
+use "../viz_data"
+use "../viz_config"
+use "../viz_render"
+use "../viz_window"
+use "../viz_palette"
+
+// === Wave Simulation State ===
+// State layout: flat array [w, h, c, damping, ...current_grid..., ...prev_grid...]
+// Total: 4 header + 2 * w * h values
+
+fn recipe_wave_init(w, h)
+  // Guard: minimum grid size
+  let mut gw = w
+  let mut gh = h
+  if gw < 5.0
+    gw = 5.0
+  end
+  if gh < 5.0
+    gh = 5.0
+  end
+
+  let n = gw * gh
+  let mut state = []
+  // Header: [w, h, c (wave speed), damping]
+  push(state, gw)
+  push(state, gh)
+  push(state, 0.5)     // wave speed
+  push(state, 0.998)   // damping factor (slight energy loss)
+
+  // Current grid — initial pulse in center
+  let cx = floor(gw / 2.0)
+  let cy = floor(gh / 2.0)
+  let mut i = 0.0
+  while i < n
+    let row = floor(i / gw)
+    let col = i - row * gw
+    let dx = col - cx
+    let dy = row - cy
+    let dist_sq = dx * dx + dy * dy
+    // Gaussian pulse
+    let mut val = 0.0
+    if dist_sq < 25.0
+      val = (25.0 - dist_sq) / 25.0
+    end
+    push(state, val)
+    i = i + 1.0
+  end
+
+  // Previous grid — same as current (zero velocity start)
+  i = 0.0
+  while i < n
+    let idx = int(4.0 + i)
+    push(state, state[idx])
+    i = i + 1.0
+  end
+
+  return state
+end
+
+fn recipe_wave_step(state, dt)
+  // Wave equation: u_next = 2*u_cur - u_prev + c^2 * laplacian(u_cur)
+  let n_state = len(state)
+  if n_state < 5.0
+    return state
+  end
+
+  let w = state[0]
+  let h = state[1]
+  let c = state[2]
+  let damping = state[3]
+
+  // Guard: valid dimensions
+  if w < 5.0 || h < 5.0
+    return state
+  end
+
+  let n = w * h
+  let cur_offset = 4.0
+  let prev_offset = 4.0 + n
+
+  // Guard: state large enough for both grids
+  if n_state < 4.0 + 2.0 * n
+    return state
+  end
+
+  let c_sq = c * c
+
+  // Build next state
+  let mut next = []
+  push(next, w)
+  push(next, h)
+  push(next, c)
+  push(next, damping)
+
+  // Compute next grid
+  let mut row = 0.0
+  while row < h
+    let mut col = 0.0
+    while col < w
+      let idx_cur = int(cur_offset + row * w + col)
+      let idx_prev = int(prev_offset + row * w + col)
+
+      // Boundary: absorbing (set to zero)
+      if row == 0.0 || row == h - 1.0 || col == 0.0 || col == w - 1.0
+        push(next, 0.0)
+      else
+        let cur = state[idx_cur]
+        let prev = state[idx_prev]
+        let up = state[int(cur_offset + (row - 1.0) * w + col)]
+        let down = state[int(cur_offset + (row + 1.0) * w + col)]
+        let left = state[int(cur_offset + row * w + (col - 1.0))]
+        let right = state[int(cur_offset + row * w + (col + 1.0))]
+
+        let laplacian = up + down + left + right - 4.0 * cur
+        let mut new_val = 2.0 * cur - prev + c_sq * laplacian
+        new_val = new_val * damping
+
+        // Clamp to prevent blowup
+        if new_val > 2.0
+          new_val = 2.0
+        end
+        if new_val < -2.0
+          new_val = -2.0
+        end
+        push(next, new_val)
+      end
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+
+  // Copy current → previous (rotate buffers)
+  let mut i = 0.0
+  while i < n
+    push(next, state[int(cur_offset + i)])
+    i = i + 1.0
+  end
+
+  return next
+end
+
+fn recipe_wave_get_grid(state)
+  // Extract current grid (without header and prev buffer)
+  let n_state = len(state)
+  if n_state < 5.0
+    return []
+  end
+
+  let w = state[0]
+  let h = state[1]
+  let n = w * h
+
+  // Guard: state large enough
+  if n_state < 4.0 + n
+    return []
+  end
+
+  let mut grid = []
+  let mut i = 0.0
+  while i < n
+    push(grid, state[int(4.0 + i)])
+    i = i + 1.0
+  end
+  return grid
+end
+
+fn recipe_wave_run(w, h)
+  // Full recipe: init + window + simulation loop
+  let mut rw = w
+  let mut rh = h
+  if rw < 5.0
+    rw = 5.0
+  end
+  if rh < 5.0
+    rh = 5.0
+  end
+
+  print("LoomView Recipe: Wave Propagation ({rw}x{rh})")
+
+  let mut state = recipe_wave_init(rw, rh)
+  let grid = recipe_wave_get_grid(state)
+
+  // Config for heatmap with coolwarm palette (diverging data)
+  let mut config = viz_auto_config(grid, VIZ_HEATMAP)
+  config[4] = PAL_COOLWARM
+  config[5] = rw
+  config[6] = rh
+
+  let _cvs = viz_window_open("LoomView - Wave Propagation", 900.0, 600.0)
+  viz_window_transport()
+
+  // Add wave speed slider
+  let _speed_s = viz_window_add_slider("Wave Speed", 0.1, 1.0, 0.5)
+  // Add damping slider
+  let _damp_s = viz_window_add_slider("Damping", 0.99, 1.0, 0.998)
+
+  // Initial render
+  let _r = viz_window_update(grid, VIZ_HEATMAP, config)
+
+  // Simulation loop
+  let mut step_count = 0.0
+  while gui_running() == 1.0
+    gui_update()
+
+    let playing = viz_window_is_playing()
+    let speed = viz_window_speed()
+
+    if playing == 1.0
+      // Update parameters from sliders
+      let c_val = viz_window_get_slider(0.0)
+      let d_val = viz_window_get_slider(1.0)
+      if c_val > 0.0
+        state[2] = c_val
+      end
+      if d_val > 0.0
+        state[3] = d_val
+      end
+
+      // Step
+      let mut steps = floor(speed)
+      if steps < 1.0
+        steps = 1.0
+      end
+      let mut s = 0.0
+      while s < steps
+        state = recipe_wave_step(state, 0.016)
+        s = s + 1.0
+      end
+      step_count = step_count + steps
+
+      // Render
+      let new_grid = recipe_wave_get_grid(state)
+      let _r2 = viz_window_update(new_grid, VIZ_HEATMAP, config)
+    end
+  end
+
+  print("Wave simulation ended after {step_count} steps")
+  return state
+end

@@ -1,0 +1,124 @@
+// test_ring_buffer.flow — Tests for stdlib/collections/ring_buffer.flow
+use "ring_buffer"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic operations ────────────────────────────────────────
+
+fn test_create()
+    let mut rb = ring_create(5.0)
+    check("create empty", ring_is_empty(rb) == 1.0)
+    check("create size", ring_size(rb) == 0.0)
+    check("create cap", ring_capacity(rb) == 5.0)
+    return 0.0
+end
+
+fn test_push_pop()
+    let mut rb = ring_create(3.0)
+    ring_push(rb, 10.0)
+    ring_push(rb, 20.0)
+    ring_push(rb, 30.0)
+    check("push size", ring_size(rb) == 3.0)
+    check("push full", ring_is_full(rb) == 1.0)
+    check("pop 10", ring_pop(rb) == 10.0)
+    check("pop 20", ring_pop(rb) == 20.0)
+    check("pop 30", ring_pop(rb) == 30.0)
+    check("pop empty", ring_pop(rb) == -1.0)
+    return 0.0
+end
+
+fn test_overwrite()
+    let mut rb = ring_create(3.0)
+    ring_push(rb, 1.0)
+    ring_push(rb, 2.0)
+    ring_push(rb, 3.0)
+    ring_push(rb, 4.0)  // overwrites 1
+    ring_push(rb, 5.0)  // overwrites 2
+    check("overwrite size", ring_size(rb) == 3.0)
+    check("overwrite oldest", ring_peek(rb) == 3.0)
+    check("overwrite newest", ring_peek_back(rb) == 5.0)
+    return 0.0
+end
+
+fn test_peek()
+    let mut rb = ring_create(4.0)
+    check("peek empty", ring_peek(rb) == -1.0)
+    ring_push(rb, 100.0)
+    ring_push(rb, 200.0)
+    check("peek front", ring_peek(rb) == 100.0)
+    check("peek back", ring_peek_back(rb) == 200.0)
+    return 0.0
+end
+
+fn test_get()
+    let mut rb = ring_create(4.0)
+    ring_push(rb, 10.0)
+    ring_push(rb, 20.0)
+    ring_push(rb, 30.0)
+    check("get[0]", ring_get(rb, 0.0) == 10.0)
+    check("get[1]", ring_get(rb, 1.0) == 20.0)
+    check("get[2]", ring_get(rb, 2.0) == 30.0)
+    check("get oob", ring_get(rb, 3.0) == -1.0)
+    return 0.0
+end
+
+fn test_to_array()
+    let mut rb = ring_create(3.0)
+    ring_push(rb, 1.0)
+    ring_push(rb, 2.0)
+    ring_push(rb, 3.0)
+    ring_push(rb, 4.0)  // overwrite 1
+    let arr = ring_to_array(rb)
+    check("to_array len", len(arr) == 3.0)
+    check("to_array[0]", arr[0] == 2.0)
+    check("to_array[2]", arr[2] == 4.0)
+    return 0.0
+end
+
+fn test_clear()
+    let mut rb = ring_create(5.0)
+    ring_push(rb, 1.0)
+    ring_push(rb, 2.0)
+    ring_clear(rb)
+    check("clear empty", ring_is_empty(rb) == 1.0)
+    // Should be able to push again
+    ring_push(rb, 99.0)
+    check("clear reuse", ring_peek(rb) == 99.0)
+    return 0.0
+end
+
+fn test_wrap_around()
+    // Test wrap-around after multiple push/pop cycles
+    let mut rb = ring_create(3.0)
+    ring_push(rb, 1.0)
+    ring_push(rb, 2.0)
+    ring_pop(rb)
+    ring_push(rb, 3.0)
+    ring_push(rb, 4.0)
+    // Should be: 2, 3, 4
+    check("wrap [0]", ring_get(rb, 0.0) == 2.0)
+    check("wrap [1]", ring_get(rb, 1.0) == 3.0)
+    check("wrap [2]", ring_get(rb, 2.0) == 4.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_create()
+test_push_pop()
+test_overwrite()
+test_peek()
+test_get()
+test_to_array()
+test_clear()
+test_wrap_around()
+print("")
+print("All ring_buffer tests passed (8 tests)")

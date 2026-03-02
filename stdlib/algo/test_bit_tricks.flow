@@ -1,0 +1,128 @@
+// test_bit_tricks.flow — Tests for stdlib/algo/bit_tricks.flow
+use "bit_tricks"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Popcount ──────────────────────────────────────────────
+
+fn test_popcount()
+    check("popcount 0", popcount(0.0) == 0.0)
+    check("popcount 1", popcount(1.0) == 1.0)
+    check("popcount 7", popcount(7.0) == 3.0)    // 111
+    check("popcount 255", popcount(255.0) == 8.0)  // 11111111
+    check("popcount 1024", popcount(1024.0) == 1.0)
+    return 0.0
+end
+
+// ── CLZ / CTZ ─────────────────────────────────────────────
+
+fn test_clz_ctz()
+    check("clz 1", clz(1.0) == 31.0)
+    check("clz 128", clz(128.0) == 24.0)  // bit 7 is highest
+    check("clz 0", clz(0.0) == 32.0)
+    check("ctz 1", ctz(1.0) == 0.0)
+    check("ctz 8", ctz(8.0) == 3.0)       // 1000
+    check("ctz 0", ctz(0.0) == 32.0)
+    check("ctz 12", ctz(12.0) == 2.0)     // 1100
+    return 0.0
+end
+
+// ── Power of 2 ────────────────────────────────────────────
+
+fn test_power_of_2()
+    check("pow2 1", is_power_of_2(1.0) == 1.0)
+    check("pow2 2", is_power_of_2(2.0) == 1.0)
+    check("pow2 16", is_power_of_2(16.0) == 1.0)
+    check("pow2 3", is_power_of_2(3.0) == 0.0)
+    check("pow2 0", is_power_of_2(0.0) == 0.0)
+    check("next pow2 5", next_power_of_2(5.0) == 8.0)
+    check("next pow2 8", next_power_of_2(8.0) == 8.0)
+    check("next pow2 1", next_power_of_2(1.0) == 1.0)
+    return 0.0
+end
+
+// ── Highest / lowest bit ──────────────────────────────────
+
+fn test_bit_positions()
+    check("highest 8", highest_bit(8.0) == 3.0)
+    check("highest 255", highest_bit(255.0) == 7.0)
+    check("highest 0", highest_bit(0.0) == -1.0)
+    check("lowest 12", lowest_bit(12.0) == 2.0)
+    check("lowest 1", lowest_bit(1.0) == 0.0)
+    return 0.0
+end
+
+// ── Bit reverse ───────────────────────────────────────────
+
+fn test_bit_reverse()
+    check("reverse 5 w3", bit_reverse_n(5.0, 3.0) == 5.0)   // 101 -> 101
+    check("reverse 6 w3", bit_reverse_n(6.0, 3.0) == 3.0)   // 110 -> 011
+    check("reverse 1 w4", bit_reverse_n(1.0, 4.0) == 8.0)   // 0001 -> 1000
+    return 0.0
+end
+
+// ── Parity ────────────────────────────────────────────────
+
+fn test_parity()
+    check("parity 7", bit_parity(7.0) == 1.0)   // 3 bits = odd
+    check("parity 5", bit_parity(5.0) == 0.0)    // 2 bits = even
+    check("parity 0", bit_parity(0.0) == 0.0)
+    return 0.0
+end
+
+// ── Gray code ─────────────────────────────────────────────
+
+fn test_gray_code()
+    check("gray 0", gray_code(0.0) == 0.0)
+    check("gray 1", gray_code(1.0) == 1.0)
+    check("gray 2", gray_code(2.0) == 3.0)   // 10 -> 11
+    check("gray 3", gray_code(3.0) == 2.0)   // 11 -> 10
+    // Roundtrip
+    check("gray roundtrip 5", from_gray_code(gray_code(5.0)) == 5.0)
+    check("gray roundtrip 10", from_gray_code(gray_code(10.0)) == 10.0)
+    return 0.0
+end
+
+// ── Morton code (interleave) ──────────────────────────────
+
+fn test_morton()
+    let z = bit_interleave(3.0, 5.0)  // x=11, y=101 -> 100111
+    let xy = bit_deinterleave(z)
+    check("morton roundtrip x", xy[0] == 3.0)
+    check("morton roundtrip y", xy[1] == 5.0)
+    // Known value: interleave(1, 1) = 3 (binary 11)
+    check("morton 1,1", bit_interleave(1.0, 1.0) == 3.0)
+    return 0.0
+end
+
+// ── Bit swap ──────────────────────────────────────────────
+
+fn test_bit_swap()
+    // 5 = 101, swap bits 0 and 2 -> 101 (same, both are 1)
+    check("swap same", bit_swap(5.0, 0.0, 2.0) == 5.0)
+    // 6 = 110, swap bits 0 and 1 -> 101 = 5
+    check("swap diff", bit_swap(6.0, 0.0, 1.0) == 5.0)
+    return 0.0
+end
+
+// ── Run all ───────────────────────────────────────────────
+
+test_popcount()
+test_clz_ctz()
+test_power_of_2()
+test_bit_positions()
+test_bit_reverse()
+test_parity()
+test_gray_code()
+test_morton()
+test_bit_swap()
+print("")
+print("All bit_tricks tests passed (9 tests)")

@@ -1,0 +1,359 @@
+// stdlib/algo/dp.flow — Dynamic programming utilities
+//
+// Classic DP problem solutions using flat arrays.
+//
+// Functions: dp_knapsack_01, dp_knapsack_unbounded, dp_coin_change,
+//            dp_lis_length, dp_max_subarray, dp_staircase_ways,
+//            dp_rod_cutting, dp_edit_distance, dp_fibonacci_memo,
+//            dp_min_cost_path
+//
+// Usage:
+//   use "dp"
+//   let values = [60.0, 100.0, 120.0]
+//   let weights = [10.0, 20.0, 30.0]
+//   dp_knapsack_01(values, weights, 50.0)  // 220.0
+
+fn dp_knapsack_01(values, weights, capacity)
+    // 0/1 Knapsack: maximize value within capacity.
+    // values[i], weights[i] for each item. Returns max value.
+    let n = len(values)
+    let cap = floor(capacity) + 1.0
+
+    // dp[w] = max value achievable with capacity w
+    let mut dp = []
+    let mut w = 0.0
+    while w < cap
+        push(dp, 0.0)
+        w = w + 1.0
+    end
+
+    let mut i = 0.0
+    while i < n
+        let wi = floor(weights[i])
+        let vi = values[i]
+        // Traverse backwards to avoid using item twice
+        w = floor(capacity)
+        while w >= wi
+            let with_item = dp[w - wi] + vi
+            if with_item > dp[w]
+                dp[w] = with_item
+            end
+            w = w - 1.0
+        end
+        i = i + 1.0
+    end
+
+    return dp[floor(capacity)]
+end
+
+fn dp_knapsack_unbounded(values, weights, capacity)
+    // Unbounded knapsack: each item can be used multiple times.
+    let n = len(values)
+    let cap = floor(capacity) + 1.0
+
+    let mut dp = []
+    let mut w = 0.0
+    while w < cap
+        push(dp, 0.0)
+        w = w + 1.0
+    end
+
+    w = 1.0
+    while w <= floor(capacity)
+        let mut i = 0.0
+        while i < n
+            let wi = floor(weights[i])
+            if wi <= w
+                let val = dp[w - wi] + values[i]
+                if val > dp[w]
+                    dp[w] = val
+                end
+            end
+            i = i + 1.0
+        end
+        w = w + 1.0
+    end
+
+    return dp[floor(capacity)]
+end
+
+fn dp_coin_change(coins, amount)
+    // Minimum coins needed to make amount. Returns -1.0 if impossible.
+    let n = len(coins)
+    let target = floor(amount) + 1.0
+    let inf = 999999999.0
+
+    let mut dp = []
+    let mut i = 0.0
+    while i < target
+        push(dp, inf)
+        i = i + 1.0
+    end
+    dp[0] = 0.0
+
+    i = 1.0
+    while i <= floor(amount)
+        let mut j = 0.0
+        while j < n
+            let c = floor(coins[j])
+            if c <= i
+                let prev = dp[i - c]
+                if prev + 1.0 < dp[i]
+                    dp[i] = prev + 1.0
+                end
+            end
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+
+    if dp[floor(amount)] >= inf
+        return -1.0
+    end
+    return dp[floor(amount)]
+end
+
+fn dp_lis_length(arr)
+    // Length of longest increasing subsequence.
+    // O(n²) DP approach.
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+
+    let mut dp = []
+    let mut i = 0.0
+    while i < n
+        push(dp, 1.0)
+        i = i + 1.0
+    end
+
+    let mut max_len = 1.0
+    i = 1.0
+    while i < n
+        let mut j = 0.0
+        while j < i
+            if arr[j] < arr[i]
+                if dp[j] + 1.0 > dp[i]
+                    dp[i] = dp[j] + 1.0
+                end
+            end
+            j = j + 1.0
+        end
+        if dp[i] > max_len
+            max_len = dp[i]
+        end
+        i = i + 1.0
+    end
+
+    return max_len
+end
+
+fn dp_max_subarray(arr)
+    // Maximum subarray sum (Kadane's algorithm).
+    // Returns the maximum sum.
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+
+    let mut max_sum = arr[0]
+    let mut curr_sum = arr[0]
+
+    let mut i = 1.0
+    while i < n
+        if curr_sum + arr[i] > arr[i]
+            curr_sum = curr_sum + arr[i]
+        else
+            curr_sum = arr[i]
+        end
+        if curr_sum > max_sum
+            max_sum = curr_sum
+        end
+        i = i + 1.0
+    end
+
+    return max_sum
+end
+
+fn dp_staircase_ways(n)
+    // Number of ways to climb n stairs (1 or 2 steps at a time).
+    // Classic Fibonacci-like DP.
+    if n <= 0.0
+        return 0.0
+    end
+    if n == 1.0
+        return 1.0
+    end
+    if n == 2.0
+        return 2.0
+    end
+
+    let mut a = 1.0
+    let mut b = 2.0
+    let mut i = 3.0
+    while i <= n
+        let temp = a + b
+        a = b
+        b = temp
+        i = i + 1.0
+    end
+    return b
+end
+
+fn dp_rod_cutting(prices, rod_length)
+    // Maximize revenue by cutting a rod of given length.
+    // prices[i] = price for rod of length (i+1).
+    let n = floor(rod_length) + 1.0
+
+    let mut dp = []
+    let mut i = 0.0
+    while i < n
+        push(dp, 0.0)
+        i = i + 1.0
+    end
+
+    i = 1.0
+    while i <= floor(rod_length)
+        let mut j = 0.0
+        while j < i && j < len(prices)
+            let val = prices[j] + dp[i - j - 1.0]
+            if val > dp[i]
+                dp[i] = val
+            end
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+
+    return dp[floor(rod_length)]
+end
+
+fn dp_edit_distance(a, b)
+    // Minimum edit distance (insert, delete, replace).
+    // Same as Levenshtein distance. Returns integer cost.
+    let na = len(a)
+    let nb = len(b)
+
+    if na == 0.0
+        return nb
+    end
+    if nb == 0.0
+        return na
+    end
+
+    let cols = nb + 1.0
+    let total = (na + 1.0) * cols
+    let mut dp = []
+    let mut k = 0.0
+    while k < total
+        push(dp, 0.0)
+        k = k + 1.0
+    end
+
+    let mut i = 0.0
+    while i <= na
+        dp[i * cols] = i
+        i = i + 1.0
+    end
+    let mut j = 0.0
+    while j <= nb
+        dp[j] = j
+        j = j + 1.0
+    end
+
+    i = 1.0
+    while i <= na
+        j = 1.0
+        while j <= nb
+            if char_at(a, i - 1.0) == char_at(b, j - 1.0)
+                dp[i * cols + j] = dp[(i - 1.0) * cols + (j - 1.0)]
+            else
+                let del = dp[(i - 1.0) * cols + j] + 1.0
+                let ins = dp[i * cols + (j - 1.0)] + 1.0
+                let sub = dp[(i - 1.0) * cols + (j - 1.0)] + 1.0
+                let mut mn = del
+                if ins < mn
+                    mn = ins
+                end
+                if sub < mn
+                    mn = sub
+                end
+                dp[i * cols + j] = mn
+            end
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+
+    return dp[na * cols + nb]
+end
+
+fn dp_fibonacci_memo(n)
+    // Fibonacci with bottom-up DP (no recursion).
+    if n <= 0.0
+        return 0.0
+    end
+    if n == 1.0
+        return 1.0
+    end
+
+    let mut a = 0.0
+    let mut b = 1.0
+    let mut i = 2.0
+    while i <= n
+        let temp = a + b
+        a = b
+        b = temp
+        i = i + 1.0
+    end
+    return b
+end
+
+fn dp_min_cost_path(grid, rows, cols)
+    // Minimum cost path from top-left to bottom-right in a grid.
+    // Can only move right or down.
+    // grid: flat array [row0col0, row0col1, ..., row1col0, ...].
+    let total = rows * cols
+    let mut dp = []
+    let mut k = 0.0
+    while k < total
+        push(dp, 0.0)
+        k = k + 1.0
+    end
+
+    dp[0] = grid[0]
+
+    // First row
+    let mut j = 1.0
+    while j < cols
+        dp[j] = dp[j - 1.0] + grid[j]
+        j = j + 1.0
+    end
+
+    // First column
+    let mut i = 1.0
+    while i < rows
+        dp[i * cols] = dp[(i - 1.0) * cols] + grid[i * cols]
+        i = i + 1.0
+    end
+
+    // Fill rest
+    i = 1.0
+    while i < rows
+        j = 1.0
+        while j < cols
+            let from_up = dp[(i - 1.0) * cols + j]
+            let from_left = dp[i * cols + (j - 1.0)]
+            let mut mn = from_up
+            if from_left < mn
+                mn = from_left
+            end
+            dp[i * cols + j] = mn + grid[i * cols + j]
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+
+    return dp[(rows - 1.0) * cols + (cols - 1.0)]
+end

@@ -1,0 +1,47 @@
+#version 450
+// Matrix-vector multiplication: y = A * x
+// A is m×n, x is n×1, y is m×1
+// Each workgroup computes one element of y using reduction
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Matrix { float data[]; } mat;
+layout(set=0, binding=1) buffer VecIn  { float data[]; } x;
+layout(set=0, binding=2) buffer VecOut { float data[]; } y;
+
+layout(push_constant) uniform PC {
+    float rows;
+    float cols;
+} pc;
+
+shared float partial[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint rows = uint(pc.rows);
+    uint cols = uint(pc.cols);
+
+    if (row >= rows) {
+        return;
+    }
+
+    float sum = 0.0;
+    for (uint i = tid; i < cols; i += 256u) {
+        sum += mat.data[row * cols + i] * x.data[i];
+    }
+
+    partial[tid] = sum;
+    barrier();
+
+    // Parallel reduction
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            partial[tid] += partial[tid + s];
+        }
+        barrier();
+    }
+
+    if (tid == 0u) {
+        y.data[row] = partial[0];
+    }
+}

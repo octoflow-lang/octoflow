@@ -243,6 +243,29 @@ let rem_pos = ecs_remove_pos(0.0, pos_eid, pos_x, pos_y)
 check("ecs_remove_pos", rem_pos, 1.0)
 check("pos_eid after remove", len(pos_eid), 1.0)
 
+// Verify swap-delete correctness: remaining entity should be entity 1
+check("pos swap-delete eid", pos_eid[0], 1.0)
+check("pos swap-delete x", pos_x[0], 10.0)
+check("pos swap-delete y", pos_y[0], 20.0)
+
+// Remove velocity component
+let rem_vel = ecs_remove_vel(0.0, vel_eid, vel_vx, vel_vy)
+check("ecs_remove_vel", rem_vel, 1.0)
+check("vel_eid after remove", len(vel_eid), 0.0)
+
+// Remove missing velocity returns 0
+let rem_vel2 = ecs_remove_vel(99.0, vel_eid, vel_vx, vel_vy)
+check("ecs_remove_vel missing", rem_vel2, 0.0)
+
+// Remove health component
+let rem_hp = ecs_remove_hp(0.0, hp_eid, hp_val)
+check("ecs_remove_hp", rem_hp, 1.0)
+check("hp_eid after remove", len(hp_eid), 0.0)
+
+// Remove missing health returns 0
+let rem_hp2 = ecs_remove_hp(99.0, hp_eid, hp_val)
+check("ecs_remove_hp missing", rem_hp2, 0.0)
+
 // ── Physics2D tests ───────────────────────────────────────
 print("7. Physics2D")
 

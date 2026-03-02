@@ -1,0 +1,59 @@
+// stdlib/devops/octopress_compress.flow — OctoPress Model Compression Tool
+//
+// Compresses a GGUF model into per-tensor .ocp files using OctoPress.
+// Dequantizes weights to F32 and applies delta compression for 3-5x
+// savings over raw F32 while eliminating inference-time dequantization.
+//
+// Usage:
+//   octoflow run stdlib/devops/octopress_compress.flow --allow-read --allow-write \
+//     -- model.gguf model_ocp/
+//
+// Arguments:
+//   positional 0: input GGUF model path
+//   positional 1: output directory for .ocp files
+//
+// After compression, run inference with:
+//   octoflow run stdlib/llm/generate_ocp.flow --allow-read --allow-write --allow-ffi \
+//     -- model_ocp/ "Your prompt here"
+
+use "../sys/args"
+use "../llm/decompose_ocp"
+
+print("=== OctoPress Model Compression ===")
+print("")
+
+let args = parse_args()
+
+// Get input and output paths
+let gguf_path = arg_value(args, "0", "")
+let output_dir = arg_value(args, "1", "")
+
+if len(gguf_path) < 2.0
+    print("Usage: octoflow run octopress_compress.flow --allow-read --allow-write -- <model.gguf> <output_dir>")
+    print("")
+    print("Arguments:")
+    print("  model.gguf  — Path to input GGUF model file")
+    print("  output_dir  — Directory for output .ocp files (must exist)")
+    print("")
+    print("Example:")
+    print("  octoflow run stdlib/devops/octopress_compress.flow --allow-read --allow-write -- models/qwen-0.5b.gguf models/qwen-0.5b-ocp/")
+else
+    if len(output_dir) < 2.0
+        // Default output: input path + _ocp suffix
+        let base = str_replace(gguf_path, ".gguf", "")
+        let out = base + "_ocp"
+        print("Output directory not specified, using: {out}")
+        print("")
+        let t_start = time()
+        let total = decompose_gguf_ocp(gguf_path, out)
+        let t_elapsed = time() - t_start
+        print("")
+        print("Compression time: {t_elapsed}ms")
+    else
+        let t_start = time()
+        let total = decompose_gguf_ocp(gguf_path, output_dir)
+        let t_elapsed = time() - t_start
+        print("")
+        print("Compression time: {t_elapsed}ms")
+    end
+end

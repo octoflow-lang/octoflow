@@ -5,9 +5,9 @@
 //
 // Run: octoflow run gui_calculator.flow
 
-use "gui/gui"
-use "gui/layout"
-use "gui/theme"
+use "../stdlib/gui/gui"
+use "../stdlib/gui/layout"
+use "../stdlib/gui/theme"
 
 let _t = gui_theme_dark()
 gui_init(280, 380, "Calculator")

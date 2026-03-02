@@ -1,0 +1,39 @@
+// 10M Element-wise GPU benchmark
+// Measures: gpu_add, gpu_mul on 10M float arrays
+// Compare with: python examples/benchmark_elementwise_10m.py
+
+print("=== OctoFlow 10M Element-wise GPU Benchmark ===")
+
+// Create 10M element arrays
+let t0 = now_ms()
+let a = gpu_fill(1.5, 10000000.0)
+let t1 = now_ms()
+let fill_ms = t1 - t0
+print("gpu_fill 10M:   {fill_ms:.1} ms")
+
+let b = gpu_fill(2.5, 10000000.0)
+let n = len(a)
+print("array len:      {n}")
+
+// Warmup
+let warm = gpu_add(a, b)
+
+// Timed gpu_add
+let t2 = now_ms()
+let c_add = gpu_add(a, b)
+let t3 = now_ms()
+let add_ms = t3 - t2
+
+// Timed gpu_mul
+let t4 = now_ms()
+let c_mul = gpu_mul(a, b)
+let t5 = now_ms()
+let mul_ms = t5 - t4
+
+// Verify
+let v0 = c_add[0]
+let v1 = c_mul[0]
+print("add[0]:         {v0}")
+print("mul[0]:         {v1}")
+print("gpu_add 10M:    {add_ms:.1} ms")
+print("gpu_mul 10M:    {mul_ms:.1} ms")

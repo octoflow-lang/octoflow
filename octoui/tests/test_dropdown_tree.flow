@@ -1,0 +1,188 @@
+// tests/test_dropdown_tree.flow — Dropdown + TreeView Tests
+//
+// Tests: dropdown item count, selection, tree node hierarchy.
+//
+// Run: octoflow run octoui/tests/test_dropdown_tree.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/text"
+use "../widgets/input/button"
+use "../widgets/input/dropdown"
+use "../widgets/data/treeview"
+use "../widgets/layout/column"
+use "../platform/desktop/window_win32"
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// Open window
+let _w = ui_window_open(500.0, 400.0, "Dropdown + Tree Test")
+
+// Root layout
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 500.0, 400.0)
+
+// ── Tests 1-5: Dropdown ──
+let dd = ui_dropdown(root, 200.0, 28.0)
+if dd >= 0.0
+  print("PASS: dropdown widget valid")
+  pass = pass + 1.0
+else
+  print("FAIL: dropdown widget invalid")
+  fail = fail + 1.0
+end
+
+let _di1 = ui_dropdown_option(dd, "OPTION A")
+let _di2 = ui_dropdown_option(dd, "OPTION B")
+let _di3 = ui_dropdown_option(dd, "OPTION C")
+let _dif = ui_dropdown_finalize(dd)
+
+// Default selection is 0
+let dd_sel1 = ui_dropdown_selected(dd)
+if dd_sel1 == 0.0
+  print("PASS: dropdown default selection is 0")
+  pass = pass + 1.0
+else
+  print("FAIL: dropdown default should be 0")
+  fail = fail + 1.0
+end
+
+// Set selection to 2
+let _ds = ui_dropdown_set(dd, 2.0)
+let dd_sel2 = ui_dropdown_selected(dd)
+if dd_sel2 == 2.0
+  print("PASS: dropdown selection updated to 2")
+  pass = pass + 1.0
+else
+  print("FAIL: dropdown should be 2")
+  fail = fail + 1.0
+end
+
+// Back to 0
+let _ds2 = ui_dropdown_set(dd, 0.0)
+let dd_sel3 = ui_dropdown_selected(dd)
+if dd_sel3 == 0.0
+  print("PASS: dropdown selection back to 0")
+  pass = pass + 1.0
+else
+  print("FAIL: dropdown should be 0")
+  fail = fail + 1.0
+end
+
+// Set to 1
+let _ds3 = ui_dropdown_set(dd, 1.0)
+let dd_sel4 = ui_dropdown_selected(dd)
+if dd_sel4 == 1.0
+  print("PASS: dropdown selection set to 1")
+  pass = pass + 1.0
+else
+  print("FAIL: dropdown should be 1")
+  fail = fail + 1.0
+end
+
+// ── Tests 6-13: TreeView ──
+let tv = ui_treeview(root, 460.0, 6.0)
+if tv >= 0.0
+  print("PASS: treeview widget valid")
+  pass = pass + 1.0
+else
+  print("FAIL: treeview widget invalid")
+  fail = fail + 1.0
+end
+
+let n_root = ui_treeview_node(tv, -1.0, "PROJECT")
+if n_root >= 0.0
+  print("PASS: root node valid")
+  pass = pass + 1.0
+else
+  print("FAIL: root node invalid")
+  fail = fail + 1.0
+end
+
+let n_src = ui_treeview_node(tv, n_root, "SRC")
+if n_src >= 0.0
+  print("PASS: src node valid")
+  pass = pass + 1.0
+else
+  print("FAIL: src node invalid")
+  fail = fail + 1.0
+end
+
+let n_main = ui_treeview_node(tv, n_src, "MAIN.FLOW")
+let n_test = ui_treeview_node(tv, n_src, "TEST.FLOW")
+let n_docs = ui_treeview_node(tv, n_root, "DOCS")
+let n_readme = ui_treeview_node(tv, n_docs, "README.MD")
+let _tvf = ui_treeview_finalize(tv)
+
+// Default selection is -1 (nothing selected until finalize)
+let tv_sel = ui_treeview_selected(tv)
+if tv_sel == -1.0
+  print("PASS: treeview default selection is -1 (none)")
+  pass = pass + 1.0
+else
+  print("FAIL: treeview default should be -1")
+  fail = fail + 1.0
+end
+
+// Root node is expanded by default
+let root_exp = _ui_tv_expanded[n_root]
+if root_exp == 1.0
+  print("PASS: root node expanded by default")
+  pass = pass + 1.0
+else
+  print("FAIL: root should be expanded")
+  fail = fail + 1.0
+end
+
+// Toggle root node (collapses)
+let _tvc = ui_treeview_toggle(tv, n_root)
+let root_exp2 = _ui_tv_expanded[n_root]
+if root_exp2 == 0.0
+  print("PASS: root collapsed after toggle()")
+  pass = pass + 1.0
+else
+  print("FAIL: root should be collapsed")
+  fail = fail + 1.0
+end
+
+// Toggle again (expands)
+let _tve = ui_treeview_toggle(tv, n_root)
+let root_exp3 = _ui_tv_expanded[n_root]
+if root_exp3 == 1.0
+  print("PASS: root expanded after second toggle()")
+  pass = pass + 1.0
+else
+  print("FAIL: root should be expanded")
+  fail = fail + 1.0
+end
+
+// Leaf node label
+let main_label = ui_treeview_label(n_main)
+if main_label == "MAIN.FLOW"
+  print("PASS: leaf node label correct")
+  pass = pass + 1.0
+else
+  print("FAIL: wrong label")
+  fail = fail + 1.0
+end
+
+// ── Summary ──
+let _l = ui_layout_update()
+let _tvr = ui_treeview_refresh_all()
+let _r = ui_pipeline_render()
+let _p = ui_pipeline_present()
+let _sl = sleep(200.0)
+let _wc = ui_window_close()
+
+let total = pass + fail
+print(" ")
+print("test_dropdown_tree: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

@@ -1,0 +1,34 @@
+use "../stdlib/terminal/render"
+
+// Generate a simple gradient test pattern
+let w = 40.0
+let h = 20.0
+
+let mut r = []
+let mut g = []
+let mut b = []
+
+for y in range(0, int(h))
+  for x in range(0, int(w))
+    let rv = int(x / w * 255.0)
+    let gv = int(y / h * 255.0)
+    let bv = int(128.0)
+    push(r, rv)
+    push(g, gv)
+    push(b, bv)
+  end
+end
+
+print("=== Halfblock render ===")
+term_render(w, h, r, g, b, "halfblock")
+
+print("=== Digits render ===")
+term_render(w, h, r, g, b, "digits")
+
+print("=== Kitty render (escape sequences) ===")
+term_render(w, h, r, g, b, "kitty")
+
+print("=== Sixel render (escape sequences) ===")
+term_render(w, h, r, g, b, "sixel")
+
+print("ALL DONE")

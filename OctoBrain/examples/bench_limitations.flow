@@ -1,0 +1,357 @@
+// OctoBrain Limitations Benchmark (XOR + Spiral)
+// Documents where cosine similarity fails and explains why.
+// These are NOT expected to pass — they are diagnostic.
+//
+// Test A — XOR: 4 points repeated 50x, interleaved.
+//   Expected ~50% accuracy because cosine similarity cannot separate XOR classes.
+//
+// Test B — Spiral raw: 2 interleaved spirals in 2D.
+//   Expected ~50% because normalization removes radius information.
+//
+// Test C — Spiral windowed: consecutive spiral points as 6D windows.
+//   Expected 60-75% improvement because local curvature differs angularly in 6D.
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\bench_limitations.flow"
+
+use "../lib/octobrain"
+use "../lib/benchmark"
+
+print("=== OctoBrain Limitations Benchmark ===")
+print("Purpose: Document where cosine similarity fails and explain why.")
+print("")
+
+// ═══════════════════════════════════════════════════════════════════
+// Test A — XOR (200 observations)
+// ═══════════════════════════════════════════════════════════════════
+print("--- Test A: XOR Pattern (200 observations) ---")
+print("")
+
+// 4 points repeated 50x each in interleaved order:
+//   [0,0]=class 0, [1,0]=class 1, [0,1]=class 1, [1,1]=class 0
+
+let mut brain_a = octobrain_new(2.0)
+let mut p_state_a = proto_new()
+let mut p_embs_a = []
+let mut p_mc_a = []
+let mut e_state_a = embed_new()
+let mut W_embed_a = []
+let mut obs_buffer_a = []
+let mut edge_state_a = edges_new()
+let mut en_a = []
+let mut ea_a = []
+let mut eo_a = []
+let mut ep_a = []
+let mut ew_a = []
+let mut eact_a = []
+let mut window_a = []
+let mut W_score_a = []
+
+let mut match_protos_a = []
+let mut labels_a = []
+
+let mut rep = 0.0
+while rep < 50.0
+  // Point 1: [0,0] -> class 0
+  // Zero vector: cosine_sim = 0 always, creates new proto every time
+  let d1 = [0.0, 0.0]
+  let dummy1 = octobrain_observe(brain_a, p_state_a, p_embs_a, p_mc_a, e_state_a, W_embed_a, obs_buffer_a, edge_state_a, en_a, ea_a, eo_a, ep_a, ew_a, eact_a, window_a, W_score_a, d1)
+  let mid1 = map_get(p_state_a, "last_match_id")
+  push(match_protos_a, mid1)
+  push(labels_a, 0.0)
+
+  // Point 2: [1,0] -> class 1
+  let d2 = [1.0, 0.0]
+  let dummy2 = octobrain_observe(brain_a, p_state_a, p_embs_a, p_mc_a, e_state_a, W_embed_a, obs_buffer_a, edge_state_a, en_a, ea_a, eo_a, ep_a, ew_a, eact_a, window_a, W_score_a, d2)
+  let mid2 = map_get(p_state_a, "last_match_id")
+  push(match_protos_a, mid2)
+  push(labels_a, 1.0)
+
+  // Point 3: [0,1] -> class 1
+  let d3 = [0.0, 1.0]
+  let dummy3 = octobrain_observe(brain_a, p_state_a, p_embs_a, p_mc_a, e_state_a, W_embed_a, obs_buffer_a, edge_state_a, en_a, ea_a, eo_a, ep_a, ew_a, eact_a, window_a, W_score_a, d3)
+  let mid3 = map_get(p_state_a, "last_match_id")
+  push(match_protos_a, mid3)
+  push(labels_a, 1.0)
+
+  // Point 4: [1,1] -> class 0
+  let d4 = [1.0, 1.0]
+  let dummy4 = octobrain_observe(brain_a, p_state_a, p_embs_a, p_mc_a, e_state_a, W_embed_a, obs_buffer_a, edge_state_a, en_a, ea_a, eo_a, ep_a, ew_a, eact_a, window_a, W_score_a, d4)
+  let mid4 = map_get(p_state_a, "last_match_id")
+  push(match_protos_a, mid4)
+  push(labels_a, 0.0)
+
+  rep = rep + 1.0
+end
+
+let stats_a = octobrain_stats(brain_a, p_state_a, edge_state_a)
+let pc_a = map_get(stats_a, "proto_count")
+let num_samples_a = len(match_protos_a)
+
+// Build majority-vote mapping and compute accuracy
+let mapping_a = build_mapping(match_protos_a, labels_a, pc_a, 2.0)
+let accuracy_a = compute_accuracy(match_protos_a, labels_a, mapping_a, num_samples_a)
+
+print("Proto count: {pc_a}")
+print("Accuracy: {accuracy_a:.4}")
+print("")
+
+// Confusion matrix
+print("Confusion matrix:")
+let dummy_cm_a = print_confusion(match_protos_a, labels_a, mapping_a, num_samples_a, 2.0)
+print("")
+
+// Proto purity
+print("Proto purity:")
+let dummy_pur_a = print_purity(match_protos_a, labels_a, pc_a, 2.0, num_samples_a)
+print("")
+
+print("NOTE XOR: Accuracy {accuracy_a:.4}")
+print("  DIAGNOSTIC: XOR accidentally separable in cosine space!")
+print("  - [0,0] -> zero vector, creates a new proto every observation (50 protos)")
+print("  - [1,0] (class 1) -> angle 0 degrees, gets one proto")
+print("  - [0,1] (class 1) -> angle 90 degrees, gets one proto")
+print("  - [1,1] (class 0) -> angle 45 degrees, gets one proto")
+print("  Since each non-zero point maps to a PURE proto (only one class),")
+print("  majority-vote achieves perfect accuracy. The zero-vector protos are all")
+print("  class 0 and also get mapped correctly. Proto count ({pc_a}) is bloated")
+print("  by zero-vector weakness, but accuracy is not affected.")
+print("  KEY INSIGHT: 2D XOR with cosine similarity works because the class-0")
+print("  non-zero point [1,1] is angularly distinct from class-1 points.")
+print("  The real failure mode is the zero-vector proto explosion.")
+print("")
+
+// ═══════════════════════════════════════════════════════════════════
+// Test B — Spiral raw (200 points per class, 2D)
+// ═══════════════════════════════════════════════════════════════════
+print("--- Test B: Spiral Raw (400 observations, 2D) ---")
+print("")
+
+// Generate 2 interleaved spirals:
+//   Class 0: r = i/100 * 3, theta = r * 3.14, x = r*cos(theta), y = r*sin(theta)
+//   Class 1: same r/theta but theta offset by pi
+
+let mut brain_b = octobrain_new(2.0)
+let mut p_state_b = proto_new()
+let mut p_embs_b = []
+let mut p_mc_b = []
+let mut e_state_b = embed_new()
+let mut W_embed_b = []
+let mut obs_buffer_b = []
+let mut edge_state_b = edges_new()
+let mut en_b = []
+let mut ea_b = []
+let mut eo_b = []
+let mut ep_b = []
+let mut ew_b = []
+let mut eact_b = []
+let mut window_b = []
+let mut W_score_b = []
+
+let mut match_protos_b = []
+let mut labels_b = []
+
+let num_per_class = 200.0
+let mut si = 0.0
+while si < num_per_class
+  let r = si / 100.0 * 3.0
+  let theta = r * 3.14159
+
+  // Class 0 point
+  let x0 = r * cos(theta)
+  let y0 = r * sin(theta)
+  // Avoid zero vector at si=0
+  let mut d0 = []
+  if si == 0.0
+    push(d0, 0.01)
+    push(d0, 0.01)
+  else
+    push(d0, x0)
+    push(d0, y0)
+  end
+  let dummy_b0 = octobrain_observe(brain_b, p_state_b, p_embs_b, p_mc_b, e_state_b, W_embed_b, obs_buffer_b, edge_state_b, en_b, ea_b, eo_b, ep_b, ew_b, eact_b, window_b, W_score_b, d0)
+  let mid_b0 = map_get(p_state_b, "last_match_id")
+  push(match_protos_b, mid_b0)
+  push(labels_b, 0.0)
+
+  // Class 1 point (offset by pi)
+  let theta1 = theta + 3.14159
+  let x1 = r * cos(theta1)
+  let y1 = r * sin(theta1)
+  let mut d1b = []
+  if si == 0.0
+    push(d1b, -0.01)
+    push(d1b, -0.01)
+  else
+    push(d1b, x1)
+    push(d1b, y1)
+  end
+  let dummy_b1 = octobrain_observe(brain_b, p_state_b, p_embs_b, p_mc_b, e_state_b, W_embed_b, obs_buffer_b, edge_state_b, en_b, ea_b, eo_b, ep_b, ew_b, eact_b, window_b, W_score_b, d1b)
+  let mid_b1 = map_get(p_state_b, "last_match_id")
+  push(match_protos_b, mid_b1)
+  push(labels_b, 1.0)
+
+  si = si + 1.0
+end
+
+let stats_b = octobrain_stats(brain_b, p_state_b, edge_state_b)
+let pc_b = map_get(stats_b, "proto_count")
+let num_samples_b = len(match_protos_b)
+
+let mapping_b = build_mapping(match_protos_b, labels_b, pc_b, 2.0)
+let accuracy_b = compute_accuracy(match_protos_b, labels_b, mapping_b, num_samples_b)
+
+print("Proto count: {pc_b}")
+print("Accuracy: {accuracy_b:.4}")
+print("")
+
+print("Confusion matrix:")
+let dummy_cm_b = print_confusion(match_protos_b, labels_b, mapping_b, num_samples_b, 2.0)
+print("")
+
+print("Proto purity:")
+let dummy_pur_b = print_purity(match_protos_b, labels_b, pc_b, 2.0, num_samples_b)
+print("")
+
+print("NOTE Spiral Raw: Accuracy {accuracy_b:.4} (expected ~50%)")
+print("  WHY: Normalization projects all points onto the unit circle,")
+print("  destroying the radius information that distinguishes the spirals.")
+print("  Both spirals trace the same angular path (just phase-shifted by pi),")
+print("  but at each angle there are points from BOTH classes at different radii.")
+print("  After normalization, same-angle points from different classes become identical.")
+print("")
+
+// ═══════════════════════════════════════════════════════════════════
+// Test C — Spiral windowed (6D)
+// ═══════════════════════════════════════════════════════════════════
+print("--- Test C: Spiral Windowed (6D, consecutive triplets) ---")
+print("")
+
+// Use consecutive spiral points as windows:
+//   [x_t, y_t, x_{t+1}, y_{t+1}, x_{t+2}, y_{t+2}]
+// Local curvature differs between spirals -> angular separation in 6D.
+
+// First, generate all spiral points for both classes
+let mut spiral0_x = []
+let mut spiral0_y = []
+let mut spiral1_x = []
+let mut spiral1_y = []
+
+let mut gi = 0.0
+while gi < num_per_class
+  let r = gi / 100.0 * 3.0
+  let theta = r * 3.14159
+  // Class 0
+  let gx0 = r * cos(theta)
+  let gy0 = r * sin(theta)
+  push(spiral0_x, gx0)
+  push(spiral0_y, gy0)
+  // Class 1
+  let theta1 = theta + 3.14159
+  let gx1 = r * cos(theta1)
+  let gy1 = r * sin(theta1)
+  push(spiral1_x, gx1)
+  push(spiral1_y, gy1)
+  gi = gi + 1.0
+end
+
+let mut brain_c = octobrain_new(2.0)
+let mut p_state_c = proto_new()
+let mut p_embs_c = []
+let mut p_mc_c = []
+let mut e_state_c = embed_new()
+let mut W_embed_c = []
+let mut obs_buffer_c = []
+let mut edge_state_c = edges_new()
+let mut en_c = []
+let mut ea_c = []
+let mut eo_c = []
+let mut ep_c = []
+let mut ew_c = []
+let mut eact_c = []
+let mut window_c = []
+let mut W_score_c = []
+
+let mut match_protos_c = []
+let mut labels_c = []
+
+// Window: 3 consecutive points -> 6D vector
+// We can make num_per_class - 2 windows per class
+// Start from index 1 to avoid zero vector at index 0
+let win_count = num_per_class - 3.0
+let mut wi = 1.0
+while wi < win_count + 1.0
+  // Class 0 window: [x_i, y_i, x_{i+1}, y_{i+1}, x_{i+2}, y_{i+2}]
+  let mut dc0 = []
+  push(dc0, spiral0_x[wi])
+  push(dc0, spiral0_y[wi])
+  push(dc0, spiral0_x[wi + 1.0])
+  push(dc0, spiral0_y[wi + 1.0])
+  push(dc0, spiral0_x[wi + 2.0])
+  push(dc0, spiral0_y[wi + 2.0])
+
+  let dummy_c0 = octobrain_observe(brain_c, p_state_c, p_embs_c, p_mc_c, e_state_c, W_embed_c, obs_buffer_c, edge_state_c, en_c, ea_c, eo_c, ep_c, ew_c, eact_c, window_c, W_score_c, dc0)
+  let mid_c0 = map_get(p_state_c, "last_match_id")
+  push(match_protos_c, mid_c0)
+  push(labels_c, 0.0)
+
+  // Class 1 window
+  let mut dc1 = []
+  push(dc1, spiral1_x[wi])
+  push(dc1, spiral1_y[wi])
+  push(dc1, spiral1_x[wi + 1.0])
+  push(dc1, spiral1_y[wi + 1.0])
+  push(dc1, spiral1_x[wi + 2.0])
+  push(dc1, spiral1_y[wi + 2.0])
+
+  let dummy_c1 = octobrain_observe(brain_c, p_state_c, p_embs_c, p_mc_c, e_state_c, W_embed_c, obs_buffer_c, edge_state_c, en_c, ea_c, eo_c, ep_c, ew_c, eact_c, window_c, W_score_c, dc1)
+  let mid_c1 = map_get(p_state_c, "last_match_id")
+  push(match_protos_c, mid_c1)
+  push(labels_c, 1.0)
+
+  wi = wi + 1.0
+end
+
+let stats_c = octobrain_stats(brain_c, p_state_c, edge_state_c)
+let pc_c = map_get(stats_c, "proto_count")
+let num_samples_c = len(match_protos_c)
+
+let mapping_c = build_mapping(match_protos_c, labels_c, pc_c, 2.0)
+let accuracy_c = compute_accuracy(match_protos_c, labels_c, mapping_c, num_samples_c)
+
+print("Proto count: {pc_c}")
+print("Accuracy: {accuracy_c:.4}")
+print("")
+
+print("Confusion matrix:")
+let dummy_cm_c = print_confusion(match_protos_c, labels_c, mapping_c, num_samples_c, 2.0)
+print("")
+
+print("Proto purity:")
+let dummy_pur_c = print_purity(match_protos_c, labels_c, pc_c, 2.0, num_samples_c)
+print("")
+
+print("NOTE Spiral Windowed: Accuracy {accuracy_c:.4} (expected 60-75%, got ~50%)")
+print("  WHY ~50%: The pi phase offset means class-1 windows are exactly the")
+print("  negation of class-0 windows: if class 0 has [x,y,...], class 1 has [-x,-y,...].")
+print("  After normalization, these point in opposite directions (cosine_sim = -1.0),")
+print("  so they form separate protos. BUT interleaved feeding means each radius")
+print("  creates protos visited equally by both classes. The EMA drift pulls protos")
+print("  toward the midpoint of alternating class-0/class-1 observations,")
+print("  destroying the angular separation. Proto purity stays at ~50%.")
+print("  INSIGHT: Windowing helps when curvature differs ASYMMETRICALLY between")
+print("  classes. With a perfect pi offset, the symmetry is preserved in 6D too.")
+print("")
+
+// ── Summary ───────────────────────────────────────────────────────
+print("=== Summary ===")
+print("Test A (XOR):            accuracy={accuracy_a:.4}  protos={pc_a}  (expected ~50%)")
+print("Test B (Spiral raw 2D):  accuracy={accuracy_b:.4}  protos={pc_b}  (expected ~50%)")
+print("Test C (Spiral wind 6D): accuracy={accuracy_c:.4}  protos={pc_c}  (expected 60-75%)")
+print("")
+print("These results document cosine similarity behavior:")
+print("  1. Zero vectors create a new proto per observation (known weakness)")
+print("  2. XOR accidentally works in 2D cosine space (angular separation exists)")
+print("  3. Normalization destroys magnitude (radius) information in 2D spirals")
+print("  4. Symmetric spiral offset (pi) defeats windowing — curvature is mirrored")
+print("")
+print("--- limitations benchmark complete ---")

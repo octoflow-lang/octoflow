@@ -1,0 +1,177 @@
+// stdlib/search/tests/test_search.flow — OctoSearch Tests
+//
+// Tests the tokenizer, punctuation stripping, and index builder.
+// GPU BM25 scoring tested via end-to-end search in engine.flow.
+//
+// Run: octoflow run stdlib/search/tests/test_search.flow --allow-read --allow-write
+
+use "../indexer"
+
+print("=== Test: OctoSearch ===")
+print("")
+
+let mut _cnt = [0.0, 0.0]
+
+fn check(name, cond)
+    if cond > 0.5
+        print("  PASS: {name}")
+        _cnt[0] = _cnt[0] + 1.0
+    else
+        print("  FAIL: {name}")
+        _cnt[1] = _cnt[1] + 1.0
+    end
+    return 0.0
+end
+
+// ── Tokenizer Tests ───────────────────────────────────────────────
+
+print("Tokenizer")
+
+// Test basic tokenization
+let mut tok1 = []
+let n1 = octosearch_tokenize("Hello World GPU compute is FAST", tok1)
+let _t = check("basic tokenize count > 0", n1 > 0.0)
+let _t = check("basic tokenize array populated", len(tok1) > 0.0)
+let _t = check("basic tokenize count matches len", abs(n1 - len(tok1)) < 0.01)
+
+// Test that tokens are lowercased
+let mut has_upper = 0.0
+let mut i = 0.0
+while i < len(tok1)
+    if tok1[i] != to_lower(tok1[i])
+        has_upper = 1.0
+    end
+    i = i + 1.0
+end
+let _t = check("all tokens lowercase", has_upper < 0.5)
+
+// Test short word filtering (len <= 1 should be skipped)
+let mut tok2 = []
+let n2 = octosearch_tokenize("I a am good at x", tok2)
+// "I", "a", "x" should be skipped (length 1); "am", "good", "at" kept
+let _t = check("short words filtered", len(tok2) < 6.0)
+
+// Test empty input
+let mut tok3 = []
+let n3 = octosearch_tokenize("", tok3)
+let _t = check("empty input gives 0 tokens", n3 < 0.5)
+
+// Test single word
+let mut tok4 = []
+let n4 = octosearch_tokenize("hello", tok4)
+let _t = check("single word gives 1 token", abs(n4 - 1.0) < 0.01)
+
+print("")
+
+// ── Punctuation Stripping Tests ───────────────────────────────────
+
+print("Punctuation Stripping")
+
+let s1 = octosearch_strip_punct("hello.")
+let _t = check("strip trailing period", s1 == "hello")
+
+let s2 = octosearch_strip_punct("(test)")
+let _t = check("strip parens", s2 == "test")
+
+let s3 = octosearch_strip_punct("\"quoted\"")
+let _t = check("strip quotes", s3 == "quoted")
+
+let s4 = octosearch_strip_punct("clean")
+let _t = check("no-op on clean word", s4 == "clean")
+
+let s5 = octosearch_strip_punct(",comma,")
+let _t = check("strip commas", s5 == "comma")
+
+print("")
+
+// ── Directory Walker Tests ────────────────────────────────────────
+
+print("Directory Walker")
+
+// Walk a known small directory
+let mut paths = []
+let exts = [".flow"]
+let nw = octosearch_walk("C:/OctoFlow/stdlib/search", exts, paths)
+let _t = check("walk finds files", nw > 0.0)
+let _t = check("walk paths populated", len(paths) > 0.0)
+
+// All paths should end with .flow
+let mut all_flow = 1.0
+i = 0.0
+while i < len(paths)
+    if ends_with(paths[i], ".flow") < 0.5
+        all_flow = 0.0
+    end
+    i = i + 1.0
+end
+let _t = check("all paths end with .flow", all_flow > 0.5)
+
+print("")
+
+// ── Index Builder Tests ───────────────────────────────────────────
+
+print("Index Builder (small test)")
+
+// Index just the search tests directory (small, known contents)
+let mut test_idx = map()
+let mut test_vocab = map()
+let nd = octosearch_build_index("C:/OctoFlow/stdlib/search/tests", exts, test_idx, test_vocab)
+let _t = check("build_index returns n_docs > 0", nd > 0.0)
+let _t = check("idx has n_docs", is_none(map_get(test_idx, "n_docs")) < 0.5)
+let _t = check("idx has vocab_size", is_none(map_get(test_idx, "vocab_size")) < 0.5)
+
+let vs = map_get(test_idx, "vocab_size")
+let _t = check("vocab_size > 0", vs > 0.0)
+let _t = check("tf_matrix populated", len(_os_tf_matrix) > 0.0)
+let _t = check("doc_lengths populated", len(_os_doc_lengths) > 0.0)
+let _t = check("idf populated", len(_os_idf) > 0.0)
+let _t = check("doc_paths populated", len(_os_doc_paths) > 0.0)
+
+// TF matrix should be n_docs x vocab_size
+let expected_tf_len = nd * vs
+let _t = check("tf_matrix size correct", abs(len(_os_tf_matrix) - expected_tf_len) < 0.5)
+
+// All IDF values should be non-negative
+let mut all_idf_ok = 1.0
+i = 0.0
+while i < len(_os_idf)
+    if _os_idf[i] < 0.0
+        all_idf_ok = 0.0
+    end
+    i = i + 1.0
+end
+let _t = check("all IDF values >= 0", all_idf_ok > 0.5)
+
+print("")
+
+// ── BM25 CPU Scoring Tests ────────────────────────────────────────
+
+print("BM25 CPU Scoring")
+
+// Search for a term we know exists in this file: "tokenize"
+let mut qtok = []
+let _qn = octosearch_tokenize("tokenize", qtok)
+let _t = check("query tokenization", len(qtok) > 0.0)
+
+// Check that "tokenize" is in the vocab
+let mut tok_in_vocab = 0.0
+if len(qtok) > 0.0
+    if map_has(test_vocab, qtok[0]) > 0.5
+        tok_in_vocab = 1.0
+    end
+end
+let _t = check("query term found in vocab", tok_in_vocab > 0.5)
+
+print("")
+
+// ── Summary ───────────────────────────────────────────────────────
+
+let p = _cnt[0]
+let f = _cnt[1]
+print("Results: {p} passed, {f} failed")
+if f < 0.5
+    print("ALL OCTOSEARCH TESTS PASSED")
+else
+    print("SOME TESTS FAILED")
+end
+print("")

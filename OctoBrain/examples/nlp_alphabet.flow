@@ -1,0 +1,218 @@
+// OctoBrain NLP: Alphabet Structure + Word Boundary Demo
+// Two NLP experiments using the brain + text preprocessing module.
+//
+// Test A: Feed the uppercase alphabet repeated 20 times as 4-gram windows.
+//   Adjacent 4-grams like [A,B,C,D] and [B,C,D,E] are very similar
+//   (codes differ by ~0.008 per position), so the brain should create
+//   only 3-8 protos grouping letter regions.
+//
+// Test B: Feed "THE CAT SAT ON THE MAT " repeated 20 times as 4-gram windows.
+//   Space character (code 0.25) is very different from letters (~0.51-0.95),
+//   so n-grams containing spaces should form distinct prototypes.
+//
+// Note: Raw character codes are all positive (0.25-0.70), yielding cosine
+// similarity ~1.0 between any pair after normalization. We center codes
+// around the corpus mean so direction encodes letter identity, not magnitude.
+
+use "../lib/octobrain"
+use "../lib/text"
+
+// ── center_gram ─────────────────────────────────────────────────
+// Center a code gram around a reference value so that differences
+// become the signal. Without centering, all-positive narrow-range
+// vectors collapse to cosine ~1.0 after normalization.
+fn center_gram(gram, center, n)
+  let mut centered = []
+  let mut i = 0.0
+  while i < n
+    push(centered, gram[i] - center)
+    i = i + 1.0
+  end
+  return centered
+end
+
+// ── Test A helper ─────────────────────────────────────────────────
+fn run_alphabet_test()
+  // Brain boilerplate
+  let mut brain = octobrain_new(2.0)
+  let mut p_state = proto_new()
+  let mut p_embs = []
+  let mut p_mc = []
+  let mut e_state = embed_new()
+  let mut W_embed = []
+  let mut obs_buffer = []
+  let mut edge_state = edges_new()
+  let mut en = []
+  let mut ea = []
+  let mut eo = []
+  let mut ep = []
+  let mut ew = []
+  let mut eact = []
+  let mut window = []
+  let mut W_score = []
+
+  // Build the repeated alphabet string
+  let mut full_text = ""
+  let base = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  let mut rep = 0.0
+  while rep < 20.0
+    full_text = full_text + base
+    rep = rep + 1.0
+  end
+
+  // Encode to numeric codes
+  let codes = text_to_codes(full_text)
+  let codes_len = len(codes)
+  let gram_size = 4.0
+
+  // Center value: midpoint of uppercase letter codes (A=0.508, Z=0.703)
+  let center = 0.605
+
+  // Feed n-grams to brain
+  let max_pos = codes_len - gram_size + 1.0
+  let mut pos = 0.0
+  let mut obs_count = 0.0
+  while pos < max_pos
+    let gram = text_ngram(codes, pos, gram_size)
+    let centered = center_gram(gram, center, gram_size)
+    let dummy = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, centered)
+    obs_count = obs_count + 1.0
+
+    // Print milestones
+    if obs_count == 100.0 || obs_count == 250.0 || obs_count == 500.0
+      let stats = octobrain_stats(brain, p_state, edge_state)
+      let pc = map_get(stats, "proto_count")
+      let ec = map_get(stats, "edge_count")
+      let tc = map_get(stats, "transition_count")
+      print("  Step {obs_count}: protos={pc}, edges={ec}, transitions={tc}")
+    end
+
+    pos = pos + 1.0
+  end
+
+  // Final stats
+  let stats = octobrain_stats(brain, p_state, edge_state)
+  let pc = map_get(stats, "proto_count")
+  let ec = map_get(stats, "edge_count")
+  let tc = map_get(stats, "transition_count")
+  let oc = map_get(stats, "obs_count")
+  print("  Final: protos={pc}, edges={ec}, transitions={tc}, obs={oc}")
+
+  // PASS/FAIL for proto count (2-20)
+  if pc >= 2.0 && pc <= 20.0
+    print("  PASS: Brain discovered {pc} letter-group prototypes (range: 2-20)")
+  else
+    print("  FAIL: Proto count {pc} outside expected range 2-20")
+  end
+
+  // PASS/FAIL for transitions
+  if tc > 0.0
+    print("  PASS: Transitions detected ({tc}) -- letter group boundaries")
+  else
+    print("  FAIL: No transitions detected")
+  end
+
+  return 0.0
+end
+
+// ── Test B helper ─────────────────────────────────────────────────
+fn run_word_boundary_test()
+  // Brain boilerplate (separate instance)
+  let mut brain = octobrain_new(2.0)
+  let mut p_state = proto_new()
+  let mut p_embs = []
+  let mut p_mc = []
+  let mut e_state = embed_new()
+  let mut W_embed = []
+  let mut obs_buffer = []
+  let mut edge_state = edges_new()
+  let mut en = []
+  let mut ea = []
+  let mut eo = []
+  let mut ep = []
+  let mut ew = []
+  let mut eact = []
+  let mut window = []
+  let mut W_score = []
+
+  // Build the repeated sentence string
+  let mut full_text = ""
+  let base = "THE CAT SAT ON THE MAT "
+  let mut rep = 0.0
+  while rep < 20.0
+    full_text = full_text + base
+    rep = rep + 1.0
+  end
+
+  // Encode to numeric codes
+  let codes = text_to_codes(full_text)
+  let codes_len = len(codes)
+  let gram_size = 4.0
+
+  // Center value: midpoint between space (0.25) and letters (~0.55)
+  // Using 0.45 places space-grams in negative territory and letter-grams
+  // in positive territory, maximizing angular separation.
+  let center = 0.45
+
+  // Feed n-grams to brain
+  let max_pos = codes_len - gram_size + 1.0
+  let mut pos = 0.0
+  let mut obs_count = 0.0
+  while pos < max_pos
+    let gram = text_ngram(codes, pos, gram_size)
+    let centered = center_gram(gram, center, gram_size)
+    let dummy = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, centered)
+    obs_count = obs_count + 1.0
+
+    // Print milestones
+    if obs_count == 100.0 || obs_count == 250.0
+      let stats = octobrain_stats(brain, p_state, edge_state)
+      let pc = map_get(stats, "proto_count")
+      let ec = map_get(stats, "edge_count")
+      let tc = map_get(stats, "transition_count")
+      print("  Step {obs_count}: protos={pc}, edges={ec}, transitions={tc}")
+    end
+
+    pos = pos + 1.0
+  end
+
+  // Final stats
+  let stats = octobrain_stats(brain, p_state, edge_state)
+  let pc = map_get(stats, "proto_count")
+  let ec = map_get(stats, "edge_count")
+  let tc = map_get(stats, "transition_count")
+  let oc = map_get(stats, "obs_count")
+  print("  Final: protos={pc}, edges={ec}, transitions={tc}, obs={oc}")
+
+  // PASS/FAIL for proto count (>= 3)
+  if pc >= 3.0
+    print("  PASS: Brain discovered {pc} prototypes (>=3 -- letter vs space patterns)")
+  else
+    print("  FAIL: Proto count {pc} < 3 (expected letter vs space separation)")
+  end
+
+  // PASS/FAIL for transitions
+  if tc > 0.0
+    print("  PASS: Transitions at word boundaries ({tc} total)")
+  else
+    print("  FAIL: No transitions detected at word boundaries")
+  end
+
+  return 0.0
+end
+
+// ── Main ──────────────────────────────────────────────────────────
+print("=== OctoBrain NLP: Alphabet + Word Boundary Demo ===")
+print("")
+
+print("--- Test A: Alphabet Structure Discovery ---")
+print("Feeding ABCDEFGHIJKLMNOPQRSTUVWXYZ x20 as 4-gram windows...")
+let dummy_a = run_alphabet_test()
+print("")
+
+print("--- Test B: Word Boundary Detection ---")
+print("Feeding THE CAT SAT ON THE MAT x20 as 4-gram windows...")
+let dummy_b = run_word_boundary_test()
+print("")
+
+print("--- nlp alphabet demo complete ---")

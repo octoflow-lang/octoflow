@@ -1,0 +1,244 @@
+// test_fft.flow — Tests for stdlib/media/fft.flow
+use "fft"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.1
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Power-of-2 utilities ───────────────────────────────
+
+fn test_pow2()
+    check("is_pow2 1", fft_is_pow2(1.0) == 1.0)
+    check("is_pow2 2", fft_is_pow2(2.0) == 1.0)
+    check("is_pow2 4", fft_is_pow2(4.0) == 1.0)
+    check("is_pow2 8", fft_is_pow2(8.0) == 1.0)
+    check("is_pow2 16", fft_is_pow2(16.0) == 1.0)
+    check("not_pow2 3", fft_is_pow2(3.0) == 0.0)
+    check("not_pow2 5", fft_is_pow2(5.0) == 0.0)
+    check("not_pow2 0", fft_is_pow2(0.0) == 0.0)
+    check("not_pow2 neg", fft_is_pow2(-4.0) == 0.0)
+    check("next_pow2 1", fft_next_pow2(1.0) == 1.0)
+    check("next_pow2 3", fft_next_pow2(3.0) == 4.0)
+    check("next_pow2 5", fft_next_pow2(5.0) == 8.0)
+    check("next_pow2 8", fft_next_pow2(8.0) == 8.0)
+    check("next_pow2 9", fft_next_pow2(9.0) == 16.0)
+    return 0.0
+end
+
+// ── DC impulse ─────────────────────────────────────────
+
+fn test_dc_impulse()
+    // Impulse at t=0: FFT should give flat magnitude = 1.0
+    let mut real = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let mut imag = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let r = fft_forward(real, imag, 8.0)
+    check("fft ok", r == 1.0)
+    // All bins should have magnitude 1.0
+    let mut all_one = 1.0
+    let mut i = 0.0
+    while i < 8.0
+        let mag = sqrt(real[int(i)] * real[int(i)] + imag[int(i)] * imag[int(i)])
+        if abs(mag - 1.0) > 0.01
+            all_one = 0.0
+        end
+        i = i + 1.0
+    end
+    check("impulse flat", all_one == 1.0)
+    return 0.0
+end
+
+// ── DC signal ──────────────────────────────────────────
+
+fn test_dc_signal()
+    // Constant signal: all energy in bin 0
+    let mut real = [1.0, 1.0, 1.0, 1.0]
+    let mut imag = [0.0, 0.0, 0.0, 0.0]
+    let _f = fft_forward(real, imag, 4.0)
+    check("dc bin0", approx(real[0], 4.0) == 1.0)
+    check("dc bin1", approx(real[1], 0.0) == 1.0)
+    check("dc bin2", approx(real[2], 0.0) == 1.0)
+    check("dc bin3", approx(real[3], 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Forward + inverse roundtrip ────────────────────────
+
+fn test_roundtrip()
+    let mut real = [0.5, -0.3, 0.8, -0.1, 0.6, -0.7, 0.2, 0.4]
+    let mut imag = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    // Save originals
+    let mut orig = [0.5, -0.3, 0.8, -0.1, 0.6, -0.7, 0.2, 0.4]
+    let _f = fft_forward(real, imag, 8.0)
+    let _i = fft_inverse(real, imag, 8.0)
+    // Should recover original
+    let mut ok = 1.0
+    let mut i = 0.0
+    while i < 8.0
+        if abs(real[int(i)] - orig[int(i)]) > 0.01
+            ok = 0.0
+        end
+        i = i + 1.0
+    end
+    check("roundtrip real", ok == 1.0)
+    // Imaginary should be ~0
+    let mut imag_ok = 1.0
+    i = 0.0
+    while i < 8.0
+        if abs(imag[int(i)]) > 0.01
+            imag_ok = 0.0
+        end
+        i = i + 1.0
+    end
+    check("roundtrip imag", imag_ok == 1.0)
+    return 0.0
+end
+
+// ── Magnitude spectrum ─────────────────────────────────
+
+fn test_magnitude()
+    let mut real = [1.0, 0.0, 0.0, 0.0]
+    let mut imag = [0.0, 0.0, 0.0, 0.0]
+    let _f = fft_forward(real, imag, 4.0)
+    let mut mag = []
+    let n = fft_magnitude(real, imag, 4.0, mag)
+    check("mag count", n == 4.0)
+    check("mag len", len(mag) == 4.0)
+    // All magnitudes should be 1.0 for impulse
+    check("mag uniform", approx(mag[0], 1.0) == 1.0)
+    check("mag uniform2", approx(mag[1], 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Phase spectrum ─────────────────────────────────────
+
+fn test_phase()
+    let mut real = [1.0, 0.0, 0.0, 0.0]
+    let mut imag = [0.0, 0.0, 0.0, 0.0]
+    let _f = fft_forward(real, imag, 4.0)
+    let mut ph = []
+    let n = fft_phase(real, imag, 4.0, ph)
+    check("phase count", n == 4.0)
+    check("phase len", len(ph) == 4.0)
+    // Bin 0 has real=1, imag=0 → phase=0
+    check("phase bin0", approx(ph[0], 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Power spectrum ─────────────────────────────────────
+
+fn test_power()
+    let mut real = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let mut imag = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let _f = fft_forward(real, imag, 8.0)
+    let mut pow = []
+    let n = fft_power_spectrum(real, imag, 8.0, pow)
+    check("power count", n == 4.0)
+    check("power len", len(pow) == 4.0)
+    // Each bin: (1² + 0²)/8 = 0.125
+    check("power val", approx(pow[0], 0.125) == 1.0)
+    return 0.0
+end
+
+// ── Frequency bin conversion ───────────────────────────
+
+fn test_freq_bin()
+    check("bin 0", fft_freq_bin(0.0, 1024.0, 44100.0) == 0.0)
+    let f1 = fft_freq_bin(1.0, 1024.0, 44100.0)
+    check("bin 1", approx(f1, 43.07) == 1.0)
+    let f10 = fft_freq_bin(10.0, 1024.0, 44100.0)
+    check("bin 10", approx(f10, 430.66) == 1.0)
+    check("bin zero n", fft_freq_bin(5.0, 0.0, 44100.0) == 0.0)
+    return 0.0
+end
+
+// ── Dominant frequency ─────────────────────────────────
+
+fn test_dominant()
+    // Create a signal with energy at bin 2 (of 8)
+    // Bin 2 of N=8 at rate=8 Hz → 2.0 Hz
+    let mut real = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let mut imag = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    // Set bin 2 to have large magnitude
+    real[2] = 10.0
+    let freq = fft_dominant_freq(real, imag, 8.0, 8.0)
+    check("dominant", approx(freq, 2.0) == 1.0)
+    return 0.0
+end
+
+// ── Hann window ────────────────────────────────────────
+
+fn test_hann()
+    let mut data = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    let _w = fft_hann_window(data, 8.0)
+    // Hann: endpoints = 0, center = 1
+    check("hann start", approx(data[0], 0.0) == 1.0)
+    check("hann end", approx(data[7], 0.0) == 1.0)
+    // Middle should be near 1.0
+    check("hann mid", data[3] > 0.7 && data[4] > 0.7)
+    return 0.0
+end
+
+// ── STFT ───────────────────────────────────────────────
+
+fn test_stft()
+    // 16 samples, window=4, hop=2
+    let mut samples = [1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0,
+                       1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0]
+    let mut result = []
+    let frames = fft_stft(samples, 16.0, 4.0, 2.0, result)
+    check("stft frames", frames > 0.0)
+    // Each frame contributes window_size/2 = 2 magnitude values
+    check("stft result", len(result) == frames * 2.0)
+    return 0.0
+end
+
+// ── Edge cases ─────────────────────────────────────────
+
+fn test_edges()
+    let mut r = [1.0]
+    let mut i = [0.0]
+    // N=1 should fail (< 2)
+    let f1 = fft_forward(r, i, 1.0)
+    check("edge n1", f1 == 0.0)
+    // N=3 should fail (not pow2)
+    let mut r3 = [1.0, 0.0, 0.0]
+    let mut i3 = [0.0, 0.0, 0.0]
+    let f3 = fft_forward(r3, i3, 3.0)
+    check("edge n3", f3 == 0.0)
+    // STFT edge: window > samples
+    let mut s = [1.0, 1.0]
+    let mut res = []
+    let st = fft_stft(s, 2.0, 4.0, 2.0, res)
+    check("stft short", st == 0.0)
+    return 0.0
+end
+
+// ── Run all ────────────────────────────────────────────
+
+test_pow2()
+test_dc_impulse()
+test_dc_signal()
+test_roundtrip()
+test_magnitude()
+test_phase()
+test_power()
+test_freq_bin()
+test_dominant()
+test_hann()
+test_stft()
+test_edges()
+print("")
+print("All FFT tests passed (12 tests)")

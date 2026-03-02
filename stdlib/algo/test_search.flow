@@ -1,0 +1,153 @@
+// test_search.flow — Tests for stdlib/algo/search.flow
+use "search"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Binary Search ───────────────────────────────────────────────
+
+fn test_binary_search_found()
+    let mut arr = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
+    check("binary_search found 5", binary_search(arr, 5.0) == 2.0)
+    check("binary_search found 1 (first)", binary_search(arr, 1.0) == 0.0)
+    check("binary_search found 11 (last)", binary_search(arr, 11.0) == 5.0)
+    return 0.0
+end
+
+fn test_binary_search_not_found()
+    let mut arr = [1.0, 3.0, 5.0, 7.0, 9.0]
+    check("binary_search not found 4", binary_search(arr, 4.0) == -1.0)
+    check("binary_search not found 0", binary_search(arr, 0.0) == -1.0)
+    check("binary_search not found 10", binary_search(arr, 10.0) == -1.0)
+    return 0.0
+end
+
+fn test_binary_search_single()
+    let mut arr = [5.0]
+    check("binary_search single found", binary_search(arr, 5.0) == 0.0)
+    check("binary_search single not found", binary_search(arr, 3.0) == -1.0)
+    return 0.0
+end
+
+fn test_binary_search_empty()
+    let mut arr = []
+    check("binary_search empty", binary_search(arr, 5.0) == -1.0)
+    return 0.0
+end
+
+// ── Lower/Upper Bound ───────────────────────────────────────────
+
+fn test_lower_bound()
+    let mut arr = [1.0, 3.0, 5.0, 5.0, 7.0, 9.0]
+    check("lower_bound exact", lower_bound(arr, 5.0) == 2.0)
+    check("lower_bound between", lower_bound(arr, 4.0) == 2.0)
+    check("lower_bound start", lower_bound(arr, 0.0) == 0.0)
+    check("lower_bound past end", lower_bound(arr, 10.0) == 6.0)
+    return 0.0
+end
+
+fn test_upper_bound()
+    let mut arr = [1.0, 3.0, 5.0, 5.0, 7.0, 9.0]
+    check("upper_bound exact", upper_bound(arr, 5.0) == 4.0)
+    check("upper_bound between", upper_bound(arr, 4.0) == 2.0)
+    check("upper_bound past end", upper_bound(arr, 10.0) == 6.0)
+    return 0.0
+end
+
+// ── Linear Search ───────────────────────────────────────────────
+
+fn test_linear_search()
+    let mut arr = [4.0, 2.0, 7.0, 1.0, 7.0]
+    check("linear_search found", linear_search(arr, 7.0) == 2.0)
+    check("linear_search not found", linear_search(arr, 99.0) == -1.0)
+    return 0.0
+end
+
+fn test_contains_value()
+    let mut arr = [4.0, 2.0, 7.0, 1.0]
+    check("contains_value yes", contains_value(arr, 7.0) == 1.0)
+    check("contains_value no", contains_value(arr, 99.0) == 0.0)
+    return 0.0
+end
+
+fn test_count_value()
+    let mut arr = [1.0, 2.0, 3.0, 2.0, 1.0, 2.0]
+    check("count_value 2", count_value(arr, 2.0) == 3.0)
+    check("count_value 3", count_value(arr, 3.0) == 1.0)
+    check("count_value 99", count_value(arr, 99.0) == 0.0)
+    return 0.0
+end
+
+fn test_find_all()
+    let mut arr = [1.0, 5.0, 3.0, 5.0, 7.0, 5.0]
+    let mut indices = find_all(arr, 5.0)
+    check("find_all count", len(indices) == 3.0)
+    check("find_all indices", indices[0] == 1.0 && indices[1] == 3.0 && indices[2] == 5.0)
+    return 0.0
+end
+
+// ── Min/Max ─────────────────────────────────────────────────────
+
+fn test_find_min_max()
+    let mut arr = [4.0, 2.0, 7.0, 1.0, 9.0, 3.0]
+    check("find_min", find_min(arr) == 1.0)
+    check("find_max", find_max(arr) == 9.0)
+    check("find_min_index", find_min_index(arr) == 3.0)
+    check("find_max_index", find_max_index(arr) == 4.0)
+    return 0.0
+end
+
+fn test_find_min_max_empty()
+    let mut arr = []
+    check("find_min empty", find_min(arr) == 0.0)
+    check("find_max empty", find_max(arr) == 0.0)
+    check("find_min_index empty", find_min_index(arr) == -1.0)
+    check("find_max_index empty", find_max_index(arr) == -1.0)
+    return 0.0
+end
+
+// ── Range Queries ───────────────────────────────────────────────
+
+fn test_count_in_range()
+    let mut arr = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
+    check("count_in_range [3,9]", count_in_range(arr, 3.0, 9.0) == 4.0)
+    check("count_in_range [0,1]", count_in_range(arr, 0.0, 1.0) == 1.0)
+    check("count_in_range [20,30]", count_in_range(arr, 20.0, 30.0) == 0.0)
+    return 0.0
+end
+
+fn test_find_closest()
+    let mut arr = [1.0, 3.0, 5.0, 7.0, 9.0]
+    check("find_closest exact", find_closest(arr, 5.0) == 5.0)
+    check("find_closest between", find_closest(arr, 6.0) == 5.0)
+    check("find_closest 6.5 → 7", find_closest(arr, 6.6) == 7.0)
+    check("find_closest below min", find_closest(arr, -5.0) == 1.0)
+    check("find_closest above max", find_closest(arr, 100.0) == 9.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_binary_search_found()
+test_binary_search_not_found()
+test_binary_search_single()
+test_binary_search_empty()
+test_lower_bound()
+test_upper_bound()
+test_linear_search()
+test_contains_value()
+test_count_value()
+test_find_all()
+test_find_min_max()
+test_find_min_max_empty()
+test_count_in_range()
+test_find_closest()
+print("")
+print("All search tests passed (14 tests)")

@@ -1,0 +1,178 @@
+// test_linked_list.flow — Tests for stdlib/collections/linked_list.flow
+use "linked_list"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Creation ──────────────────────────────────────────────────
+
+fn test_ll_create()
+    let mut ll = ll_create()
+    check("create empty", ll_is_empty(ll) == 1.0)
+    check("create size", ll_size(ll) == 0.0)
+    return 0.0
+end
+
+// ── Push / Pop ────────────────────────────────────────────────
+
+fn test_push_pop_back()
+    let mut ll = ll_create()
+    ll_push_back(ll, 10.0)
+    ll_push_back(ll, 20.0)
+    ll_push_back(ll, 30.0)
+    check("push back size", ll_size(ll) == 3.0)
+    check("pop back 1", ll_pop_back(ll) == 30.0)
+    check("pop back 2", ll_pop_back(ll) == 20.0)
+    check("pop back 3", ll_pop_back(ll) == 10.0)
+    check("empty after pop", ll_is_empty(ll) == 1.0)
+    return 0.0
+end
+
+fn test_push_pop_front()
+    let mut ll = ll_create()
+    ll_push_front(ll, 10.0)
+    ll_push_front(ll, 20.0)
+    ll_push_front(ll, 30.0)
+    check("push front size", ll_size(ll) == 3.0)
+    check("pop front 1", ll_pop_front(ll) == 30.0)
+    check("pop front 2", ll_pop_front(ll) == 20.0)
+    check("pop front 3", ll_pop_front(ll) == 10.0)
+    return 0.0
+end
+
+fn test_mixed()
+    let mut ll = ll_create()
+    ll_push_back(ll, 1.0)
+    ll_push_back(ll, 2.0)
+    ll_push_front(ll, 0.0)
+    // Order: [0, 1, 2]
+    check("mixed peek front", ll_peek_front(ll) == 0.0)
+    check("mixed peek back", ll_peek_back(ll) == 2.0)
+    check("mixed pop front", ll_pop_front(ll) == 0.0)
+    check("mixed pop back", ll_pop_back(ll) == 2.0)
+    return 0.0
+end
+
+// ── Get ───────────────────────────────────────────────────────
+
+fn test_get()
+    let mut ll = ll_create()
+    ll_push_back(ll, 10.0)
+    ll_push_back(ll, 20.0)
+    ll_push_back(ll, 30.0)
+    check("get 0", ll_get(ll, 0.0) == 10.0)
+    check("get 1", ll_get(ll, 1.0) == 20.0)
+    check("get 2", ll_get(ll, 2.0) == 30.0)
+    check("get oob", ll_get(ll, 5.0) == -1.0)
+    return 0.0
+end
+
+// ── To Array ──────────────────────────────────────────────────
+
+fn test_to_array()
+    let mut ll = ll_create()
+    ll_push_back(ll, 1.0)
+    ll_push_back(ll, 2.0)
+    ll_push_back(ll, 3.0)
+    let arr = ll_to_array(ll)
+    check("to_array len", len(arr) == 3.0)
+    check("to_array order", arr[0] == 1.0 && arr[1] == 2.0 && arr[2] == 3.0)
+    return 0.0
+end
+
+// ── Contains ──────────────────────────────────────────────────
+
+fn test_contains()
+    let mut ll = ll_create()
+    ll_push_back(ll, 5.0)
+    ll_push_back(ll, 10.0)
+    check("contains yes", ll_contains(ll, 5.0) == 1.0)
+    check("contains no", ll_contains(ll, 99.0) == 0.0)
+    return 0.0
+end
+
+// ── Reverse ───────────────────────────────────────────────────
+
+fn test_reverse()
+    let mut ll = ll_create()
+    ll_push_back(ll, 1.0)
+    ll_push_back(ll, 2.0)
+    ll_push_back(ll, 3.0)
+    ll_reverse(ll)
+    check("reverse front", ll_peek_front(ll) == 3.0)
+    check("reverse back", ll_peek_back(ll) == 1.0)
+    let arr = ll_to_array(ll)
+    check("reverse order", arr[0] == 3.0 && arr[1] == 2.0 && arr[2] == 1.0)
+    return 0.0
+end
+
+// ── Insert / Remove At ────────────────────────────────────────
+
+fn test_insert_at()
+    let mut ll = ll_create()
+    ll_push_back(ll, 1.0)
+    ll_push_back(ll, 3.0)
+    ll_insert_at(ll, 1.0, 2.0)
+    check("insert size", ll_size(ll) == 3.0)
+    check("insert order", ll_get(ll, 0.0) == 1.0 && ll_get(ll, 1.0) == 2.0 && ll_get(ll, 2.0) == 3.0)
+    return 0.0
+end
+
+fn test_remove_at()
+    let mut ll = ll_create()
+    ll_push_back(ll, 1.0)
+    ll_push_back(ll, 2.0)
+    ll_push_back(ll, 3.0)
+    let removed = ll_remove_at(ll, 1.0)
+    check("remove val", removed == 2.0)
+    check("remove size", ll_size(ll) == 2.0)
+    check("remove order", ll_get(ll, 0.0) == 1.0 && ll_get(ll, 1.0) == 3.0)
+    return 0.0
+end
+
+// ── Clear ─────────────────────────────────────────────────────
+
+fn test_clear()
+    let mut ll = ll_create()
+    ll_push_back(ll, 1.0)
+    ll_push_back(ll, 2.0)
+    ll_clear(ll)
+    check("clear empty", ll_is_empty(ll) == 1.0)
+    check("clear size", ll_size(ll) == 0.0)
+    return 0.0
+end
+
+// ── Empty Operations ──────────────────────────────────────────
+
+fn test_empty_ops()
+    let mut ll = ll_create()
+    check("empty pop front", ll_pop_front(ll) == -1.0)
+    check("empty pop back", ll_pop_back(ll) == -1.0)
+    check("empty peek front", ll_peek_front(ll) == -1.0)
+    check("empty peek back", ll_peek_back(ll) == -1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_ll_create()
+test_push_pop_back()
+test_push_pop_front()
+test_mixed()
+test_get()
+test_to_array()
+test_contains()
+test_reverse()
+test_insert_at()
+test_remove_at()
+test_clear()
+test_empty_ops()
+print("")
+print("All linked list tests passed (12 tests)")

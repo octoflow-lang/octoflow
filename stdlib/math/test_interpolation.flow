@@ -1,0 +1,160 @@
+// test_interpolation.flow — Tests for stdlib/math/interpolation.flow
+use "interpolation"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── lerp ────────────────────────────────────────────────────
+
+fn test_lerp()
+    check("lerp 0", lerp(0.0, 100.0, 0.0) == 0.0)
+    check("lerp 1", lerp(0.0, 100.0, 1.0) == 100.0)
+    check("lerp mid", lerp(0.0, 100.0, 0.5) == 50.0)
+    check("lerp neg", approx(lerp(10.0, 20.0, -0.5), 5.0) == 1.0)
+    return 0.0
+end
+
+// ── inverse_lerp ────────────────────────────────────────────
+
+fn test_inverse_lerp()
+    check("inv_lerp mid", approx(inverse_lerp(0.0, 100.0, 50.0), 0.5) == 1.0)
+    check("inv_lerp start", inverse_lerp(0.0, 100.0, 0.0) == 0.0)
+    check("inv_lerp end", inverse_lerp(0.0, 100.0, 100.0) == 1.0)
+    check("inv_lerp same", inverse_lerp(5.0, 5.0, 5.0) == 0.0)
+    return 0.0
+end
+
+// ── remap ───────────────────────────────────────────────────
+
+fn test_remap()
+    check("remap mid", approx(remap(0.0, 10.0, 0.0, 100.0, 5.0), 50.0) == 1.0)
+    check("remap edge", remap(0.0, 10.0, 0.0, 100.0, 0.0) == 0.0)
+    return 0.0
+end
+
+// ── clamp01 ─────────────────────────────────────────────────
+
+fn test_clamp01()
+    check("clamp low", clamp01(-0.5) == 0.0)
+    check("clamp high", clamp01(1.5) == 1.0)
+    check("clamp mid", clamp01(0.7) == 0.7)
+    return 0.0
+end
+
+// ── step ────────────────────────────────────────────────────
+
+fn test_step()
+    check("step below", step(0.5, 0.3) == 0.0)
+    check("step above", step(0.5, 0.7) == 1.0)
+    check("step at", step(0.5, 0.5) == 1.0)
+    return 0.0
+end
+
+// ── smoothstep ──────────────────────────────────────────────
+
+fn test_smoothstep()
+    check("ss start", smoothstep(0.0, 1.0, 0.0) == 0.0)
+    check("ss end", smoothstep(0.0, 1.0, 1.0) == 1.0)
+    check("ss mid", approx(smoothstep(0.0, 1.0, 0.5), 0.5) == 1.0)
+    // Should be between 0 and 1 at t=0.25
+    let s = smoothstep(0.0, 1.0, 0.25)
+    check("ss quarter", s > 0.0 && s < 0.5)
+    return 0.0
+end
+
+// ── smootherstep ────────────────────────────────────────────
+
+fn test_smootherstep()
+    check("sss start", smootherstep(0.0, 1.0, 0.0) == 0.0)
+    check("sss end", smootherstep(0.0, 1.0, 1.0) == 1.0)
+    check("sss mid", approx(smootherstep(0.0, 1.0, 0.5), 0.5) == 1.0)
+    return 0.0
+end
+
+// ── cosine_interp ───────────────────────────────────────────
+
+fn test_cosine_interp()
+    check("cos start", approx(cosine_interp(0.0, 1.0, 0.0), 0.0) == 1.0)
+    check("cos end", approx(cosine_interp(0.0, 1.0, 1.0), 1.0) == 1.0)
+    check("cos mid", approx(cosine_interp(0.0, 1.0, 0.5), 0.5) == 1.0)
+    return 0.0
+end
+
+// ── Bezier ──────────────────────────────────────────────────
+
+fn test_bezier_quadratic()
+    // Quadratic Bezier: p0=0, p1=0.5, p2=1 at t=0.5
+    let b = bezier_quadratic(0.0, 0.5, 1.0, 0.5)
+    check("bezier_q mid", approx(b, 0.5) == 1.0)
+    check("bezier_q start", bezier_quadratic(0.0, 0.5, 1.0, 0.0) == 0.0)
+    check("bezier_q end", bezier_quadratic(0.0, 0.5, 1.0, 1.0) == 1.0)
+    return 0.0
+end
+
+fn test_bezier_cubic()
+    check("bezier_c start", bezier_cubic(0.0, 0.3, 0.7, 1.0, 0.0) == 0.0)
+    check("bezier_c end", bezier_cubic(0.0, 0.3, 0.7, 1.0, 1.0) == 1.0)
+    let mid = bezier_cubic(0.0, 0.3, 0.7, 1.0, 0.5)
+    check("bezier_c mid", mid > 0.3 && mid < 0.7)
+    return 0.0
+end
+
+// ── catmull_rom ─────────────────────────────────────────────
+
+fn test_catmull_rom()
+    // Catmull-Rom passes through p1 at t=0 and p2 at t=1
+    check("cr start", approx(catmull_rom(0.0, 1.0, 2.0, 3.0, 0.0), 1.0) == 1.0)
+    check("cr end", approx(catmull_rom(0.0, 1.0, 2.0, 3.0, 1.0), 2.0) == 1.0)
+    return 0.0
+end
+
+// ── nearest_interp ──────────────────────────────────────────
+
+fn test_nearest()
+    check("nearest low", nearest_interp(10.0, 20.0, 0.3) == 10.0)
+    check("nearest high", nearest_interp(10.0, 20.0, 0.7) == 20.0)
+    return 0.0
+end
+
+// ── bilinear_interp ─────────────────────────────────────────
+
+fn test_bilinear()
+    // All corners same = same value everywhere
+    check("bilinear uniform", bilinear_interp(5.0, 5.0, 5.0, 5.0, 0.5, 0.5) == 5.0)
+    // Linear gradient
+    let b = bilinear_interp(0.0, 1.0, 0.0, 1.0, 0.5, 0.5)
+    check("bilinear mid", approx(b, 0.5) == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_lerp()
+test_inverse_lerp()
+test_remap()
+test_clamp01()
+test_step()
+test_smoothstep()
+test_smootherstep()
+test_cosine_interp()
+test_bezier_quadratic()
+test_bezier_cubic()
+test_catmull_rom()
+test_nearest()
+test_bilinear()
+print("")
+print("All interpolation tests passed (13 tests)")

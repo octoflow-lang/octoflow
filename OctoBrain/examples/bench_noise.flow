@@ -1,0 +1,314 @@
+// OctoBrain Noise Robustness Benchmark
+// How gracefully does prediction accuracy degrade as noise increases?
+// Quantifies the brain's noise tolerance curve.
+//
+// Base signal: sin(t * 0.5), window size 4, 500 observations per noise level
+// Noise levels: 0.0, 0.05, 0.10, 0.20, 0.50, 1.0
+// Noise = additive: data[i] + noise_level * (random() * 2.0 - 1.0)
+//
+// Protocol for each noise level (fresh brain each time):
+//   1. Generate 504 data points of sin(t * 0.5) for t = 0.0, 0.1, 0.2, ...
+//   2. Add noise to each data point
+//   3. Create 500 sliding windows of size 4
+//   4. Feed first 350 windows (training), record proto IDs
+//   5. Build second-order Markov table from training sequence
+//   6. Feed next 150 windows (test), predict next proto before each feed
+//   7. Measure transition prediction accuracy
+//
+// PASS/FAIL criteria:
+//   - noise=0.0 accuracy >= 0.80
+//   - noise=0.10 accuracy >= 0.50
+//   - Graceful degradation: no single step drops accuracy by > 0.30
+//   - Proto count at noise=1.0 < 50
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\bench_noise.flow" --max-iters 30000000
+
+use "../lib/octobrain"
+use "../lib/sequence"
+
+// ── Helper function: run one noise trial ─────────────────────────────
+// Returns a map with keys "accuracy" and "proto_count"
+fn run_noise_trial(noise_level)
+  let num_points = 504.0
+  let train_count = 350.0
+  let test_count = 150.0
+
+  // Step 1: Generate base signal with noise
+  let mut signal = []
+  let mut ti = 0.0
+  while ti < num_points
+    let t = ti * 0.1
+    let base = sin(t * 0.5)
+    let noise = noise_level * (random() * 2.0 - 1.0)
+    push(signal, base + noise)
+    ti = ti + 1.0
+  end
+
+  // Step 2: Create fresh brain + all 16 external arrays
+  let mut brain = octobrain_new(2.0)
+  let mut p_state = proto_new()
+  let mut p_embs = []
+  let mut p_mc = []
+  let mut e_state = embed_new()
+  let mut W_embed = []
+  let mut obs_buffer = []
+  let mut edge_state = edges_new()
+  let mut en = []
+  let mut ea = []
+  let mut eo = []
+  let mut ep = []
+  let mut ew = []
+  let mut eact = []
+  let mut window_arr = []
+  let mut W_score = []
+
+  // Step 3: Training phase - feed first 350 windows, record proto IDs
+  let mut proto_seq = []
+  let mut wi = 0.0
+  while wi < train_count
+    let mut data = []
+    push(data, signal[wi])
+    push(data, signal[wi + 1.0])
+    push(data, signal[wi + 2.0])
+    push(data, signal[wi + 3.0])
+    let _obs = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window_arr, W_score, data)
+    let pid = map_get(p_state, "last_match_id")
+    push(proto_seq, pid)
+    wi = wi + 1.0
+  end
+
+  // Get proto count after training
+  let train_stats = octobrain_stats(brain, p_state, edge_state)
+  let pc = map_get(train_stats, "proto_count")
+
+  // Step 4: Build second-order Markov table from training proto sequence
+  let seq_len = len(proto_seq)
+  let table = markov2_build(proto_seq, seq_len, pc)
+
+  // Step 5: Testing phase - predict then observe for next 150 windows
+  // We need at least 2 previous proto IDs for second-order prediction
+  let mut prev_proto = proto_seq[seq_len - 2.0]
+  let mut curr_proto = proto_seq[seq_len - 1.0]
+  let mut correct = 0.0
+  let mut total = 0.0
+
+  let mut ti2 = 0.0
+  while ti2 < test_count
+    let window_idx = train_count + ti2
+
+    // Predict next proto using second-order Markov table
+    let mut predicted = -1.0
+    if prev_proto >= 0.0 && prev_proto < pc && curr_proto >= 0.0 && curr_proto < pc
+      predicted = markov2_predict(table, prev_proto, curr_proto, pc)
+    end
+
+    // Observe the actual next window
+    let mut test_data = []
+    push(test_data, signal[window_idx])
+    push(test_data, signal[window_idx + 1.0])
+    push(test_data, signal[window_idx + 2.0])
+    push(test_data, signal[window_idx + 3.0])
+    let _obs2 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window_arr, W_score, test_data)
+    let actual = map_get(p_state, "last_match_id")
+
+    // Check prediction
+    if predicted >= 0.0
+      if predicted == actual
+        correct = correct + 1.0
+      end
+      total = total + 1.0
+    end
+
+    // Shift context for second-order
+    prev_proto = curr_proto
+    curr_proto = actual
+    ti2 = ti2 + 1.0
+  end
+
+  // Compute accuracy
+  let mut accuracy = 0.0
+  if total > 0.0
+    accuracy = correct / total
+  end
+
+  // Get final proto count
+  let final_stats = octobrain_stats(brain, p_state, edge_state)
+  let final_pc = map_get(final_stats, "proto_count")
+
+  // Return results as map
+  let mut result = map()
+  map_set(result, "accuracy", accuracy)
+  map_set(result, "proto_count", final_pc)
+  return result
+end
+
+print("=== OctoBrain Noise Robustness Benchmark ===")
+print("Signal: sin(t * 0.5), window=4, 500 obs per level")
+print("Training: 350 windows, Testing: 150 windows")
+print("Prediction: second-order Markov (predict before observe)")
+print("")
+
+// ── Run trials for each noise level ──────────────────────────────────
+// noise levels: 0.0, 0.05, 0.10, 0.20, 0.50, 1.0
+
+// Trial 0: noise = 0.00
+print("Running noise=0.00 ...")
+let r0 = run_noise_trial(0.0)
+let acc0 = map_get(r0, "accuracy")
+let pc0 = map_get(r0, "proto_count")
+let pct0 = floor(acc0 * 1000.0) / 10.0
+print("  accuracy={pct0}%, protos={pc0}")
+print("")
+
+// Trial 1: noise = 0.05
+print("Running noise=0.05 ...")
+let r1 = run_noise_trial(0.05)
+let acc1 = map_get(r1, "accuracy")
+let pc1 = map_get(r1, "proto_count")
+let pct1 = floor(acc1 * 1000.0) / 10.0
+print("  accuracy={pct1}%, protos={pc1}")
+print("")
+
+// Trial 2: noise = 0.10
+print("Running noise=0.10 ...")
+let r2 = run_noise_trial(0.1)
+let acc2 = map_get(r2, "accuracy")
+let pc2 = map_get(r2, "proto_count")
+let pct2 = floor(acc2 * 1000.0) / 10.0
+print("  accuracy={pct2}%, protos={pc2}")
+print("")
+
+// Trial 3: noise = 0.20
+print("Running noise=0.20 ...")
+let r3 = run_noise_trial(0.2)
+let acc3 = map_get(r3, "accuracy")
+let pc3 = map_get(r3, "proto_count")
+let pct3 = floor(acc3 * 1000.0) / 10.0
+print("  accuracy={pct3}%, protos={pc3}")
+print("")
+
+// Trial 4: noise = 0.50
+print("Running noise=0.50 ...")
+let r4 = run_noise_trial(0.5)
+let acc4 = map_get(r4, "accuracy")
+let pc4 = map_get(r4, "proto_count")
+let pct4 = floor(acc4 * 1000.0) / 10.0
+print("  accuracy={pct4}%, protos={pc4}")
+print("")
+
+// Trial 5: noise = 1.00
+print("Running noise=1.00 ...")
+let r5 = run_noise_trial(1.0)
+let acc5 = map_get(r5, "accuracy")
+let pc5 = map_get(r5, "proto_count")
+let pct5 = floor(acc5 * 1000.0) / 10.0
+print("  accuracy={pct5}%, protos={pc5}")
+print("")
+
+// ── Results Table ────────────────────────────────────────────────────
+print("=== Noise Robustness Results ===")
+print("noise=0.00: accuracy={pct0}%, protos={pc0}")
+print("noise=0.05: accuracy={pct1}%, protos={pc1}")
+print("noise=0.10: accuracy={pct2}%, protos={pc2}")
+print("noise=0.20: accuracy={pct3}%, protos={pc3}")
+print("noise=0.50: accuracy={pct4}%, protos={pc4}")
+print("noise=1.00: accuracy={pct5}%, protos={pc5}")
+print("")
+
+// ── Graceful Degradation Check ───────────────────────────────────────
+// No single noise step should drop accuracy by more than 0.30
+let drop01 = acc0 - acc1
+let drop12 = acc1 - acc2
+let drop23 = acc2 - acc3
+let drop34 = acc3 - acc4
+let drop45 = acc4 - acc5
+
+let mut max_drop = 0.0
+if drop01 > max_drop
+  max_drop = drop01
+end
+if drop12 > max_drop
+  max_drop = drop12
+end
+if drop23 > max_drop
+  max_drop = drop23
+end
+if drop34 > max_drop
+  max_drop = drop34
+end
+if drop45 > max_drop
+  max_drop = drop45
+end
+
+print("--- Degradation Steps ---")
+print("  0.00->0.05 drop: {drop01:.4}")
+print("  0.05->0.10 drop: {drop12:.4}")
+print("  0.10->0.20 drop: {drop23:.4}")
+print("  0.20->0.50 drop: {drop34:.4}")
+print("  0.50->1.00 drop: {drop45:.4}")
+print("  Max single-step drop: {max_drop:.4}")
+print("")
+
+// ── AUC (Area Under Curve) as robustness score ───────────────────────
+// Trapezoidal rule: noise levels [0.0, 0.05, 0.10, 0.20, 0.50, 1.0]
+// Widths: 0.05, 0.05, 0.10, 0.30, 0.50
+let auc = 0.05 * (acc0 + acc1) / 2.0 + 0.05 * (acc1 + acc2) / 2.0 + 0.10 * (acc2 + acc3) / 2.0 + 0.30 * (acc3 + acc4) / 2.0 + 0.50 * (acc4 + acc5) / 2.0
+print("AUC (robustness score): {auc:.4}")
+print("  (max possible = 1.0 if accuracy stays 100% across all noise levels)")
+print("")
+
+// ── PASS/FAIL Criteria ───────────────────────────────────────────────
+print("=== PASS/FAIL Criteria ===")
+
+let mut pass_count = 0.0
+let mut fail_count = 0.0
+
+// Criterion 1: noise=0.0 accuracy >= 0.80
+if acc0 >= 0.80
+  print("PASS noise=0.0 accuracy: {pct0}% (>= 80%)")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL noise=0.0 accuracy: {pct0}% (expected >= 80%)")
+  fail_count = fail_count + 1.0
+end
+
+// Criterion 2: noise=0.10 accuracy >= 0.50
+if acc2 >= 0.50
+  print("PASS noise=0.10 accuracy: {pct2}% (>= 50%)")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL noise=0.10 accuracy: {pct2}% (expected >= 50%)")
+  fail_count = fail_count + 1.0
+end
+
+// Criterion 3: Graceful degradation - no single step drops > 0.30
+if max_drop <= 0.30
+  print("PASS graceful degradation: max drop={max_drop:.4} (<= 0.30)")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL graceful degradation: max drop={max_drop:.4} (expected <= 0.30)")
+  fail_count = fail_count + 1.0
+end
+
+// Criterion 4: Proto count at noise=1.0 < 50
+if pc5 < 50.0
+  print("PASS noise=1.0 proto count: {pc5} (< 50)")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL noise=1.0 proto count: {pc5} (expected < 50)")
+  fail_count = fail_count + 1.0
+end
+
+let pass_int = int(pass_count)
+let fail_int = int(fail_count)
+print("")
+print("Result: {pass_int}/4 criteria passed, {fail_int}/4 failed")
+
+if pass_count == 4.0
+  print("OVERALL: PASS")
+else
+  print("OVERALL: FAIL")
+end
+
+print("")
+print("--- noise robustness benchmark complete ---")

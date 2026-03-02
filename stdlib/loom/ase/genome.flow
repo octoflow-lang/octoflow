@@ -1,0 +1,64 @@
+// genome.flow — ASE Genome Library
+//
+// A genome is a flat array of floats. A schema is a parallel array of
+// [min, max] bounds per gene: [min0, max0, min1, max1, ...].
+//
+// Functions:
+//   ase_genome_create(gene_count) → zeroed genome array
+//   ase_genome_randomize(genome, schema) → genome filled with random values
+//   ase_genome_clamp(genome, schema) → genome clamped to bounds
+//   ase_genome_discretize(genome, gene_index, options) → gene snapped to nearest
+
+fn ase_genome_create(gene_count)
+  let mut g = []
+  let mut i = 0.0
+  while i < gene_count
+    push(g, 0.0)
+    i = i + 1.0
+  end
+  return g
+end
+
+fn ase_genome_randomize(genome, schema)
+  let mut i = 0.0
+  while i < len(genome)
+    let lo = schema[i * 2.0]
+    let hi = schema[i * 2.0 + 1.0]
+    genome[i] = lo + random() * (hi - lo)
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn ase_genome_clamp(genome, schema)
+  let mut i = 0.0
+  while i < len(genome)
+    let lo = schema[i * 2.0]
+    let hi = schema[i * 2.0 + 1.0]
+    if genome[i] < lo
+      genome[i] = lo
+    end
+    if genome[i] > hi
+      genome[i] = hi
+    end
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn ase_genome_discretize(genome, gene_index, options)
+  let val = genome[gene_index]
+  let mut best = options[0]
+  let mut best_dist = abs(val - best)
+  let mut i = 1.0
+  while i < len(options)
+    let d = abs(val - options[i])
+    if d < best_dist
+      best = options[i]
+      best_dist = d
+    end
+    i = i + 1.0
+  end
+  genome[gene_index] = best
+  return 0.0
+end

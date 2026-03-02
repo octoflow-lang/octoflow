@@ -1,0 +1,138 @@
+// stdlib/ml/gpu_ml.flow — GPU-Accelerated ML Functions
+//
+// Uses Loom Engine GPU kernels for 10-1000x speedups on large datasets.
+// Provides GPU-accelerated equivalents of core ML operations from:
+//   nn.flow, linalg.flow, preprocess.flow, cluster.flow, metrics.flow
+//
+// Architecture: Thin wrappers around proven GPU primitives from stdlib/loom/.
+// Import this instead of the CPU modules when working with large arrays.
+//
+// Note: Some functions require the Loom runtime (rt_create_buffer) which
+// limits cross-module use. Functions marked [BUILTIN] use only GPU builtins
+// and work reliably cross-module. Functions marked [RUNTIME] need the full
+// Loom runtime pipeline.
+//
+// Usage:
+//   use "gpu_ml"
+//   let probs = gpu_softmax_forward(logits)
+
+use "../loom/math/advanced"
+use "../loom/math/linalg"
+use "../loom/math/stats"
+use "../loom/data/composite"
+use "../loom/ops/ops"
+
+// ============================================================
+// LINEAR ALGEBRA — GPU path [RUNTIME]
+// ============================================================
+
+fn gpu_mat_mul(a, b, m, n, k)
+    // GPU tiled matrix multiplication: (m x k) * (k x n) -> (m x n)
+    // 100-1000x faster than CPU for m,n,k > 64
+    return gpu_matmul(a, b, m, n, k)
+end
+
+fn gpu_mat_vec_mul(mat, vec, rows, cols)
+    // GPU matrix-vector multiply: (rows x cols) * (cols) -> (rows)
+    return gpu_matrix_vector_mul(mat, vec, rows, cols)
+end
+
+// ============================================================
+// NEURAL NETWORK LAYERS — GPU path
+// ============================================================
+
+fn gpu_dense_forward(weights, bias, input, n_in, n_out)
+    // Dense layer: output = weights * input + bias [RUNTIME]
+    // weights: flat array [n_out x n_in], input: flat array [n_in]
+    let wx = gpu_matrix_vector_mul(weights, input, n_out, n_in)
+    let result = gpu_vector_add(wx, bias)
+    return result
+end
+
+fn gpu_softmax_forward(input)
+    // Numerically stable softmax on GPU [BUILTIN]
+    return gpu_softmax(input)
+end
+
+fn gpu_sigmoid_forward(input)
+    // Sigmoid activation on GPU via SPIR-V kernel [BUILTIN]
+    return gpu_sigmoid(input)
+end
+
+fn gpu_relu_forward(input)
+    // ReLU activation on GPU via SPIR-V kernel [BUILTIN]
+    return gpu_relu(input)
+end
+
+fn gpu_tanh_forward(input)
+    // Tanh activation on GPU via SPIR-V kernel [BUILTIN]
+    return gpu_tanh(input)
+end
+
+// ============================================================
+// PREPROCESSING — GPU path
+// ============================================================
+
+fn gpu_minmax_scale_ml(data)
+    // Min-max scaling to [0, 1] on GPU [BUILTIN]
+    // Uses gpu_min/gpu_max builtins + CPU normalization
+    return gpu_minmax_scale(data)
+end
+
+fn gpu_zscore_scale_ml(data)
+    // Z-score standardization on GPU [RUNTIME]
+    return gpu_standardize(data)
+end
+
+// ============================================================
+// CLUSTERING — GPU path
+// ============================================================
+
+fn gpu_euclidean_dist(a, b)
+    // Euclidean distance between two vectors on GPU [BUILTIN]
+    return gpu_euclidean_distance(a, b)
+end
+
+// ============================================================
+// LOSS FUNCTIONS — GPU path [BUILTIN]
+// ============================================================
+
+fn gpu_mse_loss(predicted, actual)
+    // Mean squared error on GPU
+    let diff = gpu_sub_run(predicted, actual)
+    let sq = gpu_mul_run(diff, diff)
+    let total = gpu_sum(sq)
+    return total / len(predicted)
+end
+
+fn gpu_mae_loss(predicted, actual)
+    // Mean absolute error on GPU
+    let diff = gpu_sub_run(predicted, actual)
+    let absd = gpu_abs_run(diff)
+    let total = gpu_sum(absd)
+    return total / len(predicted)
+end
+
+// ============================================================
+// STATISTICS — GPU path [BUILTIN]
+// ============================================================
+
+fn gpu_mean_ml(data)
+    // Arithmetic mean on GPU
+    return gpu_mean(data)
+end
+
+fn gpu_variance_ml(data)
+    // Sample variance on GPU
+    return gpu_variance(data)
+end
+
+fn gpu_std_ml(data)
+    // Standard deviation on GPU
+    return gpu_std(data)
+end
+
+fn gpu_correlation_ml(a, b)
+    // Pearson correlation on GPU [RUNTIME]
+    return gpu_correlation(a, b)
+end

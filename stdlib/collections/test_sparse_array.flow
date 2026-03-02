@@ -1,0 +1,143 @@
+// test_sparse_array.flow — Tests for stdlib/collections/sparse_array.flow
+use "sparse_array"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Basic operations ────────────────────────────────────────
+
+fn test_create()
+    let mut s = sparse_create(100.0, 0.0)
+    check("create size", sparse_size(s) == 100.0)
+    check("create nnz", sparse_nnz(s) == 0.0)
+    check("create default", sparse_get(s, 50.0) == 0.0)
+    return 0.0
+end
+
+fn test_set_get()
+    let mut s = sparse_create(100.0, 0.0)
+    sparse_set(s, 10.0, 3.14)
+    sparse_set(s, 50.0, 2.71)
+    check("get 10", approx(sparse_get(s, 10.0), 3.14) == 1.0)
+    check("get 50", approx(sparse_get(s, 50.0), 2.71) == 1.0)
+    check("get default", sparse_get(s, 0.0) == 0.0)
+    check("nnz 2", sparse_nnz(s) == 2.0)
+    return 0.0
+end
+
+fn test_has()
+    let mut s = sparse_create(100.0, 0.0)
+    sparse_set(s, 5.0, 42.0)
+    check("has yes", sparse_has(s, 5.0) == 1.0)
+    check("has no", sparse_has(s, 6.0) == 0.0)
+    return 0.0
+end
+
+fn test_remove()
+    let mut s = sparse_create(100.0, 0.0)
+    sparse_set(s, 10.0, 5.0)
+    sparse_remove(s, 10.0)
+    check("remove nnz", sparse_nnz(s) == 0.0)
+    check("remove default", sparse_get(s, 10.0) == 0.0)
+    return 0.0
+end
+
+fn test_set_default_removes()
+    let mut s = sparse_create(100.0, 0.0)
+    sparse_set(s, 10.0, 5.0)
+    sparse_set(s, 10.0, 0.0)  // set to default removes
+    check("set default nnz", sparse_nnz(s) == 0.0)
+    return 0.0
+end
+
+// ── Keys / Values ───────────────────────────────────────────
+
+fn test_keys_values()
+    let mut s = sparse_create(100.0, 0.0)
+    sparse_set(s, 3.0, 10.0)
+    sparse_set(s, 7.0, 20.0)
+    let k = sparse_keys(s)
+    let v = sparse_values(s)
+    check("keys len", len(k) == 2.0)
+    check("vals len", len(v) == 2.0)
+    return 0.0
+end
+
+// ── To dense ────────────────────────────────────────────────
+
+fn test_to_dense()
+    let mut s = sparse_create(5.0, 0.0)
+    sparse_set(s, 1.0, 10.0)
+    sparse_set(s, 3.0, 30.0)
+    let d = sparse_to_dense(s)
+    check("dense len", len(d) == 5.0)
+    check("dense[0]", d[0] == 0.0)
+    check("dense[1]", d[1] == 10.0)
+    check("dense[3]", d[3] == 30.0)
+    return 0.0
+end
+
+// ── Arithmetic ──────────────────────────────────────────────
+
+fn test_add()
+    let mut a = sparse_create(10.0, 0.0)
+    sparse_set(a, 0.0, 1.0)
+    sparse_set(a, 5.0, 2.0)
+    let mut b = sparse_create(10.0, 0.0)
+    sparse_set(b, 0.0, 3.0)
+    sparse_set(b, 7.0, 4.0)
+    let mut c = sparse_add(a, b)
+    check("add [0]", sparse_get(c, 0.0) == 4.0)
+    check("add [5]", sparse_get(c, 5.0) == 2.0)
+    check("add [7]", sparse_get(c, 7.0) == 4.0)
+    return 0.0
+end
+
+fn test_dot()
+    let mut a = sparse_create(10.0, 0.0)
+    sparse_set(a, 0.0, 2.0)
+    sparse_set(a, 5.0, 3.0)
+    let mut b = sparse_create(10.0, 0.0)
+    sparse_set(b, 0.0, 4.0)
+    sparse_set(b, 5.0, 5.0)
+    let d = sparse_dot(a, b)
+    check("dot product", d == 23.0)  // 2*4 + 3*5
+    return 0.0
+end
+
+fn test_scale()
+    let mut s = sparse_create(10.0, 0.0)
+    sparse_set(s, 3.0, 5.0)
+    let mut scaled = sparse_scale(s, 3.0)
+    check("scale", sparse_get(scaled, 3.0) == 15.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_create()
+test_set_get()
+test_has()
+test_remove()
+test_set_default_removes()
+test_keys_values()
+test_to_dense()
+test_add()
+test_dot()
+test_scale()
+print("")
+print("All sparse_array tests passed (10 tests)")

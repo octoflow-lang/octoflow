@@ -1,0 +1,98 @@
+// test_string_search.flow — Tests for stdlib/algo/string_search.flow
+use "string_search"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Naive search ──────────────────────────────────────────
+
+fn test_naive()
+    check("naive found", naive_search("hello world", "world") == 6.0)
+    check("naive not found", naive_search("hello world", "xyz") == -1.0)
+    check("naive start", naive_search("abcdef", "abc") == 0.0)
+    check("naive empty pat", naive_search("hello", "") == 0.0)
+    return 0.0
+end
+
+// ── KMP search ────────────────────────────────────────────
+
+fn test_kmp()
+    check("kmp found", kmp_search("hello world hello", "hello") == 0.0)
+    check("kmp mid", kmp_search("abcxyzabc", "xyz") == 3.0)
+    check("kmp not found", kmp_search("abcdef", "xyz") == -1.0)
+    check("kmp pattern repeat", kmp_search("aaabaaab", "aaab") == 0.0)
+    return 0.0
+end
+
+// ── Rabin-Karp search ─────────────────────────────────────
+
+fn test_rabin_karp()
+    check("rk found", rabin_karp_search("hello world", "world") == 6.0)
+    check("rk not found", rabin_karp_search("abcdef", "xyz") == -1.0)
+    check("rk single", rabin_karp_search("a", "a") == 0.0)
+    return 0.0
+end
+
+// ── Count occurrences ─────────────────────────────────────
+
+fn test_count()
+    check("count 2", count_occurrences("abcabc", "abc") == 2.0)
+    check("count 3", count_occurrences("aaa", "a") == 3.0)
+    check("count 0", count_occurrences("hello", "xyz") == 0.0)
+    check("count overlap", count_occurrences("aaaa", "aa") == 2.0)  // non-overlapping
+    return 0.0
+end
+
+// ── Find all ──────────────────────────────────────────────
+
+fn test_find_all()
+    let pos = find_all_occurrences("abcabcabc", "abc")
+    check("findall len", len(pos) == 3.0)
+    check("findall[0]", pos[0] == 0.0)
+    check("findall[1]", pos[1] == 3.0)
+    check("findall[2]", pos[2] == 6.0)
+    // Overlapping
+    let pos2 = find_all_occurrences("aaaa", "aa")
+    check("findall overlap", len(pos2) == 3.0)  // positions 0, 1, 2
+    return 0.0
+end
+
+// ── Longest common substring ──────────────────────────────
+
+fn test_lcs()
+    check("lcs basic", longest_common_substring("abcdef", "xbcdy") == 3.0)  // "bcd"
+    check("lcs same", longest_common_substring("hello", "hello") == 5.0)
+    check("lcs none", longest_common_substring("abc", "xyz") == 0.0)
+    check("lcs empty", longest_common_substring("", "abc") == 0.0)
+    return 0.0
+end
+
+// ── KMP table ─────────────────────────────────────────────
+
+fn test_kmp_table()
+    let table = kmp_build_table("abcabd")
+    check("table len", len(table) == 6.0)
+    check("table[0]", table[0] == 0.0)
+    check("table[3]", table[3] == 1.0)
+    check("table[4]", table[4] == 2.0)
+    return 0.0
+end
+
+// ── Run all ───────────────────────────────────────────────
+
+test_naive()
+test_kmp()
+test_rabin_karp()
+test_count()
+test_find_all()
+test_lcs()
+test_kmp_table()
+print("")
+print("All string_search tests passed (7 tests)")

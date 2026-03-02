@@ -1,0 +1,232 @@
+// stdlib/collections/priority_queue.flow — Min-heap priority queue
+//
+// Priority queue with explicit priority-value pairs.
+// Stores pairs as flat array: [priority0, value0, priority1, value1, ...]
+// Min-heap property: parent priority <= child priority.
+//
+// Internal structure:
+//   pq[0] = size (number of elements)
+//   pq[1..] = pairs [priority, value, priority, value, ...]
+//
+// Functions: pq_create, pq_push, pq_pop, pq_peek_priority, pq_peek_value,
+//            pq_size, pq_is_empty, pq_clear, pq_to_array
+//
+// Usage:
+//   use "priority_queue"
+//   let mut pq = pq_create()
+//   pq_push(pq, 3.0, 300.0)    // priority 3, value 300
+//   pq_push(pq, 1.0, 100.0)    // priority 1, value 100
+//   pq_push(pq, 2.0, 200.0)    // priority 2, value 200
+//   pq_peek_value(pq)           // 100.0 (lowest priority)
+//   pq_pop(pq)                  // 100.0
+
+fn pq_create()
+    let mut pq = []
+    push(pq, 0.0)  // size
+    return pq
+end
+
+fn _pq_parent(i)
+    return floor((i - 1.0) / 2.0)
+end
+
+fn _pq_left(i)
+    return 2.0 * i + 1.0
+end
+
+fn _pq_right(i)
+    return 2.0 * i + 2.0
+end
+
+fn _pq_swap(pq, i, j)
+    // Swap pairs at heap indices i and j.
+    let base = 1.0
+    let pi = base + i * 2.0
+    let pj = base + j * 2.0
+
+    let tp = pq[pi]
+    let tv = pq[pi + 1.0]
+    pq[pi] = pq[pj]
+    pq[pi + 1.0] = pq[pj + 1.0]
+    pq[pj] = tp
+    pq[pj + 1.0] = tv
+    return 0.0
+end
+
+fn _pq_sift_up(pq, i)
+    let mut idx = i
+    while idx > 0.0
+        let parent = _pq_parent(idx)
+        let base = 1.0
+        if pq[base + idx * 2.0] < pq[base + parent * 2.0]
+            _pq_swap(pq, idx, parent)
+            idx = parent
+        else
+            return 0.0
+        end
+    end
+    return 0.0
+end
+
+fn _pq_sift_down(pq, i)
+    let size = pq[0]
+    let mut idx = i
+    let base = 1.0
+    let mut guard = 0.0
+
+    while guard < size
+        let left = _pq_left(idx)
+        let right = _pq_right(idx)
+        let mut smallest = idx
+
+        if left < size && pq[base + left * 2.0] < pq[base + smallest * 2.0]
+            smallest = left
+        end
+        if right < size && pq[base + right * 2.0] < pq[base + smallest * 2.0]
+            smallest = right
+        end
+
+        if smallest != idx
+            _pq_swap(pq, idx, smallest)
+            idx = smallest
+        else
+            return 0.0
+        end
+        guard = guard + 1.0
+    end
+    return 0.0
+end
+
+fn pq_push(pq, priority, value)
+    // Insert element with given priority and value.
+    push(pq, priority)
+    push(pq, value)
+    let size = pq[0] + 1.0
+    pq[0] = size
+    _pq_sift_up(pq, size - 1.0)
+    return 0.0
+end
+
+fn pq_pop(pq)
+    // Remove and return the value with lowest priority.
+    // Returns -1.0 if empty.
+    let size = pq[0]
+    if size == 0.0
+        return -1.0
+    end
+
+    let base = 1.0
+    let value = pq[base + 1.0]  // value of root
+
+    if size == 1.0
+        // Remove last pair
+        pq[0] = 0.0
+        // We can't truly shrink the array, but size = 0 means "empty"
+        return value
+    end
+
+    // Move last element to root
+    let last = size - 1.0
+    pq[base] = pq[base + last * 2.0]
+    pq[base + 1.0] = pq[base + last * 2.0 + 1.0]
+    pq[0] = size - 1.0
+
+    _pq_sift_down(pq, 0.0)
+    return value
+end
+
+fn pq_peek_priority(pq)
+    // Return priority of highest-priority element (lowest number).
+    if pq[0] == 0.0
+        return -1.0
+    end
+    return pq[1]
+end
+
+fn pq_peek_value(pq)
+    // Return value of highest-priority element.
+    if pq[0] == 0.0
+        return -1.0
+    end
+    return pq[2]
+end
+
+fn pq_size(pq)
+    return pq[0]
+end
+
+fn pq_is_empty(pq)
+    if pq[0] == 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn pq_clear(pq)
+    pq[0] = 0.0
+    return 0.0
+end
+
+fn pq_to_array(pq)
+    // Return values in priority order (ascending). Destructive to a copy.
+    let size = pq[0]
+    let mut result = []
+
+    // Build a temporary copy
+    let mut tmp = []
+    let mut i = 0.0
+    while i < len(pq)
+        push(tmp, pq[i])
+        i = i + 1.0
+    end
+
+    // Pop all from tmp
+    let mut count = 0.0
+    while count < size
+        let base = 1.0
+        let value = tmp[base + 1.0]
+        push(result, value)
+
+        let s = tmp[0]
+        if s == 1.0
+            tmp[0] = 0.0
+        else
+            let last = s - 1.0
+            tmp[base] = tmp[base + last * 2.0]
+            tmp[base + 1.0] = tmp[base + last * 2.0 + 1.0]
+            tmp[0] = s - 1.0
+
+            // Inline sift down on tmp
+            let mut idx = 0.0
+            let mut done = 0.0
+            while done == 0.0
+                let left = 2.0 * idx + 1.0
+                let right = 2.0 * idx + 2.0
+                let mut sm = idx
+                let ns = tmp[0]
+
+                if left < ns && tmp[base + left * 2.0] < tmp[base + sm * 2.0]
+                    sm = left
+                end
+                if right < ns && tmp[base + right * 2.0] < tmp[base + sm * 2.0]
+                    sm = right
+                end
+
+                if sm != idx
+                    // Swap
+                    let tp = tmp[base + idx * 2.0]
+                    let tv = tmp[base + idx * 2.0 + 1.0]
+                    tmp[base + idx * 2.0] = tmp[base + sm * 2.0]
+                    tmp[base + idx * 2.0 + 1.0] = tmp[base + sm * 2.0 + 1.0]
+                    tmp[base + sm * 2.0] = tp
+                    tmp[base + sm * 2.0 + 1.0] = tv
+                    idx = sm
+                else
+                    done = 1.0
+                end
+            end
+        end
+        count = count + 1.0
+    end
+    return result
+end

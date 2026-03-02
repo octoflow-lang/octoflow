@@ -1,0 +1,206 @@
+// stdlib/llm/decompose_ocp.flow — GGUF → OctoPress Decomposition
+//
+// Converts a monolithic GGUF model into per-tensor .ocp files.
+// Each tensor is dequantized to F32 and delta-compressed via OctoPress.
+// Result: compressed F32 arrays ready for direct GPU upload at inference.
+//
+// Unlike decompose_gguf.flow (raw binary extraction), this produces
+// OctoPress .ocp files that decompress to clean float arrays — no
+// dequantization needed at inference time.
+//
+// Output structure:
+//   {output_dir}/manifest_ocp.txt   — metadata + tensor dimensions
+//   {output_dir}/token_embd.ocp     — embedding table
+//   {output_dir}/output_norm.ocp    — final norm weights
+//   {output_dir}/blk_NNN_attn_q.ocp — Q weight for layer N
+//   {output_dir}/blk_NNN_attn_k.ocp — K weight for layer N
+//   ... (9 tensors per layer)
+//
+// Usage:
+//   use "decompose_ocp"
+//   let _r = decompose_gguf_ocp("model.gguf", "model_ocp/")
+//
+// Run standalone:
+//   octoflow run stdlib/llm/decompose_ocp.flow --allow-read --allow-write
+
+use "gguf"
+
+fn decompose_layer_tensor(gguf_path, model, layer_idx, tensor_suffix, output_dir, method)
+    // Load a single layer tensor, compress with OctoPress, save to .ocp
+    // Returns: number of floats compressed (or 0.0 on failure)
+    let lis = str(int(layer_idx))
+    let full_name = "blk." + lis + "." + tensor_suffix
+
+    // Pad layer number for sorted file listing
+    let mut pad = ""
+    if layer_idx < 10.0
+        pad = "00"
+    elif layer_idx < 100.0
+        pad = "0"
+    end
+
+    // Build short name for file: blk_NNN_attn_q
+    let short = str_replace(tensor_suffix, ".weight", "")
+    let short2 = str_replace(short, ".", "_")
+    let ocp_path = output_dir + "/blk_" + pad + lis + "_" + short2 + ".ocp"
+
+    let data = gguf_load_tensor(gguf_path, model, full_name)
+    let n = len(data)
+    if n < 1.0
+        print("  WARN: empty tensor {full_name}")
+        return 0.0
+    end
+
+    let compressed = octopress_encode(data, method)
+    octopress_save(compressed, ocp_path)
+    return n
+end
+
+fn decompose_gguf_ocp(gguf_path, output_dir)
+    print("=== GGUF → OctoPress Decomposition ===")
+    print("  Input:  {gguf_path}")
+    print("  Output: {output_dir}")
+    print("")
+
+    octopress_init(256.0)
+
+    // Load model metadata
+    print("Loading model metadata...")
+    let model = gguf_load_from_file(gguf_path)
+
+    let n_embd = map_get(model, "n_embd")
+    let n_head = map_get(model, "n_head")
+    let mut n_kv_head = map_get(model, "n_kv_head")
+    let n_ff = map_get(model, "n_ff")
+    let n_layer = map_get(model, "n_layer")
+    let vocab_size = map_get(model, "vocab_size")
+    let arch = map_get(model, "arch")
+    let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+    let rope_theta = gguf_meta_default(model, "rope.freq_base", 10000.0)
+
+    if n_kv_head == 0.0
+        n_kv_head = n_head
+    end
+
+    print("  {arch}: {n_layer} layers, {n_embd} dim, {vocab_size} vocab")
+    print("")
+
+    // ── Persistent tensors ──────────────────────────────────────
+
+    print("Compressing persistent tensors...")
+
+    // Token embedding — large, use delta compression
+    let embd_data = gguf_load_tensor(gguf_path, model, "token_embd.weight")
+    let embd_n = len(embd_data)
+    let embd_comp = octopress_encode(embd_data, 1.0)
+    octopress_save(embd_comp, output_dir + "/token_embd.ocp")
+    print("  token_embd: {embd_n} floats")
+
+    // Output norm — small, use raw encoding
+    let norm_data = gguf_load_tensor(gguf_path, model, "output_norm.weight")
+    let norm_n = len(norm_data)
+    let norm_comp = octopress_encode(norm_data, 0.0)
+    octopress_save(norm_comp, output_dir + "/output_norm.ocp")
+    print("  output_norm: {norm_n} floats")
+
+    // Check for separate output weights
+    let has_output = gguf_has_tensor(model, "output.weight")
+    let mut lm_n = 0.0
+    if has_output == 1.0
+        let lm_data = gguf_load_tensor(gguf_path, model, "output.weight")
+        lm_n = len(lm_data)
+        let lm_comp = octopress_encode(lm_data, 1.0)
+        octopress_save(lm_comp, output_dir + "/output_weight.ocp")
+        print("  output_weight: {lm_n} floats")
+    else
+        print("  output_weight: tied to token_embd")
+    end
+
+    print("")
+
+    // ── Per-layer tensors ───────────────────────────────────────
+
+    print("Compressing {n_layer} layers...")
+
+    // Tensor names for each layer (9 standard tensors)
+    let mut tensor_names = []
+    push(tensor_names, "attn_norm.weight")
+    push(tensor_names, "attn_q.weight")
+    push(tensor_names, "attn_k.weight")
+    push(tensor_names, "attn_v.weight")
+    push(tensor_names, "attn_output.weight")
+    push(tensor_names, "ffn_norm.weight")
+    push(tensor_names, "ffn_gate.weight")
+    push(tensor_names, "ffn_up.weight")
+    push(tensor_names, "ffn_down.weight")
+
+    // Methods: norm weights are small (raw=0), matrices are delta-compressible (delta=1)
+    let mut tensor_methods = []
+    push(tensor_methods, 0.0)
+    push(tensor_methods, 1.0)
+    push(tensor_methods, 1.0)
+    push(tensor_methods, 1.0)
+    push(tensor_methods, 1.0)
+    push(tensor_methods, 0.0)
+    push(tensor_methods, 1.0)
+    push(tensor_methods, 1.0)
+    push(tensor_methods, 1.0)
+
+    let mut total_floats = 0.0
+    let mut li = 0.0
+    while li < n_layer
+        let t_start = time()
+        let mut layer_floats = 0.0
+
+        let mut ti = 0.0
+        while ti < len(tensor_names)
+            let nf = decompose_layer_tensor(gguf_path, model, li, tensor_names[ti], output_dir, tensor_methods[ti])
+            layer_floats = layer_floats + nf
+            ti = ti + 1.0
+        end
+
+        total_floats = total_floats + layer_floats
+        let t_elapsed = time() - t_start
+        let lis = str(int(li))
+        print("  layer {lis}: {layer_floats} floats ({t_elapsed}ms)")
+
+        // Evict layer tensors from cache to bound memory
+        let _ev = gguf_evict_layer_ram(gguf_path, model, li)
+
+        li = li + 1.0
+    end
+
+    // ── Write manifest ──────────────────────────────────────────
+
+    print("")
+    print("Writing manifest...")
+
+    let mut manifest = ""
+    manifest = manifest + "# OctoPress Model Manifest\n"
+    manifest = manifest + "# Auto-generated by decompose_ocp.flow\n"
+    manifest = manifest + "arch=" + arch + "\n"
+    manifest = manifest + "n_embd=" + str(int(n_embd)) + "\n"
+    manifest = manifest + "n_head=" + str(int(n_head)) + "\n"
+    manifest = manifest + "n_kv_head=" + str(int(n_kv_head)) + "\n"
+    manifest = manifest + "n_ff=" + str(int(n_ff)) + "\n"
+    manifest = manifest + "n_layer=" + str(int(n_layer)) + "\n"
+    manifest = manifest + "vocab_size=" + str(int(vocab_size)) + "\n"
+    manifest = manifest + "eps=" + str(eps) + "\n"
+    manifest = manifest + "rope_theta=" + str(rope_theta) + "\n"
+    manifest = manifest + "has_output=" + str(int(has_output)) + "\n"
+    manifest = manifest + "total_floats=" + str(int(total_floats)) + "\n"
+
+    write_file(output_dir + "/manifest_ocp.txt", manifest)
+
+    // ── Summary ─────────────────────────────────────────────────
+
+    let total_bytes = total_floats * 4.0
+    let total_mb = total_bytes / 1048576.0
+    print("")
+    print("=== Decomposition Complete ===")
+    print("  Layers: {n_layer}")
+    print("  Total floats: {total_floats} ({total_mb} MB uncompressed)")
+    print("  Output: {output_dir}/")
+    print("  Manifest: {output_dir}/manifest_ocp.txt")
+    return total_floats
+end

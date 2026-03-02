@@ -1,0 +1,224 @@
+// emit_octopress_analyze.flow — OctoPress Block Analysis Kernel Emitter
+//
+// Analyzes a data block to determine the best compression strategy.
+// One workgroup per block. Computes 6 metrics in shared memory reductions.
+//
+// Binding 0: input data (float array, N per block)
+// Binding 1: output metrics (6 floats per block)
+//
+// Output layout per block:
+//   [0] min       — minimum value
+//   [1] max       — maximum value
+//   [2] mean      — arithmetic mean
+//   [3] variance  — population variance
+//   [4] entropy   — (placeholder, requires bitwise histogram)
+//   [5] similarity — self-similarity score [0..1]
+//
+// Decision encoded in similarity + variance:
+//   similarity > 0.8            → FRACTAL (type 0)
+//   variance < 0.001            → DELTA   (type 1)
+//   else                        → HOLDER  (type 2)
+//
+// Workgroup: 256 threads. block_size must equal 256.
+
+use "../../compiler/ir"
+
+// ── Reduction step helpers ─────────────────────────────────────────
+// Each step: partner = lid + stride, guard = lid <= stride,
+// reduce pair, select result or keep original, barrier.
+// Follows the proven emit_rmsnorm.flow pattern.
+
+fn _emit_sum_step(blk, lid_ref, stride)
+  let partner = ir_iadd(blk, lid_ref, stride)
+  let guard = ir_ulte(blk, lid_ref, stride)
+  let my_val = ir_shared_load(blk, lid_ref)
+  let p_val = ir_shared_load(blk, partner)
+  let s = ir_fadd(blk, my_val, p_val)
+  let kept = ir_select(blk, 1.0, guard, s, my_val)
+  ir_shared_store(blk, lid_ref, kept)
+  ir_barrier(blk)
+  return 0.0
+end
+
+fn _emit_min_step(blk, lid_ref, stride)
+  let partner = ir_iadd(blk, lid_ref, stride)
+  let guard = ir_ulte(blk, lid_ref, stride)
+  let my_val = ir_shared_load(blk, lid_ref)
+  let p_val = ir_shared_load(blk, partner)
+  let mn = ir_fmin(blk, my_val, p_val)
+  let kept = ir_select(blk, 1.0, guard, mn, my_val)
+  ir_shared_store(blk, lid_ref, kept)
+  ir_barrier(blk)
+  return 0.0
+end
+
+fn _emit_max_step(blk, lid_ref, stride)
+  let partner = ir_iadd(blk, lid_ref, stride)
+  let guard = ir_ulte(blk, lid_ref, stride)
+  let my_val = ir_shared_load(blk, lid_ref)
+  let p_val = ir_shared_load(blk, partner)
+  let mx = ir_fmax(blk, my_val, p_val)
+  let kept = ir_select(blk, 1.0, guard, mx, my_val)
+  ir_shared_store(blk, lid_ref, kept)
+  ir_barrier(blk)
+  return 0.0
+end
+
+// ── 8-step tree reduction wrappers ─────────────────────────────────
+
+fn _emit_reduce_sum(blk, lid_ref, c128, c64, c32, c16, c8, c4, c2, c1)
+  _emit_sum_step(blk, lid_ref, c128)
+  _emit_sum_step(blk, lid_ref, c64)
+  _emit_sum_step(blk, lid_ref, c32)
+  _emit_sum_step(blk, lid_ref, c16)
+  _emit_sum_step(blk, lid_ref, c8)
+  _emit_sum_step(blk, lid_ref, c4)
+  _emit_sum_step(blk, lid_ref, c2)
+  _emit_sum_step(blk, lid_ref, c1)
+  return 0.0
+end
+
+fn _emit_reduce_min(blk, lid_ref, c128, c64, c32, c16, c8, c4, c2, c1)
+  _emit_min_step(blk, lid_ref, c128)
+  _emit_min_step(blk, lid_ref, c64)
+  _emit_min_step(blk, lid_ref, c32)
+  _emit_min_step(blk, lid_ref, c16)
+  _emit_min_step(blk, lid_ref, c8)
+  _emit_min_step(blk, lid_ref, c4)
+  _emit_min_step(blk, lid_ref, c2)
+  _emit_min_step(blk, lid_ref, c1)
+  return 0.0
+end
+
+fn _emit_reduce_max(blk, lid_ref, c128, c64, c32, c16, c8, c4, c2, c1)
+  _emit_max_step(blk, lid_ref, c128)
+  _emit_max_step(blk, lid_ref, c64)
+  _emit_max_step(blk, lid_ref, c32)
+  _emit_max_step(blk, lid_ref, c16)
+  _emit_max_step(blk, lid_ref, c8)
+  _emit_max_step(blk, lid_ref, c4)
+  _emit_max_step(blk, lid_ref, c2)
+  _emit_max_step(blk, lid_ref, c1)
+  return 0.0
+end
+
+// ── Main emitter ───────────────────────────────────────────────────
+
+fn emit_octopress_analyze(out_path, block_size)
+  ir_new()
+  ir_input_count = 1.0
+  ir_shared_size = 256.0
+  ir_workgroup_size = 256.0
+
+  let entry = ir_block("entry")
+  let write_out = ir_block("write_out")
+  let exit_blk = ir_block("exit")
+
+  let lid = ir_load_local_id(entry)
+  let wid = ir_load_workgroup_id(entry)
+
+  // Global element index: wid * block_size + lid
+  let bs_u = ir_const_u(entry, block_size)
+  let base = ir_imul(entry, wid, bs_u)
+  let gid = ir_iadd(entry, base, lid)
+
+  // Load input value
+  let val = ir_load_input_at(entry, 0.0, gid)
+
+  // Stride constants for 8-step reduction (256 → 1)
+  let c128 = ir_const_u(entry, 128.0)
+  let c64 = ir_const_u(entry, 64.0)
+  let c32 = ir_const_u(entry, 32.0)
+  let c16 = ir_const_u(entry, 16.0)
+  let c8 = ir_const_u(entry, 8.0)
+  let c4 = ir_const_u(entry, 4.0)
+  let c2u = ir_const_u(entry, 2.0)
+  let c1u = ir_const_u(entry, 1.0)
+  let c0u = ir_const_u(entry, 0.0)
+
+  // ── Phase 1a: SUM reduction ────────────────────────────────────
+  ir_shared_store(entry, lid, val)
+  ir_barrier(entry)
+  _emit_reduce_sum(entry, lid, c128, c64, c32, c16, c8, c4, c2u, c1u)
+  let sum_val = ir_shared_load(entry, c0u)
+
+  let n_f = ir_const_f(entry, block_size)
+  let mean_val = ir_fdiv(entry, sum_val, n_f)
+
+  // ── Phase 1b: MIN reduction ────────────────────────────────────
+  ir_shared_store(entry, lid, val)
+  ir_barrier(entry)
+  _emit_reduce_min(entry, lid, c128, c64, c32, c16, c8, c4, c2u, c1u)
+  let min_val = ir_shared_load(entry, c0u)
+
+  // ── Phase 1c: MAX reduction ────────────────────────────────────
+  ir_shared_store(entry, lid, val)
+  ir_barrier(entry)
+  _emit_reduce_max(entry, lid, c128, c64, c32, c16, c8, c4, c2u, c1u)
+  let max_val = ir_shared_load(entry, c0u)
+
+  // ── Phase 2: Variance reduction ────────────────────────────────
+  let diff = ir_fsub(entry, val, mean_val)
+  let diff_sq = ir_fmul(entry, diff, diff)
+  ir_shared_store(entry, lid, diff_sq)
+  ir_barrier(entry)
+  _emit_reduce_sum(entry, lid, c128, c64, c32, c16, c8, c4, c2u, c1u)
+  let sum_sq = ir_shared_load(entry, c0u)
+  let variance = ir_fdiv(entry, sum_sq, n_f)
+
+  // ── Phase 3: Self-similarity estimation ────────────────────────
+  // Compare first quarter (lid 0..63) with second quarter (lid 64..127)
+  // Threads with lid >= 64 contribute 0.0 to the MSE sum
+  let c63 = ir_const_u(entry, 63.0)
+  let q_gid = ir_iadd(entry, gid, c64)
+  let q_val = ir_load_input_at(entry, 0.0, q_gid)
+  let q_diff = ir_fsub(entry, val, q_val)
+  let q_dsq = ir_fmul(entry, q_diff, q_diff)
+  let in_q = ir_ulte(entry, lid, c63)
+  let c0f = ir_const_f(entry, 0.0)
+  let q_contrib = ir_select(entry, 1.0, in_q, q_dsq, c0f)
+  ir_shared_store(entry, lid, q_contrib)
+  ir_barrier(entry)
+  _emit_reduce_sum(entry, lid, c128, c64, c32, c16, c8, c4, c2u, c1u)
+  let sum_q = ir_shared_load(entry, c0u)
+  let c64f = ir_const_f(entry, 64.0)
+  let mse = ir_fdiv(entry, sum_q, c64f)
+
+  // similarity = 1.0 - min(mse / (variance + eps), 1.0)
+  let eps = ir_const_f(entry, 0.00001)
+  let var_eps = ir_fadd(entry, variance, eps)
+  let ratio = ir_fdiv(entry, mse, var_eps)
+  let c1f = ir_const_f(entry, 1.0)
+  let clamped = ir_fmin(entry, ratio, c1f)
+  let similarity = ir_fsub(entry, c1f, clamped)
+
+  // ── Thread 0 output guard ─────────────────────────────────────
+  let is_t0 = ir_uequ(entry, lid, c0u)
+  ir_selection_merge(entry, exit_blk)
+  ir_term_cond_branch(entry, is_t0, write_out, exit_blk)
+
+  // ── Write output (thread 0 only) ──────────────────────────────
+  // 6 metrics per block at output[wid * 6 + 0..5]
+  let c6u = ir_const_u(write_out, 6.0)
+  let out_base = ir_imul(write_out, wid, c6u)
+  let out1 = ir_iadd(write_out, out_base, ir_const_u(write_out, 1.0))
+  let out2 = ir_iadd(write_out, out_base, ir_const_u(write_out, 2.0))
+  let out3 = ir_iadd(write_out, out_base, ir_const_u(write_out, 3.0))
+  let out4 = ir_iadd(write_out, out_base, ir_const_u(write_out, 4.0))
+  let out5 = ir_iadd(write_out, out_base, ir_const_u(write_out, 5.0))
+
+  ir_store_output_at(write_out, out_base, min_val)
+  ir_store_output_at(write_out, out1, max_val)
+  ir_store_output_at(write_out, out2, mean_val)
+  ir_store_output_at(write_out, out3, variance)
+  ir_store_output_at(write_out, out4, c0f)
+  ir_store_output_at(write_out, out5, similarity)
+
+  ir_term_branch(write_out, exit_blk)
+
+  // ── Exit ──────────────────────────────────────────────────────
+  ir_term_return(exit_blk)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

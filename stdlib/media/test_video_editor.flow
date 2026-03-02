@@ -1,0 +1,621 @@
+// test_video_editor.flow — Tests for stdlib/media/video_editor.flow
+use "timeline"
+use "video_player"
+use "video_editor"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn test_create()
+    let ed = ve_create(30.0, 800.0, 400.0)
+    check("create id", ed >= 0.0)
+    check("create fps", ve_fps(ed) == 30.0)
+    check("create state", ve_state(ed) == VE_STATE_IDLE)
+    check("create cursor", ve_cursor(ed) == 0.0)
+    check("create sel clip", ve_selected_clip(ed) == -1.0)
+    check("create zoom", ve_get_zoom(ed) == 100.0)
+    check("create scroll", ve_get_scroll(ed) == 0.0)
+    check("create track h", ve_get_track_height(ed) == 60.0)
+    check("create snap", ve_get_snap(ed) == VE_SNAP_CLIP)
+    check("create in pt", ve_in_point(ed) == -1.0)
+    check("create out pt", ve_out_point(ed) == -1.0)
+    check("create view w", ve_view_width(ed) == 800.0)
+    check("create view h", ve_view_height(ed) == 400.0)
+    check("create tl id", ve_timeline_id(ed) >= 0.0)
+    check("create vp id", ve_player_id(ed) >= 0.0)
+    check("create undo", ve_undo_count(ed) == 0.0)
+    check("create marker", ve_marker_count(ed) == 0.0)
+    check("create rq", ve_render_queue_count(ed) == 0.0)
+    check("create duration", ve_duration(ed) == 0.0)
+    return 0.0
+end
+
+fn test_destroy()
+    let ed = ve_create(24.0, 640.0, 360.0)
+    check("destroy ok", ve_destroy(ed) == 0.0)
+    check("destroy bad", ve_destroy(-1.0) == -1.0)
+    check("destroy oob", ve_destroy(9999.0) == -1.0)
+    return 0.0
+end
+
+fn test_create_defaults()
+    // Bad FPS clamped
+    let ed1 = ve_create(0.0, 100.0, 100.0)
+    check("fps zero->30", ve_fps(ed1) == 30.0)
+
+    let ed2 = ve_create(999.0, 100.0, 100.0)
+    check("fps hi->240", ve_fps(ed2) == 240.0)
+
+    // Bad view dims default
+    let ed3 = ve_create(30.0, 0.0, 0.0)
+    check("view w default", ve_view_width(ed3) == 800.0)
+    check("view h default", ve_view_height(ed3) == 400.0)
+
+    return 0.0
+end
+
+// ── Track management ─────────────────────────────────────
+
+fn test_tracks()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    let vt = ve_add_video_track(ed)
+    check("add video", vt >= 0.0)
+
+    let at = ve_add_audio_track(ed)
+    check("add audio", at >= 0.0)
+
+    check("track count", ve_track_count(ed) >= 2.0)
+
+    ve_select_track(ed, 1.0)
+    // Just make sure no crash
+
+    // Invalid editor
+    check("bad add video", ve_add_video_track(-1.0) == -1.0)
+    check("bad add audio", ve_add_audio_track(-1.0) == -1.0)
+    check("bad track count", ve_track_count(-1.0) == 0.0)
+    check("bad sel track", ve_select_track(-1.0, 0.0) == -1.0)
+
+    return 0.0
+end
+
+// ── Clip management ──────────────────────────────────────
+
+fn test_clips()
+    let ed = ve_create(30.0, 800.0, 400.0)
+    let vt = ve_add_video_track(ed)
+
+    let c1 = ve_add_clip(ed, vt, 0.0, 5.0, 100.0)
+    check("add clip", c1 >= 0.0)
+    check("undo after add", ve_undo_count(ed) == 1.0)
+
+    let c2 = ve_add_clip(ed, vt, 5.0, 3.0, 101.0)
+    check("add clip2", c2 >= 0.0)
+    check("undo after add2", ve_undo_count(ed) == 2.0)
+
+    // Invalid editor
+    check("bad add clip", ve_add_clip(-1.0, 0.0, 0.0, 1.0, 1.0) == -1.0)
+
+    return 0.0
+end
+
+fn test_remove_clip()
+    let ed = ve_create(30.0, 800.0, 400.0)
+    let vt = ve_add_video_track(ed)
+    let c1 = ve_add_clip(ed, vt, 0.0, 5.0, 100.0)
+
+    // Select it first
+    ve_select_clip(ed, c1)
+    check("sel before remove", ve_selected_clip(ed) == c1)
+
+    let r = ve_remove_clip(ed, c1)
+    check("remove ok", r == 0.0)
+    // Selection cleared
+    check("sel after remove", ve_selected_clip(ed) == -1.0)
+
+    // Invalid editor
+    check("bad remove", ve_remove_clip(-1.0, 0.0) == -1.0)
+
+    return 0.0
+end
+
+fn test_move_clip()
+    let ed = ve_create(30.0, 800.0, 400.0)
+    let vt = ve_add_video_track(ed)
+    let c1 = ve_add_clip(ed, vt, 0.0, 5.0, 100.0)
+
+    let r = ve_move_clip(ed, c1, 10.0)
+    check("move ok", r == 0.0)
+    check("undo after move", ve_undo_count(ed) >= 2.0)
+
+    // Invalid editor
+    check("bad move", ve_move_clip(-1.0, 0.0, 1.0) == -1.0)
+
+    return 0.0
+end
+
+fn test_trim_clip()
+    let ed = ve_create(30.0, 800.0, 400.0)
+    let vt = ve_add_video_track(ed)
+    let c1 = ve_add_clip(ed, vt, 0.0, 5.0, 100.0)
+
+    let r = ve_trim_clip(ed, c1, 3.0)
+    check("trim ok", r == 0.0)
+    check("undo after trim", ve_undo_count(ed) >= 2.0)
+
+    // Invalid editor
+    check("bad trim", ve_trim_clip(-1.0, 0.0, 1.0) == -1.0)
+
+    return 0.0
+end
+
+fn test_split_clip()
+    let ed = ve_create(30.0, 800.0, 400.0)
+    let vt = ve_add_video_track(ed)
+    let c1 = ve_add_clip(ed, vt, 0.0, 10.0, 100.0)
+
+    // Split at 4 seconds
+    let c2 = ve_split_clip(ed, c1, 4.0)
+    check("split ok", c2 >= 0.0)
+
+    // Split before start → fail
+    check("split before", ve_split_clip(ed, c1, -1.0) == -1.0)
+
+    // Invalid editor
+    check("bad split", ve_split_clip(-1.0, 0.0, 1.0) == -1.0)
+
+    return 0.0
+end
+
+// ── Selection ────────────────────────────────────────────
+
+fn test_selection()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("no sel", ve_selected_clip(ed) == -1.0)
+
+    ve_select_clip(ed, 42.0)
+    check("select", ve_selected_clip(ed) == 42.0)
+
+    ve_deselect_clip(ed)
+    check("deselect", ve_selected_clip(ed) == -1.0)
+
+    // Invalid editor
+    check("bad select", ve_select_clip(-1.0, 0.0) == -1.0)
+    check("bad deselect", ve_deselect_clip(-1.0) == -1.0)
+    check("bad selected", ve_selected_clip(-1.0) == -1.0)
+
+    return 0.0
+end
+
+// ── Playhead / Cursor ────────────────────────────────────
+
+fn test_cursor()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("cursor init", ve_cursor(ed) == 0.0)
+
+    let t = ve_set_cursor(ed, 5.0)
+    check("cursor set", t == 5.0)
+    check("cursor get", ve_cursor(ed) == 5.0)
+
+    // Clamp negative
+    let t2 = ve_set_cursor(ed, -10.0)
+    check("cursor clamp neg", t2 == 0.0)
+
+    // Invalid editor
+    check("bad cursor set", ve_set_cursor(-1.0, 1.0) == -1.0)
+    check("bad cursor get", ve_cursor(-1.0) == 0.0)
+
+    return 0.0
+end
+
+fn test_step()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    ve_step_forward(ed)
+    check("step fwd", ve_cursor(ed) > 0.0 - 0.5)
+
+    // Invalid editor
+    check("bad step fwd", ve_step_forward(-1.0) == -1.0)
+    check("bad step bwd", ve_step_backward(-1.0) == -1.0)
+
+    return 0.0
+end
+
+// ── In/Out points ────────────────────────────────────────
+
+fn test_in_out()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("in init", ve_in_point(ed) == -1.0)
+    check("out init", ve_out_point(ed) == -1.0)
+    check("dur no pts", ve_in_out_duration(ed) == 0.0)
+
+    ve_set_cursor(ed, 2.0)
+    ve_set_in_point(ed)
+    check("in point", ve_in_point(ed) == 2.0)
+
+    ve_set_cursor(ed, 8.0)
+    ve_set_out_point(ed)
+    check("out point", ve_out_point(ed) == 8.0)
+
+    check("in out dur", approx(ve_in_out_duration(ed), 6.0) == 1.0)
+
+    // Clear
+    ve_clear_in_out(ed)
+    check("clear in", ve_in_point(ed) == -1.0)
+    check("clear out", ve_out_point(ed) == -1.0)
+    check("dur cleared", ve_in_out_duration(ed) == 0.0)
+
+    // Invalid editor
+    check("bad in", ve_set_in_point(-1.0) == -1.0)
+    check("bad out", ve_set_out_point(-1.0) == -1.0)
+    check("bad clear", ve_clear_in_out(-1.0) == -1.0)
+    check("bad in get", ve_in_point(-1.0) == -1.0)
+    check("bad out get", ve_out_point(-1.0) == -1.0)
+    check("bad dur", ve_in_out_duration(-1.0) == 0.0)
+
+    return 0.0
+end
+
+// ── Preview transport ────────────────────────────────────
+
+fn test_transport()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("not playing", ve_is_playing(ed) == 0.0)
+    check("state idle", ve_state(ed) == VE_STATE_IDLE)
+
+    ve_play(ed)
+    check("playing", ve_is_playing(ed) == 1.0)
+    check("state preview", ve_state(ed) == VE_STATE_PREVIEW)
+
+    ve_pause(ed)
+    check("paused", ve_is_playing(ed) == 0.0)
+    check("state idle2", ve_state(ed) == VE_STATE_IDLE)
+
+    // Toggle
+    ve_toggle(ed)
+    check("toggle on", ve_is_playing(ed) == 1.0)
+    ve_toggle(ed)
+    check("toggle off", ve_is_playing(ed) == 0.0)
+
+    // Stop resets cursor
+    ve_set_cursor(ed, 5.0)
+    ve_stop(ed)
+    check("stop cursor", ve_cursor(ed) == 0.0)
+    check("stop state", ve_state(ed) == VE_STATE_IDLE)
+
+    // Invalid editor
+    check("bad play", ve_play(-1.0) == -1.0)
+    check("bad pause", ve_pause(-1.0) == -1.0)
+    check("bad stop", ve_stop(-1.0) == -1.0)
+    check("bad toggle", ve_toggle(-1.0) == -1.0)
+    check("bad advance", ve_advance(-1.0, 0.1) == -1.0)
+    check("bad playing", ve_is_playing(-1.0) == 0.0)
+
+    return 0.0
+end
+
+fn test_advance()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    // Advance while idle does nothing
+    let t1 = ve_advance(ed, 0.1)
+    check("advance idle", t1 == 0.0)
+
+    // Advance while playing
+    ve_play(ed)
+    let t2 = ve_advance(ed, 0.5)
+    check("advance play", t2 >= 0.0)
+
+    return 0.0
+end
+
+// ── Snap settings ────────────────────────────────────────
+
+fn test_snap()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("snap default", ve_get_snap(ed) == VE_SNAP_CLIP)
+
+    ve_set_snap(ed, VE_SNAP_NONE)
+    check("snap none", ve_get_snap(ed) == VE_SNAP_NONE)
+
+    ve_set_snap(ed, VE_SNAP_MARKER)
+    check("snap marker", ve_get_snap(ed) == VE_SNAP_MARKER)
+
+    ve_set_snap(ed, VE_SNAP_FRAME)
+    check("snap frame", ve_get_snap(ed) == VE_SNAP_FRAME)
+
+    // Bad mode
+    check("snap bad", ve_set_snap(ed, 99.0) == -1.0)
+    check("snap neg", ve_set_snap(ed, -1.0) == -1.0)
+
+    // Threshold
+    ve_set_snap_threshold(ed, 0.5)
+    // Just make sure no crash
+
+    // Clamp threshold
+    ve_set_snap_threshold(ed, 0.001)
+    // Clamped to 0.01 minimum
+
+    ve_set_snap_threshold(ed, 100.0)
+    // Clamped to 5.0 maximum
+
+    // Invalid editor
+    check("bad snap set", ve_set_snap(-1.0, 0.0) == -1.0)
+    check("bad snap get", ve_get_snap(-1.0) == VE_SNAP_NONE)
+    check("bad thresh", ve_set_snap_threshold(-1.0, 1.0) == -1.0)
+
+    return 0.0
+end
+
+// ── Zoom / Scroll ────────────────────────────────────────
+
+fn test_zoom()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("zoom default", ve_get_zoom(ed) == 100.0)
+
+    ve_set_zoom(ed, 200.0)
+    check("zoom set", ve_get_zoom(ed) == 200.0)
+
+    // Clamp low
+    ve_set_zoom(ed, 0.0)
+    check("zoom lo", ve_get_zoom(ed) == 1.0)
+
+    // Clamp high
+    ve_set_zoom(ed, 99999.0)
+    check("zoom hi", ve_get_zoom(ed) == 10000.0)
+
+    // Zoom in/out
+    ve_set_zoom(ed, 100.0)
+    ve_zoom_in(ed)
+    check("zoom in", ve_get_zoom(ed) == 150.0)
+    ve_zoom_out(ed)
+    check("zoom out", ve_get_zoom(ed) == 100.0)
+
+    // Invalid editor
+    check("bad zoom set", ve_set_zoom(-1.0, 100.0) == -1.0)
+    check("bad zoom get", ve_get_zoom(-1.0) == 100.0)
+
+    return 0.0
+end
+
+fn test_scroll()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("scroll default", ve_get_scroll(ed) == 0.0)
+
+    ve_set_scroll(ed, 10.0)
+    check("scroll set", ve_get_scroll(ed) == 10.0)
+
+    // Clamp negative
+    ve_set_scroll(ed, -5.0)
+    check("scroll neg", ve_get_scroll(ed) == 0.0)
+
+    // Invalid editor
+    check("bad scroll set", ve_set_scroll(-1.0, 1.0) == -1.0)
+    check("bad scroll get", ve_get_scroll(-1.0) == 0.0)
+
+    return 0.0
+end
+
+fn test_track_height()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("th default", ve_get_track_height(ed) == 60.0)
+
+    ve_set_track_height(ed, 100.0)
+    check("th set", ve_get_track_height(ed) == 100.0)
+
+    // Clamp low
+    ve_set_track_height(ed, 5.0)
+    check("th lo", ve_get_track_height(ed) == 20.0)
+
+    // Clamp high
+    ve_set_track_height(ed, 999.0)
+    check("th hi", ve_get_track_height(ed) == 300.0)
+
+    // Invalid editor
+    check("bad th set", ve_set_track_height(-1.0, 60.0) == -1.0)
+    check("bad th get", ve_get_track_height(-1.0) == 60.0)
+
+    return 0.0
+end
+
+// ── Time ↔ Pixel ─────────────────────────────────────────
+
+fn test_coord_mapping()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    // Default: 100 px/s, scroll 0
+    check("t2p zero", ve_time_to_pixel(ed, 0.0) == 0.0)
+    check("t2p 1s", ve_time_to_pixel(ed, 1.0) == 100.0)
+    check("t2p 5s", ve_time_to_pixel(ed, 5.0) == 500.0)
+
+    check("p2t zero", approx(ve_pixel_to_time(ed, 0.0), 0.0) == 1.0)
+    check("p2t 100", approx(ve_pixel_to_time(ed, 100.0), 1.0) == 1.0)
+    check("p2t 500", approx(ve_pixel_to_time(ed, 500.0), 5.0) == 1.0)
+
+    // With scroll offset
+    ve_set_scroll(ed, 2.0)
+    check("t2p scroll", ve_time_to_pixel(ed, 2.0) == 0.0)
+    check("t2p scroll2", ve_time_to_pixel(ed, 3.0) == 100.0)
+    check("p2t scroll", approx(ve_pixel_to_time(ed, 0.0), 2.0) == 1.0)
+
+    // With zoom change
+    ve_set_scroll(ed, 0.0)
+    ve_set_zoom(ed, 200.0)
+    check("t2p zoomed", ve_time_to_pixel(ed, 1.0) == 200.0)
+    check("p2t zoomed", approx(ve_pixel_to_time(ed, 200.0), 1.0) == 1.0)
+
+    // Invalid editor
+    check("bad t2p", ve_time_to_pixel(-1.0, 1.0) == 0.0)
+    check("bad p2t", ve_pixel_to_time(-1.0, 100.0) == 0.0)
+
+    return 0.0
+end
+
+// ── Markers ──────────────────────────────────────────────
+
+fn test_markers()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("marker init", ve_marker_count(ed) == 0.0)
+
+    let m0 = ve_add_marker(ed, 5.0, 1.0)
+    check("marker add", m0 == 0.0)
+    check("marker count1", ve_marker_count(ed) == 1.0)
+
+    let m1 = ve_add_marker(ed, 10.0, 2.0)
+    check("marker add2", m1 == 1.0)
+    check("marker count2", ve_marker_count(ed) == 2.0)
+
+    // Bad time
+    check("marker neg", ve_add_marker(ed, -1.0, 0.0) == -1.0)
+
+    // Invalid editor
+    check("bad marker add", ve_add_marker(-1.0, 1.0, 0.0) == -1.0)
+    check("bad marker cnt", ve_marker_count(-1.0) == 0.0)
+
+    return 0.0
+end
+
+// ── Render queue ─────────────────────────────────────────
+
+fn test_render_queue()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("rq init", ve_render_queue_count(ed) == 0.0)
+
+    let r0 = ve_render_enqueue(ed, 0.0, 10.0, 1.0)
+    check("rq add", r0 == 0.0)
+    check("rq count1", ve_render_queue_count(ed) == 1.0)
+
+    let r1 = ve_render_enqueue(ed, 10.0, 20.0, 2.0)
+    check("rq add2", r1 == 1.0)
+    check("rq count2", ve_render_queue_count(ed) == 2.0)
+
+    // Bad range (end <= start)
+    check("rq bad range", ve_render_enqueue(ed, 5.0, 5.0, 3.0) == -1.0)
+    check("rq bad range2", ve_render_enqueue(ed, 10.0, 5.0, 3.0) == -1.0)
+
+    // Invalid editor
+    check("bad rq add", ve_render_enqueue(-1.0, 0.0, 1.0, 1.0) == -1.0)
+    check("bad rq cnt", ve_render_queue_count(-1.0) == 0.0)
+
+    return 0.0
+end
+
+// ── Undo ─────────────────────────────────────────────────
+
+fn test_undo()
+    let ed = ve_create(30.0, 800.0, 400.0)
+
+    check("undo init", ve_undo_count(ed) == 0.0)
+    check("can undo no", ve_can_undo(ed) == 0.0)
+
+    // Add a clip to generate undo entry
+    let vt = ve_add_video_track(ed)
+    let c1 = ve_add_clip(ed, vt, 0.0, 5.0, 100.0)
+
+    check("undo after add", ve_undo_count(ed) == 1.0)
+    check("can undo yes", ve_can_undo(ed) == 1.0)
+
+    // More ops push more undo
+    ve_move_clip(ed, c1, 2.0)
+    check("undo 2", ve_undo_count(ed) == 2.0)
+
+    ve_trim_clip(ed, c1, 3.0)
+    check("undo 3", ve_undo_count(ed) == 3.0)
+
+    // Invalid editor
+    check("bad undo cnt", ve_undo_count(-1.0) == 0.0)
+    check("bad can undo", ve_can_undo(-1.0) == 0.0)
+
+    return 0.0
+end
+
+// ── Edge cases ───────────────────────────────────────────
+
+fn test_edges()
+    // All bad editor id calls
+    check("bad destroy", ve_destroy(-1.0) == -1.0)
+    check("bad duration", ve_duration(-1.0) == 0.0)
+    check("bad fps", ve_fps(-1.0) == 30.0)
+    check("bad state", ve_state(-1.0) == VE_STATE_IDLE)
+    check("bad tl id", ve_timeline_id(-1.0) == -1.0)
+    check("bad vp id", ve_player_id(-1.0) == -1.0)
+    check("bad view w", ve_view_width(-1.0) == 0.0)
+    check("bad view h", ve_view_height(-1.0) == 0.0)
+
+    // Out of bounds editor id
+    check("oob destroy", ve_destroy(9999.0) == -1.0)
+    check("oob cursor", ve_cursor(9999.0) == 0.0)
+    check("oob playing", ve_is_playing(9999.0) == 0.0)
+
+    return 0.0
+end
+
+fn test_snap_frame()
+    // Test that frame snap works when adding clip
+    let ed = ve_create(30.0, 800.0, 400.0)
+    ve_set_snap(ed, VE_SNAP_FRAME)
+    let vt = ve_add_video_track(ed)
+
+    // 0.05 sec at 30fps → snaps to frame 1 = 1/30 = 0.0333...
+    // floor(0.05 * 30) / 30 = floor(1.5) / 30 = 1/30
+    let c1 = ve_add_clip(ed, vt, 0.05, 2.0, 100.0)
+    check("snap frame add", c1 >= 0.0)
+
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────────
+
+test_create()
+test_destroy()
+test_create_defaults()
+test_tracks()
+test_clips()
+test_remove_clip()
+test_move_clip()
+test_trim_clip()
+test_split_clip()
+test_selection()
+test_cursor()
+test_step()
+test_in_out()
+test_transport()
+test_advance()
+test_snap()
+test_zoom()
+test_scroll()
+test_track_height()
+test_coord_mapping()
+test_markers()
+test_render_queue()
+test_undo()
+test_edges()
+test_snap_frame()
+print("")
+print("All video_editor tests passed (25 tests)")

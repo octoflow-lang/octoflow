@@ -1,0 +1,323 @@
+// test_media_player.flow — Tests for stdlib/media/media_player.flow
+use "media_player"
+use "audio_player"
+use "video_player"
+use "playlist"
+use "timeline"
+use "pcm"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.1
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Helpers ──────────────────────────────────────────────
+
+fn make_audio_player()
+    let pcm = pcm_create(44100.0, 1.0, 1.0)
+    return ap_create(pcm)
+end
+
+fn make_video_player()
+    let tl = tl_create(30.0)
+    let tk = tl_add_track(tl, TL_VIDEO)
+    let _c = tl_add_clip(tl, tk, 0.0, 10.0, 1.0)
+    return vp_create(tl, 30.0)
+end
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn test_create()
+    let mp = mp_create(MP_TYPE_AUDIO)
+    check("create id", mp >= 0.0)
+    check("create type", mp_type(mp) == MP_TYPE_AUDIO)
+    check("create vol", mp_get_volume(mp) == 1.0)
+    check("create mute", mp_is_muted(mp) == 0.0)
+    check("create no audio", mp_get_audio(mp) == -1.0)
+    check("create no video", mp_get_video(mp) == -1.0)
+    check("create no pl", mp_get_playlist(mp) == -1.0)
+
+    let mp2 = mp_create(MP_TYPE_VIDEO)
+    check("create video", mp_type(mp2) == MP_TYPE_VIDEO)
+
+    return 0.0
+end
+
+fn test_destroy()
+    let mp = mp_create(MP_TYPE_AUDIO)
+    let r = mp_destroy(mp)
+    check("destroy ok", r == 0.0)
+    let r2 = mp_destroy(-1.0)
+    check("destroy bad", r2 == -1.0)
+    return 0.0
+end
+
+// ── Attach components ────────────────────────────────────
+
+fn test_attach()
+    let mp = mp_create(MP_TYPE_VIDEO)
+    let ap = make_audio_player()
+    let vp = make_video_player()
+    let pl = pl_create()
+
+    mp_set_audio(mp, ap)
+    check("attach audio", mp_get_audio(mp) == ap)
+
+    mp_set_video(mp, vp)
+    check("attach video", mp_get_video(mp) == vp)
+
+    mp_set_playlist(mp, pl)
+    check("attach pl", mp_get_playlist(mp) == pl)
+
+    return 0.0
+end
+
+// ── Transport ────────────────────────────────────────────
+
+fn test_transport()
+    let mp = mp_create(MP_TYPE_AUDIO)
+    let ap = make_audio_player()
+    mp_set_audio(mp, ap)
+
+    mp_play(mp)
+    check("play", mp_is_playing(mp) == 1.0)
+
+    mp_pause(mp)
+    check("pause", mp_is_paused(mp) == 1.0)
+
+    mp_play(mp)
+    mp_stop(mp)
+    check("stop", mp_is_playing(mp) == 0.0)
+
+    // Toggle
+    mp_toggle(mp)
+    check("toggle play", mp_is_playing(mp) == 1.0)
+    mp_toggle(mp)
+    check("toggle pause", mp_is_paused(mp) == 1.0)
+
+    return 0.0
+end
+
+// ── Transport with video ─────────────────────────────────
+
+fn test_transport_video()
+    let mp = mp_create(MP_TYPE_VIDEO)
+    let ap = make_audio_player()
+    let vp = make_video_player()
+    mp_set_audio(mp, ap)
+    mp_set_video(mp, vp)
+
+    mp_play(mp)
+    check("video play a", ap_is_playing(ap) == 1.0)
+    check("video play v", vp_is_playing(vp) == 1.0)
+
+    mp_pause(mp)
+    check("video pause a", ap_is_paused(ap) == 1.0)
+    check("video pause v", vp_is_paused(vp) == 1.0)
+
+    mp_stop(mp)
+    check("video stop a", ap_is_stopped(ap) == 1.0)
+    check("video stop v", vp_is_stopped(vp) == 1.0)
+
+    return 0.0
+end
+
+// ── Seek ─────────────────────────────────────────────────
+
+fn test_seek()
+    let mp = mp_create(MP_TYPE_VIDEO)
+    let vp = make_video_player()
+    mp_set_video(mp, vp)
+
+    mp_seek(mp, 5.0)
+    check("seek time", approx(mp_current_time(mp), 5.0) == 1.0)
+
+    mp_seek_percent(mp, 0.5)
+    check("seek pct", approx(mp_position_percent(mp), 0.5) == 1.0)
+
+    return 0.0
+end
+
+// ── Volume / Mute ────────────────────────────────────────
+
+fn test_volume()
+    let mp = mp_create(MP_TYPE_AUDIO)
+    let ap = make_audio_player()
+    mp_set_audio(mp, ap)
+
+    mp_set_volume(mp, 0.7)
+    check("vol set", approx(mp_get_volume(mp), 0.7) == 1.0)
+    check("vol applied", approx(ap_get_volume(ap), 0.7) == 1.0)
+
+    // Clamp
+    mp_set_volume(mp, 5.0)
+    check("vol clamp hi", mp_get_volume(mp) == 1.0)
+    mp_set_volume(mp, -1.0)
+    check("vol clamp lo", mp_get_volume(mp) == 0.0)
+
+    return 0.0
+end
+
+fn test_mute()
+    let mp = mp_create(MP_TYPE_AUDIO)
+    let ap = make_audio_player()
+    mp_set_audio(mp, ap)
+    mp_set_volume(mp, 0.8)
+
+    mp_mute(mp)
+    check("mute", mp_is_muted(mp) == 1.0)
+    check("mute vol", ap_get_volume(ap) == 0.0)
+
+    mp_unmute(mp)
+    check("unmute", mp_is_muted(mp) == 0.0)
+    check("unmute vol", approx(ap_get_volume(ap), 0.8) == 1.0)
+
+    // Toggle
+    mp_toggle_mute(mp)
+    check("toggle mute", mp_is_muted(mp) == 1.0)
+    mp_toggle_mute(mp)
+    check("toggle unmute", mp_is_muted(mp) == 0.0)
+
+    return 0.0
+end
+
+// ── Speed / Loop ─────────────────────────────────────────
+
+fn test_speed_loop()
+    let mp = mp_create(MP_TYPE_AUDIO)
+    let ap = make_audio_player()
+    mp_set_audio(mp, ap)
+
+    mp_set_speed(mp, 2.0)
+    check("speed set", ap_get_speed(ap) == 2.0)
+
+    mp_set_loop(mp, 1.0)
+    check("loop set", ap_get_loop(ap) == 1.0)
+
+    return 0.0
+end
+
+// ── Subtitles ────────────────────────────────────────────
+
+fn test_subtitles()
+    let mp = mp_create(MP_TYPE_VIDEO)
+
+    // Add subtitles
+    let s0 = mp_add_subtitle(mp, 0.0, 5.0, 100.0)
+    check("sub add", s0 == 0.0)
+    let s1 = mp_add_subtitle(mp, 5.0, 10.0, 200.0)
+    check("sub add 2", s1 == 1.0)
+    check("sub count", mp_subtitle_count(mp) == 2.0)
+
+    // Subtitles off by default
+    check("sub off", mp_get_subtitle_at(mp, 2.0) == -1.0)
+
+    // Enable and query
+    mp_set_subtitles(mp, 1.0)
+    check("sub on", mp_get_subtitle_at(mp, 2.0) == 100.0)
+    check("sub 2", mp_get_subtitle_at(mp, 7.0) == 200.0)
+    check("sub gap", mp_get_subtitle_at(mp, 15.0) == -1.0)
+
+    // Invalid subtitle
+    let r = mp_add_subtitle(mp, 5.0, 2.0, 1.0)  // end < start
+    check("sub bad", r == -1.0)
+
+    return 0.0
+end
+
+// ── Playlist integration ─────────────────────────────────
+
+fn test_playlist()
+    let mp = mp_create(MP_TYPE_AUDIO)
+    let pl = pl_create()
+    pl_add(pl, 100.0)
+    pl_add(pl, 200.0)
+    pl_add(pl, 300.0)
+    mp_set_playlist(mp, pl)
+
+    check("pl current", mp_playlist_current(mp) == 100.0)
+
+    mp_playlist_next(mp)
+    check("pl next", mp_playlist_current(mp) == 200.0)
+
+    mp_playlist_prev(mp)
+    check("pl prev", mp_playlist_current(mp) == 100.0)
+
+    return 0.0
+end
+
+// ── Duration / Position ──────────────────────────────────
+
+fn test_duration()
+    let mp = mp_create(MP_TYPE_VIDEO)
+    let vp = make_video_player()
+    mp_set_video(mp, vp)
+
+    check("dur", approx(mp_duration(mp), 10.0) == 1.0)
+    check("time 0", mp_current_time(mp) == 0.0)
+    check("pct 0", mp_position_percent(mp) == 0.0)
+
+    return 0.0
+end
+
+// ── Edge cases ───────────────────────────────────────────
+
+fn test_edges()
+    check("bad play", mp_play(-1.0) == -1.0)
+    check("bad pause", mp_pause(-1.0) == -1.0)
+    check("bad stop", mp_stop(-1.0) == -1.0)
+    check("bad seek", mp_seek(-1.0, 0.0) == -1.0)
+    check("bad vol", mp_set_volume(-1.0, 0.5) == -1.0)
+    check("bad mute", mp_mute(-1.0) == -1.0)
+    check("bad time", mp_current_time(-1.0) == 0.0)
+    check("bad dur", mp_duration(-1.0) == 0.0)
+    check("bad type", mp_type(-1.0) == MP_TYPE_AUDIO)
+    check("bad sub", mp_add_subtitle(-1.0, 0.0, 1.0, 1.0) == -1.0)
+    check("bad pl next", mp_playlist_next(-1.0) == -1.0)
+
+    // No components attached
+    let mp = mp_create(MP_TYPE_AUDIO)
+    mp_play(mp)
+    check("no comp play", mp_is_playing(mp) == 0.0)
+    check("no comp time", mp_current_time(mp) == 0.0)
+    check("no comp dur", mp_duration(mp) == 0.0)
+
+    // Advance with 0 dt
+    let r = mp_advance(mp, 0.0)
+    check("adv zero", r == 0.0)
+
+    // No playlist
+    check("no pl next", mp_playlist_next(mp) == -1.0)
+
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────────
+
+test_create()
+test_destroy()
+test_attach()
+test_transport()
+test_transport_video()
+test_seek()
+test_volume()
+test_mute()
+test_speed_loop()
+test_subtitles()
+test_playlist()
+test_duration()
+test_edges()
+print("")
+print("All media_player tests passed (13 tests)")

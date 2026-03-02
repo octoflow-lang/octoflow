@@ -1,0 +1,169 @@
+// test_bitwise.flow — Tests for stdlib/math/bitwise.flow
+use "bitwise"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── AND ─────────────────────────────────────────────────────────
+
+fn test_bit_and()
+    check("and 0xFF & 0x0F = 0x0F", bit_and(255.0, 15.0) == 15.0)
+    check("and 0xFF00 & 0x0FF0 = 0x0F00", bit_and(65280.0, 4080.0) == 3840.0)
+    check("and 0 & x = 0", bit_and(0.0, 12345.0) == 0.0)
+    check("and x & x = x", bit_and(42.0, 42.0) == 42.0)
+    return 0.0
+end
+
+// ── OR ──────────────────────────────────────────────────────────
+
+fn test_bit_or()
+    check("or 0xF0 | 0x0F = 0xFF", bit_or(240.0, 15.0) == 255.0)
+    check("or 0 | x = x", bit_or(0.0, 42.0) == 42.0)
+    check("or x | x = x", bit_or(42.0, 42.0) == 42.0)
+    return 0.0
+end
+
+// ── XOR ─────────────────────────────────────────────────────────
+
+fn test_bit_xor()
+    check("xor 0xFF ^ 0x0F = 0xF0", bit_xor(255.0, 15.0) == 240.0)
+    check("xor x ^ 0 = x", bit_xor(42.0, 0.0) == 42.0)
+    check("xor x ^ x = 0", bit_xor(42.0, 42.0) == 0.0)
+    check("xor self-inverse", bit_xor(bit_xor(123.0, 456.0), 456.0) == 123.0)
+    return 0.0
+end
+
+// ── NOT ─────────────────────────────────────────────────────────
+
+fn test_bit_not()
+    check("not 0 = 0xFFFFFFFF", bit_not(0.0) == 4294967295.0)
+    check("not ~(~x) = x", bit_not(bit_not(42.0)) == 42.0)
+    return 0.0
+end
+
+// ── Shift ───────────────────────────────────────────────────────
+
+fn test_bit_shl()
+    check("shl 1 << 0 = 1", bit_shl(1.0, 0.0) == 1.0)
+    check("shl 1 << 8 = 256", bit_shl(1.0, 8.0) == 256.0)
+    check("shl 1 << 16 = 65536", bit_shl(1.0, 16.0) == 65536.0)
+    check("shl 5 << 3 = 40", bit_shl(5.0, 3.0) == 40.0)
+    return 0.0
+end
+
+fn test_bit_shr()
+    check("shr 256 >> 8 = 1", bit_shr(256.0, 8.0) == 1.0)
+    check("shr 40 >> 3 = 5", bit_shr(40.0, 3.0) == 5.0)
+    check("shr 255 >> 4 = 15", bit_shr(255.0, 4.0) == 15.0)
+    return 0.0
+end
+
+// ── Bit Manipulation ────────────────────────────────────────────
+
+fn test_bit_get()
+    // 42 = 0b101010
+    check("bit_get 42[0] = 0", bit_get(42.0, 0.0) == 0.0)
+    check("bit_get 42[1] = 1", bit_get(42.0, 1.0) == 1.0)
+    check("bit_get 42[5] = 1", bit_get(42.0, 5.0) == 1.0)
+    return 0.0
+end
+
+fn test_bit_set_clear()
+    check("bit_set 0 bit 3 = 8", bit_set(0.0, 3.0) == 8.0)
+    check("bit_clear 15 bit 2 = 11", bit_clear(15.0, 2.0) == 11.0)
+    check("bit_toggle 0 bit 4 = 16", bit_toggle(0.0, 4.0) == 16.0)
+    check("bit_toggle 16 bit 4 = 0", bit_toggle(16.0, 4.0) == 0.0)
+    return 0.0
+end
+
+fn test_bit_count()
+    check("popcount 0 = 0", bit_count(0.0) == 0.0)
+    check("popcount 1 = 1", bit_count(1.0) == 1.0)
+    check("popcount 7 = 3", bit_count(7.0) == 3.0)
+    check("popcount 255 = 8", bit_count(255.0) == 8.0)
+    return 0.0
+end
+
+// ── Rotation ────────────────────────────────────────────────────
+
+fn test_bit_rotation()
+    // Rotate 0b10000001 left by 1 in 8-bit field → 0b00000011
+    check("rotl 129 by 1 (8-bit) = 3", bit_rotl(129.0, 1.0, 8.0) == 3.0)
+    // Rotate 0b00000011 right by 1 in 8-bit field → 0b10000001
+    check("rotr 3 by 1 (8-bit) = 129", bit_rotr(3.0, 1.0, 8.0) == 129.0)
+    return 0.0
+end
+
+// ── Conversion ──────────────────────────────────────────────────
+
+fn test_to_binary()
+    check("to_binary 0", to_binary(0.0) == "0")
+    check("to_binary 10 = 1010", to_binary(10.0) == "1010")
+    check("to_binary 255 = 11111111", to_binary(255.0) == "11111111")
+    return 0.0
+end
+
+fn test_from_binary()
+    check("from_binary 1010 = 10", from_binary("1010") == 10.0)
+    check("from_binary 11111111 = 255", from_binary("11111111") == 255.0)
+    return 0.0
+end
+
+fn test_to_hex()
+    check("to_hex 0 = 0", to_hex(0.0) == "0")
+    check("to_hex 255 = ff", to_hex(255.0) == "ff")
+    check("to_hex 4096 = 1000", to_hex(4096.0) == "1000")
+    return 0.0
+end
+
+fn test_from_hex()
+    check("from_hex ff = 255", from_hex("ff") == 255.0)
+    check("from_hex FF = 255", from_hex("FF") == 255.0)
+    check("from_hex 1000 = 4096", from_hex("1000") == 4096.0)
+    return 0.0
+end
+
+fn test_hex_roundtrip()
+    check("hex roundtrip 12345", from_hex(to_hex(12345.0)) == 12345.0)
+    return 0.0
+end
+
+fn test_binary_roundtrip()
+    check("binary roundtrip 42", from_binary(to_binary(42.0)) == 42.0)
+    return 0.0
+end
+
+fn test_hex_padded()
+    check("hex_padded ff to 4", to_hex_padded(255.0, 4.0) == "00ff")
+    check("hex_padded 0 to 8", to_hex_padded(0.0, 8.0) == "00000000")
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_bit_and()
+test_bit_or()
+test_bit_xor()
+test_bit_not()
+test_bit_shl()
+test_bit_shr()
+test_bit_get()
+test_bit_set_clear()
+test_bit_count()
+test_bit_rotation()
+test_to_binary()
+test_from_binary()
+test_to_hex()
+test_from_hex()
+test_hex_roundtrip()
+test_binary_roundtrip()
+test_hex_padded()
+print("")
+print("All bitwise tests passed (17 tests)")

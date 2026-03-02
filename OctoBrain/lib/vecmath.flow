@@ -1,0 +1,148 @@
+// OctoBrain Vector Math Utilities
+// Pure .flow implementations of common vector operations.
+// All vectors are flat arrays of f32. The `dim` parameter specifies
+// the number of elements to operate on (starting from index 0).
+
+// ── dot_product ────────────────────────────────────────────────
+// Compute the dot product of vectors a and b, each of length dim.
+fn dot_product(a, b, dim)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < dim
+    sum = sum + a[i] * b[i]
+    i = i + 1.0
+  end
+  return sum
+end
+
+// ── vec_norm ───────────────────────────────────────────────────
+// Compute the L2 (Euclidean) norm of vector v of length dim.
+fn vec_norm(v, dim)
+  let mut sum = 0.0
+  let mut i = 0.0
+  while i < dim
+    sum = sum + v[i] * v[i]
+    i = i + 1.0
+  end
+  return sqrt(sum)
+end
+
+// ── cosine_sim ─────────────────────────────────────────────────
+// Cosine similarity between vectors a and b. Returns value in [-1, 1].
+// Returns 0.0 if either vector has zero norm (degenerate case).
+fn cosine_sim(a, b, dim)
+  let d = dot_product(a, b, dim)
+  let na = vec_norm(a, dim)
+  let nb = vec_norm(b, dim)
+  let denom = na * nb
+  if denom < 0.000001
+    return 0.0
+  end
+  return d / denom
+end
+
+// ── normalize ──────────────────────────────────────────────────
+// Return a unit vector (norm = 1) in the same direction as v.
+// If v is near-zero, returns a zero vector.
+fn normalize(v, dim)
+  let n = vec_norm(v, dim)
+  let mut result = []
+  let mut i = 0.0
+  if n < 0.000001
+    while i < dim
+      push(result, 0.0)
+      i = i + 1.0
+    end
+    return result
+  end
+  while i < dim
+    push(result, v[i] / n)
+    i = i + 1.0
+  end
+  return result
+end
+
+// ── vec_subtract ───────────────────────────────────────────────
+// Element-wise subtraction: a - b, both of length dim.
+fn vec_subtract(a, b, dim)
+  let mut result = []
+  let mut i = 0.0
+  while i < dim
+    push(result, a[i] - b[i])
+    i = i + 1.0
+  end
+  return result
+end
+
+// ── vec_add ────────────────────────────────────────────────────
+// Element-wise addition: a + b, both of length dim.
+fn vec_add(a, b, dim)
+  let mut result = []
+  let mut i = 0.0
+  while i < dim
+    push(result, a[i] + b[i])
+    i = i + 1.0
+  end
+  return result
+end
+
+// ── vec_scale ──────────────────────────────────────────────────
+// Multiply each element of v by scalar.
+fn vec_scale(v, scalar, dim)
+  let mut result = []
+  let mut i = 0.0
+  while i < dim
+    push(result, v[i] * scalar)
+    i = i + 1.0
+  end
+  return result
+end
+
+// ── vec_extract ────────────────────────────────────────────────
+// Extract a sub-vector from a flat 2D array.
+// flat_array is a 1D array representing a 2D matrix stored row-major.
+// Returns elements [row*cols .. row*cols + cols).
+fn vec_extract(flat_array, row, cols)
+  let mut result = []
+  let base = row * cols
+  let mut i = 0.0
+  while i < cols
+    push(result, flat_array[base + i])
+    i = i + 1.0
+  end
+  return result
+end
+
+// ── vec_insert ─────────────────────────────────────────────────
+// Write a sub-vector into a flat 2D array at the given row.
+// Returns a new array (OctoFlow arrays are copy-on-return).
+// The values array must have exactly cols elements.
+fn vec_insert(flat_array, row, cols, values)
+  let n = len(flat_array)
+  let mut result = []
+  let base = row * cols
+  let mut i = 0.0
+  while i < n
+    // Check if this index falls within the row to overwrite
+    let offset = i - base
+    if offset >= 0.0 && offset < cols
+      push(result, values[offset])
+    else
+      push(result, flat_array[i])
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+// ── vec_zeros ──────────────────────────────────────────────────
+// Create a zero vector of the given dimension.
+fn vec_zeros(dim)
+  let mut result = []
+  let mut i = 0.0
+  while i < dim
+    push(result, 0.0)
+    i = i + 1.0
+  end
+  return result
+end

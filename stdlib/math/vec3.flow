@@ -1,0 +1,304 @@
+// stdlib/math/vec3.flow — 3D vector operations
+//
+// Vectors stored as [x, y, z] arrays. Functions return new arrays.
+// All angles in radians unless noted.
+//
+// Functions: vec3, vec3_zero, vec3_one, vec3_up, vec3_right, vec3_forward,
+//            vec3_add, vec3_sub, vec3_scale, vec3_negate, vec3_mul,
+//            vec3_dot, vec3_cross, vec3_length, vec3_length_sq,
+//            vec3_distance, vec3_distance_sq, vec3_manhattan,
+//            vec3_normalize, vec3_set_length, vec3_clamp_length,
+//            vec3_angle_between, vec3_lerp, vec3_midpoint,
+//            vec3_project, vec3_reject, vec3_reflect,
+//            vec3_min, vec3_max, vec3_abs, vec3_floor, vec3_ceil
+//
+// Usage:
+//   use "vec3"
+//   let mut a = vec3(1.0, 2.0, 3.0)
+//   let mut b = vec3(4.0, 5.0, 6.0)
+//   let mut c = vec3_cross(a, b)
+//   let d = vec3_dot(a, b)     // 32.0
+//   let dist = vec3_length(a)  // ~3.74
+
+// ── Construction ────────────────────────────────────────────────
+
+fn vec3(x, y, z)
+    let mut v = [x, y, z]
+    return v
+end
+
+fn vec3_zero()
+    let mut v = [0.0, 0.0, 0.0]
+    return v
+end
+
+fn vec3_one()
+    let mut v = [1.0, 1.0, 1.0]
+    return v
+end
+
+fn vec3_up()
+    let mut v = [0.0, 1.0, 0.0]
+    return v
+end
+
+fn vec3_right()
+    let mut v = [1.0, 0.0, 0.0]
+    return v
+end
+
+fn vec3_forward()
+    let mut v = [0.0, 0.0, 1.0]
+    return v
+end
+
+// ── Arithmetic ──────────────────────────────────────────────────
+
+fn vec3_add(a, b)
+    let mut v = [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+    return v
+end
+
+fn vec3_sub(a, b)
+    let mut v = [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    return v
+end
+
+fn vec3_scale(a, s)
+    let mut v = [a[0] * s, a[1] * s, a[2] * s]
+    return v
+end
+
+fn vec3_negate(a)
+    let mut v = [0.0 - a[0], 0.0 - a[1], 0.0 - a[2]]
+    return v
+end
+
+fn vec3_mul(a, b)
+    // Component-wise multiplication.
+    let mut v = [a[0] * b[0], a[1] * b[1], a[2] * b[2]]
+    return v
+end
+
+// ── Products ────────────────────────────────────────────────────
+
+fn vec3_dot(a, b)
+    // Dot product: a·b = ax*bx + ay*by + az*bz
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+end
+
+fn vec3_cross(a, b)
+    // Cross product: a × b (right-hand rule)
+    let mut v = [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]
+    ]
+    return v
+end
+
+// ── Length / Distance ───────────────────────────────────────────
+
+fn vec3_length(a)
+    return sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
+end
+
+fn vec3_length_sq(a)
+    return a[0] * a[0] + a[1] * a[1] + a[2] * a[2]
+end
+
+fn vec3_distance(a, b)
+    let dx = b[0] - a[0]
+    let dy = b[1] - a[1]
+    let dz = b[2] - a[2]
+    return sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+fn vec3_distance_sq(a, b)
+    let dx = b[0] - a[0]
+    let dy = b[1] - a[1]
+    let dz = b[2] - a[2]
+    return dx * dx + dy * dy + dz * dz
+end
+
+fn vec3_manhattan(a, b)
+    let mut dx = b[0] - a[0]
+    let mut dy = b[1] - a[1]
+    let mut dz = b[2] - a[2]
+    if dx < 0.0
+        dx = 0.0 - dx
+    end
+    if dy < 0.0
+        dy = 0.0 - dy
+    end
+    if dz < 0.0
+        dz = 0.0 - dz
+    end
+    return dx + dy + dz
+end
+
+// ── Normalization ───────────────────────────────────────────────
+
+fn vec3_normalize(a)
+    let len_val = vec3_length(a)
+    if len_val < 0.0001
+        return vec3_zero()
+    end
+    let mut v = [a[0] / len_val, a[1] / len_val, a[2] / len_val]
+    return v
+end
+
+fn vec3_set_length(a, new_len)
+    let n = vec3_normalize(a)
+    return vec3_scale(n, new_len)
+end
+
+fn vec3_clamp_length(a, max_len)
+    let len_sq = vec3_length_sq(a)
+    if len_sq > max_len * max_len
+        return vec3_set_length(a, max_len)
+    end
+    let mut v = [a[0], a[1], a[2]]
+    return v
+end
+
+// ── Angle ───────────────────────────────────────────────────────
+
+fn vec3_angle_between(a, b)
+    // Angle between two vectors (radians, [0, PI]).
+    let d = vec3_dot(a, b)
+    let la = vec3_length(a)
+    let lb = vec3_length(b)
+    if la < 0.0001 || lb < 0.0001
+        return 0.0
+    end
+    let mut cos_val = d / (la * lb)
+    if cos_val > 1.0
+        cos_val = 1.0
+    end
+    if cos_val < -1.0
+        cos_val = -1.0
+    end
+    return acos(cos_val)
+end
+
+// ── Interpolation ───────────────────────────────────────────────
+
+fn vec3_lerp(a, b, t)
+    let mut v = [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t
+    ]
+    return v
+end
+
+fn vec3_midpoint(a, b)
+    let mut v = [
+        (a[0] + b[0]) / 2.0,
+        (a[1] + b[1]) / 2.0,
+        (a[2] + b[2]) / 2.0
+    ]
+    return v
+end
+
+// ── Projection / Reflection ─────────────────────────────────────
+
+fn vec3_project(a, b)
+    // Project a onto b: (a·b / b·b) * b
+    let bb = vec3_dot(b, b)
+    if bb < 0.0001
+        return vec3_zero()
+    end
+    let scale = vec3_dot(a, b) / bb
+    return vec3_scale(b, scale)
+end
+
+fn vec3_reject(a, b)
+    // Component of a perpendicular to b: a - project(a, b)
+    let proj = vec3_project(a, b)
+    return vec3_sub(a, proj)
+end
+
+fn vec3_reflect(a, normal)
+    // Reflect a across normal: a - 2(a·n)n
+    let d = vec3_dot(a, normal)
+    let mut v = [
+        a[0] - 2.0 * d * normal[0],
+        a[1] - 2.0 * d * normal[1],
+        a[2] - 2.0 * d * normal[2]
+    ]
+    return v
+end
+
+// ── Component-wise Operations ───────────────────────────────────
+
+fn vec3_min(a, b)
+    let mut x = a[0]
+    if b[0] < x
+        x = b[0]
+    end
+    let mut y = a[1]
+    if b[1] < y
+        y = b[1]
+    end
+    let mut z = a[2]
+    if b[2] < z
+        z = b[2]
+    end
+    let mut v = [x, y, z]
+    return v
+end
+
+fn vec3_max(a, b)
+    let mut x = a[0]
+    if b[0] > x
+        x = b[0]
+    end
+    let mut y = a[1]
+    if b[1] > y
+        y = b[1]
+    end
+    let mut z = a[2]
+    if b[2] > z
+        z = b[2]
+    end
+    let mut v = [x, y, z]
+    return v
+end
+
+fn vec3_abs(a)
+    let mut x = a[0]
+    if x < 0.0
+        x = 0.0 - x
+    end
+    let mut y = a[1]
+    if y < 0.0
+        y = 0.0 - y
+    end
+    let mut z = a[2]
+    if z < 0.0
+        z = 0.0 - z
+    end
+    let mut v = [x, y, z]
+    return v
+end
+
+fn vec3_floor(a)
+    let mut v = [floor(a[0]), floor(a[1]), floor(a[2])]
+    return v
+end
+
+fn vec3_ceil(a)
+    let mut v = [ceil(a[0]), ceil(a[1]), ceil(a[2])]
+    return v
+end
+
+// ── Triple Product ──────────────────────────────────────────────
+
+fn vec3_scalar_triple(a, b, c)
+    // Scalar triple product: a · (b × c)
+    // Equal to the signed volume of the parallelepiped.
+    let cross = vec3_cross(b, c)
+    return vec3_dot(a, cross)
+end

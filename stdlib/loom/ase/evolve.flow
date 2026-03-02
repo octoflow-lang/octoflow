@@ -1,0 +1,100 @@
+// evolve.flow — ASE Evolution Engine
+//
+// Mutation, crossover, selection, and generation advancement.
+//
+// Functions:
+//   ase_mutate(genome, schema, mutation_rate) → 0.0 (modifies genome in-place)
+//   ase_crossover(parent_a, parent_b) → child genome array
+//   ase_select_top(population, fitness_scores, keep_count) → indices array
+//   ase_next_generation(population, fitness_scores, schema, keep_count, mutation_rate) → new population
+
+use "genome"
+
+fn ase_mutate(genome, schema, mutation_rate)
+  let mut i = 0.0
+  while i < len(genome)
+    if random() < mutation_rate
+      let lo = schema[i * 2.0]
+      let hi = schema[i * 2.0 + 1.0]
+      let range = hi - lo
+      let delta = (random() - 0.5) * range * 0.4
+      genome[i] = genome[i] + delta
+    end
+    i = i + 1.0
+  end
+  ase_genome_clamp(genome, schema)
+  return 0.0
+end
+
+fn ase_crossover(parent_a, parent_b)
+  let mut child = ase_genome_create(len(parent_a))
+  let cut = floor(random() * len(parent_a))
+  let mut i = 0.0
+  while i < len(parent_a)
+    if i < cut
+      child[i] = parent_a[i]
+    else
+      child[i] = parent_b[i]
+    end
+    i = i + 1.0
+  end
+  return child
+end
+
+fn ase_select_top(population, fitness_scores, keep_count)
+  let mut indices = []
+  let mut used = []
+  let mut i = 0.0
+  while i < len(fitness_scores)
+    push(used, 0.0)
+    i = i + 1.0
+  end
+  let mut k = 0.0
+  while k < keep_count
+    let mut best_idx = -1.0
+    let mut best_fit = -999999.0
+    let mut j = 0.0
+    while j < len(fitness_scores)
+      if used[j] < 0.5
+        if fitness_scores[j] > best_fit
+          best_fit = fitness_scores[j]
+          best_idx = j
+        end
+      end
+      j = j + 1.0
+    end
+    if best_idx >= 0.0
+      push(indices, best_idx)
+      used[best_idx] = 1.0
+    end
+    k = k + 1.0
+  end
+  return indices
+end
+
+fn ase_next_generation(population, fitness_scores, schema, keep_count, mutation_rate)
+  let top_indices = ase_select_top(population, fitness_scores, keep_count)
+  let mut next_pop = []
+
+  // Keep winners
+  let mut i = 0.0
+  while i < len(top_indices)
+    let idx = top_indices[i]
+    push(next_pop, population[idx])
+    i = i + 1.0
+  end
+
+  // Fill remaining with crossover children
+  while len(next_pop) < len(population)
+    let mut p1 = floor(random() * keep_count)
+    let mut p2 = floor(random() * keep_count)
+    if abs(p2 - p1) < 0.5
+      p2 = floor((p1 + 1.0) - floor((p1 + 1.0) / keep_count) * keep_count)
+    end
+    let child = ase_crossover(next_pop[p1], next_pop[p2])
+    ase_mutate(child, schema, mutation_rate)
+    push(next_pop, child)
+  end
+
+  return next_pop
+end

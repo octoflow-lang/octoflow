@@ -31,7 +31,7 @@ let UI_SLIDER_HANDLE_W = 12.0
 fn ui_slider(parent, w, h, min_val, max_val, initial)
   // Track
   let track = ui_tree_add(UI_SLIDER, parent, w, h, " ")
-  let _tc = ui_tree_set_color_themed(track, UI_COLOR_BORDER)
+  let _tc = ui_tree_set_color_themed(track, UI_COLOR_SURFACE_2)
 
   // Fill rect (shows filled portion from left to handle)
   let fill = ui_tree_add(UI_BOX, track, 0.0, h, " ")

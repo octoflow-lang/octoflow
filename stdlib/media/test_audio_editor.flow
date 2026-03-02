@@ -1,0 +1,499 @@
+// test_audio_editor.flow — Tests for stdlib/media/audio_editor.flow
+use "audio_editor"
+use "pcm"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Helper ───────────────────────────────────────────────
+
+fn make_pcm(n)
+    let buf = pcm_create(44100.0, n / 44100.0, 1.0)
+    let samples = pcm_samples(buf)
+    let mut i = 0.0
+    while i < n && i < len(samples)
+        samples[i] = (i / n) * 2.0 - 1.0  // -1 to +1
+        i = i + 1.0
+    end
+    return buf
+end
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn test_create()
+    let pcm = make_pcm(1000.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+    check("create id", ed >= 0.0)
+    check("create pcm", ae_pcm_id(ed) == pcm)
+    check("create samples", ae_sample_count(ed) == 1000.0)
+    check("create no sel", ae_has_selection(ed) == 0.0)
+    check("create cursor", ae_cursor(ed) == 0.0)
+    check("create tool", ae_get_tool(ed) == AE_TOOL_SELECT)
+    check("create vw", ae_view_width(ed) == 800.0)
+    check("create clip", ae_clipboard_length(ed) == 0.0)
+    return 0.0
+end
+
+fn test_destroy()
+    let pcm = make_pcm(100.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+    check("destroy ok", ae_destroy(ed) == 0.0)
+    check("destroy bad", ae_destroy(-1.0) == -1.0)
+    return 0.0
+end
+
+// ── Selection ────────────────────────────────────────────
+
+fn test_selection()
+    let pcm = make_pcm(1000.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    ae_select(ed, 100.0, 500.0)
+    check("sel has", ae_has_selection(ed) == 1.0)
+    check("sel start", ae_selection_start(ed) == 100.0)
+    check("sel end", ae_selection_end(ed) == 500.0)
+    check("sel len", ae_selection_length(ed) == 400.0)
+
+    // Reversed args → auto-swap
+    ae_select(ed, 800.0, 200.0)
+    check("sel swap", ae_selection_start(ed) == 200.0)
+
+    // Select all
+    ae_select_all(ed)
+    check("sel all", ae_selection_length(ed) == 1000.0)
+
+    // Deselect
+    ae_deselect(ed)
+    check("desel", ae_has_selection(ed) == 0.0)
+
+    // Clamp to bounds
+    ae_select(ed, -50.0, 2000.0)
+    check("sel clamp s", ae_selection_start(ed) == 0.0)
+    check("sel clamp e", ae_selection_end(ed) == 1000.0)
+
+    return 0.0
+end
+
+// ── Cursor ───────────────────────────────────────────────
+
+fn test_cursor()
+    let pcm = make_pcm(1000.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    ae_set_cursor(ed, 500.0)
+    check("cursor set", ae_cursor(ed) == 500.0)
+
+    // Clamp
+    ae_set_cursor(ed, -10.0)
+    check("cursor lo", ae_cursor(ed) == 0.0)
+    ae_set_cursor(ed, 9999.0)
+    check("cursor hi", ae_cursor(ed) == 1000.0)
+
+    return 0.0
+end
+
+// ── Copy / Cut / Paste ───────────────────────────────────
+
+fn test_copy_paste()
+    let pcm = make_pcm(100.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    // Copy
+    ae_select(ed, 0.0, 10.0)
+    let copied = ae_copy(ed)
+    check("copy len", copied == 10.0)
+    check("clip len", ae_clipboard_length(ed) == 10.0)
+
+    // Paste at cursor
+    ae_set_cursor(ed, 50.0)
+    let pasted = ae_paste(ed)
+    check("paste len", pasted == 10.0)
+
+    // No selection → copy returns 0
+    ae_deselect(ed)
+    check("copy no sel", ae_copy(ed) == 0.0)
+
+    return 0.0
+end
+
+fn test_cut()
+    let pcm = make_pcm(100.0)
+    let samples = pcm_samples(pcm)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    ae_select(ed, 0.0, 10.0)
+    let cut_len = ae_cut(ed)
+    check("cut len", cut_len == 10.0)
+    // Selection should be silenced
+    check("cut silence", samples[0] == 0.0)
+    check("cut silence 9", samples[9] == 0.0)
+    // Clipboard should have data
+    check("cut clip", ae_clipboard_length(ed) == 10.0)
+    // Undo recorded
+    check("cut undo", ae_can_undo(ed) == 1.0)
+
+    return 0.0
+end
+
+// ── Delete ───────────────────────────────────────────────
+
+fn test_delete()
+    let pcm = make_pcm(100.0)
+    let samples = pcm_samples(pcm)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    ae_select(ed, 20.0, 30.0)
+    let del = ae_delete(ed)
+    check("del len", del == 10.0)
+    check("del silence", samples[20] == 0.0)
+    check("del desel", ae_has_selection(ed) == 0.0)
+
+    return 0.0
+end
+
+// ── Gain ─────────────────────────────────────────────────
+
+fn test_gain()
+    let pcm = make_pcm(100.0)
+    let samples = pcm_samples(pcm)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    let orig = samples[50]
+    ae_select(ed, 50.0, 60.0)
+    ae_gain(ed, 6.0)  // ~2x gain
+    check("gain up", abs(samples[50]) > abs(orig) * 1.5)
+
+    return 0.0
+end
+
+// ── Fade ─────────────────────────────────────────────────
+
+fn test_fade()
+    let pcm = make_pcm(100.0)
+    let samples = pcm_samples(pcm)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    // Set all samples to 1.0 for clear fade test
+    let mut i = 0.0
+    while i < 100.0
+        samples[i] = 1.0
+        i = i + 1.0
+    end
+
+    ae_select(ed, 0.0, 50.0)
+    ae_fade_in(ed)
+    check("fade in start", approx(samples[0], 0.0) == 1.0)
+    check("fade in mid", samples[25] > 0.3 && samples[25] < 0.7)
+    check("fade in end", samples[49] > 0.9)
+
+    // Reset
+    i = 50.0
+    while i < 100.0
+        samples[i] = 1.0
+        i = i + 1.0
+    end
+    ae_select(ed, 50.0, 100.0)
+    ae_fade_out(ed)
+    check("fade out start", samples[50] > 0.9)
+    check("fade out end", approx(samples[99], 0.0) == 1.0)
+
+    return 0.0
+end
+
+// ── Reverse ──────────────────────────────────────────────
+
+fn test_reverse()
+    let pcm = make_pcm(100.0)
+    let samples = pcm_samples(pcm)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    let first = samples[0]
+    let last = samples[9]
+    ae_select(ed, 0.0, 10.0)
+    ae_reverse(ed)
+    check("rev first", approx(samples[0], last) == 1.0)
+    check("rev last", approx(samples[9], first) == 1.0)
+
+    return 0.0
+end
+
+// ── Normalize ────────────────────────────────────────────
+
+fn test_normalize()
+    let pcm = make_pcm(100.0)
+    let samples = pcm_samples(pcm)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    // Scale down
+    let mut i = 0.0
+    while i < 100.0
+        samples[i] = samples[i] * 0.1
+        i = i + 1.0
+    end
+
+    ae_select_all(ed)
+    ae_normalize(ed)
+
+    // Find peak — should be ~1.0
+    let mut peak = 0.0
+    i = 0.0
+    while i < 100.0
+        let a = abs(samples[i])
+        if a > peak
+            peak = a
+        end
+        i = i + 1.0
+    end
+    check("norm peak", approx(peak, 1.0) == 1.0)
+
+    return 0.0
+end
+
+// ── Zoom / Scroll ────────────────────────────────────────
+
+fn test_zoom()
+    let pcm = make_pcm(1000.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    ae_set_zoom(ed, 10.0)
+    check("zoom set", ae_get_zoom(ed) == 10.0)
+
+    ae_zoom_in(ed)
+    check("zoom in", ae_get_zoom(ed) == 5.0)
+
+    ae_zoom_out(ed)
+    check("zoom out", ae_get_zoom(ed) == 10.0)
+
+    ae_zoom_to_fit(ed)
+    check("zoom fit", approx(ae_get_zoom(ed), 1000.0 / 800.0) == 1.0)
+
+    // Zoom to selection
+    ae_select(ed, 0.0, 400.0)
+    ae_zoom_to_selection(ed)
+    check("zoom sel", approx(ae_get_zoom(ed), 400.0 / 800.0) == 1.0)
+
+    // Clamp
+    ae_set_zoom(ed, 0.0)
+    check("zoom clamp lo", ae_get_zoom(ed) == 1.0)
+
+    return 0.0
+end
+
+fn test_scroll()
+    let pcm = make_pcm(1000.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    ae_set_scroll(ed, 500.0)
+    check("scroll set", ae_get_scroll(ed) == 500.0)
+
+    ae_set_scroll(ed, -10.0)
+    check("scroll lo", ae_get_scroll(ed) == 0.0)
+
+    ae_set_scroll(ed, 9999.0)
+    check("scroll hi", ae_get_scroll(ed) == 1000.0)
+
+    return 0.0
+end
+
+// ── Tool ─────────────────────────────────────────────────
+
+fn test_tool()
+    let pcm = make_pcm(100.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    ae_set_tool(ed, AE_TOOL_DRAW)
+    check("tool draw", ae_get_tool(ed) == AE_TOOL_DRAW)
+
+    ae_set_tool(ed, AE_TOOL_MARKER)
+    check("tool marker", ae_get_tool(ed) == AE_TOOL_MARKER)
+
+    // Bad tool
+    let r = ae_set_tool(ed, 99.0)
+    check("tool bad", r == -1.0)
+
+    return 0.0
+end
+
+// ── Draw ─────────────────────────────────────────────────
+
+fn test_draw()
+    let pcm = make_pcm(100.0)
+    let samples = pcm_samples(pcm)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    ae_draw_sample(ed, 50.0, 0.75)
+    check("draw val", approx(samples[50], 0.75) == 1.0)
+
+    // Clamp
+    ae_draw_sample(ed, 51.0, 5.0)
+    check("draw clamp", samples[51] == 1.0)
+
+    // Bad index
+    check("draw bad", ae_draw_sample(ed, -1.0, 0.0) == -1.0)
+
+    return 0.0
+end
+
+// ── Markers ──────────────────────────────────────────────
+
+fn test_markers()
+    let pcm = make_pcm(1000.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    let m0 = ae_add_marker(ed, 100.0, 1.0)
+    check("marker add", m0 == 0.0)
+    let m1 = ae_add_marker(ed, 500.0, 2.0)
+    check("marker add 2", m1 == 1.0)
+    check("marker count", ae_marker_count(ed) == 2.0)
+
+    let mut result = [0.0, 0.0]
+    ae_get_marker(ed, 0.0, result)
+    check("marker pos", result[0] == 100.0)
+    check("marker type", result[1] == 1.0)
+
+    // Bad marker
+    check("marker bad", ae_add_marker(ed, -10.0, 0.0) == -1.0)
+
+    return 0.0
+end
+
+// ── Effects chain ────────────────────────────────────────
+
+fn test_fx_chain()
+    let pcm = make_pcm(100.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    ae_add_fx(ed, 1.0, 1000.0, 0.7, 0.0)  // LPF at 1kHz
+    ae_add_fx(ed, 2.0, 0.5, 0.0, 0.0)     // Compressor
+    check("fx count", ae_fx_count(ed) == 2.0)
+
+    ae_clear_fx(ed)
+    check("fx clear", ae_fx_count(ed) == 0.0)
+
+    return 0.0
+end
+
+// ── Waveform ─────────────────────────────────────────────
+
+fn test_waveform()
+    let pcm = make_pcm(100.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+    ae_set_zoom(ed, 10.0)  // 10 samples per pixel
+    ae_set_scroll(ed, 0.0)
+
+    let mut mn = []
+    let mut mx = []
+    let n = ae_get_waveform(ed, mn, mx, 5.0)
+    check("wf pixels", n == 5.0)
+    check("wf min len", len(mn) == 5.0)
+    check("wf max len", len(mx) == 5.0)
+    // Max should be >= min for each pixel
+    check("wf valid", mx[0] >= mn[0])
+
+    return 0.0
+end
+
+// ── Pixel ↔ Sample ──────────────────────────────────────
+
+fn test_pixel_sample()
+    let pcm = make_pcm(1000.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+    ae_set_zoom(ed, 2.0)
+    ae_set_scroll(ed, 100.0)
+
+    // Pixel 0 → sample 100
+    check("p2s 0", ae_pixel_to_sample(ed, 0.0) == 100.0)
+    // Pixel 50 → sample 200
+    check("p2s 50", ae_pixel_to_sample(ed, 50.0) == 200.0)
+    // Sample 100 → pixel 0
+    check("s2p 100", ae_sample_to_pixel(ed, 100.0) == 0.0)
+
+    return 0.0
+end
+
+// ── Undo ─────────────────────────────────────────────────
+
+fn test_undo()
+    let pcm = make_pcm(100.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+
+    check("undo empty", ae_can_undo(ed) == 0.0)
+    check("undo count 0", ae_undo_count(ed) == 0.0)
+
+    ae_select(ed, 0.0, 10.0)
+    ae_cut(ed)
+    check("undo after cut", ae_can_undo(ed) == 1.0)
+    check("undo count 1", ae_undo_count(ed) == 1.0)
+
+    return 0.0
+end
+
+// ── Edge cases ───────────────────────────────────────────
+
+fn test_edges()
+    check("bad create sel", ae_select(-1.0, 0.0, 10.0) == -1.0)
+    check("bad cursor", ae_set_cursor(-1.0, 0.0) == -1.0)
+    check("bad copy", ae_copy(-1.0) == -1.0)
+    check("bad paste", ae_paste(-1.0) == -1.0)
+    check("bad zoom", ae_set_zoom(-1.0, 1.0) == -1.0)
+    check("bad scroll", ae_set_scroll(-1.0, 0.0) == -1.0)
+    check("bad draw", ae_draw_sample(-1.0, 0.0, 0.0) == -1.0)
+    check("bad marker", ae_add_marker(-1.0, 0.0, 0.0) == -1.0)
+    check("bad fx", ae_add_fx(-1.0, 0.0, 0.0, 0.0, 0.0) == -1.0)
+    check("bad wf", ae_get_waveform(-1.0, [], [], 10.0) == 0.0)
+
+    // Operations with no selection
+    let pcm = make_pcm(100.0)
+    let ed = ae_create(pcm, 800.0, 200.0)
+    check("no sel cut", ae_cut(ed) == 0.0)
+    check("no sel del", ae_delete(ed) == 0.0)
+    check("no sel gain", ae_gain(ed, 6.0) == 0.0)
+    check("no sel fade", ae_fade_in(ed) == 0.0)
+    check("no sel rev", ae_reverse(ed) == 0.0)
+    check("no sel norm", ae_normalize(ed) == 0.0)
+
+    // Empty clipboard paste
+    check("no clip paste", ae_paste(ed) == 0.0)
+
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────────
+
+test_create()
+test_destroy()
+test_selection()
+test_cursor()
+test_copy_paste()
+test_cut()
+test_delete()
+test_gain()
+test_fade()
+test_reverse()
+test_normalize()
+test_zoom()
+test_scroll()
+test_tool()
+test_draw()
+test_markers()
+test_fx_chain()
+test_waveform()
+test_pixel_sample()
+test_undo()
+test_edges()
+print("")
+print("All audio_editor tests passed (21 tests)")

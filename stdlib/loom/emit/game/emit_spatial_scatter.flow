@@ -1,0 +1,92 @@
+// emit_spatial_scatter.flow — Scatter particles into sorted-by-cell order
+//
+// 1 thread = 1 particle. Atomically claims a slot in the sorted array.
+//
+// Push constants (2 floats):
+//   pc[0] = N (particle count)
+//   pc[1] = GRID_SIZE
+//
+// Buffer layout:
+//   Binding 0: positions[N*4], velocities[N*4], cell_ids[N] — READ
+//   Binding 1: offsets[GRID³] — READ/WRITE (atomic increment for insert index)
+//   Binding 2: sorted_pos[N*4], sorted_vel[N*4], sorted_to_orig[N] — WRITE
+//
+// Dispatch: loom_dispatch(vm, "spatial_scatter.spv", [N, GRID], ceil(N/256))
+
+use "../../../compiler/ir"
+
+fn emit_spatial_scatter(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry = ir_block("entry")
+
+  let c0f = ir_const_f(entry, 0.0)
+  let c0u = ir_const_u(entry, 0)
+  let c1u = ir_const_u(entry, 1)
+  let c2u = ir_const_u(entry, 2)
+  let c3u = ir_const_u(entry, 3)
+  let c4u = ir_const_u(entry, 4)
+  let c8u = ir_const_u(entry, 8)
+  let c9u = ir_const_u(entry, 9)
+
+  let pc_n = ir_push_const(entry, 0.0)
+  let pc_grid = ir_push_const(entry, 1.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, pc_n)
+
+  let main_m = ir_block("main_merge")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_bounds, work, main_m)
+
+  let n_u = ir_ftou(work, pc_n)
+
+  // ── Read cell_id from binding 0: offset = N*8 + gid ──
+  let cell_ids_base = ir_imul(work, n_u, c8u)
+  let cell_f = ir_load_input_at(work, 0.0, ir_iadd(work, cell_ids_base, gid))
+  let cell_u = ir_ftou(work, cell_f)
+
+  // ── Atomic increment offsets[cell_id] on binding 1 → insert index ──
+  let insert_idx = ir_buf_atomic_iadd(work, 1.0, cell_u, c1u)
+
+  // ── Copy position to sorted array (binding 2) ──
+  let src_pos = ir_imul(work, gid, c4u)
+  let dst_pos = ir_imul(work, insert_idx, c4u)
+  let px = ir_load_input_at(work, 0.0, src_pos)
+  let py = ir_load_input_at(work, 0.0, ir_iadd(work, src_pos, c1u))
+  let pz = ir_load_input_at(work, 0.0, ir_iadd(work, src_pos, c2u))
+  let pm = ir_load_input_at(work, 0.0, ir_iadd(work, src_pos, c3u))
+
+  ir_buf_store_f(work, 2.0, dst_pos, px)
+  ir_buf_store_f(work, 2.0, ir_iadd(work, dst_pos, c1u), py)
+  ir_buf_store_f(work, 2.0, ir_iadd(work, dst_pos, c2u), pz)
+  ir_buf_store_f(work, 2.0, ir_iadd(work, dst_pos, c3u), pm)
+
+  // ── Copy velocity (binding 0 offset: N*4) ──
+  let vel_src_base = ir_imul(work, n_u, c4u)
+  let src_vel = ir_iadd(work, vel_src_base, ir_imul(work, gid, c4u))
+  let dst_vel_base = ir_imul(work, n_u, c4u)  // sorted_vel starts at N*4 in binding 2
+  let dst_vel = ir_iadd(work, dst_vel_base, ir_imul(work, insert_idx, c4u))
+
+  let vx = ir_load_input_at(work, 0.0, src_vel)
+  let vy = ir_load_input_at(work, 0.0, ir_iadd(work, src_vel, c1u))
+  let vz = ir_load_input_at(work, 0.0, ir_iadd(work, src_vel, c2u))
+
+  ir_buf_store_f(work, 2.0, dst_vel, vx)
+  ir_buf_store_f(work, 2.0, ir_iadd(work, dst_vel, c1u), vy)
+  ir_buf_store_f(work, 2.0, ir_iadd(work, dst_vel, c2u), vz)
+  ir_buf_store_f(work, 2.0, ir_iadd(work, dst_vel, c3u), c0f)
+
+  // ── Store original index mapping: sorted_to_orig[insert_idx] = gid ──
+  let idx_base = ir_imul(work, n_u, c8u)  // after sorted_pos + sorted_vel
+  ir_buf_store_f(work, 2.0, ir_iadd(work, idx_base, insert_idx), gid_f)
+
+  ir_term_branch(work, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

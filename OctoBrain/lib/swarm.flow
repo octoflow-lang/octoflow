@@ -1,0 +1,153 @@
+// OctoBrain Swarm Voting Utilities
+// Reusable decision-making functions for multi-brain swarms.
+// Supports majority vote, weighted vote, and swarm accuracy computation.
+
+use "vecmath"
+
+// majority_vote(predictions, num_voters, num_classes)
+// predictions: flat array of length num_voters, each element is a class ID (0-based float)
+// num_classes: number of distinct classes
+// Returns the class with the most votes. Ties broken by lowest class ID.
+fn majority_vote(predictions, num_voters, num_classes)
+  // Build vote counts
+  let mut votes = []
+  let mut c = 0.0
+  while c < num_classes
+    push(votes, 0.0)
+    c = c + 1.0
+  end
+
+  // Tally votes
+  let mut i = 0.0
+  while i < num_voters
+    let cls = predictions[i]
+    votes[cls] = votes[cls] + 1.0
+    i = i + 1.0
+  end
+
+  // Find class with max votes (lowest ID wins ties)
+  let mut best_class = 0.0
+  let mut best_count = votes[0]
+  let mut ci = 1.0
+  while ci < num_classes
+    if votes[ci] > best_count
+      best_count = votes[ci]
+      best_class = ci
+    end
+    ci = ci + 1.0
+  end
+
+  return best_class
+end
+
+// weighted_vote(predictions, confidences, num_voters, num_classes)
+// predictions: flat array [num_voters] of class IDs
+// confidences: flat array [num_voters] of confidence weights (higher = more influence)
+// Returns class with highest total confidence weight. Ties broken by lowest class ID.
+fn weighted_vote(predictions, confidences, num_voters, num_classes)
+  // Build weighted vote sums
+  let mut weights = []
+  let mut c = 0.0
+  while c < num_classes
+    push(weights, 0.0)
+    c = c + 1.0
+  end
+
+  // Accumulate weighted votes
+  let mut i = 0.0
+  while i < num_voters
+    let cls = predictions[i]
+    let w = confidences[i]
+    weights[cls] = weights[cls] + w
+    i = i + 1.0
+  end
+
+  // Find class with max weight (lowest ID wins ties)
+  let mut best_class = 0.0
+  let mut best_weight = weights[0]
+  let mut ci = 1.0
+  while ci < num_classes
+    if weights[ci] > best_weight
+      best_weight = weights[ci]
+      best_class = ci
+    end
+    ci = ci + 1.0
+  end
+
+  return best_class
+end
+
+// swarm_accuracy(voter_preds, true_labels, num_samples, num_voters, num_classes)
+// voter_preds: flat array [num_samples x num_voters] — row-major
+//   voter_preds[sample * num_voters + voter] = class prediction
+// true_labels: array [num_samples] — ground truth class for each sample
+// Returns accuracy in [0, 1] using majority vote across voters per sample.
+fn swarm_accuracy(voter_preds, true_labels, num_samples, num_voters, num_classes)
+  let mut correct = 0.0
+  let mut s = 0.0
+  while s < num_samples
+    // Extract predictions for this sample
+    let mut sample_preds = []
+    let mut v = 0.0
+    while v < num_voters
+      let idx = s * num_voters + v
+      push(sample_preds, voter_preds[idx])
+      v = v + 1.0
+    end
+
+    // Get majority vote
+    let winner = majority_vote(sample_preds, num_voters, num_classes)
+
+    if winner == true_labels[s]
+      correct = correct + 1.0
+    end
+    s = s + 1.0
+  end
+
+  return correct / num_samples
+end
+
+// type_encode_onehot(type_id, num_types)
+// Encode a type ID as a one-hot vector of length num_types.
+// type_id: 0-based float, num_types: total number of types.
+// Returns array of length num_types with 1.0 at position type_id, 0.0 elsewhere.
+fn type_encode_onehot(type_id, num_types)
+  let mut vec = []
+  let mut i = 0.0
+  while i < num_types
+    if i == type_id
+      push(vec, 1.0)
+    else
+      push(vec, 0.0)
+    end
+    i = i + 1.0
+  end
+  return vec
+end
+
+// type_encode_bigram_onehot(type1, type2, num_types)
+// Encode a pair of consecutive type IDs as a concatenated one-hot vector.
+// Returns array of length num_types * 2.
+// Useful for Level 2 brains that see bigram context.
+fn type_encode_bigram_onehot(type1, type2, num_types)
+  let mut vec = []
+  let mut i = 0.0
+  while i < num_types
+    if i == type1
+      push(vec, 1.0)
+    else
+      push(vec, 0.0)
+    end
+    i = i + 1.0
+  end
+  i = 0.0
+  while i < num_types
+    if i == type2
+      push(vec, 1.0)
+    else
+      push(vec, 0.0)
+    end
+    i = i + 1.0
+  end
+  return vec
+end

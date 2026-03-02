@@ -1,7 +1,19 @@
 // stdlib/collections/queue.flow — Queue (FIFO) data structure
 //
+// Map-based O(1) enqueue/dequeue using head/tail indices.
+// Values stored as string keys: "v_0", "v_1", etc.
+//
 // Functions: queue_create, queue_enqueue, queue_dequeue, queue_peek,
-//            queue_size, queue_is_empty, queue_clear
+//            queue_size, queue_is_empty, queue_clear, queue_to_array,
+//            queue_contains, queue_enqueue_all
+//
+// Usage:
+//   use "queue"
+//   let mut q = queue_create()
+//   queue_enqueue(q, 10.0)
+//   queue_enqueue(q, 20.0)
+//   queue_peek(q)         // "10" (string — use float() to convert)
+//   queue_dequeue(q)      // "10"
 //
 // Uses map-based O(1) dequeue (same pattern as collections.flow)
 
@@ -67,4 +79,43 @@ fn queue_clear(q)
   map_set(q, "head", "0")
   map_set(q, "tail", "0")
   return 0.0
+end
+
+fn queue_to_array(q)
+    // Return all values front-to-back as a flat array of strings.
+    let mut head = float(map_get(q, "head"))
+    let tail = float(map_get(q, "tail"))
+    let mut result = []
+    while head < tail
+        let key = "v_" + str(head)
+        push(result, float(map_get(q, key)))
+        head = head + 1.0
+    end
+    return result
+end
+
+fn queue_contains(q, val)
+    // Check if value exists in queue. Compares as strings.
+    let mut head = float(map_get(q, "head"))
+    let tail = float(map_get(q, "tail"))
+    let target = str(val)
+    while head < tail
+        let key = "v_" + str(head)
+        if map_get(q, key) == target
+            return 1.0
+        end
+        head = head + 1.0
+    end
+    return 0.0
+end
+
+fn queue_enqueue_all(q, arr)
+    // Enqueue all elements from an array.
+    let n = len(arr)
+    let mut i = 0.0
+    while i < n
+        queue_enqueue(q, arr[i])
+        i = i + 1.0
+    end
+    return 0.0
 end

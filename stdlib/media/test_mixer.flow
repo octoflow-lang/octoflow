@@ -1,0 +1,251 @@
+// test_mixer.flow — Tests for stdlib/media/mixer.flow
+use "mixer"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Create mixer ───────────────────────────────────────
+
+fn test_create()
+    let mx = mixer_create(44100.0)
+    check("create id", mx >= 0.0)
+    check("create tracks", mixer_track_count(mx) == 0.0)
+    check("create master", mixer_get_master_gain(mx) == 1.0)
+    // Default sample rate
+    let mx2 = mixer_create(0.0)
+    check("create default", mx2 >= 0.0)
+    return 0.0
+end
+
+// ── Add tracks ─────────────────────────────────────────
+
+fn test_add_tracks()
+    let mx = mixer_create(100.0)
+    let mut s1 = [0.5, 0.3, -0.2]
+    let t1 = mixer_add_track(mx, s1, 3.0)
+    check("track 0", t1 == 0.0)
+    check("count 1", mixer_track_count(mx) == 1.0)
+    let mut s2 = [0.8, -0.4]
+    let t2 = mixer_add_track(mx, s2, 2.0)
+    check("track 1", t2 == 1.0)
+    check("count 2", mixer_track_count(mx) == 2.0)
+    // Invalid mixer
+    let bad = mixer_add_track(-1.0, s1, 3.0)
+    check("bad mixer", bad == -1.0)
+    return 0.0
+end
+
+// ── Volume and pan ─────────────────────────────────────
+
+fn test_volume_pan()
+    let mx = mixer_create(100.0)
+    let mut s = [0.5]
+    let t = mixer_add_track(mx, s, 1.0)
+    let _v = mixer_set_volume(mx, t, 0.5)
+    check("vol set", approx(mixer_get_volume(mx, t), 0.5) == 1.0)
+    let _p = mixer_set_pan(mx, t, -0.8)
+    check("pan set", approx(mixer_get_pan(mx, t), -0.8) == 1.0)
+    // Clamp pan
+    let _p2 = mixer_set_pan(mx, t, 5.0)
+    check("pan clamp", mixer_get_pan(mx, t) == 1.0)
+    // Negative volume clamped
+    let _v2 = mixer_set_volume(mx, t, -1.0)
+    check("vol clamp", mixer_get_volume(mx, t) == 0.0)
+    return 0.0
+end
+
+// ── Mute/Solo ──────────────────────────────────────────
+
+fn test_mute_solo()
+    let mx = mixer_create(100.0)
+    let mut s = [0.5]
+    let t = mixer_add_track(mx, s, 1.0)
+    check("not muted", mixer_is_muted(mx, t) == 0.0)
+    let _m = mixer_mute(mx, t)
+    check("muted", mixer_is_muted(mx, t) == 1.0)
+    let _u = mixer_unmute(mx, t)
+    check("unmuted", mixer_is_muted(mx, t) == 0.0)
+    // Solo
+    let _s = mixer_solo(mx, t)
+    let _us = mixer_unsolo(mx, t)
+    check("solo ok", 1.0 == 1.0)
+    return 0.0
+end
+
+// ── Mono mixdown ───────────────────────────────────────
+
+fn test_mixdown_mono()
+    let mx = mixer_create(100.0)
+    let mut s1 = [0.3, 0.3, 0.3]
+    let mut s2 = [0.2, 0.2, 0.2]
+    let _t1 = mixer_add_track(mx, s1, 3.0)
+    let _t2 = mixer_add_track(mx, s2, 3.0)
+    let mut out = []
+    let n = mixer_mix_down(mx, 3.0, out)
+    check("mixdown n", n == 3.0)
+    check("mixdown len", len(out) == 3.0)
+    // 0.3 + 0.2 = 0.5
+    check("mixdown sum", approx(out[0], 0.5) == 1.0)
+    return 0.0
+end
+
+// ── Mixdown with volume ────────────────────────────────
+
+fn test_mixdown_volume()
+    let mx = mixer_create(100.0)
+    let mut s1 = [0.8]
+    let t1 = mixer_add_track(mx, s1, 1.0)
+    let _v = mixer_set_volume(mx, t1, 0.5)
+    let mut out = []
+    let _n = mixer_mix_down(mx, 1.0, out)
+    // 0.8 * 0.5 = 0.4
+    check("vol mix", approx(out[0], 0.4) == 1.0)
+    return 0.0
+end
+
+// ── Mixdown with mute ──────────────────────────────────
+
+fn test_mixdown_mute()
+    let mx = mixer_create(100.0)
+    let mut s1 = [0.5]
+    let mut s2 = [0.3]
+    let t1 = mixer_add_track(mx, s1, 1.0)
+    let _t2 = mixer_add_track(mx, s2, 1.0)
+    let _m = mixer_mute(mx, t1)
+    let mut out = []
+    let _n = mixer_mix_down(mx, 1.0, out)
+    // Only track 2 plays: 0.3
+    check("mute mix", approx(out[0], 0.3) == 1.0)
+    return 0.0
+end
+
+// ── Mixdown with solo ──────────────────────────────────
+
+fn test_mixdown_solo()
+    let mx = mixer_create(100.0)
+    let mut s1 = [0.5]
+    let mut s2 = [0.3]
+    let mut s3 = [0.1]
+    let _t1 = mixer_add_track(mx, s1, 1.0)
+    let t2 = mixer_add_track(mx, s2, 1.0)
+    let _t3 = mixer_add_track(mx, s3, 1.0)
+    let _s = mixer_solo(mx, t2)
+    let mut out = []
+    let _n = mixer_mix_down(mx, 1.0, out)
+    // Only track 2 plays: 0.3
+    check("solo mix", approx(out[0], 0.3) == 1.0)
+    return 0.0
+end
+
+// ── Stereo mixdown ─────────────────────────────────────
+
+fn test_stereo()
+    let mx = mixer_create(100.0)
+    let mut s = [1.0, 1.0]
+    let t = mixer_add_track(mx, s, 2.0)
+    let _p = mixer_set_pan(mx, t, -1.0)  // Full left
+    let mut out_l = []
+    let mut out_r = []
+    let _n = mixer_mix_down_stereo(mx, 2.0, out_l, out_r)
+    // Full left: L=1.0, R=0.0
+    check("stereo L", approx(out_l[0], 1.0) == 1.0)
+    check("stereo R", approx(out_r[0], 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Master gain ────────────────────────────────────────
+
+fn test_master()
+    let mx = mixer_create(100.0)
+    let mut s = [0.6]
+    let _t = mixer_add_track(mx, s, 1.0)
+    let _g = mixer_set_master_gain(mx, 0.5)
+    check("master get", approx(mixer_get_master_gain(mx), 0.5) == 1.0)
+    let mut out = []
+    let _n = mixer_mix_down(mx, 1.0, out)
+    // 0.6 * 0.5 = 0.3
+    check("master mix", approx(out[0], 0.3) == 1.0)
+    return 0.0
+end
+
+// ── Clipping protection ────────────────────────────────
+
+fn test_clipping()
+    let mx = mixer_create(100.0)
+    let mut s1 = [0.8]
+    let mut s2 = [0.8]
+    let _t1 = mixer_add_track(mx, s1, 1.0)
+    let _t2 = mixer_add_track(mx, s2, 1.0)
+    let mut out = []
+    let _n = mixer_mix_down(mx, 1.0, out)
+    // 0.8 + 0.8 = 1.6 → clamped to 1.0
+    check("clip", out[0] == 1.0)
+    return 0.0
+end
+
+// ── Track peak ─────────────────────────────────────────
+
+fn test_peak()
+    let mx = mixer_create(100.0)
+    let mut s = [0.3, -0.7, 0.5]
+    let t = mixer_add_track(mx, s, 3.0)
+    let p = mixer_track_peak(mx, t)
+    check("peak", approx(p, 0.7) == 1.0)
+    return 0.0
+end
+
+// ── Edge cases ─────────────────────────────────────────
+
+fn test_edges()
+    let mx = mixer_create(100.0)
+    // Mix with no tracks
+    let mut out = []
+    let n = mixer_mix_down(mx, 5.0, out)
+    check("empty mix", n == 0.0)
+    // Track shorter than output
+    let mut s = [0.5, 0.5]
+    let _t = mixer_add_track(mx, s, 2.0)
+    let mut out2 = []
+    let _n2 = mixer_mix_down(mx, 5.0, out2)
+    check("short track", len(out2) == 5.0)
+    check("short pad", out2[3] == 0.0)
+    // Invalid track IDs
+    let _v = mixer_set_volume(mx, 99.0, 1.0)
+    check("bad track", 1.0 == 1.0)
+    // Remove track
+    let _r = mixer_remove_track(mx, 0.0)
+    check("remove", mixer_is_muted(mx, 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Run all ────────────────────────────────────────────
+
+test_create()
+test_add_tracks()
+test_volume_pan()
+test_mute_solo()
+test_mixdown_mono()
+test_mixdown_volume()
+test_mixdown_mute()
+test_mixdown_solo()
+test_stereo()
+test_master()
+test_clipping()
+test_peak()
+test_edges()
+print("")
+print("All mixer tests passed (13 tests)")

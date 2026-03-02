@@ -1,0 +1,369 @@
+// stdlib/math/number_theory.flow — Number theory and common math functions
+//
+// Functions: factorial, fibonacci, is_prime, prime_sieve, pow_int,
+//            combinations, permutations, sum_array, product_array,
+//            mean, median, mod_pow, abs_val, divisors, is_even, is_odd
+//
+// Usage:
+//   use "number_theory"
+//   let f = factorial(5.0)   // 120.0
+//   let p = is_prime(17.0)   // 1.0
+
+// ── Factorial ───────────────────────────────────────────────────
+
+fn factorial(n)
+    // Returns n! (0! = 1, negative returns 0)
+    if n < 0.0
+        return 0.0
+    end
+    if n < 2.0
+        return 1.0
+    end
+    let mut result = 1.0
+    let mut i = 2.0
+    while i <= n
+        result = result * i
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Fibonacci ───────────────────────────────────────────────────
+
+fn fibonacci(n)
+    // Returns the nth Fibonacci number (0-indexed: fib(0)=0, fib(1)=1, fib(2)=1, ...)
+    if n < 0.0
+        return 0.0
+    end
+    if n < 1.0
+        return 0.0
+    end
+    if n < 2.0
+        return 1.0
+    end
+    let mut a = 0.0
+    let mut b = 1.0
+    let mut i = 2.0
+    while i <= n
+        let tmp = a + b
+        a = b
+        b = tmp
+        i = i + 1.0
+    end
+    return b
+end
+
+fn fibonacci_seq(n)
+    // Returns array of first n Fibonacci numbers
+    let mut result = []
+    if n < 1.0
+        return result
+    end
+    push(result, 0.0)
+    if n < 2.0
+        return result
+    end
+    push(result, 1.0)
+    let mut i = 2.0
+    while i < n
+        let val = result[i - 1.0] + result[i - 2.0]
+        push(result, val)
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Primality ───────────────────────────────────────────────────
+
+fn is_prime(n)
+    // Returns 1.0 if n is prime, 0.0 otherwise
+    if n < 2.0
+        return 0.0
+    end
+    if n < 4.0
+        return 1.0
+    end
+    // Check divisibility by 2 and 3
+    let r2 = n - floor(n / 2.0) * 2.0
+    if r2 < 0.5
+        return 0.0
+    end
+    let r3 = n - floor(n / 3.0) * 3.0
+    if r3 < 0.5
+        return 0.0
+    end
+    // Check 6k±1 up to sqrt(n)
+    let mut i = 5.0
+    while i * i <= n
+        let ri = n - floor(n / i) * i
+        if ri < 0.5
+            return 0.0
+        end
+        let i2 = i + 2.0
+        let ri2 = n - floor(n / i2) * i2
+        if ri2 < 0.5
+            return 0.0
+        end
+        i = i + 6.0
+    end
+    return 1.0
+end
+
+fn prime_sieve(limit)
+    // Returns array of all primes up to limit (Sieve of Eratosthenes)
+    if limit < 2.0
+        let mut empty = []
+        return empty
+    end
+    let n = floor(limit) + 1.0
+    let mut sieve = array_new(n, 1.0)
+    sieve[0] = 0.0
+    sieve[1] = 0.0
+
+    let mut i = 2.0
+    while i * i < n
+        if sieve[i] > 0.5
+            let mut j = i * i
+            while j < n
+                sieve[j] = 0.0
+                j = j + i
+            end
+        end
+        i = i + 1.0
+    end
+
+    let mut primes = []
+    let mut k = 2.0
+    while k < n
+        if sieve[k] > 0.5
+            push(primes, k)
+        end
+        k = k + 1.0
+    end
+    return primes
+end
+
+// ── Exponentiation ──────────────────────────────────────────────
+
+fn pow_int(base, exp)
+    // Integer exponentiation by squaring. exp must be non-negative integer.
+    if exp < 0.0
+        return 0.0
+    end
+    if exp < 0.5
+        return 1.0
+    end
+    let mut result = 1.0
+    let mut b = base
+    let mut e = exp
+    while e > 0.5
+        let rem = e - floor(e / 2.0) * 2.0
+        if rem > 0.5
+            result = result * b
+        end
+        b = b * b
+        e = floor(e / 2.0)
+    end
+    return result
+end
+
+fn mod_pow(base, exp, modulus)
+    // Modular exponentiation: (base^exp) mod modulus
+    if modulus < 1.5
+        return 0.0
+    end
+    let mut result = 1.0
+    let mut b = base - floor(base / modulus) * modulus
+    let mut e = exp
+    while e > 0.5
+        let rem = e - floor(e / 2.0) * 2.0
+        if rem > 0.5
+            result = result * b
+            result = result - floor(result / modulus) * modulus
+        end
+        b = b * b
+        b = b - floor(b / modulus) * modulus
+        e = floor(e / 2.0)
+    end
+    return result
+end
+
+// ── Combinatorics ───────────────────────────────────────────────
+
+fn permutations(n, r)
+    // P(n,r) = n! / (n-r)!
+    if r > n || r < 0.0 || n < 0.0
+        return 0.0
+    end
+    let mut result = 1.0
+    let mut i = 0.0
+    while i < r
+        result = result * (n - i)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn combinations(n, r)
+    // C(n,r) = n! / (r! * (n-r)!)
+    if r > n || r < 0.0 || n < 0.0
+        return 0.0
+    end
+    // Use smaller of r and n-r for efficiency
+    let mut k = r
+    if n - r < r
+        k = n - r
+    end
+    let mut result = 1.0
+    let mut i = 0.0
+    while i < k
+        result = result * (n - i)
+        result = result / (i + 1.0)
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Array Statistics ────────────────────────────────────────────
+
+fn sum_array(arr)
+    let n = len(arr)
+    let mut total = 0.0
+    let mut i = 0.0
+    while i < n
+        total = total + arr[i]
+        i = i + 1.0
+    end
+    return total
+end
+
+fn product_array(arr)
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    let mut total = 1.0
+    let mut i = 0.0
+    while i < n
+        total = total * arr[i]
+        i = i + 1.0
+    end
+    return total
+end
+
+fn mean(arr)
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    return sum_array(arr) / n
+end
+
+fn median(arr)
+    // Returns median value. Sorts a copy internally.
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    // Copy array
+    let mut sorted = []
+    let mut i = 0.0
+    while i < n
+        push(sorted, arr[i])
+        i = i + 1.0
+    end
+    // Insertion sort the copy (simple, correct for any size)
+    let mut si = 1.0
+    while si < n
+        let key = sorted[si]
+        let mut j = si - 1.0
+        while j >= 0.0 && sorted[j] > key
+            sorted[j + 1.0] = sorted[j]
+            j = j - 1.0
+        end
+        sorted[j + 1.0] = key
+        si = si + 1.0
+    end
+    // Middle element(s)
+    let half = floor(n / 2.0)
+    let rem = n - floor(n / 2.0) * 2.0
+    if rem > 0.5
+        return sorted[half]
+    end
+    return (sorted[half - 1.0] + sorted[half]) / 2.0
+end
+
+// ── Number Utilities ────────────────────────────────────────────
+
+fn is_even(n)
+    let rem = n - floor(n / 2.0) * 2.0
+    if rem < 0.5
+        return 1.0
+    end
+    return 0.0
+end
+
+fn is_odd(n)
+    let rem = n - floor(n / 2.0) * 2.0
+    if rem > 0.5
+        return 1.0
+    end
+    return 0.0
+end
+
+fn abs_val(x)
+    if x < 0.0
+        return 0.0 - x
+    end
+    return x
+end
+
+fn divisors(n)
+    // Returns array of all positive divisors of n
+    let mut result = []
+    if n < 1.0
+        return result
+    end
+    let mut i = 1.0
+    while i * i <= n
+        let rem = n - floor(n / i) * i
+        if rem < 0.5
+            push(result, i)
+            let pair = n / i
+            if pair != i
+                push(result, pair)
+            end
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn digit_sum(n)
+    // Sum of digits (works for non-negative integers)
+    let mut x = abs(n)
+    x = floor(x)
+    let mut total = 0.0
+    while x > 0.5
+        let digit = x - floor(x / 10.0) * 10.0
+        total = total + digit
+        x = floor(x / 10.0)
+    end
+    return total
+end
+
+fn collatz(n)
+    // Returns number of Collatz steps to reach 1
+    let mut x = floor(n)
+    let mut steps = 0.0
+    while x > 1.0
+        let rem = x - floor(x / 2.0) * 2.0
+        if rem < 0.5
+            x = x / 2.0
+        else
+            x = 3.0 * x + 1.0
+        end
+        steps = steps + 1.0
+    end
+    return steps
+end

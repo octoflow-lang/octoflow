@@ -1,0 +1,127 @@
+#version 450
+// scan_lookback — Decoupled Lookback Prefix Sum (Merrill & Garland 2016)
+//
+// Single-pass parallel prefix sum using atomic operations for inter-workgroup
+// communication. Faster than 3-pass Blelloch scan (32_scan_sum.comp).
+//
+// Each workgroup:
+// 1. Scans its local chunk (512 elements)
+// 2. Atomically publishes its partial sum
+// 3. "Looks back" at previous workgroups' status flags
+// 4. When all predecessors ready, adds their prefix to local results
+//
+// 4 bindings (input, output, status[], prefix[]), 1 push constant (4 bytes)
+// status[wg]: 0=incomplete, 1=aggregate_ready, 2=prefix_ready
+// prefix[wg]: running prefix sum up to (not including) this workgroup
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Input   { float data[]; } inp;
+layout(set=0, binding=1) buffer Output  { float data[]; } out_;
+layout(set=0, binding=2) buffer Status  { uint  data[]; } status;
+layout(set=0, binding=3) buffer Prefix  { float data[]; } prefix;
+layout(push_constant) uniform PC { float n_elements; } pc;
+
+shared float temp[512];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint wid = gl_WorkGroupID.x;
+    uint N = uint(pc.n_elements);
+    uint block_size = 512u;
+    uint offset = wid * block_size;
+
+    // Load local chunk
+    uint ai = tid;
+    uint bi = tid + 256u;
+    temp[ai] = (offset + ai < N) ? inp.data[offset + ai] : 0.0;
+    temp[bi] = (offset + bi < N) ? inp.data[offset + bi] : 0.0;
+
+    // Up-sweep
+    uint stride = 1u;
+    for (uint d = 256u; d > 0u; d >>= 1u) {
+        barrier();
+        if (tid < d) {
+            uint ai2 = stride * (2u * tid + 1u) - 1u;
+            uint bi2 = stride * (2u * tid + 2u) - 1u;
+            temp[bi2] += temp[ai2];
+        }
+        stride <<= 1u;
+    }
+
+    barrier();
+    float block_aggregate = temp[511];
+
+    // Thread 0: publish aggregate and compute prefix via lookback
+    if (tid == 0u && wid > 0u) {
+        // Mark aggregate ready
+        atomicStore(status.data[wid], 1u, gl_ScopeDevice, gl_StorageSemanticsBuffer, gl_SemanticsAcquireRelease);
+
+        // Lookback: accumulate predecessors' aggregates
+        float running_prefix = 0.0;
+        for (uint look = wid; look > 0u; look--) {
+            uint pred_wid = look - 1u;
+
+            // Wait for predecessor
+            uint pred_status;
+            do {
+                pred_status = atomicLoad(status.data[pred_wid], gl_ScopeDevice, gl_StorageSemanticsBuffer, gl_SemanticsAcquireRelease);
+            } while (pred_status == 0u);
+
+            if (pred_status == 2u) {
+                // Prefix ready — use it and stop
+                running_prefix += prefix.data[pred_wid];
+                break;
+            } else {
+                // Aggregate only — accumulate and keep looking
+                running_prefix += out_.data[pred_wid * block_size + block_size - 1u];
+            }
+        }
+
+        prefix.data[wid] = running_prefix;
+        atomicStore(status.data[wid], 2u, gl_ScopeDevice, gl_StorageSemanticsBuffer, gl_SemanticsAcquireRelease);
+    }
+
+    // Workgroup 0 has no prefix
+    if (tid == 0u && wid == 0u) {
+        prefix.data[0] = 0.0;
+        atomicStore(status.data[0], 2u, gl_ScopeDevice, gl_StorageSemanticsBuffer, gl_SemanticsAcquireRelease);
+    }
+
+    // Wait for prefix to be ready
+    if (wid > 0u) {
+        barrier();
+        if (tid == 0u) {
+            uint my_status;
+            do {
+                my_status = atomicLoad(status.data[wid], gl_ScopeDevice, gl_StorageSemanticsBuffer, gl_SemanticsAcquireRelease);
+            } while (my_status != 2u);
+        }
+        barrier();
+    }
+
+    // Down-sweep (exclusive scan)
+    if (tid == 0u) {
+        temp[511] = 0.0;
+    }
+
+    for (uint d = 1u; d < 512u; d <<= 1u) {
+        stride >>= 1u;
+        barrier();
+        if (tid < d) {
+            uint ai2 = stride * (2u * tid + 1u) - 1u;
+            uint bi2 = stride * (2u * tid + 2u) - 1u;
+            float t = temp[ai2];
+            temp[ai2] = temp[bi2];
+            temp[bi2] += t;
+        }
+    }
+    barrier();
+
+    // Write inclusive scan + prefix
+    float my_prefix = prefix.data[wid];
+    float orig_ai = (offset + ai < N) ? inp.data[offset + ai] : 0.0;
+    float orig_bi = (offset + bi < N) ? inp.data[offset + bi] : 0.0;
+
+    if (offset + ai < N) out_.data[offset + ai] = temp[ai] + orig_ai + my_prefix;
+    if (offset + bi < N) out_.data[offset + bi] = temp[bi] + orig_bi + my_prefix;
+}

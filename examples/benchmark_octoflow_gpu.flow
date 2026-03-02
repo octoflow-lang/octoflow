@@ -1,0 +1,119 @@
+// OctoFlow GPU Benchmark — matches benchmark_pytorch_cuda.py exactly
+// Same operations, same element counts, same GPU
+// Run: flowgpu-cli run examples/benchmark_octoflow_gpu.flow
+// Compare: python examples/benchmark_pytorch_cuda.py
+
+print("=== OctoFlow + Vulkan Benchmark ===")
+
+let n = 10000000.0
+
+// ── Warmup ──
+let w1 = gpu_fill(1.0, n)
+let w2 = gpu_fill(1.0, n)
+let w3 = gpu_add(w1, w2)
+
+// ── Test 1: gpu_fill 2x10M ──
+let t0 = now_ms()
+let a = gpu_fill(1.5, n)
+let b = gpu_fill(2.5, n)
+let t1 = now_ms()
+let fill_ms = t1 - t0
+print("gpu_fill 2x10M:  {fill_ms:.2} ms")
+
+// ── Test 2: Element-wise add ──
+let t2 = now_ms()
+let c_add = gpu_add(a, b)
+let t3 = now_ms()
+let add_ms = t3 - t2
+let v_add = c_add[0]
+print("gpu_add 10M:     {add_ms:.2} ms  [0]={v_add}")
+
+// ── Test 3: Element-wise mul ──
+let t4 = now_ms()
+let c_mul = gpu_mul(a, b)
+let t5 = now_ms()
+let mul_ms = t5 - t4
+let v_mul = c_mul[0]
+print("gpu_mul 10M:     {mul_ms:.2} ms  [0]={v_mul}")
+
+// ── Test 4: Scale (scalar multiply) ──
+let t6 = now_ms()
+let scaled = gpu_scale(a, 2.0)
+let t7 = now_ms()
+let scale_ms = t7 - t6
+print("gpu_scale 10M:   {scale_ms:.2} ms")
+
+// ── Test 5: Abs ──
+let neg = gpu_fill(0.0 - 3.14, n)
+let t8 = now_ms()
+let ab = gpu_abs(neg)
+let t9 = now_ms()
+let abs_ms = t9 - t8
+print("gpu_abs 10M:     {abs_ms:.2} ms")
+
+// ── Test 6: Reduction sum ──
+let big = gpu_fill(3.0, n)
+let ta = now_ms()
+let s = gpu_sum(big)
+let tb = now_ms()
+let sum_ms = tb - ta
+print("gpu_sum 10M:     {sum_ms:.2} ms  result={s}")
+
+// ── Test 7: Matmul 256x256 ──
+let n256 = 256.0
+let sz256 = n256 * n256
+let a256 = gpu_fill(1.0, sz256)
+let b256 = gpu_fill(1.0, sz256)
+let tc = now_ms()
+let c256 = gpu_matmul(a256, b256, n256, n256, n256)
+let td = now_ms()
+let mat256_ms = td - tc
+let v256 = c256[0]
+print("matmul 256:      {mat256_ms:.2} ms  c[0,0]={v256}")
+
+// ── Test 8: Matmul 512x512 ──
+let n512 = 512.0
+let sz512 = n512 * n512
+let a512 = gpu_fill(1.0, sz512)
+let b512 = gpu_fill(1.0, sz512)
+let te = now_ms()
+let c512 = gpu_matmul(a512, b512, n512, n512, n512)
+let tf = now_ms()
+let mat512_ms = tf - te
+let v512 = c512[0]
+print("matmul 512:      {mat512_ms:.2} ms  c[0,0]={v512}")
+
+// ── Test 9: Matmul 1024x1024 ──
+let n1024 = 1024.0
+let sz1024 = n1024 * n1024
+let a1024 = gpu_fill(1.0, sz1024)
+let b1024 = gpu_fill(1.0, sz1024)
+let tg = now_ms()
+let c1024 = gpu_matmul(a1024, b1024, n1024, n1024, n1024)
+let th = now_ms()
+let mat1024_ms = th - tg
+let v1024 = c1024[0]
+print("matmul 1024:     {mat1024_ms:.2} ms  c[0,0]={v1024}")
+
+// ── Test 10: 5-step pipeline (add->mul->scale->abs->sum) ──
+let pa = gpu_fill(3.0, n)
+let pb = gpu_fill(2.0, n)
+let pc = gpu_fill(3.0, n)
+// warmup
+let pw1 = gpu_add(pa, pb)
+let pw2 = gpu_mul(pw1, pc)
+let pw3 = gpu_scale(pw2, 0.5)
+let pw4 = gpu_abs(pw3)
+let pw5 = gpu_sum(pw4)
+let ti = now_ms()
+let p1 = gpu_add(pa, pb)
+let p2 = gpu_mul(p1, pc)
+let p3 = gpu_scale(p2, 0.5)
+let p4 = gpu_abs(p3)
+let p5 = gpu_sum(p4)
+let tj = now_ms()
+let pipe_ms = tj - ti
+print("5-step pipeline: {pipe_ms:.2} ms  result={p5}")
+
+print("")
+print("--- done ---")

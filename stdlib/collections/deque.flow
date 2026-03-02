@@ -1,0 +1,260 @@
+// stdlib/collections/deque.flow — Double-ended queue (Deque)
+//
+// Array-based deque with O(1) amortized push/pop at both ends.
+// Uses a flat array with head/tail pointers and dynamic resizing.
+//
+// Internal structure:
+//   deque[0] = head pointer
+//   deque[1] = tail pointer (one past last element)
+//   deque[2] = capacity
+//   deque[3] = size
+//   deque[4..] = circular buffer data
+//
+// Functions: deque_create, deque_push_front, deque_push_back,
+//            deque_pop_front, deque_pop_back, deque_peek_front,
+//            deque_peek_back, deque_size, deque_is_empty,
+//            deque_clear, deque_get, deque_to_array, deque_contains
+//
+// Usage:
+//   use "deque"
+//   let mut dq = deque_create()
+//   deque_push_back(dq, 1.0)
+//   deque_push_back(dq, 2.0)
+//   deque_push_front(dq, 0.0)
+//   let front = deque_pop_front(dq)  // 0.0
+//   let back = deque_pop_back(dq)    // 2.0
+
+fn deque_create()
+    // Create empty deque with initial capacity 16.
+    let cap = 16.0
+    let mut dq = []
+    push(dq, 0.0)    // head
+    push(dq, 0.0)    // tail
+    push(dq, cap)    // capacity
+    push(dq, 0.0)    // size
+
+    // Pre-fill buffer
+    let mut i = 0.0
+    while i < cap
+        push(dq, 0.0)
+        i = i + 1.0
+    end
+    return dq
+end
+
+fn _deque_resize(dq)
+    // Double capacity and rebuild.
+    let old_cap = dq[2]
+    let new_cap = old_cap * 2.0
+    let size = dq[3]
+    let head = dq[0]
+
+    // Build new deque
+    let mut new_dq = []
+    push(new_dq, 0.0)        // new head = 0
+    push(new_dq, size)        // new tail = size
+    push(new_dq, new_cap)     // capacity
+    push(new_dq, size)        // size
+
+    // Copy elements in order
+    let mut i = 0.0
+    while i < size
+        let idx = floor((head + i) - floor((head + i) / old_cap) * old_cap)
+        push(new_dq, dq[4.0 + idx])
+        i = i + 1.0
+    end
+
+    // Fill remaining capacity
+    while i < new_cap
+        push(new_dq, 0.0)
+        i = i + 1.0
+    end
+
+    // Copy back into dq — we can't reassign dq, so copy element by element
+    // This is a limitation — instead, return new deque
+    return new_dq
+end
+
+fn deque_push_back(dq, value)
+    // Push element to back. Returns dq (may be resized).
+    let size = dq[3]
+    let cap = dq[2]
+
+    if size >= cap
+        let mut new_dq = _deque_resize(dq)
+        let tail = new_dq[1]
+        new_dq[4.0 + tail] = value
+        new_dq[1] = tail + 1.0
+        if new_dq[1] >= new_dq[2]
+            new_dq[1] = 0.0
+        end
+        new_dq[3] = new_dq[3] + 1.0
+        return new_dq
+    end
+
+    let tail = dq[1]
+    dq[4.0 + tail] = value
+    let mut new_tail = tail + 1.0
+    if new_tail >= cap
+        new_tail = 0.0
+    end
+    dq[1] = new_tail
+    dq[3] = size + 1.0
+    return dq
+end
+
+fn deque_push_front(dq, value)
+    // Push element to front. Returns dq (may be resized).
+    let size = dq[3]
+    let cap = dq[2]
+
+    if size >= cap
+        let mut new_dq = _deque_resize(dq)
+        let mut new_head = new_dq[0] - 1.0
+        if new_head < 0.0
+            new_head = new_dq[2] - 1.0
+        end
+        new_dq[0] = new_head
+        new_dq[4.0 + new_head] = value
+        new_dq[3] = new_dq[3] + 1.0
+        return new_dq
+    end
+
+    let mut new_head = dq[0] - 1.0
+    if new_head < 0.0
+        new_head = cap - 1.0
+    end
+    dq[0] = new_head
+    dq[4.0 + new_head] = value
+    dq[3] = size + 1.0
+    return dq
+end
+
+fn deque_pop_front(dq)
+    // Remove and return front element. Returns -1.0 if empty.
+    let size = dq[3]
+    if size == 0.0
+        return -1.0
+    end
+
+    let head = dq[0]
+    let cap = dq[2]
+    let value = dq[4.0 + head]
+
+    let mut new_head = head + 1.0
+    if new_head >= cap
+        new_head = 0.0
+    end
+    dq[0] = new_head
+    dq[3] = size - 1.0
+    return value
+end
+
+fn deque_pop_back(dq)
+    // Remove and return back element. Returns -1.0 if empty.
+    let size = dq[3]
+    if size == 0.0
+        return -1.0
+    end
+
+    let cap = dq[2]
+    let mut new_tail = dq[1] - 1.0
+    if new_tail < 0.0
+        new_tail = cap - 1.0
+    end
+    dq[1] = new_tail
+    dq[3] = size - 1.0
+    return dq[4.0 + new_tail]
+end
+
+fn deque_peek_front(dq)
+    // Return front element without removing. Returns -1.0 if empty.
+    if dq[3] == 0.0
+        return -1.0
+    end
+    return dq[4.0 + dq[0]]
+end
+
+fn deque_peek_back(dq)
+    // Return back element without removing. Returns -1.0 if empty.
+    if dq[3] == 0.0
+        return -1.0
+    end
+    let cap = dq[2]
+    let mut idx = dq[1] - 1.0
+    if idx < 0.0
+        idx = cap - 1.0
+    end
+    return dq[4.0 + idx]
+end
+
+fn deque_get(dq, index)
+    // Get element at logical index (0 = front). Returns -1.0 if out of bounds.
+    let size = dq[3]
+    if index < 0.0 || index >= size
+        return -1.0
+    end
+    let cap = dq[2]
+    let head = dq[0]
+    let mut phys = head + index
+    if phys >= cap
+        phys = phys - cap
+    end
+    return dq[4.0 + phys]
+end
+
+fn deque_size(dq)
+    return dq[3]
+end
+
+fn deque_is_empty(dq)
+    if dq[3] == 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn deque_clear(dq)
+    // Reset to empty.
+    dq[0] = 0.0
+    dq[1] = 0.0
+    dq[3] = 0.0
+    return 0.0
+end
+
+fn deque_to_array(dq)
+    // Convert to flat array in order (front to back).
+    let size = dq[3]
+    let cap = dq[2]
+    let head = dq[0]
+    let mut arr = []
+    let mut i = 0.0
+    while i < size
+        let mut phys = head + i
+        if phys >= cap
+            phys = phys - cap
+        end
+        push(arr, dq[4.0 + phys])
+        i = i + 1.0
+    end
+    return arr
+end
+
+fn deque_contains(dq, value)
+    // Check if deque contains value. Returns 1.0 or 0.0.
+    let size = dq[3]
+    let cap = dq[2]
+    let head = dq[0]
+    let mut i = 0.0
+    while i < size
+        let mut phys = head + i
+        if phys >= cap
+            phys = phys - cap
+        end
+        if dq[4.0 + phys] == value
+            return 1.0
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end

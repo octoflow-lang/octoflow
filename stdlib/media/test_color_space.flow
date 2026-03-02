@@ -1,0 +1,185 @@
+// test_color_space.flow — Tests for stdlib/media/color_space.flow
+use "color_space"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 2.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn approx_fine(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── RGB → YUV → RGB roundtrip ──────────────────────────
+
+fn test_yuv_roundtrip()
+    let mut yuv = [0.0, 0.0, 0.0]
+    let mut rgb = [0.0, 0.0, 0.0]
+    // Red
+    let _c1 = cs_rgb_to_yuv(255.0, 0.0, 0.0, yuv)
+    check("yuv red Y", yuv[0] > 0.2 && yuv[0] < 0.4)
+    let _c2 = cs_yuv_to_rgb(yuv[0], yuv[1], yuv[2], rgb)
+    check("yuv rt R", approx(rgb[0], 255.0) == 1.0)
+    check("yuv rt G", approx(rgb[1], 0.0) == 1.0)
+    check("yuv rt B", approx(rgb[2], 0.0) == 1.0)
+    // White: Y=1, U=0, V=0
+    let _c3 = cs_rgb_to_yuv(255.0, 255.0, 255.0, yuv)
+    check("yuv white Y", approx_fine(yuv[0], 1.0) == 1.0)
+    check("yuv white U", abs(yuv[1]) < 0.01)
+    check("yuv white V", abs(yuv[2]) < 0.01)
+    // Black: Y=0
+    let _c4 = cs_rgb_to_yuv(0.0, 0.0, 0.0, yuv)
+    check("yuv black Y", approx_fine(yuv[0], 0.0) == 1.0)
+    return 0.0
+end
+
+// ── RGB → YCbCr → RGB roundtrip ────────────────────────
+
+fn test_ycbcr_roundtrip()
+    let mut ycbcr = [0.0, 0.0, 0.0]
+    let mut rgb = [0.0, 0.0, 0.0]
+    let _c1 = cs_rgb_to_ycbcr(128.0, 64.0, 32.0, ycbcr)
+    check("ycbcr Y", ycbcr[0] > 0.0)
+    let _c2 = cs_ycbcr_to_rgb(ycbcr[0], ycbcr[1], ycbcr[2], rgb)
+    check("ycbcr rt R", approx(rgb[0], 128.0) == 1.0)
+    check("ycbcr rt G", approx(rgb[1], 64.0) == 1.0)
+    check("ycbcr rt B", approx(rgb[2], 32.0) == 1.0)
+    return 0.0
+end
+
+// ── RGB → CMYK → RGB roundtrip ─────────────────────────
+
+fn test_cmyk_roundtrip()
+    let mut cmyk = [0.0, 0.0, 0.0, 0.0]
+    let mut rgb = [0.0, 0.0, 0.0]
+    // Red: C=0, M=1, Y=1, K=0
+    let _c1 = cs_rgb_to_cmyk(255.0, 0.0, 0.0, cmyk)
+    check("cmyk red C", approx_fine(cmyk[0], 0.0) == 1.0)
+    check("cmyk red M", approx_fine(cmyk[1], 1.0) == 1.0)
+    check("cmyk red K", approx_fine(cmyk[3], 0.0) == 1.0)
+    let _c2 = cs_cmyk_to_rgb(cmyk[0], cmyk[1], cmyk[2], cmyk[3], rgb)
+    check("cmyk rt R", approx(rgb[0], 255.0) == 1.0)
+    check("cmyk rt G", approx(rgb[1], 0.0) == 1.0)
+    // Black: K=1
+    let _c3 = cs_rgb_to_cmyk(0.0, 0.0, 0.0, cmyk)
+    check("cmyk black K", cmyk[3] == 1.0)
+    // White: all 0
+    let _c4 = cs_rgb_to_cmyk(255.0, 255.0, 255.0, cmyk)
+    check("cmyk white", cmyk[0] == 0.0 && cmyk[3] == 0.0)
+    return 0.0
+end
+
+// ── RGB → XYZ ──────────────────────────────────────────
+
+fn test_xyz()
+    let mut xyz = [0.0, 0.0, 0.0]
+    // White should have Y close to 1.0
+    let _c1 = cs_rgb_to_xyz(255.0, 255.0, 255.0, xyz)
+    check("xyz white Y", xyz[1] > 0.9 && xyz[1] < 1.1)
+    // Black should be near 0
+    let _c2 = cs_rgb_to_xyz(0.0, 0.0, 0.0, xyz)
+    check("xyz black", xyz[0] < 0.01 && xyz[1] < 0.01 && xyz[2] < 0.01)
+    return 0.0
+end
+
+// ── RGB → LAB → RGB roundtrip ──────────────────────────
+
+fn test_lab_roundtrip()
+    let mut lab = [0.0, 0.0, 0.0]
+    // White: L≈100, a≈0, b≈0
+    let _c1 = cs_rgb_to_lab(255.0, 255.0, 255.0, lab)
+    check("lab white L", lab[0] > 95.0 && lab[0] < 105.0)
+    check("lab white a", abs(lab[1]) < 2.0)
+    check("lab white b", abs(lab[2]) < 2.0)
+    // Black: L≈0
+    let _c2 = cs_rgb_to_lab(0.0, 0.0, 0.0, lab)
+    check("lab black L", lab[0] < 5.0)
+    // Red: positive a
+    let _c3 = cs_rgb_to_lab(255.0, 0.0, 0.0, lab)
+    check("lab red a+", lab[1] > 0.0)
+    return 0.0
+end
+
+// ── Delta-E ────────────────────────────────────────────
+
+fn test_delta_e()
+    // Same color → 0
+    let de1 = cs_delta_e76(50.0, 20.0, -10.0, 50.0, 20.0, -10.0)
+    check("de same", de1 == 0.0)
+    // Different colors → positive
+    let de2 = cs_delta_e76(50.0, 20.0, -10.0, 80.0, -20.0, 30.0)
+    check("de diff", de2 > 0.0)
+    // CIE94 same → 0
+    let de3 = cs_delta_e94(50.0, 20.0, -10.0, 50.0, 20.0, -10.0)
+    check("de94 same", de3 < 0.001)
+    // CIE94 different → positive
+    let de4 = cs_delta_e94(50.0, 20.0, -10.0, 80.0, -20.0, 30.0)
+    check("de94 diff", de4 > 0.0)
+    // CIE76 > threshold
+    let de5 = cs_delta_e76(0.0, 0.0, 0.0, 100.0, 0.0, 0.0)
+    check("de bw", de5 == 100.0)
+    return 0.0
+end
+
+// ── Bulk conversion ────────────────────────────────────
+
+fn test_bulk()
+    let mut sr = [255.0, 0.0, 128.0]
+    let mut sg = [0.0, 255.0, 128.0]
+    let mut sb = [0.0, 0.0, 128.0]
+    let mut dy = []  let mut du = []  let mut dv = []
+    let n = cs_apply_rgb_to_yuv(sr, sg, sb, dy, du, dv, 3.0)
+    check("bulk n", n == 3.0)
+    check("bulk len", len(dy) == 3.0)
+    // Roundtrip
+    let mut dr = []  let mut dg = []  let mut db = []
+    let n2 = cs_apply_yuv_to_rgb(dy, du, dv, dr, dg, db, 3.0)
+    check("bulk rt n", n2 == 3.0)
+    check("bulk rt R", approx(dr[0], 255.0) == 1.0)
+    check("bulk rt G2", approx(dg[1], 255.0) == 1.0)
+    return 0.0
+end
+
+// ── Edge cases ─────────────────────────────────────────
+
+fn test_edges()
+    let mut short = [0.0, 0.0]
+    // Too-short result array
+    let r1 = cs_rgb_to_yuv(128.0, 64.0, 32.0, short)
+    check("edge short yuv", r1 == 0.0)
+    let r2 = cs_rgb_to_cmyk(128.0, 64.0, 32.0, short)
+    check("edge short cmyk", r2 == 0.0)
+    // Bulk with zero pixels
+    let mut dy = []  let mut du = []  let mut dv = []
+    let n = cs_apply_rgb_to_yuv(dy, du, dv, dy, du, dv, 0.0)
+    check("edge bulk zero", n == 0.0)
+    return 0.0
+end
+
+// ── Run all ────────────────────────────────────────────
+
+test_yuv_roundtrip()
+test_ycbcr_roundtrip()
+test_cmyk_roundtrip()
+test_xyz()
+test_lab_roundtrip()
+test_delta_e()
+test_bulk()
+test_edges()
+print("")
+print("All color_space tests passed (8 tests)")

@@ -1,0 +1,318 @@
+// stdlib/collections/linked_list.flow — Doubly linked list
+//
+// Map-based linked list with O(1) push/pop at both ends.
+// Each node is stored as map entries with auto-incrementing IDs.
+//
+// Internal structure (map):
+//   __head: ID of first node (or "" if empty)
+//   __tail: ID of last node (or "" if empty)
+//   __size: number of elements
+//   __counter: auto-incrementing node ID
+//   v_{id}: value stored at node
+//   n_{id}: next node ID (or "" if tail)
+//   p_{id}: previous node ID (or "" if head)
+//
+// Functions: ll_create, ll_push_front, ll_push_back,
+//            ll_pop_front, ll_pop_back, ll_peek_front, ll_peek_back,
+//            ll_get, ll_insert_at, ll_remove_at, ll_size,
+//            ll_is_empty, ll_to_array, ll_reverse, ll_contains, ll_clear
+//
+// Usage:
+//   use "linked_list"
+//   let mut ll = ll_create()
+//   ll_push_back(ll, 1.0)
+//   ll_push_back(ll, 2.0)
+//   ll_push_front(ll, 0.0)
+//   ll_pop_front(ll)   // 0.0
+//   ll_pop_back(ll)    // 2.0
+
+fn ll_create()
+    let mut ll = map()
+    map_set(ll, "__head", "")
+    map_set(ll, "__tail", "")
+    map_set(ll, "__size", "0")
+    map_set(ll, "__counter", "0")
+    return ll
+end
+
+fn _ll_next_id(ll)
+    let c = float(map_get(ll, "__counter")) + 1.0
+    map_set(ll, "__counter", str(c))
+    return str(c)
+end
+
+fn ll_push_front(ll, value)
+    let id = _ll_next_id(ll)
+    map_set(ll, "v_" + id, str(value))
+    map_set(ll, "n_" + id, map_get(ll, "__head"))
+    map_set(ll, "p_" + id, "")
+
+    let old_head = map_get(ll, "__head")
+    if len(old_head) > 0.0
+        map_set(ll, "p_" + old_head, id)
+    else
+        // List was empty — new node is also tail
+        map_set(ll, "__tail", id)
+    end
+
+    map_set(ll, "__head", id)
+    let size = float(map_get(ll, "__size")) + 1.0
+    map_set(ll, "__size", str(size))
+    return 0.0
+end
+
+fn ll_push_back(ll, value)
+    let id = _ll_next_id(ll)
+    map_set(ll, "v_" + id, str(value))
+    map_set(ll, "n_" + id, "")
+    map_set(ll, "p_" + id, map_get(ll, "__tail"))
+
+    let old_tail = map_get(ll, "__tail")
+    if len(old_tail) > 0.0
+        map_set(ll, "n_" + old_tail, id)
+    else
+        map_set(ll, "__head", id)
+    end
+
+    map_set(ll, "__tail", id)
+    let size = float(map_get(ll, "__size")) + 1.0
+    map_set(ll, "__size", str(size))
+    return 0.0
+end
+
+fn ll_pop_front(ll)
+    let head = map_get(ll, "__head")
+    if len(head) == 0.0
+        return -1.0
+    end
+
+    let value = float(map_get(ll, "v_" + head))
+    let next = map_get(ll, "n_" + head)
+
+    // Clean up node
+    map_remove(ll, "v_" + head)
+    map_remove(ll, "n_" + head)
+    map_remove(ll, "p_" + head)
+
+    if len(next) > 0.0
+        map_set(ll, "p_" + next, "")
+        map_set(ll, "__head", next)
+    else
+        map_set(ll, "__head", "")
+        map_set(ll, "__tail", "")
+    end
+
+    let size = float(map_get(ll, "__size")) - 1.0
+    map_set(ll, "__size", str(size))
+    return value
+end
+
+fn ll_pop_back(ll)
+    let tail = map_get(ll, "__tail")
+    if len(tail) == 0.0
+        return -1.0
+    end
+
+    let value = float(map_get(ll, "v_" + tail))
+    let prev = map_get(ll, "p_" + tail)
+
+    map_remove(ll, "v_" + tail)
+    map_remove(ll, "n_" + tail)
+    map_remove(ll, "p_" + tail)
+
+    if len(prev) > 0.0
+        map_set(ll, "n_" + prev, "")
+        map_set(ll, "__tail", prev)
+    else
+        map_set(ll, "__head", "")
+        map_set(ll, "__tail", "")
+    end
+
+    let size = float(map_get(ll, "__size")) - 1.0
+    map_set(ll, "__size", str(size))
+    return value
+end
+
+fn ll_peek_front(ll)
+    let head = map_get(ll, "__head")
+    if len(head) == 0.0
+        return -1.0
+    end
+    return float(map_get(ll, "v_" + head))
+end
+
+fn ll_peek_back(ll)
+    let tail = map_get(ll, "__tail")
+    if len(tail) == 0.0
+        return -1.0
+    end
+    return float(map_get(ll, "v_" + tail))
+end
+
+fn ll_get(ll, index)
+    // Get value at index (0-based from front). Returns -1.0 if out of bounds.
+    let size = float(map_get(ll, "__size"))
+    if index < 0.0 || index >= size
+        return -1.0
+    end
+
+    let mut curr = map_get(ll, "__head")
+    let mut i = 0.0
+    while i < index
+        curr = map_get(ll, "n_" + curr)
+        i = i + 1.0
+    end
+    return float(map_get(ll, "v_" + curr))
+end
+
+fn ll_size(ll)
+    return float(map_get(ll, "__size"))
+end
+
+fn ll_is_empty(ll)
+    if float(map_get(ll, "__size")) == 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn ll_to_array(ll)
+    let mut result = []
+    let mut curr = map_get(ll, "__head")
+    while len(curr) > 0.0
+        push(result, float(map_get(ll, "v_" + curr)))
+        curr = map_get(ll, "n_" + curr)
+    end
+    return result
+end
+
+fn ll_contains(ll, value)
+    let mut curr = map_get(ll, "__head")
+    let vs = str(value)
+    while len(curr) > 0.0
+        if map_get(ll, "v_" + curr) == vs
+            return 1.0
+        end
+        curr = map_get(ll, "n_" + curr)
+    end
+    return 0.0
+end
+
+fn ll_reverse(ll)
+    // Reverse the list in place by swapping next/prev pointers.
+    let size = float(map_get(ll, "__size"))
+    if size <= 1.0
+        return 0.0
+    end
+
+    let mut curr = map_get(ll, "__head")
+    while len(curr) > 0.0
+        let next = map_get(ll, "n_" + curr)
+        let prev = map_get(ll, "p_" + curr)
+        // Swap next and prev
+        map_set(ll, "n_" + curr, prev)
+        map_set(ll, "p_" + curr, next)
+        curr = next
+    end
+
+    // Swap head and tail
+    let old_head = map_get(ll, "__head")
+    let old_tail = map_get(ll, "__tail")
+    map_set(ll, "__head", old_tail)
+    map_set(ll, "__tail", old_head)
+    return 0.0
+end
+
+fn ll_clear(ll)
+    // Remove all nodes.
+    let mut curr = map_get(ll, "__head")
+    while len(curr) > 0.0
+        let next = map_get(ll, "n_" + curr)
+        map_remove(ll, "v_" + curr)
+        map_remove(ll, "n_" + curr)
+        map_remove(ll, "p_" + curr)
+        curr = next
+    end
+    map_set(ll, "__head", "")
+    map_set(ll, "__tail", "")
+    map_set(ll, "__size", "0")
+    return 0.0
+end
+
+fn ll_insert_at(ll, index, value)
+    // Insert value at index. Returns 1.0 on success.
+    let size = float(map_get(ll, "__size"))
+
+    if index <= 0.0
+        ll_push_front(ll, value)
+        return 1.0
+    end
+    if index >= size
+        ll_push_back(ll, value)
+        return 1.0
+    end
+
+    // Find node at index
+    let mut curr = map_get(ll, "__head")
+    let mut i = 0.0
+    while i < index
+        curr = map_get(ll, "n_" + curr)
+        i = i + 1.0
+    end
+
+    // Insert before curr
+    let prev = map_get(ll, "p_" + curr)
+    let id = _ll_next_id(ll)
+    map_set(ll, "v_" + id, str(value))
+    map_set(ll, "n_" + id, curr)
+    map_set(ll, "p_" + id, prev)
+    map_set(ll, "p_" + curr, id)
+    if len(prev) > 0.0
+        map_set(ll, "n_" + prev, id)
+    end
+
+    let new_size = size + 1.0
+    map_set(ll, "__size", str(new_size))
+    return 1.0
+end
+
+fn ll_remove_at(ll, index)
+    // Remove node at index. Returns removed value.
+    let size = float(map_get(ll, "__size"))
+    if index < 0.0 || index >= size
+        return -1.0
+    end
+    if index == 0.0
+        return ll_pop_front(ll)
+    end
+    if index == size - 1.0
+        return ll_pop_back(ll)
+    end
+
+    // Find node at index
+    let mut curr = map_get(ll, "__head")
+    let mut i = 0.0
+    while i < index
+        curr = map_get(ll, "n_" + curr)
+        i = i + 1.0
+    end
+
+    let value = float(map_get(ll, "v_" + curr))
+    let prev = map_get(ll, "p_" + curr)
+    let next = map_get(ll, "n_" + curr)
+
+    if len(prev) > 0.0
+        map_set(ll, "n_" + prev, next)
+    end
+    if len(next) > 0.0
+        map_set(ll, "p_" + next, prev)
+    end
+
+    map_remove(ll, "v_" + curr)
+    map_remove(ll, "n_" + curr)
+    map_remove(ll, "p_" + curr)
+
+    let new_size = size - 1.0
+    map_set(ll, "__size", str(new_size))
+    return value
+end

@@ -1,0 +1,162 @@
+// test_oscillator.flow — Tests for stdlib/media/oscillator.flow
+use "oscillator"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Sine wave ────────────────────────────────────────
+
+fn test_sine()
+    let mut s = []
+    let n = osc_sine(s, 1.0, 1.0, 8.0, 8.0)
+    check("sine count", n == 8.0)
+    check("sine len", len(s) == 8.0)
+    // At i=0, sin(0) = 0
+    check("sine start", approx(s[0], 0.0) == 1.0)
+    // At i=2, sin(pi/2) = 1 (freq=1, rate=8, so period=8, quarter=2)
+    check("sine quarter", approx(s[2], 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Square wave ──────────────────────────────────────
+
+fn test_square()
+    let mut s = []
+    let _n = osc_square(s, 1.0, 1.0, 8.0, 8.0)
+    check("square hi", s[0] == 1.0)
+    check("square lo", s[4] == -1.0)
+    return 0.0
+end
+
+// ── Sawtooth wave ────────────────────────────────────
+
+fn test_saw()
+    let mut s = []
+    let _n = osc_saw(s, 1.0, 1.0, 8.0, 8.0)
+    check("saw start", approx(s[0], -1.0) == 1.0)
+    check("saw mid", s[4] == 0.0)
+    return 0.0
+end
+
+// ── Triangle wave ────────────────────────────────────
+
+fn test_triangle()
+    let mut s = []
+    let _n = osc_triangle(s, 1.0, 1.0, 8.0, 8.0)
+    check("tri start", approx(s[0], -1.0) == 1.0)
+    check("tri peak", approx(s[2], 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Noise ────────────────────────────────────────────
+
+fn test_noise()
+    let mut s = []
+    let _n = osc_noise(s, 1.0, 100.0)
+    check("noise len", len(s) == 100.0)
+    // All within [-1, 1]
+    let mut in_range = 1.0
+    let mut i = 0.0
+    while i < 100.0
+        if s[int(i)] > 1.0 || s[int(i)] < -1.0
+            in_range = 0.0
+        end
+        i = i + 1.0
+    end
+    check("noise range", in_range == 1.0)
+    return 0.0
+end
+
+// ── Stateful oscillator ──────────────────────────────
+
+fn test_stateful()
+    let osc = osc_create(OSC_SINE, 1.0, 1.0, 8.0)
+    let v0 = osc_next(osc)
+    check("stateful start", approx(v0, 0.0) == 1.0)
+    // Fill 7 more samples
+    let mut buf = []
+    let _f = osc_fill(osc, buf, 7.0)
+    check("fill len", len(buf) == 7.0)
+    return 0.0
+end
+
+// ── FM synthesis ─────────────────────────────────────
+
+fn test_fm()
+    let mut s = []
+    let _n = osc_fm(s, 440.0, 5.0, 3.0, 0.8, 44100.0, 100.0)
+    check("fm len", len(s) == 100.0)
+    // All within amplitude range
+    let mut ok = 1.0
+    let mut i = 0.0
+    while i < 100.0
+        if abs(s[int(i)]) > 0.81
+            ok = 0.0
+        end
+        i = i + 1.0
+    end
+    check("fm range", ok == 1.0)
+    return 0.0
+end
+
+// ── Chord ────────────────────────────────────────────
+
+fn test_chord()
+    let mut s = []
+    let mut freqs = [261.63, 329.63, 392.0]
+    let _n = osc_chord(s, freqs, 3.0, 0.9, 44100.0, 100.0)
+    check("chord len", len(s) == 100.0)
+    return 0.0
+end
+
+// ── Pulse wave ───────────────────────────────────────
+
+fn test_pulse()
+    let mut s = []
+    let _n = osc_pulse(s, 1.0, 0.25, 1.0, 8.0, 8.0)
+    check("pulse len", len(s) == 8.0)
+    // 25% duty = 2 samples high, 6 low
+    check("pulse hi", s[0] == 1.0)
+    check("pulse lo", s[3] == -1.0)
+    return 0.0
+end
+
+// ── Edge cases ───────────────────────────────────────
+
+fn test_edges()
+    let mut s = []
+    let n = osc_sine(s, 440.0, 1.0, 0.0, 10.0)
+    check("edge zero rate", n == 0.0)
+    let n2 = osc_sine(s, 440.0, 1.0, 44100.0, 0.0)
+    check("edge zero n", n2 == 0.0)
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────
+
+test_sine()
+test_square()
+test_saw()
+test_triangle()
+test_noise()
+test_stateful()
+test_fm()
+test_chord()
+test_pulse()
+test_edges()
+print("")
+print("All oscillator tests passed (10 tests)")

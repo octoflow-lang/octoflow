@@ -1,0 +1,140 @@
+// test_matrix_ext.flow — Tests for stdlib/math/matrix_ext.flow
+use "matrix_ext"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.1
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Inverse ───────────────────────────────────────────────
+
+fn test_inverse()
+    // 2x2: [[4, 7], [2, 6]]. det = 24-14 = 10
+    // inv = [[0.6, -0.7], [-0.2, 0.4]]
+    let mut A = [2.0, 2.0, 4.0, 7.0, 2.0, 6.0]
+    let inv = mat_inverse(A)
+    check("inv size", len(inv) > 0.0)
+    check("inv[0,0]", approx(inv[2], 0.6) == 1.0)
+    check("inv[0,1]", approx(inv[3], -0.7) == 1.0)
+    check("inv[1,0]", approx(inv[4], -0.2) == 1.0)
+    check("inv[1,1]", approx(inv[5], 0.4) == 1.0)
+    return 0.0
+end
+
+fn test_inverse_singular()
+    // Singular matrix: [[1, 2], [2, 4]]
+    let mut A = [2.0, 2.0, 1.0, 2.0, 2.0, 4.0]
+    let inv = mat_inverse(A)
+    check("inv singular", len(inv) == 0.0)
+    return 0.0
+end
+
+// ── Solve ─────────────────────────────────────────────────
+
+fn test_solve()
+    // Solve: [[2, 1], [1, 3]] * x = [[5], [10]]
+    // x = [[1], [3]]
+    let mut A = [2.0, 2.0, 2.0, 1.0, 1.0, 3.0]
+    let mut b = [2.0, 1.0, 5.0, 10.0]
+    let x = mat_solve(A, b)
+    check("solve size", len(x) > 0.0)
+    check("solve x[0]", approx(x[2], 1.0) == 1.0)
+    check("solve x[1]", approx(x[3], 3.0) == 1.0)
+    return 0.0
+end
+
+// ── LU decomposition ─────────────────────────────────────
+
+fn test_lu()
+    // 2x2: [[4, 3], [6, 3]]
+    let mut A = [2.0, 2.0, 4.0, 3.0, 6.0, 3.0]
+    let lu = mat_lu_decompose(A)
+    let n = lu[0]
+    check("lu n", n == 2.0)
+    // L should have 1s on diagonal
+    check("lu L[0,0]", lu[1] == 1.0)
+    check("lu L[1,1]", lu[4] == 1.0)
+    // U[0,0] should be 4
+    check("lu U[0,0]", lu[5] == 4.0)
+    return 0.0
+end
+
+// ── Eigenvalue ────────────────────────────────────────────
+
+fn test_eigenvalue()
+    // [[2, 1], [1, 2]]: eigenvalues are 3 and 1
+    let mut A = [2.0, 2.0, 2.0, 1.0, 1.0, 2.0]
+    let result = mat_eigenvalue_power(A, 100.0)
+    check("eigen dominant", approx(result[0], 3.0) == 1.0)
+    return 0.0
+end
+
+// ── Rank ──────────────────────────────────────────────────
+
+fn test_rank()
+    // Full rank 2x2
+    let mut A = [2.0, 2.0, 1.0, 2.0, 3.0, 4.0]
+    check("rank full", mat_rank(A) == 2.0)
+    // Rank 1 (second row is 2x first)
+    let mut B = [2.0, 2.0, 1.0, 2.0, 2.0, 4.0]
+    check("rank deficient", mat_rank(B) == 1.0)
+    return 0.0
+end
+
+// ── Singular ──────────────────────────────────────────────
+
+fn test_singular()
+    let mut A = [2.0, 2.0, 1.0, 2.0, 2.0, 4.0]
+    check("is singular", mat_is_singular(A) == 1.0)
+    let mut B = [2.0, 2.0, 1.0, 0.0, 0.0, 1.0]
+    check("not singular", mat_is_singular(B) == 0.0)
+    return 0.0
+end
+
+// ── Frobenius norm ────────────────────────────────────────
+
+fn test_frobenius()
+    // [[1, 2], [3, 4]] → sqrt(1+4+9+16) = sqrt(30) ≈ 5.477
+    let mut A = [2.0, 2.0, 1.0, 2.0, 3.0, 4.0]
+    check("frobenius", approx(mat_frobenius_norm(A), 5.477) == 1.0)
+    return 0.0
+end
+
+// ── Row echelon ───────────────────────────────────────────
+
+fn test_row_echelon()
+    // [[1, 2, 3], [4, 5, 6]] → [[4, 5, 6], [0, 0.75, 1.5]]
+    let mut A = [2.0, 3.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let ref_m = mat_row_echelon(A)
+    // First pivot should be in position [0,0]
+    check("ref nonzero", abs(ref_m[2]) > 0.1)
+    // Below pivot should be 0
+    check("ref zero", abs(ref_m[5]) < 0.01)
+    return 0.0
+end
+
+// ── Run all ───────────────────────────────────────────────
+
+test_inverse()
+test_inverse_singular()
+test_solve()
+test_lu()
+test_eigenvalue()
+test_rank()
+test_singular()
+test_frobenius()
+test_row_echelon()
+print("")
+print("All matrix_ext tests passed (9 tests)")

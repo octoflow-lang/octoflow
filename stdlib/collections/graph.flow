@@ -1,7 +1,9 @@
 // stdlib/collections/graph.flow — Graph data structure (adjacency list via map)
 //
 // Functions: graph_create, graph_add_node, graph_add_edge, graph_neighbors,
-//            graph_weight, graph_nodes, graph_bfs, graph_has_edge
+//            graph_weight, graph_nodes, graph_bfs, graph_dfs, graph_dijkstra,
+//            graph_topological_sort, graph_has_edge, graph_add_undirected_edge,
+//            graph_degree, graph_has_path
 //
 // Nodes are string keys. Edges stored as "node:neighbor_list" in map.
 // Weights stored as "w_from_to" keys.
@@ -128,6 +130,269 @@ fn graph_has_edge(g, from, to)
   // Use delimited match to avoid substring false positives (e.g. "1" in "1,10")
   let delimited = "," + adj + ","
   if contains(delimited, "," + to + ",")
+    return 1.0
+  end
+  return 0.0
+end
+
+// ── Undirected Edge Helper ──────────────────────────────────────
+
+fn graph_add_undirected_edge(g, a, b, weight)
+  // Add edges in both directions
+  graph_add_edge(g, a, b, weight)
+  graph_add_edge(g, b, a, weight)
+  return 0.0
+end
+
+// ── Depth-First Search ──────────────────────────────────────────
+
+fn graph_dfs(g, start)
+  // Depth-first search returning visit order as comma-separated string.
+  // Uses explicit stack (no recursion limit issues).
+  let mut visited = map()
+  let mut stack = []
+  push(stack, start)
+  let mut order = ""
+
+  while len(stack) > 0.0
+    let current = pop(stack)
+
+    if map_has(visited, current) == 0.0
+      map_set(visited, current, "1")
+      if len(order) > 0.0
+        order = order + "," + current
+      else
+        order = current
+      end
+
+      // Push neighbors in reverse order so leftmost is visited first
+      let mut neighbors = graph_neighbors(g, current)
+      let nn = len(neighbors)
+      let mut ni = nn - 1.0
+      while ni >= 0.0
+        let nb = neighbors[ni]
+        if map_has(visited, nb) == 0.0
+          push(stack, nb)
+        end
+        ni = ni - 1.0
+      end
+    end
+  end
+
+  return order
+end
+
+// ── Dijkstra's Shortest Path ────────────────────────────────────
+
+fn graph_dijkstra(g, start, target)
+  // Dijkstra's algorithm for shortest path.
+  // Returns map with:
+  //   "distance" → shortest distance (float as string), or "inf" if unreachable
+  //   "path" → comma-separated node path from start to target
+  //
+  // Uses simple priority queue via sorted insertion (adequate for <1000 nodes).
+  let mut dist = map()
+  let mut prev = map()
+  let mut visited = map()
+
+  // Priority queue: flat array [dist, node_str, dist, node_str, ...]
+  // Kept sorted by distance (smallest first)
+  let mut pq = []
+
+  let nodes = graph_nodes(g)
+  let n = len(nodes)
+
+  // Initialize distances to infinity
+  let mut i = 0.0
+  while i < n
+    map_set(dist, nodes[i], "999999999")
+    i = i + 1.0
+  end
+  map_set(dist, start, "0")
+
+  // Enqueue start
+  push(pq, 0.0)
+  push(pq, start)
+
+  let mut result = map()
+
+  while len(pq) > 0.0
+    // Dequeue minimum (first two elements)
+    let cur_dist = pq[0]
+    let cur_node = pq[1]
+    // Remove first two elements by shifting
+    let pq_len = len(pq)
+    let mut new_pq = []
+    let mut pi = 2.0
+    while pi < pq_len
+      push(new_pq, pq[pi])
+      pi = pi + 1.0
+    end
+    pq = new_pq
+
+    if map_has(visited, cur_node) > 0.5
+      // Skip already-visited (stale entry)
+    else
+      map_set(visited, cur_node, "1")
+
+      // Check if we reached target
+      if cur_node == target
+        // Reconstruct path
+        let mut path = target
+        let mut trace = target
+        let mut done = 0.0
+        while done < 0.5
+          if map_has(prev, trace) > 0.5
+            trace = map_get(prev, trace)
+            path = trace + "," + path
+            if trace == start
+              done = 1.0
+            end
+          else
+            done = 1.0
+          end
+        end
+        map_set(result, "distance", str(cur_dist))
+        map_set(result, "path", path)
+        return result
+      end
+
+      // Relax neighbors
+      let mut neighbors = graph_neighbors(g, cur_node)
+      let nn = len(neighbors)
+      let mut ni = 0.0
+      while ni < nn
+        let nb = neighbors[ni]
+        if map_has(visited, nb) == 0.0
+          let edge_w = graph_weight(g, cur_node, nb)
+          let new_dist = cur_dist + edge_w
+          let old_dist = float(map_get(dist, nb))
+          if new_dist < old_dist
+            map_set(dist, nb, str(new_dist))
+            map_set(prev, nb, cur_node)
+            // Insert into priority queue (sorted by distance)
+            let mut inserted = 0.0
+            let mut ins_pq = []
+            let pql = len(pq)
+            let mut pk = 0.0
+            while pk < pql
+              if inserted < 0.5 && new_dist < pq[pk]
+                push(ins_pq, new_dist)
+                push(ins_pq, nb)
+                inserted = 1.0
+              end
+              push(ins_pq, pq[pk])
+              push(ins_pq, pq[pk + 1.0])
+              pk = pk + 2.0
+            end
+            if inserted < 0.5
+              push(ins_pq, new_dist)
+              push(ins_pq, nb)
+            end
+            pq = ins_pq
+          end
+        end
+        ni = ni + 1.0
+      end
+    end
+  end
+
+  // Target unreachable
+  map_set(result, "distance", "inf")
+  map_set(result, "path", "")
+  return result
+end
+
+// ── Topological Sort ────────────────────────────────────────────
+
+fn graph_topological_sort(g)
+  // Kahn's algorithm for topological ordering of a DAG.
+  // Returns comma-separated string of nodes in topological order.
+  // Returns empty string if graph has a cycle.
+  let nodes = graph_nodes(g)
+  let n = len(nodes)
+
+  // Count in-degrees
+  let mut in_deg = map()
+  let mut i = 0.0
+  while i < n
+    map_set(in_deg, nodes[i], "0")
+    i = i + 1.0
+  end
+
+  i = 0.0
+  while i < n
+    let mut neighbors = graph_neighbors(g, nodes[i])
+    let nn = len(neighbors)
+    let mut ni = 0.0
+    while ni < nn
+      let nb = neighbors[ni]
+      let cur = float(map_get(in_deg, nb))
+      map_set(in_deg, nb, str(cur + 1.0))
+      ni = ni + 1.0
+    end
+    i = i + 1.0
+  end
+
+  // Collect zero in-degree nodes
+  let mut queue = []
+  i = 0.0
+  while i < n
+    if float(map_get(in_deg, nodes[i])) < 0.5
+      push(queue, nodes[i])
+    end
+    i = i + 1.0
+  end
+
+  let mut order = ""
+  let mut count = 0.0
+  let mut qi = 0.0
+
+  while qi < len(queue)
+    let current = queue[qi]
+    qi = qi + 1.0
+
+    if len(order) > 0.0
+      order = order + "," + current
+    else
+      order = current
+    end
+    count = count + 1.0
+
+    let mut neighbors = graph_neighbors(g, current)
+    let nn = len(neighbors)
+    let mut ni = 0.0
+    while ni < nn
+      let nb = neighbors[ni]
+      let deg = float(map_get(in_deg, nb)) - 1.0
+      map_set(in_deg, nb, str(deg))
+      if deg < 0.5
+        push(queue, nb)
+      end
+      ni = ni + 1.0
+    end
+  end
+
+  // If count != n, there's a cycle
+  if count < n
+    return ""
+  end
+  return order
+end
+
+// ── Utility ─────────────────────────────────────────────────────
+
+fn graph_degree(g, node)
+  // Returns out-degree of a node
+  let mut neighbors = graph_neighbors(g, node)
+  return len(neighbors)
+end
+
+fn graph_has_path(g, start, target)
+  // Returns 1.0 if path exists from start to target, 0.0 otherwise
+  let visit_order = graph_bfs(g, start)
+  let delimited = "," + visit_order + ","
+  if contains(delimited, "," + target + ",")
     return 1.0
   end
   return 0.0

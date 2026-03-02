@@ -38,7 +38,7 @@ fn ui_toggle(parent, label)
 
   // Track (background bar)
   let track = ui_tree_add(UI_TOGGLE, row, UI_TOGGLE_W, UI_TOGGLE_H, " ")
-  let _tc = ui_tree_set_color_themed(track, UI_COLOR_BORDER)
+  let _tc = ui_tree_set_color_themed(track, UI_COLOR_SURFACE_2)
 
   // Knob (slides left/right)
   let knob = ui_tree_add(UI_BOX, track, UI_TOGGLE_KNOB_W, UI_TOGGLE_H, " ")
@@ -118,8 +118,8 @@ fn ui_toggle_update_visual(row_id)
     // ON: primary color track
     let _tc = ui_tree_set_color_themed(track, UI_COLOR_PRIMARY)
   else
-    // OFF: border color track
-    let _tc = ui_tree_set_color_themed(track, UI_COLOR_BORDER)
+    // OFF: surface2 color track (softer inactive)
+    let _tc = ui_tree_set_color_themed(track, UI_COLOR_SURFACE_2)
   end
 
   return 0.0

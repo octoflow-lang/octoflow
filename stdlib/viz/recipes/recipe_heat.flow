@@ -1,0 +1,218 @@
+// recipe_heat.flow — 2D Heat Diffusion Visualization Recipe
+//
+// Simulates the heat equation on a 2D grid using 5-point stencil.
+// CPU stepping (no Loom GPU required for this recipe).
+// Renders as a heatmap with transport controls.
+//
+// Usage:
+//   use "viz/recipes/recipe_heat"
+//   recipe_heat_run(40, 30)
+
+use "../../gui/gui_core"
+use "../../gui/window"
+use "../../gui/canvas"
+use "../viz_data"
+use "../viz_config"
+use "../viz_render"
+use "../viz_window"
+use "../viz_palette"
+
+// === Heat Simulation State ===
+// State layout: flat array [w, h, alpha, ...grid_data...]
+// Grid data: w*h values, row-major
+
+fn recipe_heat_init(w, h)
+  // Guard: minimum grid size
+  let mut gw = w
+  let mut gh = h
+  if gw < 3.0
+    gw = 3.0
+  end
+  if gh < 3.0
+    gh = 3.0
+  end
+
+  let n = gw * gh
+  let mut state = []
+  // Header: [w, h, alpha]
+  push(state, gw)
+  push(state, gh)
+  push(state, 0.25)   // diffusion coefficient (0 < alpha <= 0.25 for stability)
+
+  // Initialize grid to zero
+  let mut i = 0.0
+  while i < n
+    push(state, 0.0)
+    i = i + 1.0
+  end
+
+  // Hot spot in center
+  let cx = floor(gw / 2.0)
+  let cy = floor(gh / 2.0)
+  let mut dy = -2.0
+  while dy <= 2.0
+    let mut dx = -2.0
+    while dx <= 2.0
+      let hx = cx + dx
+      let hy = cy + dy
+      if hx >= 0.0 && hx < gw && hy >= 0.0 && hy < gh
+        let idx = int(3.0 + hy * gw + hx)
+        state[idx] = 1.0
+      end
+      dx = dx + 1.0
+    end
+    dy = dy + 1.0
+  end
+
+  return state
+end
+
+fn recipe_heat_step(state, dt)
+  // 5-point stencil heat diffusion step
+  let n_state = len(state)
+  if n_state < 4.0
+    return state
+  end
+
+  let w = state[0]
+  let h = state[1]
+  let alpha = state[2]
+
+  // Guard: valid dimensions
+  if w < 3.0 || h < 3.0
+    return state
+  end
+
+  let n = w * h
+  // Guard: state is large enough for header + grid
+  if n_state < 3.0 + n
+    return state
+  end
+
+  // Create next grid
+  let mut next = []
+  push(next, w)
+  push(next, h)
+  push(next, alpha)
+
+  let mut row = 0.0
+  while row < h
+    let mut col = 0.0
+    while col < w
+      let idx = int(3.0 + row * w + col)
+      let cur = state[idx]
+
+      // Boundary: fixed at current value (Dirichlet)
+      if row == 0.0 || row == h - 1.0 || col == 0.0 || col == w - 1.0
+        push(next, cur)
+      else
+        // 5-point stencil: up, down, left, right
+        let up = state[int(3.0 + (row - 1.0) * w + col)]
+        let down = state[int(3.0 + (row + 1.0) * w + col)]
+        let left = state[int(3.0 + row * w + (col - 1.0))]
+        let right = state[int(3.0 + row * w + (col + 1.0))]
+
+        let laplacian = up + down + left + right - 4.0 * cur
+        let new_val = cur + alpha * laplacian
+
+        // Clamp to [0, 1]
+        if new_val < 0.0
+          push(next, 0.0)
+        elif new_val > 1.0
+          push(next, 1.0)
+        else
+          push(next, new_val)
+        end
+      end
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+
+  return next
+end
+
+fn recipe_heat_get_grid(state)
+  // Extract just the grid data (without header) for rendering
+  let n_state = len(state)
+  if n_state < 4.0
+    return []
+  end
+
+  let mut grid = []
+  let mut i = 3.0
+  while i < n_state
+    push(grid, state[int(i)])
+    i = i + 1.0
+  end
+  return grid
+end
+
+fn recipe_heat_run(w, h)
+  // Full recipe: init + window + simulation loop
+  // Guard: minimum size
+  let mut rw = w
+  let mut rh = h
+  if rw < 3.0
+    rw = 3.0
+  end
+  if rh < 3.0
+    rh = 3.0
+  end
+
+  print("LoomView Recipe: Heat Diffusion ({rw}x{rh})")
+
+  let mut state = recipe_heat_init(rw, rh)
+  let grid = recipe_heat_get_grid(state)
+
+  // Build config for heatmap
+  let mut config = viz_auto_config(grid, VIZ_HEATMAP)
+  config[4] = PAL_INFERNO
+  config[5] = rw
+  config[6] = rh
+
+  let _cvs = viz_window_open("LoomView - Heat Diffusion", 900.0, 600.0)
+  viz_window_transport()
+
+  // Add alpha slider
+  let _alpha_s = viz_window_add_slider("Diffusion", 0.01, 0.25, 0.25)
+
+  // Initial render
+  let _r = viz_window_update(grid, VIZ_HEATMAP, config)
+
+  // Simulation loop
+  let mut step_count = 0.0
+  while gui_running() == 1.0
+    gui_update()
+
+    let playing = viz_window_is_playing()
+    let speed = viz_window_speed()
+
+    if playing == 1.0
+      // Get alpha from slider
+      let alpha_val = viz_window_get_slider(0.0)
+      if alpha_val > 0.0
+        state[2] = alpha_val
+      end
+
+      // Step based on speed
+      let mut steps = floor(speed)
+      if steps < 1.0
+        steps = 1.0
+      end
+      let mut s = 0.0
+      while s < steps
+        state = recipe_heat_step(state, 0.016)
+        s = s + 1.0
+      end
+      step_count = step_count + steps
+
+      // Extract grid and render
+      let new_grid = recipe_heat_get_grid(state)
+      let _r2 = viz_window_update(new_grid, VIZ_HEATMAP, config)
+    end
+  end
+
+  print("Heat simulation ended after {step_count} steps")
+  return state
+end

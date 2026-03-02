@@ -1,0 +1,284 @@
+// stdlib/collections/trie.flow — Prefix tree (Trie) data structure
+//
+// Map-based trie for string key storage and prefix search.
+// Each node is encoded as map entries with path-based keys.
+//
+// Internal structure (map):
+//   __size: total number of words stored
+//   n_{path}: "1" if node exists at this path
+//   w_{path}: "1" if this path is a complete word
+//   c_{path}: comma-separated list of child characters at this path
+//
+// Path encoding: characters joined by dots, e.g. "h.e.l.l.o"
+// Root path: ""
+//
+// Functions: trie_create, trie_insert, trie_search, trie_starts_with,
+//            trie_remove, trie_size, trie_words, trie_autocomplete,
+//            trie_count_prefix, trie_longest_prefix, trie_clear
+//
+// Usage:
+//   use "trie"
+//   let mut t = trie_create()
+//   trie_insert(t, "hello")
+//   trie_insert(t, "help")
+//   trie_search(t, "hello")         // 1.0
+//   trie_starts_with(t, "hel")      // 1.0
+//   let words = trie_autocomplete(t, "hel")  // ["hello", "help"]
+
+fn trie_create()
+    let mut t = map()
+    map_set(t, "__size", "0")
+    // Root node
+    map_set(t, "n_", "1")
+    map_set(t, "c_", "")
+    return t
+end
+
+fn _trie_path(prefix, ch)
+    // Build path by appending character to prefix.
+    if len(prefix) > 0.0
+        return prefix + "." + ch
+    end
+    return ch
+end
+
+fn trie_insert(t, word)
+    // Insert a word into the trie.
+    let n = len(word)
+    if n == 0.0
+        return 0.0
+    end
+
+    let mut path = ""
+    let mut i = 0.0
+    while i < n
+        let ch = char_at(word, i)
+        let parent_ckey = "c_" + path
+        let new_path = _trie_path(path, ch)
+
+        // Create node if it doesn't exist
+        if !map_has(t, "n_" + new_path)
+            map_set(t, "n_" + new_path, "1")
+            map_set(t, "c_" + new_path, "")
+
+            // Add child to parent's children list
+            let children = map_get(t, parent_ckey)
+            if len(children) > 0.0
+                // Check if already listed
+                let parts = split(children, ",")
+                let pn = len(parts)
+                let mut found = 0.0
+                let mut j = 0.0
+                while j < pn
+                    if parts[j] == ch
+                        found = 1.0
+                    end
+                    j = j + 1.0
+                end
+                if found == 0.0
+                    map_set(t, parent_ckey, children + "," + ch)
+                end
+            else
+                map_set(t, parent_ckey, ch)
+            end
+        end
+
+        path = new_path
+        i = i + 1.0
+    end
+
+    // Mark as complete word
+    let wkey = "w_" + path
+    if !map_has(t, wkey)
+        map_set(t, wkey, "1")
+        let size = float(map_get(t, "__size")) + 1.0
+        map_set(t, "__size", str(size))
+    end
+
+    return 0.0
+end
+
+fn trie_search(t, word)
+    // Check if exact word exists. Returns 1.0 or 0.0.
+    let n = len(word)
+    if n == 0.0
+        return 0.0
+    end
+
+    let mut path = ""
+    let mut i = 0.0
+    while i < n
+        let ch = char_at(word, i)
+        let new_path = _trie_path(path, ch)
+        if !map_has(t, "n_" + new_path)
+            return 0.0
+        end
+        path = new_path
+        i = i + 1.0
+    end
+
+    if map_has(t, "w_" + path)
+        return 1.0
+    end
+    return 0.0
+end
+
+fn trie_starts_with(t, prefix)
+    // Check if any word starts with prefix. Returns 1.0 or 0.0.
+    let n = len(prefix)
+    if n == 0.0
+        return 1.0
+    end
+
+    let mut path = ""
+    let mut i = 0.0
+    while i < n
+        let ch = char_at(prefix, i)
+        let new_path = _trie_path(path, ch)
+        if !map_has(t, "n_" + new_path)
+            return 0.0
+        end
+        path = new_path
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn _trie_collect(t, path, prefix, results)
+    // Recursively collect all words under path.
+    if map_has(t, "w_" + path)
+        push(results, prefix)
+    end
+
+    let ckey = "c_" + path
+    if !map_has(t, ckey)
+        return 0.0
+    end
+    let children = map_get(t, ckey)
+    if len(children) == 0.0
+        return 0.0
+    end
+
+    let parts = split(children, ",")
+    let n = len(parts)
+    let mut i = 0.0
+    while i < n
+        let ch = parts[i]
+        let child_path = _trie_path(path, ch)
+        _trie_collect(t, child_path, prefix + ch, results)
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn trie_autocomplete(t, prefix)
+    // Get all words that start with prefix. Returns array of strings.
+    let mut results = []
+    let n = len(prefix)
+
+    // Navigate to prefix node
+    let mut path = ""
+    let mut i = 0.0
+    while i < n
+        let ch = char_at(prefix, i)
+        let new_path = _trie_path(path, ch)
+        if !map_has(t, "n_" + new_path)
+            return results
+        end
+        path = new_path
+        i = i + 1.0
+    end
+
+    // Collect all words from this node
+    _trie_collect(t, path, prefix, results)
+    return results
+end
+
+fn trie_count_prefix(t, prefix)
+    // Count how many words start with prefix.
+    let words = trie_autocomplete(t, prefix)
+    return len(words)
+end
+
+fn trie_longest_prefix(t, word)
+    // Find the longest word in trie that is a prefix of word.
+    // Returns "" if no prefix found.
+    let n = len(word)
+    let mut path = ""
+    let mut longest = ""
+    let mut i = 0.0
+    while i < n
+        let ch = char_at(word, i)
+        let new_path = _trie_path(path, ch)
+        if !map_has(t, "n_" + new_path)
+            return longest
+        end
+        path = new_path
+        if map_has(t, "w_" + path)
+            longest = substr(word, 0.0, i + 1.0)
+        end
+        i = i + 1.0
+    end
+    return longest
+end
+
+fn trie_remove(t, word)
+    // Remove a word from the trie. Returns 1.0 if removed, 0.0 if not found.
+    let n = len(word)
+    if n == 0.0
+        return 0.0
+    end
+
+    // Navigate to the word node
+    let mut path = ""
+    let mut i = 0.0
+    while i < n
+        let ch = char_at(word, i)
+        let new_path = _trie_path(path, ch)
+        if !map_has(t, "n_" + new_path)
+            return 0.0
+        end
+        path = new_path
+        i = i + 1.0
+    end
+
+    let wkey = "w_" + path
+    if !map_has(t, wkey)
+        return 0.0
+    end
+
+    // Unmark as word
+    map_remove(t, wkey)
+    let size = float(map_get(t, "__size")) - 1.0
+    map_set(t, "__size", str(size))
+
+    return 1.0
+end
+
+fn trie_size(t)
+    // Number of words in the trie.
+    return float(map_get(t, "__size"))
+end
+
+fn trie_words(t)
+    // Get all words in the trie.
+    return trie_autocomplete(t, "")
+end
+
+fn trie_clear(t)
+    // Remove all words. Rebuilds a fresh trie.
+    // Note: we can't easily remove all map keys, so we reset known state.
+    map_set(t, "__size", "0")
+    map_set(t, "c_", "")
+    // Mark that words are removed (nodes remain as stale but harmless)
+    // A production impl would track all paths, but for simplicity we
+    // leave orphan nodes — they won't appear in results since w_ keys are removed.
+    let words = trie_words(t)
+    let n = len(words)
+    let mut i = 0.0
+    while i < n
+        trie_remove(t, words[i])
+        i = i + 1.0
+    end
+    return 0.0
+end

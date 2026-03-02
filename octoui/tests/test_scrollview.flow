@@ -1,0 +1,193 @@
+// tests/test_scrollview.flow — Scroll Container + ListView Tests
+//
+// Tests: scroll container creation, scrolling, ListView virtual rendering.
+//
+// Run: octoflow run octoui/tests/test_scrollview.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/text"
+use "../widgets/layout/column"
+use "../widgets/layout/scroll"
+use "../widgets/data/listview"
+use "../platform/desktop/window_win32"
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// Open window
+let _w = ui_window_open(500.0, 400.0, "ScrollView + ListView Test")
+
+// Root layout
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 500.0, 400.0)
+
+// ── Tests 1-4: Scroll Container ──
+let sc = ui_scroll(root, 460.0, 120.0, 6.0)
+if sc >= 0.0
+  print("PASS: scroll container valid")
+  pass = pass + 1.0
+else
+  print("FAIL: scroll container invalid")
+  fail = fail + 1.0
+end
+
+// Add content that overflows (8 x 16px + 7 x 6px spacing = 170px > 120px viewport)
+let _b1 = ui_text(sc, "SCROLL ITEM 1", UI_COLOR_TEXT)
+let _b2 = ui_text(sc, "SCROLL ITEM 2", UI_COLOR_TEXT)
+let _b3 = ui_text(sc, "SCROLL ITEM 3", UI_COLOR_TEXT)
+let _b4 = ui_text(sc, "SCROLL ITEM 4", UI_COLOR_TEXT)
+let _b5 = ui_text(sc, "SCROLL ITEM 5", UI_COLOR_TEXT)
+let _b6 = ui_text(sc, "SCROLL ITEM 6", UI_COLOR_TEXT)
+let _b7 = ui_text(sc, "SCROLL ITEM 7", UI_COLOR_TEXT)
+let _b8 = ui_text(sc, "SCROLL ITEM 8", UI_COLOR_TEXT)
+
+// Layout must be computed before scroll clamping works
+let _l0 = ui_layout_update()
+let _su0 = ui_scroll_update_all()
+
+// Scroll starts at 0
+let sc_pos1 = ui_scroll_get_offset(sc)
+if sc_pos1 == 0.0
+  print("PASS: scroll starts at 0")
+  pass = pass + 1.0
+else
+  print("FAIL: scroll should start at 0")
+  fail = fail + 1.0
+end
+
+// Scroll down (max_scroll = 170 - 120 = 50, so 40 < 50 → exact value)
+let _sd = ui_scroll_by(sc, 40.0)
+let sc_pos2 = ui_scroll_get_offset(sc)
+if sc_pos2 == 40.0
+  print("PASS: scroll moved to 40 after scroll_by(40)")
+  pass = pass + 1.0
+else
+  print("FAIL: scroll should be 40")
+  fail = fail + 1.0
+end
+
+// Scroll to top
+let _st = ui_scroll_to(sc, 0.0)
+let sc_pos3 = ui_scroll_get_offset(sc)
+if sc_pos3 == 0.0
+  print("PASS: scroll back to 0 after scroll_to(0)")
+  pass = pass + 1.0
+else
+  print("FAIL: scroll should be 0")
+  fail = fail + 1.0
+end
+
+// ── Tests 5-12: ListView with 100 items ──
+let lv = ui_listview(root, 460.0, 8.0, 22.0)
+if lv >= 0.0
+  print("PASS: listview created")
+  pass = pass + 1.0
+else
+  print("FAIL: listview invalid")
+  fail = fail + 1.0
+end
+
+// Add 100 items
+let mut i = 0.0
+while i < 100.0
+  let _ai = ui_listview_add(lv, "ITEM " + str(i))
+  i = i + 1.0
+end
+
+let _fin = ui_listview_finalize(lv)
+let _lr = ui_listview_refresh(lv)
+
+// Item count
+let lv_count = ui_listview_count(lv)
+if lv_count == 100.0
+  print("PASS: listview has 100 items")
+  pass = pass + 1.0
+else
+  print("FAIL: expected 100 items")
+  fail = fail + 1.0
+end
+
+// Default selection is -1
+let lv_sel1 = ui_listview_selected(lv)
+if lv_sel1 == -1.0
+  print("PASS: default selection is -1 (none)")
+  pass = pass + 1.0
+else
+  print("FAIL: default should be -1")
+  fail = fail + 1.0
+end
+
+// Select item 5
+let _ss = ui_listview_set_selected(lv, 5.0)
+let lv_sel2 = ui_listview_selected(lv)
+if lv_sel2 == 5.0
+  print("PASS: selected item 5")
+  pass = pass + 1.0
+else
+  print("FAIL: should be item 5")
+  fail = fail + 1.0
+end
+
+// Label check
+let lbl = ui_listview_label(lv, 5.0)
+if lbl == "ITEM 5"
+  print("PASS: label at index 5 is ITEM 5")
+  pass = pass + 1.0
+else
+  print("FAIL: wrong label at index 5")
+  fail = fail + 1.0
+end
+
+// Select item 50 — should auto-scroll
+let _ss2 = ui_listview_set_selected(lv, 50.0)
+let lv_sel3 = ui_listview_selected(lv)
+if lv_sel3 == 50.0
+  print("PASS: selected item 50")
+  pass = pass + 1.0
+else
+  print("FAIL: should be item 50")
+  fail = fail + 1.0
+end
+
+// Select last item
+let _ss3 = ui_listview_set_selected(lv, 99.0)
+let lv_sel4 = ui_listview_selected(lv)
+if lv_sel4 == 99.0
+  print("PASS: selected last item (99)")
+  pass = pass + 1.0
+else
+  print("FAIL: should be item 99")
+  fail = fail + 1.0
+end
+
+// Label at last item
+let last_lbl = ui_listview_label(lv, 99.0)
+if last_lbl == "ITEM 99"
+  print("PASS: label at index 99 is ITEM 99")
+  pass = pass + 1.0
+else
+  print("FAIL: wrong label at index 99")
+  fail = fail + 1.0
+end
+
+// ── Summary ──
+let _l = ui_layout_update()
+let _scu = ui_scroll_update_all()
+let _lvr = ui_listview_refresh(lv)
+let _r = ui_pipeline_render()
+let _p = ui_pipeline_present()
+let _sl = sleep(200.0)
+let _wc = ui_window_close()
+
+let total = pass + fail
+print(" ")
+print("test_scrollview: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

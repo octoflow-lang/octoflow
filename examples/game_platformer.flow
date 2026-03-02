@@ -6,12 +6,12 @@
 // Controls:
 //   Left/Right = move    Up/Space = jump    R = restart
 
-use "game/game"
-use "game/input"
-use "game/sprite"
-use "game/tilemap"
-use "game/camera"
-use "game/collision"
+use "../stdlib/game/game"
+use "../stdlib/game/input"
+use "../stdlib/game/sprite"
+use "../stdlib/game/tilemap"
+use "../stdlib/game/camera"
+use "../stdlib/game/collision"
 
 let cvs = game_init(400.0, 300.0, "Platformer")
 

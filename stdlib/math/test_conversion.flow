@@ -1,0 +1,116 @@
+// test_conversion.flow — Tests for stdlib/math/conversion.flow
+use "conversion"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Temperature ─────────────────────────────────────────────
+
+fn test_temperature()
+    check("c_to_f boil", approx(celsius_to_fahrenheit(100.0), 212.0) == 1.0)
+    check("c_to_f freeze", approx(celsius_to_fahrenheit(0.0), 32.0) == 1.0)
+    check("f_to_c", approx(fahrenheit_to_celsius(212.0), 100.0) == 1.0)
+    check("c_to_k", approx(celsius_to_kelvin(0.0), 273.15) == 1.0)
+    check("k_to_c", approx(kelvin_to_celsius(373.15), 100.0) == 1.0)
+    return 0.0
+end
+
+// ── Distance ────────────────────────────────────────────────
+
+fn test_distance()
+    check("km_to_mi", approx(km_to_miles(1.0), 0.62) == 1.0)
+    check("mi_to_km", approx(miles_to_km(1.0), 1.609) == 1.0)
+    check("m_to_ft", approx(meters_to_feet(1.0), 3.28) == 1.0)
+    check("in_to_cm", inches_to_cm(1.0) == 2.54)
+    return 0.0
+end
+
+// ── Weight ──────────────────────────────────────────────────
+
+fn test_weight()
+    check("kg_to_lbs", approx(kg_to_lbs(1.0), 2.2) == 1.0)
+    check("lbs_to_kg", approx(lbs_to_kg(1.0), 0.45) == 1.0)
+    return 0.0
+end
+
+// ── Volume ──────────────────────────────────────────────────
+
+fn test_volume()
+    check("l_to_gal", approx(liters_to_gallons(1.0), 0.264) == 1.0)
+    check("gal_to_l", approx(gallons_to_liters(1.0), 3.78) == 1.0)
+    return 0.0
+end
+
+// ── Angles ──────────────────────────────────────────────────
+
+fn test_angles()
+    check("deg_to_rad 180", approx(deg_to_rad(180.0), 3.14159) == 1.0)
+    check("deg_to_rad 90", approx(deg_to_rad(90.0), 1.5707) == 1.0)
+    check("rad_to_deg", approx(rad_to_deg(3.14159), 180.0) == 1.0)
+    return 0.0
+end
+
+// ── Speed ───────────────────────────────────────────────────
+
+fn test_speed()
+    check("mps_to_kmh", approx(mps_to_kmh(1.0), 3.6) == 1.0)
+    check("kmh_to_mps", approx(kmh_to_mps(3.6), 1.0) == 1.0)
+    check("knots_to_kmh", approx(knots_to_kmh(1.0), 1.852) == 1.0)
+    return 0.0
+end
+
+// ── Data ────────────────────────────────────────────────────
+
+fn test_data()
+    check("bytes_to_kb", bytes_to_kb(1024.0) == 1.0)
+    check("bytes_to_mb", bytes_to_mb(1048576.0) == 1.0)
+    check("bytes_to_gb", bytes_to_gb(1073741824.0) == 1.0)
+    return 0.0
+end
+
+// ── Time ────────────────────────────────────────────────────
+
+fn test_time()
+    check("hours_to_sec", hours_to_seconds(1.0) == 3600.0)
+    check("days_to_sec", days_to_seconds(1.0) == 86400.0)
+    check("sec_to_min", seconds_to_minutes(120.0) == 2.0)
+    return 0.0
+end
+
+// ── Roundtrip ───────────────────────────────────────────────
+
+fn test_roundtrip()
+    // Converting back and forth should give original value
+    check("temp rt", approx(fahrenheit_to_celsius(celsius_to_fahrenheit(37.0)), 37.0) == 1.0)
+    check("dist rt", approx(miles_to_km(km_to_miles(42.195)), 42.195) == 1.0)
+    check("angle rt", approx(rad_to_deg(deg_to_rad(45.0)), 45.0) == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_temperature()
+test_distance()
+test_weight()
+test_volume()
+test_angles()
+test_speed()
+test_data()
+test_time()
+test_roundtrip()
+print("")
+print("All conversion tests passed (9 tests)")

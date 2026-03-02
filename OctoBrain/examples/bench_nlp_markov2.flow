@@ -1,0 +1,251 @@
+// OctoBrain Second-Order Markov NLP Benchmark
+// Compares first-order vs second-order Markov prediction on 4-gram character
+// encoding for NLP. Uses the markov1/markov2 build and predict functions from
+// lib/sequence.flow — second-order functions have never been tested on NLP data.
+//
+// Training: "the quick brown fox jumps over the lazy dog " x20 (~900 chars)
+// Test:     "the cat sat on the mat the dog ran " x10 (~350 chars)
+//
+// Single brain with 4-gram character encoding + auto_center.
+// Builds BOTH first-order and second-order Markov tables from the same
+// training proto sequence, then evaluates both simultaneously on test data.
+//
+// PASS/FAIL criteria:
+//   1. Second-order accuracy >= first-order accuracy
+//   2. Second-order accuracy >= 85% (soft: >= 70% is NOTE)
+//   3. Proto count <= 20
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\bench_nlp_markov2.flow"
+
+use "../lib/octobrain"
+use "../lib/text"
+use "../lib/preprocess"
+use "../lib/proto"
+use "../lib/sequence"
+
+print("=== OctoBrain Second-Order Markov NLP Benchmark ===")
+print("")
+
+// ── Build training text ────────────────────────────────────────
+let train_base = "the quick brown fox jumps over the lazy dog "
+let mut train_text = ""
+let mut rep = 0.0
+while rep < 20.0
+  train_text = train_text + train_base
+  rep = rep + 1.0
+end
+let train_len = len(train_text)
+let train_len_int = int(train_len)
+print("Training: '{train_base}' x20 = {train_len_int} chars")
+
+// ── Build test text ────────────────────────────────────────────
+let test_base = "the cat sat on the mat the dog ran "
+let mut test_text = ""
+let mut rep2 = 0.0
+while rep2 < 10.0
+  test_text = test_text + test_base
+  rep2 = rep2 + 1.0
+end
+let test_len = len(test_text)
+let test_len_int = int(test_len)
+print("Test: '{test_base}' x10 = {test_len_int} chars")
+print("")
+
+// ── Convert to codes ────────────────────────────────────────────
+let train_codes = text_to_codes(train_text)
+let test_codes = text_to_codes(test_text)
+let train_codes_len = len(train_codes)
+let test_codes_len = len(test_codes)
+
+print("4-gram encoding, auto-centered")
+print("")
+
+// ── Initialize brain with all required arrays ───────────────────
+let mut brain = octobrain_new(2.0)
+let mut ps = proto_new()
+let mut pe = []
+let mut pm = []
+let mut es = embed_new()
+let mut we = []
+let mut ob = []
+let mut eds = edges_new()
+let mut en = []
+let mut ea = []
+let mut eo = []
+let mut ep = []
+let mut ew = []
+let mut eact = []
+let mut win = []
+let mut ws = []
+
+// Auto-centering state
+let mut cm = []
+let mut cc = [0.0]
+
+let gram_size = 4.0
+let train_max = train_codes_len - gram_size + 1.0
+
+// ══════════════════════════════════════════════════════════════════
+// Training pass: feed all 4-grams, record proto sequence
+// ══════════════════════════════════════════════════════════════════
+let mut tseq = []
+let mut pos = 0.0
+while pos < train_max
+  let raw = text_ngram(train_codes, pos, gram_size)
+  let centered = auto_center(raw, cm, cc)
+  let d = octobrain_observe(brain, ps, pe, pm, es, we, ob, eds, en, ea, eo, ep, ew, eact, win, ws, centered)
+  let pid = map_get(ps, "last_match_id")
+  push(tseq, pid)
+  pos = pos + 1.0
+end
+
+let pc = map_get(ps, "proto_count")
+let pc_int = int(pc)
+print("Training protos: {pc_int}")
+
+// ══════════════════════════════════════════════════════════════════
+// Build BOTH Markov tables from training proto sequence
+// ══════════════════════════════════════════════════════════════════
+let sl = len(tseq)
+let table1 = markov1_build(tseq, sl, pc)
+let table2 = markov2_build(tseq, sl, pc)
+print("Built first-order Markov table (size {pc_int}x{pc_int})")
+let pc_cubed = pc * pc * pc
+let pc_cubed_int = int(pc_cubed)
+print("Built second-order Markov table (size {pc_cubed_int})")
+print("")
+
+// ══════════════════════════════════════════════════════════════════
+// Test pass: predict with both orders simultaneously
+// ══════════════════════════════════════════════════════════════════
+let test_max = test_codes_len - gram_size + 1.0
+
+let mut prev_proto = 0.0
+let mut curr_proto = 0.0
+let mut correct1 = 0.0
+let mut correct2 = 0.0
+let mut total1 = 0.0
+let mut total2 = 0.0
+let mut tp = 0.0
+
+while tp < test_max
+  let traw = text_ngram(test_codes, tp, gram_size)
+  let tcen = auto_center(traw, cm, cc)
+
+  if tp > 0.0
+    // Observe to get actual proto
+    let dt = octobrain_observe(brain, ps, pe, pm, es, we, ob, eds, en, ea, eo, ep, ew, eact, win, ws, tcen)
+    let actual = map_get(ps, "last_match_id")
+
+    // First-order prediction (available from tp >= 1)
+    // Guard: only predict if curr_proto is within training table bounds
+    if curr_proto < pc
+      let pred1 = markov1_predict(table1, curr_proto, pc)
+      if pred1 == actual
+        correct1 = correct1 + 1.0
+      end
+      total1 = total1 + 1.0
+    end
+
+    // Second-order prediction (available from tp >= 2)
+    // Guard: only predict if both prev and curr are within training table bounds
+    if tp > 1.0
+      if prev_proto < pc && curr_proto < pc
+        let pred2 = markov2_predict(table2, prev_proto, curr_proto, pc)
+        if pred2 == actual
+          correct2 = correct2 + 1.0
+        end
+        total2 = total2 + 1.0
+      end
+    end
+
+    // Update context
+    prev_proto = curr_proto
+    curr_proto = actual
+  else
+    // First observation — no prediction possible
+    let dt0 = octobrain_observe(brain, ps, pe, pm, es, we, ob, eds, en, ea, eo, ep, ew, eact, win, ws, tcen)
+    curr_proto = map_get(ps, "last_match_id")
+  end
+
+  tp = tp + 1.0
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Results
+// ══════════════════════════════════════════════════════════════════
+
+let acc1 = correct1 / total1
+let pct1 = floor(acc1 * 1000.0) / 10.0
+let correct1_int = int(correct1)
+let total1_int = int(total1)
+
+let acc2 = correct2 / total2
+let pct2 = floor(acc2 * 1000.0) / 10.0
+let correct2_int = int(correct2)
+let total2_int = int(total2)
+
+print("--- First-Order Markov ---")
+print("  Accuracy: {correct1_int}/{total1_int} = {pct1}%")
+print("")
+print("--- Second-Order Markov ---")
+print("  Accuracy: {correct2_int}/{total2_int} = {pct2}%")
+print("")
+
+// ══════════════════════════════════════════════════════════════════
+// PASS/FAIL Analysis
+// ══════════════════════════════════════════════════════════════════
+print("=== PASS/FAIL Analysis ===")
+
+let mut npass = 0.0
+let mut nfail = 0.0
+
+// Criterion 1: Second-order accuracy >= first-order accuracy
+if acc2 >= acc1
+  print("PASS: Second-order ({pct2}%) >= first-order ({pct1}%)")
+  npass = npass + 1.0
+else
+  print("FAIL: Second-order ({pct2}%) < first-order ({pct1}%)")
+  nfail = nfail + 1.0
+end
+
+// Criterion 2: Second-order accuracy >= 85% (soft: >= 70% is NOTE)
+if acc2 >= 0.85
+  print("PASS: Second-order accuracy {pct2}% >= 85%")
+  npass = npass + 1.0
+else
+  if acc2 >= 0.70
+    print("NOTE: Second-order accuracy {pct2}% >= 70% but < 85% (acceptable)")
+    npass = npass + 1.0
+  else
+    print("FAIL: Second-order accuracy {pct2}% < 70%")
+    nfail = nfail + 1.0
+  end
+end
+
+// Criterion 3: Proto count <= 20
+if pc <= 20.0
+  print("PASS: Proto count = {pc_int} <= 20")
+  npass = npass + 1.0
+else
+  print("FAIL: Proto count = {pc_int} > 20")
+  nfail = nfail + 1.0
+end
+
+let npass_int = int(npass)
+let nfail_int = int(nfail)
+print("")
+print("Result: {npass_int}/3 criteria passed, {nfail_int}/3 failed")
+
+if npass >= 3.0
+  print("OVERALL: PASS")
+else
+  if npass >= 2.0
+    print("OVERALL: PARTIAL PASS")
+  else
+    print("OVERALL: FAIL")
+  end
+end
+
+print("")
+print("--- second-order Markov NLP benchmark complete ---")

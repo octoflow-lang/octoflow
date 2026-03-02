@@ -1,0 +1,302 @@
+// stdlib/search/indexer.flow — OctoSearch Indexer
+//
+// I/O phase: reads files, tokenizes, builds flat arrays for GPU upload.
+// Uses output-parameter pattern to avoid cross-module array return issues.
+//
+// Usage:
+//   use "indexer"
+//   let mut tokens = []
+//   let n = octosearch_tokenize("hello world", tokens)
+
+// ── Tokenizer ─────────────────────────────────────────────────────
+
+fn octosearch_strip_punct(word)
+    // Strip leading/trailing punctuation from a word
+    // Handles: . , ; : ! ? ( ) [ ] { } " ' / \ - _ = + < > # @ $ % ^ & * ~ `
+    let mut result = word
+    let mut changed = 1.0
+    while changed > 0.5
+        changed = 0.0
+        let n = len(result)
+        if n < 1.0
+            return result
+        end
+        // Check first char
+        let first = substr(result, 0.0, 1.0)
+        if first == "."
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        if first == ","
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        if first == ";"
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        if first == ":"
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        if first == "!"
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        if first == "?"
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        if first == "("
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        if first == ")"
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        if first == "\""
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        if first == "'"
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        if first == "/"
+            result = substr(result, 1.0, n - 1.0)
+            changed = 1.0
+        end
+        // Check last char
+        let n2 = len(result)
+        if n2 < 1.0
+            return result
+        end
+        let last = substr(result, n2 - 1.0, 1.0)
+        if last == "."
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+        if last == ","
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+        if last == ";"
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+        if last == ":"
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+        if last == "!"
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+        if last == "?"
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+        if last == ")"
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+        if last == "("
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+        if last == "\""
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+        if last == "'"
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+        if last == "/"
+            result = substr(result, 0.0, n2 - 1.0)
+            changed = 1.0
+        end
+    end
+    return result
+end
+
+fn octosearch_tokenize(text, out_tokens)
+    // Tokenize text: lowercase, split on spaces, strip punctuation, skip short
+    // out_tokens: array to push tokens into (output param to avoid cross-module issues)
+    // Returns: number of tokens added
+    let lower = to_lower(text)
+    let raw = split(lower, " ")
+    let mut i = 0.0
+    let mut count = 0.0
+    while i < len(raw)
+        let w = octosearch_strip_punct(raw[i])
+        if len(w) > 1.0
+            push(out_tokens, w)
+            count = count + 1.0
+        end
+        i = i + 1.0
+    end
+    return count
+end
+
+// ── Directory Walker ──────────────────────────────────────────────
+
+fn octosearch_walk(directory, extensions, out_paths)
+    // Walk directory non-recursively using a queue (avoids recursion issues).
+    // out_paths: array to push matching file paths into
+    // Returns: number of files found
+    let mut count = 0.0
+    let mut dirs_to_scan = []
+    push(dirs_to_scan, directory)
+    let mut di = 0.0
+    while di < len(dirs_to_scan)
+        let cur_dir = dirs_to_scan[di]
+        let entries = list_dir(cur_dir)
+        let mut ei = 0.0
+        while ei < len(entries)
+            let entry = entries[ei]
+            let path = cur_dir + "/" + entry
+            if is_dir(path) > 0.5
+                // Queue subdirectory for later scanning
+                push(dirs_to_scan, path)
+            else
+                // Check extension match
+                let mut match_ext = 0.0
+                let mut xi = 0.0
+                while xi < len(extensions)
+                    if ends_with(entry, extensions[xi]) > 0.5
+                        match_ext = 1.0
+                    end
+                    xi = xi + 1.0
+                end
+                if match_ext > 0.5
+                    push(out_paths, path)
+                    count = count + 1.0
+                end
+            end
+            ei = ei + 1.0
+        end
+        di = di + 1.0
+    end
+    return count
+end
+
+// ── Index Builder ─────────────────────────────────────────────────
+
+fn octosearch_build_index(directory, extensions, idx, vocab_out)
+    // Build search index from files in directory.
+    //
+    // idx: map to store index metadata into (output param)
+    //   Sets: "n_docs", "vocab_size"
+    // vocab_out: map to store vocabulary into (output param, word → term_id)
+    //
+    // Also populates module-level arrays via push:
+    //   _os_tf_matrix, _os_doc_lengths, _os_idf, _os_doc_paths
+    //
+    // Returns: n_docs
+
+    // Phase 0: Walk directory to find files
+    let mut files = []
+    let n_found = octosearch_walk(directory, extensions, files)
+    print("OctoSearch: Found {n_found} files")
+
+    // Phase 1+2 merged: single pass — read, tokenize, build vocab, cache tokens
+    let mut next_id = [0.0]
+    let mut n_docs = 0.0
+
+    let mut doc_paths_local = []
+    let mut doc_lengths_local = []
+    let mut all_tokens = []
+    let mut doc_token_starts = []
+
+    let mut fi = 0.0
+    while fi < len(files)
+        let path = files[fi]
+        let content = read_file(path)
+        let tokens = tokenize(content)
+
+        push(doc_paths_local, path)
+        push(doc_lengths_local, len(tokens))
+
+        // Record where this doc's tokens start in flat storage
+        push(doc_token_starts, len(all_tokens))
+
+        // Register tokens in vocabulary + store for TF pass
+        let mut ti = 0.0
+        while ti < len(tokens)
+            let word = tokens[ti]
+            if map_has(vocab_out, word) < 0.5
+                map_set(vocab_out, word, next_id[0])
+                push(_os_vocab_words, word)
+                next_id[0] = next_id[0] + 1.0
+            end
+            push(all_tokens, word)
+            ti = ti + 1.0
+        end
+
+        n_docs = n_docs + 1.0
+        fi = fi + 1.0
+    end
+
+    let vocab_size = next_id[0]
+    print("OctoSearch: {n_docs} docs, {vocab_size} terms")
+
+    // Build TF matrix from cached tokens (no re-read)
+    let total = n_docs * vocab_size
+    let mut tf_flat = array_new(total, 0.0)
+
+    let mut di = 0.0
+    while di < n_docs
+        let start = doc_token_starts[di]
+        let doc_len = doc_lengths_local[di]
+        let mut ti = 0.0
+        while ti < doc_len
+            let word = all_tokens[start + ti]
+            if map_has(vocab_out, word) > 0.5
+                let term_id = map_get(vocab_out, word)
+                let flat_idx = di * vocab_size + term_id
+                tf_flat[flat_idx] = tf_flat[flat_idx] + 1.0
+            end
+            ti = ti + 1.0
+        end
+        di = di + 1.0
+    end
+
+    // Phase 3: Compute IDF for each term
+    // IDF(t) = log((N - df(t) + 0.5) / (df(t) + 0.5) + 1.0)
+    let mut idf_local = []
+    let mut ti = 0.0
+    while ti < vocab_size
+        let mut df = 0.0
+        let mut di2 = 0.0
+        while di2 < n_docs
+            if tf_flat[di2 * vocab_size + ti] > 0.0
+                df = df + 1.0
+            end
+            di2 = di2 + 1.0
+        end
+        let idf_val = log((n_docs - df + 0.5) / (df + 0.5) + 1.0)
+        push(idf_local, idf_val)
+        ti = ti + 1.0
+    end
+
+    // Copy to module-level output arrays
+    extend(_os_tf_matrix, tf_flat)
+    extend(_os_doc_lengths, doc_lengths_local)
+    extend(_os_idf, idf_local)
+    extend(_os_doc_paths, doc_paths_local)
+
+    map_set(idx, "n_docs", n_docs)
+    map_set(idx, "vocab_size", vocab_size)
+    return n_docs
+end
+
+// ── Module-level storage arrays ───────────────────────────────────
+// These are populated by octosearch_build_index and read by engine.flow
+
+let mut _os_tf_matrix = []
+let mut _os_doc_lengths = []
+let mut _os_idf = []
+let mut _os_doc_paths = []
+let mut _os_vocab_words = []

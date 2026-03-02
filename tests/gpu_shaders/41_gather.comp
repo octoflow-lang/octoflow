@@ -1,0 +1,41 @@
+#version 450
+// gather — Stream compaction gather operation
+//
+// Given:
+//  - data[]: original array
+//  - indices[]: prefix sum of mask (exclusive scan)
+//  - n_total: total input elements
+//  - n_out: total output elements
+//
+// For each element where mask[i]=1, indices[i] contains output position.
+// This kernel reads indices[] and copies data[i] to output[indices[i]].
+//
+// 3 bindings, 2 push constants (n_total, n_out)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Data    { float data[]; } inp;
+layout(set=0, binding=1) buffer Indices { float data[]; } idx;
+layout(set=0, binding=2) buffer Output  { float data[]; } out_;
+
+layout(push_constant) uniform PC {
+    float n_total;
+    float n_out;
+} pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint N = uint(pc.n_total);
+
+    if (i >= N) return;
+
+    // Read prefix sum value (inclusive scan)
+    float scan_val = idx.data[i];
+
+    // If this is first element or scan changed, this element passed mask
+    bool keep = (i == 0u) ? (scan_val > 0.0) : (scan_val > idx.data[i-1u]);
+
+    if (keep) {
+        uint out_idx = uint(scan_val) - 1u;
+        out_.data[out_idx] = inp.data[i];
+    }
+}

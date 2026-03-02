@@ -1,0 +1,224 @@
+// OctoBrain GPU Matching Module
+// GPU-accelerated prototype matching with CPU fallback.
+// Uses gpu_matrix_vector_mul for batch dot products when proto_count > threshold.
+//
+// Key insight: all prototypes and queries are already normalized to unit vectors,
+// so cosine similarity = dot product. The batch operation is exactly
+// gpu_matrix_vector_mul(protos_flat, query, proto_count, embed_dim).
+//
+// Run with: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run lib/gpu_match.flow --allow-ffi
+
+use "vecmath"
+use "../../stdlib/loom/math/linalg"
+use "../../stdlib/loom/ops/runtime"
+
+// GPU threshold: use GPU path when proto_count exceeds this
+let GPU_THRESHOLD = 64.0
+
+// Module state: GPU readiness flag (single-element array for cross-function mutation)
+let mut GPU_READY = [0.0]
+
+// ── gpu_match_init ─────────────────────────────────────────────────
+// Initialize the GPU runtime (Vulkan). Call once before using GPU path.
+// Sets GPU_READY[0] = 1.0 on success.
+fn gpu_match_init()
+  rt_init()
+  GPU_READY[0] = 1.0
+  return 1.0
+end
+
+// ── gpu_match_cleanup ──────────────────────────────────────────────
+// Clean up GPU resources. Call once when done with GPU matching.
+// Sets GPU_READY[0] = 0.0.
+fn gpu_match_cleanup()
+  if GPU_READY[0] > 0.5
+    rt_cleanup()
+    GPU_READY[0] = 0.0
+  end
+  return 0.0
+end
+
+// ── gpu_score_all ──────────────────────────────────────────────────
+// Batch cosine similarity: query vs all prototypes.
+// protos_flat: flat [proto_count x embed_dim] row-major (all normalized)
+// query: normalized vector [embed_dim]
+// embed_dim: dimension of each vector
+// proto_count: number of prototypes
+// Returns array [proto_count] of similarity scores.
+//
+// GPU path: when GPU_READY and proto_count > GPU_THRESHOLD, uses
+//   gpu_matrix_vector_mul for all dot products in a single dispatch.
+// CPU fallback: iterates through prototypes using cosine_sim.
+fn gpu_score_all(protos_flat, query, embed_dim, proto_count)
+  if GPU_READY[0] > 0.5 && proto_count > GPU_THRESHOLD
+    // GPU path: matrix-vector multiply gives all dot products at once
+    let sims = gpu_matrix_vector_mul(protos_flat, query, proto_count, embed_dim)
+    return sims
+  end
+  // CPU fallback: iterate through prototypes
+  let mut scores = []
+  let mut pi = 0.0
+  while pi < proto_count
+    let proto_vec = vec_extract(protos_flat, pi, embed_dim)
+    let sim = cosine_sim(query, proto_vec, embed_dim)
+    push(scores, sim)
+    pi = pi + 1.0
+  end
+  return scores
+end
+
+// ── gpu_match_best ─────────────────────────────────────────────────
+// Find best matching prototype.
+// protos_flat: flat [proto_count x embed_dim] row-major (all normalized)
+// query: normalized vector [embed_dim]
+// embed_dim: dimension of each vector
+// proto_count: number of prototypes
+// Returns array [best_id, best_sim].
+fn gpu_match_best(protos_flat, query, embed_dim, proto_count)
+  let scores = gpu_score_all(protos_flat, query, embed_dim, proto_count)
+  let mut best_id = -1.0
+  let mut best_sim = -2.0
+  let mut i = 0.0
+  while i < proto_count
+    if scores[i] > best_sim
+      best_sim = scores[i]
+      best_id = i
+    end
+    i = i + 1.0
+  end
+  let mut result = []
+  push(result, best_id)
+  push(result, best_sim)
+  return result
+end
+
+// ── gpu_batch_score_all ─────────────────────────────────────────
+// Batch cosine similarity: all queries vs all prototypes.
+// protos_flat: flat [proto_count x embed_dim] row-major (all normalized)
+// queries_flat: flat [query_count x embed_dim] row-major (all normalized)
+// embed_dim: dimension of each vector
+// proto_count: number of prototypes
+// query_count: number of query vectors
+// Returns flat [query_count x proto_count] similarity matrix (row-major).
+//
+// GPU path: single-chain transpose + matmul via Loom rt_* API.
+//   Chain dispatch 1: transpose protos (P x D) → protos_T (D x P)
+//   Chain dispatch 2: matmul queries (Q x D) x protos_T (D x P) = sims (Q x P)
+//   Single GPU submission, shared buffer, automatic memory barriers.
+// Requires GPU_READY (call gpu_match_init first).
+// CPU fallback: iterates queries x protos using cosine_sim.
+fn gpu_batch_score_all(protos_flat, queries_flat, embed_dim, proto_count, query_count)
+  if GPU_READY[0] > 0.5
+    // GPU path: single-chain transpose + matmul
+    let size_protos = proto_count * embed_dim
+    let size_queries = query_count * embed_dim
+    let size_sims = query_count * proto_count
+
+    // Create GPU buffers
+    let buf_protos = rt_create_buffer(size_protos * 4.0)
+    let buf_protos_T = rt_create_buffer(size_protos * 4.0)
+    let buf_queries = rt_create_buffer(size_queries * 4.0)
+    let buf_sims = rt_create_buffer(size_sims * 4.0)
+
+    // Upload data
+    rt_upload(buf_protos, protos_flat)
+    rt_upload(buf_queries, queries_flat)
+
+    // Load pipelines
+    let pipe_transpose = rt_load_pipeline("tests/gpu_shaders/49_transpose.spv", 2.0, 8.0)
+    let pipe_matmul = rt_load_pipeline("tests/gpu_shaders/50_matmul.spv", 3.0, 12.0)
+
+    // Workgroups for transpose (16x16 local size)
+    let mut wgs_tx = int((proto_count + 15.0) / 16.0)
+    let mut wgs_ty = int((embed_dim + 15.0) / 16.0)
+    if wgs_tx < 1.0
+      wgs_tx = 1.0
+    end
+    if wgs_ty < 1.0
+      wgs_ty = 1.0
+    end
+
+    // Workgroups for matmul (16x16 local size)
+    let mut wgs_mx = int((query_count + 15.0) / 16.0)
+    let mut wgs_my = int((proto_count + 15.0) / 16.0)
+    if wgs_mx < 1.0
+      wgs_mx = 1.0
+    end
+    if wgs_my < 1.0
+      wgs_my = 1.0
+    end
+
+    // Single chain: 2 dispatches, max 3 bindings per dispatch
+    rt_chain_begin(2.0, 3.0)
+
+    // Dispatch 1: transpose protos (P x D) → protos_T (D x P)
+    let mut pc_t = [proto_count, embed_dim]
+    rt_chain_push_constants(pipe_transpose, pc_t)
+    let mut bufs_t = [buf_protos, buf_protos_T]
+    rt_chain_dispatch_2d(pipe_transpose, bufs_t, wgs_tx, wgs_ty)
+
+    // Dispatch 2: matmul queries (Q x D) x protos_T (D x P) = sims (Q x P)
+    let mut pc_m = [query_count, embed_dim, proto_count]
+    rt_chain_push_constants(pipe_matmul, pc_m)
+    let mut bufs_m = [buf_queries, buf_protos_T, buf_sims]
+    rt_chain_dispatch_2d(pipe_matmul, bufs_m, wgs_mx, wgs_my)
+
+    rt_chain_end()
+    rt_chain_submit_wait()
+
+    // Download similarity matrix
+    rt_download(buf_sims, size_sims)
+    let mut sims = []
+    let mut i = 0.0
+    while i < size_sims
+      push(sims, rt_result[int(i)])
+      i = i + 1.0
+    end
+    return sims
+  end
+  // CPU fallback: iterate queries x protos
+  let mut sims = []
+  let mut q = 0.0
+  while q < query_count
+    let query = vec_extract(queries_flat, q, embed_dim)
+    let mut p = 0.0
+    while p < proto_count
+      let proto_vec = vec_extract(protos_flat, p, embed_dim)
+      let sim = cosine_sim(query, proto_vec, embed_dim)
+      push(sims, sim)
+      p = p + 1.0
+    end
+    q = q + 1.0
+  end
+  return sims
+end
+
+// ── gpu_batch_match_all ─────────────────────────────────────────
+// Find best matching prototype for each query in a batch.
+// protos_flat: flat [proto_count x embed_dim] row-major (all normalized)
+// queries_flat: flat [query_count x embed_dim] row-major (all normalized)
+// embed_dim: dimension of each vector
+// proto_count: number of prototypes
+// query_count: number of query vectors
+// Returns array [query_count] of best prototype IDs.
+fn gpu_batch_match_all(protos_flat, queries_flat, embed_dim, proto_count, query_count)
+  let sims = gpu_batch_score_all(protos_flat, queries_flat, embed_dim, proto_count, query_count)
+  let mut best_ids = []
+  let mut q = 0.0
+  while q < query_count
+    let mut best_id = -1.0
+    let mut best_sim = -2.0
+    let mut p = 0.0
+    while p < proto_count
+      let s = sims[q * proto_count + p]
+      if s > best_sim
+        best_sim = s
+        best_id = p
+      end
+      p = p + 1.0
+    end
+    push(best_ids, best_id)
+    q = q + 1.0
+  end
+  return best_ids
+end

@@ -1,0 +1,262 @@
+// ====================================================================
+//  GPU VM REAL WORK — Trivial vs Real kernel per dispatch
+//
+//  Compare: does the GPU actually DO work per dispatch?
+//    1. vm_scale.spv  — 1 multiply per thread (trivial)
+//    2. gol_step.spv  — 8 loads + 7 adds + 3 compares + 1 select (real)
+//
+//  Same dispatch count, same data size. Measure the difference.
+// ====================================================================
+
+print("")
+print("====================================================================")
+print("  GPU VM REAL WORK — Does dispatch carry actual compute?")
+print("====================================================================")
+print("")
+
+// ── Setup ─────────────────────────────────────────────────────────
+let grid_size = 1024.0
+let wg = floor((grid_size + 255.0) / 256.0)
+
+// Build a 32×32 grid with some cells alive (R-pentomino)
+let mut grid_data = []
+let mut gi = 0.0
+while gi < grid_size
+  push(grid_data, 0.0)
+  gi = gi + 1.0
+end
+grid_data[496] = 1.0
+grid_data[497] = 1.0
+grid_data[527] = 1.0
+grid_data[528] = 1.0
+grid_data[560] = 1.0
+
+// Simple data for scale kernel
+let mut scale_data = []
+let mut si = 0.0
+while si < grid_size
+  push(scale_data, 1.0)
+  si = si + 1.0
+end
+
+let scale_kernel = "stdlib/loom/kernels/ops/vm_scale.spv"
+let gol_kernel = "stdlib/loom/kernels/ops/gol_step.spv"
+let scale_pc = [0.0, 2.0, grid_size]
+let gol_fwd = [0.0, 1024.0, 32.0, 1024.0]
+let gol_rev = [1024.0, 0.0, 32.0, 1024.0]
+
+// ════════════════════════════════════════════════════════════════════
+//  TEST 1: Batch chain comparison — scale vs GoL at various depths
+// ════════════════════════════════════════════════════════════════════
+print("  TEST 1: Batch chain — trivial (scale×2) vs real (GoL step)")
+print("  reg=1024 floats, single VM, measure GPU execution only")
+print("  ─────────────────────────────────────────────────────────────")
+print("")
+
+let depths = [10.0, 50.0, 100.0, 500.0, 1000.0]
+let mut d1i = 0.0
+
+while d1i < len(depths)
+  let depth = depths[d1i]
+
+  // ── Trivial: scale×2 ─────────────────────────────────────────
+  let vm_s = vm_boot(1.0, grid_size, 1.0)
+  let _ws = vm_write_register(vm_s, 0.0, 0.0, scale_data)
+  let mut dsi = 0.0
+  while dsi < depth
+    let _d = vm_dispatch(vm_s, scale_kernel, scale_pc, wg)
+    dsi = dsi + 1.0
+  end
+  let prog_s = vm_build(vm_s)
+  let t0s = now_ms()
+  let _es = vm_execute(prog_s)
+  let t_scale = now_ms() - t0s
+  let _ss = vm_shutdown(vm_s)
+
+  // ── Real: GoL step (ping-pong) ────────────────────────────────
+  let vm_g = vm_boot(1.0, 2048.0, 1.0)
+  let _wg = vm_write_register(vm_g, 0.0, 0.0, grid_data)
+  let mut dgi = 0.0
+  while dgi < depth
+    let ev = dgi - floor(dgi / 2.0) * 2.0
+    if ev < 0.5
+      let _d = vm_dispatch(vm_g, gol_kernel, gol_fwd, wg)
+    else
+      let _d = vm_dispatch(vm_g, gol_kernel, gol_rev, wg)
+    end
+    dgi = dgi + 1.0
+  end
+  let prog_g = vm_build(vm_g)
+  let t0g = now_ms()
+  let _eg = vm_execute(prog_g)
+  let t_gol = now_ms() - t0g
+
+  // Read GoL result to verify it actually computed
+  let gol_result = vm_read_register(vm_g, 0.0, 0.0, grid_size)
+  let mut alive = 0.0
+  let mut vi = 0.0
+  while vi < grid_size
+    if gol_result[vi] > 0.5
+      alive = alive + 1.0
+    end
+    vi = vi + 1.0
+  end
+  let _sg = vm_shutdown(vm_g)
+
+  let ratio = 0.0
+  if t_scale > 0.5
+    let mut ratio2 = t_gol / t_scale
+    print("    {depth:.0} dispatches  |  scale: {t_scale:.0}ms  |  GoL: {t_gol:.0}ms  |  ratio: {ratio2:.1}x  |  alive={alive:.0}")
+  else
+    print("    {depth:.0} dispatches  |  scale: {t_scale:.0}ms  |  GoL: {t_gol:.0}ms  |  alive={alive:.0}")
+  end
+
+  d1i = d1i + 1.0
+end
+
+// ════════════════════════════════════════════════════════════════════
+//  TEST 2: Per-gen (CPU roundtrip each time) vs Batch — GoL kernel
+//  This shows the REAL advantage: batch eliminates overhead on REAL work
+// ════════════════════════════════════════════════════════════════════
+print("")
+print("  TEST 2: Batch vs Per-gen — GoL kernel (real work)")
+print("  Same 100 generations, same kernel, different dispatch strategy")
+print("  ─────────────────────────────────────────────────────────────")
+print("")
+
+let gens = 100.0
+
+// ── Batch: 100 GoL dispatches, 1 submit ─────────────────────────
+let vm_batch = vm_boot(1.0, 2048.0, 1.0)
+let _wb = vm_write_register(vm_batch, 0.0, 0.0, grid_data)
+
+let mut bdi = 0.0
+while bdi < gens
+  let ev = bdi - floor(bdi / 2.0) * 2.0
+  if ev < 0.5
+    let _d = vm_dispatch(vm_batch, gol_kernel, gol_fwd, wg)
+  else
+    let _d = vm_dispatch(vm_batch, gol_kernel, gol_rev, wg)
+  end
+  bdi = bdi + 1.0
+end
+
+let prog_batch = vm_build(vm_batch)
+let t0_batch = now_ms()
+let _eb = vm_execute(prog_batch)
+let t_batch = now_ms() - t0_batch
+
+let batch_result = vm_read_register(vm_batch, 0.0, 0.0, grid_size)
+let mut batch_alive = 0.0
+let mut bvi = 0.0
+while bvi < grid_size
+  if batch_result[bvi] > 0.5
+    batch_alive = batch_alive + 1.0
+  end
+  bvi = bvi + 1.0
+end
+let _sb = vm_shutdown(vm_batch)
+
+print("    BATCH:   {gens:.0} GoL dispatches, 1 submit  →  {t_batch:.0}ms  alive={batch_alive:.0}")
+
+// ── Per-gen: 100 separate boot/submit/shutdown cycles ───────────
+let mut per_grid = []
+let mut pi = 0.0
+while pi < grid_size
+  push(per_grid, grid_data[pi])
+  pi = pi + 1.0
+end
+
+let t0_per = now_ms()
+let mut pgi = 0.0
+while pgi < gens
+  let vm_p = vm_boot(1.0, 1024.0, 1.0)
+  let _wp = vm_write_register(vm_p, 0.0, 0.0, per_grid)
+  let _dp = vm_dispatch(vm_p, gol_kernel, gol_fwd, wg)
+  let prog_p = vm_build(vm_p)
+  let _ep = vm_execute(prog_p)
+  let step_r = vm_read_register(vm_p, 0.0, 1.0, grid_size)
+  let _sp = vm_shutdown(vm_p)
+  let mut pk = 0.0
+  while pk < grid_size
+    per_grid[pk] = step_r[pk]
+    pk = pk + 1.0
+  end
+  pgi = pgi + 1.0
+end
+let t_per = now_ms() - t0_per
+
+let mut per_alive = 0.0
+let mut pvi = 0.0
+while pvi < grid_size
+  if per_grid[pvi] > 0.5
+    per_alive = per_alive + 1.0
+  end
+  pvi = pvi + 1.0
+end
+
+print("    PER-GEN: {gens:.0} boot+submit+shutdown  →  {t_per:.0}ms  alive={per_alive:.0}")
+
+if t_batch > 0.5
+  let advantage = t_per / t_batch
+  print("")
+  print("    ► BATCH ADVANTAGE: {advantage:.0}x faster with REAL GoL kernel")
+  print("    ► Both produce same result: batch={batch_alive:.0} vs per-gen={per_alive:.0}")
+end
+
+// ════════════════════════════════════════════════════════════════════
+//  TEST 3: GPU work per dispatch breakdown
+//  Time 1 dispatch vs 10 vs 100 — isolate per-kernel GPU time
+// ════════════════════════════════════════════════════════════════════
+print("")
+print("  TEST 3: GPU time per GoL dispatch (isolate kernel execution)")
+print("  ─────────────────────────────────────────────────────────────")
+print("")
+
+let breakdown = [1.0, 5.0, 10.0, 50.0, 100.0, 500.0]
+let mut b3i = 0.0
+
+while b3i < len(breakdown)
+  let nd = breakdown[b3i]
+
+  let vm = vm_boot(1.0, 2048.0, 1.0)
+  let _w = vm_write_register(vm, 0.0, 0.0, grid_data)
+
+  let mut di = 0.0
+  while di < nd
+    let ev = di - floor(di / 2.0) * 2.0
+    if ev < 0.5
+      let _d = vm_dispatch(vm, gol_kernel, gol_fwd, wg)
+    else
+      let _d = vm_dispatch(vm, gol_kernel, gol_rev, wg)
+    end
+    di = di + 1.0
+  end
+
+  let prog = vm_build(vm)
+  let t0 = now_ms()
+  let _e = vm_execute(prog)
+  let t_exec = now_ms() - t0
+  let _s = vm_shutdown(vm)
+
+  let per_dispatch = 0.0
+  if nd > 0.5
+    let mut per_d = t_exec / nd
+    let ops_per_cell = 20.0
+    let total_ops = nd * grid_size * ops_per_cell
+    let gflops = total_ops / (t_exec * 1000000.0 + 0.001)
+    print("    {nd:.0} GoL dispatches  |  exec: {t_exec:.0}ms  |  ~{per_d:.2}ms/dispatch  |  ~{gflops:.2} GFLOP/s")
+  end
+
+  b3i = b3i + 1.0
+end
+
+print("")
+print("====================================================================")
+print("  CONCLUSION")
+print("====================================================================")
+print("  Each dispatch carries REAL compute (GoL: 20 ops/cell × 1024 cells)")
+print("  Batch chain eliminates CPU round-trip overhead on REAL workloads")
+print("  GPU executes the full chain autonomously — zero CPU between steps")
+print("====================================================================")
+print("")

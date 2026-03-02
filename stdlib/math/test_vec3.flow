@@ -1,0 +1,218 @@
+// test_vec3.flow — Tests for stdlib/math/vec3.flow
+use "vec3"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Construction ────────────────────────────────────────────────
+
+fn test_vec3_create()
+    let mut v = vec3(1.0, 2.0, 3.0)
+    check("vec3 create", v[0] == 1.0 && v[1] == 2.0 && v[2] == 3.0)
+    let mut z = vec3_zero()
+    check("vec3 zero", z[0] == 0.0 && z[1] == 0.0 && z[2] == 0.0)
+    let mut o = vec3_one()
+    check("vec3 one", o[0] == 1.0 && o[1] == 1.0 && o[2] == 1.0)
+    let mut u = vec3_up()
+    check("vec3 up", u[0] == 0.0 && u[1] == 1.0 && u[2] == 0.0)
+    return 0.0
+end
+
+// ── Arithmetic ──────────────────────────────────────────────────
+
+fn test_vec3_add()
+    let mut a = vec3(1.0, 2.0, 3.0)
+    let mut b = vec3(4.0, 5.0, 6.0)
+    let mut c = vec3_add(a, b)
+    check("vec3_add", c[0] == 5.0 && c[1] == 7.0 && c[2] == 9.0)
+    return 0.0
+end
+
+fn test_vec3_sub()
+    let mut a = vec3(5.0, 7.0, 9.0)
+    let mut b = vec3(1.0, 2.0, 3.0)
+    let mut c = vec3_sub(a, b)
+    check("vec3_sub", c[0] == 4.0 && c[1] == 5.0 && c[2] == 6.0)
+    return 0.0
+end
+
+fn test_vec3_scale()
+    let mut a = vec3(1.0, 2.0, 3.0)
+    let mut s = vec3_scale(a, 3.0)
+    check("vec3_scale", s[0] == 3.0 && s[1] == 6.0 && s[2] == 9.0)
+    return 0.0
+end
+
+// ── Products ────────────────────────────────────────────────────
+
+fn test_vec3_dot()
+    let mut a = vec3(1.0, 2.0, 3.0)
+    let mut b = vec3(4.0, 5.0, 6.0)
+    check("vec3_dot", vec3_dot(a, b) == 32.0)
+    return 0.0
+end
+
+fn test_vec3_cross()
+    let mut i = vec3(1.0, 0.0, 0.0)
+    let mut j = vec3(0.0, 1.0, 0.0)
+    let mut k = vec3_cross(i, j)
+    check("cross i×j = k", k[0] == 0.0 && k[1] == 0.0 && k[2] == 1.0)
+
+    let mut a = vec3(1.0, 2.0, 3.0)
+    let mut b = vec3(4.0, 5.0, 6.0)
+    let mut c = vec3_cross(a, b)
+    // (2*6 - 3*5, 3*4 - 1*6, 1*5 - 2*4) = (-3, 6, -3)
+    check("cross general", c[0] == -3.0 && c[1] == 6.0 && c[2] == -3.0)
+    return 0.0
+end
+
+// ── Length ───────────────────────────────────────────────────────
+
+fn test_vec3_length()
+    let mut a = vec3(1.0, 2.0, 2.0)
+    check("vec3_length", approx(vec3_length(a), 3.0) == 1.0)
+    check("vec3_length_sq", vec3_length_sq(a) == 9.0)
+    return 0.0
+end
+
+fn test_vec3_distance()
+    let mut a = vec3(0.0, 0.0, 0.0)
+    let mut b = vec3(1.0, 2.0, 2.0)
+    check("vec3_distance", approx(vec3_distance(a, b), 3.0) == 1.0)
+    check("vec3_manhattan", vec3_manhattan(a, b) == 5.0)
+    return 0.0
+end
+
+// ── Normalize ───────────────────────────────────────────────────
+
+fn test_vec3_normalize()
+    let mut a = vec3(0.0, 3.0, 4.0)
+    let mut n = vec3_normalize(a)
+    check("normalize x", approx(n[0], 0.0) == 1.0)
+    check("normalize y", approx(n[1], 0.6) == 1.0)
+    check("normalize z", approx(n[2], 0.8) == 1.0)
+    check("normalize len", approx(vec3_length(n), 1.0) == 1.0)
+    return 0.0
+end
+
+fn test_vec3_normalize_zero()
+    let mut z = vec3_zero()
+    let mut n = vec3_normalize(z)
+    check("normalize zero", n[0] == 0.0 && n[1] == 0.0 && n[2] == 0.0)
+    return 0.0
+end
+
+// ── Angle ───────────────────────────────────────────────────────
+
+fn test_vec3_angle_between()
+    let pi = 3.14159265358979
+    let mut i = vec3(1.0, 0.0, 0.0)
+    let mut j = vec3(0.0, 1.0, 0.0)
+    check("angle 90", approx(vec3_angle_between(i, j), pi / 2.0) == 1.0)
+
+    let mut neg_i = vec3(-1.0, 0.0, 0.0)
+    check("angle 180", approx(vec3_angle_between(i, neg_i), pi) == 1.0)
+    return 0.0
+end
+
+// ── Lerp ────────────────────────────────────────────────────────
+
+fn test_vec3_lerp()
+    let mut a = vec3(0.0, 0.0, 0.0)
+    let mut b = vec3(10.0, 20.0, 30.0)
+    let mut mid = vec3_lerp(a, b, 0.5)
+    check("lerp", mid[0] == 5.0 && mid[1] == 10.0 && mid[2] == 15.0)
+    return 0.0
+end
+
+fn test_vec3_midpoint()
+    let mut a = vec3(2.0, 4.0, 6.0)
+    let mut b = vec3(8.0, 12.0, 16.0)
+    let mut m = vec3_midpoint(a, b)
+    check("midpoint", m[0] == 5.0 && m[1] == 8.0 && m[2] == 11.0)
+    return 0.0
+end
+
+// ── Projection / Reflection ─────────────────────────────────────
+
+fn test_vec3_project()
+    let mut a = vec3(3.0, 4.0, 0.0)
+    let mut b = vec3(1.0, 0.0, 0.0)
+    let mut p = vec3_project(a, b)
+    check("project", p[0] == 3.0 && approx(p[1], 0.0) == 1.0 && approx(p[2], 0.0) == 1.0)
+    return 0.0
+end
+
+fn test_vec3_reflect()
+    let mut a = vec3(1.0, -1.0, 0.0)
+    let mut n = vec3(0.0, 1.0, 0.0)
+    let mut r = vec3_reflect(a, n)
+    check("reflect", approx(r[0], 1.0) == 1.0 && approx(r[1], 1.0) == 1.0 && approx(r[2], 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Component-wise ──────────────────────────────────────────────
+
+fn test_vec3_min_max()
+    let mut a = vec3(1.0, 5.0, 3.0)
+    let mut b = vec3(4.0, 2.0, 6.0)
+    let mut mn = vec3_min(a, b)
+    let mut mx = vec3_max(a, b)
+    check("min", mn[0] == 1.0 && mn[1] == 2.0 && mn[2] == 3.0)
+    check("max", mx[0] == 4.0 && mx[1] == 5.0 && mx[2] == 6.0)
+    return 0.0
+end
+
+fn test_vec3_abs()
+    let mut a = vec3(-3.0, 4.0, -5.0)
+    let mut b = vec3_abs(a)
+    check("abs", b[0] == 3.0 && b[1] == 4.0 && b[2] == 5.0)
+    return 0.0
+end
+
+// ── Triple Product ──────────────────────────────────────────────
+
+fn test_scalar_triple()
+    let mut a = vec3(1.0, 0.0, 0.0)
+    let mut b = vec3(0.0, 1.0, 0.0)
+    let mut c = vec3(0.0, 0.0, 1.0)
+    check("scalar triple", vec3_scalar_triple(a, b, c) == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_vec3_create()
+test_vec3_add()
+test_vec3_sub()
+test_vec3_scale()
+test_vec3_dot()
+test_vec3_cross()
+test_vec3_length()
+test_vec3_distance()
+test_vec3_normalize()
+test_vec3_normalize_zero()
+test_vec3_angle_between()
+test_vec3_lerp()
+test_vec3_midpoint()
+test_vec3_project()
+test_vec3_reflect()
+test_vec3_min_max()
+test_vec3_abs()
+test_scalar_triple()
+print("")
+print("All vec3 tests passed (18 tests)")

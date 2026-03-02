@@ -1,0 +1,336 @@
+// stdlib/game/ai_behavior.flow — Game AI steering behaviors
+//
+// Common AI movement patterns for NPCs: patrol, chase, flee, wander, seek,
+// avoid, arrive, and simple state-based behavior.
+// All behaviors output velocity (vx, vy) that callers apply to entities.
+//
+// Agent storage: flat parallel arrays. Index = agent ID.
+// State: IDLE=0, PATROL=1, CHASE=2, FLEE=3, WANDER=4, SEEK=5, ARRIVE=6
+//
+// Functions: ai_create, ai_patrol, ai_chase, ai_flee, ai_wander,
+//            ai_seek, ai_arrive, ai_avoid, ai_update,
+//            ai_set_speed, ai_set_state, ai_get_state,
+//            ai_patrol_add_waypoint, ai_distance_to
+//
+// Usage:
+//   use "ai_behavior"
+//   let agent = ai_create(100.0, 100.0, 50.0)
+//   let _p = ai_patrol_add_waypoint(agent, 200.0, 100.0)
+//   let _p2 = ai_patrol_add_waypoint(agent, 200.0, 200.0)
+//   ai_set_state(agent, AI_PATROL)
+//   // In game loop: let result = ai_update(agent, dt)
+
+// State constants
+let AI_IDLE = 0.0
+let AI_PATROL = 1.0
+let AI_CHASE = 2.0
+let AI_FLEE = 3.0
+let AI_WANDER = 4.0
+let AI_SEEK = 5.0
+let AI_ARRIVE = 6.0
+
+// ── Agent storage ───────────────────────────────────────
+let mut _ai_x = []
+let mut _ai_y = []
+let mut _ai_speed = []
+let mut _ai_state = []
+let mut _ai_target_x = []
+let mut _ai_target_y = []
+// Patrol waypoints: flat array [x0,y0, x1,y1, ...] per agent
+let mut _ai_wp_start = []
+let mut _ai_wp_count = []
+let mut _ai_wp_data = []
+let mut _ai_wp_current = []
+// Wander state
+let mut _ai_wander_angle = []
+let mut _ai_wander_timer = []
+// Result buffer (reused)
+let mut _ai_result = [0.0, 0.0]
+
+fn ai_create(x, y, speed)
+    // Create AI agent at position with speed. Returns agent ID.
+    let id = len(_ai_x)
+    push(_ai_x, x)
+    push(_ai_y, y)
+    push(_ai_speed, speed)
+    push(_ai_state, AI_IDLE)
+    push(_ai_target_x, x)
+    push(_ai_target_y, y)
+    push(_ai_wp_start, len(_ai_wp_data))
+    push(_ai_wp_count, 0.0)
+    push(_ai_wp_current, 0.0)
+    push(_ai_wander_angle, 0.0)
+    push(_ai_wander_timer, 0.0)
+    return id
+end
+
+fn ai_set_pos(id, x, y)
+    _ai_x[int(id)] = x
+    _ai_y[int(id)] = y
+    return 0.0
+end
+
+fn ai_get_x(id)
+    return _ai_x[int(id)]
+end
+
+fn ai_get_y(id)
+    return _ai_y[int(id)]
+end
+
+fn ai_set_speed(id, speed)
+    _ai_speed[int(id)] = speed
+    return 0.0
+end
+
+fn ai_set_state(id, state)
+    _ai_state[int(id)] = state
+    return 0.0
+end
+
+fn ai_get_state(id)
+    return _ai_state[int(id)]
+end
+
+fn ai_set_target(id, tx, ty)
+    // Set chase/flee/seek target position.
+    _ai_target_x[int(id)] = tx
+    _ai_target_y[int(id)] = ty
+    return 0.0
+end
+
+fn ai_distance_to(id, tx, ty)
+    // Distance from agent to point.
+    let dx = tx - _ai_x[int(id)]
+    let dy = ty - _ai_y[int(id)]
+    return sqrt(dx * dx + dy * dy)
+end
+
+// ── Patrol waypoints ────────────────────────────────────
+
+fn ai_patrol_add_waypoint(id, wx, wy)
+    // Add waypoint to agent's patrol route.
+    let i = int(id)
+    push(_ai_wp_data, wx)
+    push(_ai_wp_data, wy)
+    _ai_wp_count[i] = _ai_wp_count[i] + 1.0
+    return _ai_wp_count[i] - 1.0
+end
+
+fn _ai_get_wp(id, wp_idx)
+    // Get waypoint (x, y) into _ai_result.
+    let start = int(_ai_wp_start[int(id)])
+    let idx = start + int(wp_idx) * 2
+    _ai_result[0] = _ai_wp_data[idx]
+    _ai_result[1] = _ai_wp_data[idx + 1]
+    return 0.0
+end
+
+// ── Movement helpers ────────────────────────────────────
+
+fn _ai_move_toward(ax, ay, tx, ty, speed, dt)
+    // Compute velocity toward target. Returns into _ai_result.
+    let dx = tx - ax
+    let dy = ty - ay
+    let dist = sqrt(dx * dx + dy * dy)
+    if dist < 1.0
+        _ai_result[0] = 0.0
+        _ai_result[1] = 0.0
+        return 0.0
+    end
+    let vx = (dx / dist) * speed * dt
+    let vy = (dy / dist) * speed * dt
+    _ai_result[0] = vx
+    _ai_result[1] = vy
+    return dist
+end
+
+fn _ai_move_away(ax, ay, tx, ty, speed, dt)
+    // Compute velocity away from target.
+    let dx = ax - tx
+    let dy = ay - ty
+    let dist = sqrt(dx * dx + dy * dy)
+    if dist < 0.001
+        // Random direction
+        _ai_result[0] = speed * dt
+        _ai_result[1] = 0.0
+        return 0.0
+    end
+    _ai_result[0] = (dx / dist) * speed * dt
+    _ai_result[1] = (dy / dist) * speed * dt
+    return dist
+end
+
+// ── Behavior: Patrol ────────────────────────────────────
+
+fn _ai_do_patrol(id, dt)
+    let i = int(id)
+    let count = _ai_wp_count[i]
+    if count == 0.0
+        _ai_result[0] = 0.0
+        _ai_result[1] = 0.0
+        return 0.0
+    end
+    let current = _ai_wp_current[i]
+    let _g = _ai_get_wp(id, current)
+    let wx = _ai_result[0]
+    let wy = _ai_result[1]
+    let dist = _ai_move_toward(_ai_x[i], _ai_y[i], wx, wy, _ai_speed[i], dt)
+    // Check if reached waypoint
+    if dist < 5.0
+        _ai_wp_current[i] = current + 1.0
+        if _ai_wp_current[i] >= count
+            _ai_wp_current[i] = 0.0
+        end
+    end
+    return 0.0
+end
+
+// ── Behavior: Chase ─────────────────────────────────────
+
+fn _ai_do_chase(id, dt)
+    let i = int(id)
+    let _d = _ai_move_toward(_ai_x[i], _ai_y[i], _ai_target_x[i], _ai_target_y[i], _ai_speed[i], dt)
+    return 0.0
+end
+
+// ── Behavior: Flee ──────────────────────────────────────
+
+fn _ai_do_flee(id, dt)
+    let i = int(id)
+    let _d = _ai_move_away(_ai_x[i], _ai_y[i], _ai_target_x[i], _ai_target_y[i], _ai_speed[i], dt)
+    return 0.0
+end
+
+// ── Behavior: Wander ────────────────────────────────────
+
+fn _ai_do_wander(id, dt)
+    let i = int(id)
+    _ai_wander_timer[i] = _ai_wander_timer[i] - dt
+    if _ai_wander_timer[i] <= 0.0
+        // Pick new random direction
+        _ai_wander_angle[i] = random_float() * 6.28318
+        _ai_wander_timer[i] = 0.5 + random_float() * 2.0
+    end
+    let angle = _ai_wander_angle[i]
+    _ai_result[0] = cos(angle) * _ai_speed[i] * dt
+    _ai_result[1] = sin(angle) * _ai_speed[i] * dt
+    return 0.0
+end
+
+// ── Behavior: Seek (direct approach) ────────────────────
+
+fn _ai_do_seek(id, dt)
+    return _ai_do_chase(id, dt)
+end
+
+// ── Behavior: Arrive (slow when close) ──────────────────
+
+fn _ai_do_arrive(id, dt)
+    let i = int(id)
+    let dx = _ai_target_x[i] - _ai_x[i]
+    let dy = _ai_target_y[i] - _ai_y[i]
+    let dist = sqrt(dx * dx + dy * dy)
+    if dist < 1.0
+        _ai_result[0] = 0.0
+        _ai_result[1] = 0.0
+        return 0.0
+    end
+    // Slow down within arrival radius (50 units)
+    let mut speed = _ai_speed[i]
+    let slow_radius = 50.0
+    if dist < slow_radius
+        speed = speed * (dist / slow_radius)
+    end
+    _ai_result[0] = (dx / dist) * speed * dt
+    _ai_result[1] = (dy / dist) * speed * dt
+    return 0.0
+end
+
+// ── Main update ─────────────────────────────────────────
+
+fn ai_update(id, dt)
+    // Update agent and return velocity. Result in [vx, vy] format.
+    // Returns: [vx, vy] via _ai_result. Caller reads _ai_result[0], _ai_result[1].
+    let state = _ai_state[int(id)]
+    _ai_result[0] = 0.0
+    _ai_result[1] = 0.0
+    if state == AI_PATROL
+        let _p = _ai_do_patrol(id, dt)
+    elif state == AI_CHASE
+        let _c = _ai_do_chase(id, dt)
+    elif state == AI_FLEE
+        let _f = _ai_do_flee(id, dt)
+    elif state == AI_WANDER
+        let _w = _ai_do_wander(id, dt)
+    elif state == AI_SEEK
+        let _s = _ai_do_seek(id, dt)
+    elif state == AI_ARRIVE
+        let _a = _ai_do_arrive(id, dt)
+    end
+    // Apply velocity to position
+    let i = int(id)
+    _ai_x[i] = _ai_x[i] + _ai_result[0]
+    _ai_y[i] = _ai_y[i] + _ai_result[1]
+    return 0.0
+end
+
+fn ai_update_vx(id)
+    // Get last computed X velocity.
+    return _ai_result[0]
+end
+
+fn ai_update_vy(id)
+    // Get last computed Y velocity.
+    return _ai_result[1]
+end
+
+// ── Obstacle avoidance ──────────────────────────────────
+
+fn ai_avoid(id, obs_x, obs_y, obs_radius, dt)
+    // Steer away from obstacle if within avoidance range.
+    // Returns 1.0 if avoidance was triggered.
+    let i = int(id)
+    let dx = _ai_x[i] - obs_x
+    let dy = _ai_y[i] - obs_y
+    let dist = sqrt(dx * dx + dy * dy)
+    let avoid_range = obs_radius * 2.0
+    if dist > avoid_range
+        return 0.0
+    end
+    if dist < 0.001
+        // Agent on top of obstacle — push in default direction
+        _ai_x[i] = _ai_x[i] + _ai_speed[i] * dt
+        return 1.0
+    end
+    // Push away from obstacle proportional to proximity
+    let strength = (avoid_range - dist) / avoid_range
+    let push_x = (dx / dist) * strength * _ai_speed[i] * dt
+    let push_y = (dy / dist) * strength * _ai_speed[i] * dt
+    _ai_x[i] = _ai_x[i] + push_x
+    _ai_y[i] = _ai_y[i] + push_y
+    return 1.0
+end
+
+// ── Utility: simple behavior switching ──────────────────
+
+fn ai_chase_or_flee(id, tx, ty, chase_range, flee_range)
+    // Switch between chase and flee based on distance.
+    let dist = ai_distance_to(id, tx, ty)
+    let _t = ai_set_target(id, tx, ty)
+    if dist < flee_range
+        let _s = ai_set_state(id, AI_FLEE)
+        return AI_FLEE
+    elif dist < chase_range
+        let _s = ai_set_state(id, AI_CHASE)
+        return AI_CHASE
+    end
+    let _s = ai_set_state(id, AI_IDLE)
+    return AI_IDLE
+end
+
+fn ai_patrol_reset(id)
+    // Reset patrol to first waypoint.
+    _ai_wp_current[int(id)] = 0.0
+    return 0.0
+end

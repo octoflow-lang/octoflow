@@ -1,0 +1,100 @@
+// test_budget_edge.flow — Edge case tests for resource budget controls
+//
+// Covers gaps not in test_resource_budget.flow:
+//   1. auto_spawn respects VM cap when no parked VMs available
+//   2. Park then shutdown tracks VRAM correctly
+//
+// Run: octoflow run stdlib/loom/tests/test_budget_edge.flow --allow-ffi --allow-read --allow-write
+
+print("=== Test: Budget Edge Cases ===")
+print("")
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+fn check(name, got, expected)
+  if abs(got - expected) < 0.5
+    print("  PASS: {name} = {got}")
+    return 1.0
+  else
+    print("  FAIL: {name} = {got} (expected {expected})")
+    return 0.0
+  end
+end
+
+fn check_gt(name, got, threshold)
+  if got > threshold
+    print("  PASS: {name} = {got} > {threshold}")
+    return 1.0
+  else
+    print("  FAIL: {name} = {got} (expected > {threshold})")
+    return 0.0
+  end
+end
+
+fn tally(result)
+  if result > 0.5
+    pass = pass + 1.0
+  else
+    fail = fail + 1.0
+  end
+  return 0.0
+end
+
+// ── Test 1: auto_spawn respects VM cap ──────────────────────────────
+print("Test 1: auto_spawn respects VM cap")
+
+loom_max_vms(2.0)
+let vm1 = loom_boot(1.0, 1.0, 256.0)
+let vm2 = loom_boot(1.0, 1.0, 256.0)
+
+// Park vm1 — total VMs still 2 (1 active + 1 parked)
+loom_park(vm1)
+let _t = tally(check("pool_size=1", loom_pool_size(), 1.0))
+let _t = tally(check("vm_count=2", loom_vm_count(), 2.0))
+
+// auto_spawn should reuse the parked VM (total stays 2)
+let vm3 = loom_auto_spawn(1.0, 1.0, 128.0)
+let _t = tally(check("auto_spawn reuse ok", vm3 > 0.0, 1.0))
+let _t = tally(check("pool_size=0 after reuse", loom_pool_size(), 0.0))
+
+// Now 2 active, 0 parked = 2 total (at cap)
+// auto_spawn with nothing to reuse should fail
+let vm4 = loom_auto_spawn(1.0, 1.0, 128.0)
+let _t = tally(check("auto_spawn at cap", vm4, -1.0))
+
+loom_shutdown(vm2)
+loom_shutdown(vm3)
+loom_max_vms(64.0)
+print("")
+
+// ── Test 2: VRAM tracking through park/unpark/shutdown ──────────────
+print("Test 2: VRAM tracking lifecycle")
+
+let before = loom_vram_used()
+
+let vm_v = loom_boot(1.0, 1.0, 1024.0)
+let after_boot = loom_vram_used()
+let _t = tally(check_gt("boot increases VRAM", after_boot, before))
+
+// Park — VRAM should stay same (VM still allocated)
+loom_park(vm_v)
+let after_park = loom_vram_used()
+let _t = tally(check("park keeps VRAM", after_park, after_boot))
+
+// Unpark then shutdown — VRAM should decrease
+loom_unpark(vm_v)
+loom_shutdown(vm_v)
+let after_shutdown = loom_vram_used()
+let _t = tally(check("shutdown restores VRAM", after_shutdown, before))
+
+print("")
+
+// ── Summary ─────────────────────────────────────────────────────────
+print("Results: {pass} passed, {fail} failed")
+if fail < 0.5
+  print("ALL PASS")
+else
+  print("SOME FAILED")
+end
+print("")

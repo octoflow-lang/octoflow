@@ -1,0 +1,160 @@
+// test_interval.flow — Tests for stdlib/algo/interval.flow
+use "interval"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Basic ─────────────────────────────────────────────────────
+
+fn test_create()
+    let mut iv = interval_create(1.0, 5.0)
+    check("create start", interval_start(iv) == 1.0)
+    check("create end", interval_end(iv) == 5.0)
+    check("create length", interval_length(iv) == 4.0)
+    return 0.0
+end
+
+// ── Overlap ───────────────────────────────────────────────────
+
+fn test_overlaps()
+    let mut a = [1.0, 5.0]
+    let mut b = [3.0, 8.0]
+    let mut c = [6.0, 10.0]
+    check("overlap yes", interval_overlaps(a, b) == 1.0)
+    check("overlap no", interval_overlaps(a, c) == 0.0)
+    check("overlap touch", interval_overlaps(a, [5.0, 8.0]) == 0.0)
+    return 0.0
+end
+
+// ── Contains ──────────────────────────────────────────────────
+
+fn test_contains()
+    let mut iv = [0.0, 10.0]
+    check("contains point", interval_contains_point(iv, 5.0) == 1.0)
+    check("contains point edge", interval_contains_point(iv, 0.0) == 1.0)
+    check("contains point out", interval_contains_point(iv, 11.0) == 0.0)
+    check("contains interval", interval_contains(iv, [2.0, 8.0]) == 1.0)
+    check("contains interval no", interval_contains(iv, [5.0, 15.0]) == 0.0)
+    return 0.0
+end
+
+// ── Intersection ──────────────────────────────────────────────
+
+fn test_intersection()
+    let mut a = [1.0, 5.0]
+    let mut b = [3.0, 8.0]
+    let mut isect = interval_intersection(a, b)
+    check("isect start", isect[0] == 3.0)
+    check("isect end", isect[1] == 5.0)
+
+    let mut c = [6.0, 10.0]
+    let mut none = interval_intersection(a, c)
+    check("isect none", none[0] == -1.0)
+    return 0.0
+end
+
+// ── Union ─────────────────────────────────────────────────────
+
+fn test_union()
+    let mut a = [1.0, 5.0]
+    let mut b = [3.0, 8.0]
+    let mut u = interval_union(a, b)
+    check("union start", u[0] == 1.0)
+    check("union end", u[1] == 8.0)
+
+    let mut c = [6.0, 10.0]
+    let mut none = interval_union(a, c)
+    check("union disjoint", none[0] == -1.0)
+    return 0.0
+end
+
+// ── Gap ───────────────────────────────────────────────────────
+
+fn test_gap()
+    let mut a = [1.0, 3.0]
+    let mut b = [5.0, 8.0]
+    check("gap", interval_gap(a, b) == 2.0)
+    check("gap overlap", interval_gap(a, [2.0, 6.0]) == 0.0)
+    return 0.0
+end
+
+// ── Sort ──────────────────────────────────────────────────────
+
+fn test_sort()
+    let mut ints = [5.0, 8.0, 1.0, 3.0, 3.0, 6.0]
+    let sorted = interval_sort(ints)
+    check("sort first", sorted[0] == 1.0 && sorted[1] == 3.0)
+    check("sort second", sorted[2] == 3.0 && sorted[3] == 6.0)
+    check("sort third", sorted[4] == 5.0 && sorted[5] == 8.0)
+    return 0.0
+end
+
+// ── Merge ─────────────────────────────────────────────────────
+
+fn test_merge()
+    let mut ints = [1.0, 3.0, 2.0, 6.0, 8.0, 10.0]
+    let merged = interval_merge_all(ints)
+    check("merge count", len(merged) == 4.0)
+    check("merge first", merged[0] == 1.0 && merged[1] == 6.0)
+    check("merge second", merged[2] == 8.0 && merged[3] == 10.0)
+    return 0.0
+end
+
+fn test_merge_all_overlap()
+    let mut ints = [1.0, 5.0, 3.0, 7.0, 6.0, 10.0]
+    let merged = interval_merge_all(ints)
+    check("merge all one", len(merged) == 2.0)
+    check("merge all range", merged[0] == 1.0 && merged[1] == 10.0)
+    return 0.0
+end
+
+// ── Schedule ──────────────────────────────────────────────────
+
+fn test_schedule()
+    // Activities: [1,4], [3,5], [0,6], [5,7], [3,9], [5,9], [6,10], [8,11], [8,12], [2,14], [12,16]
+    let mut acts = [1.0, 4.0, 3.0, 5.0, 0.0, 6.0, 5.0, 7.0, 3.0, 9.0, 5.0, 9.0, 6.0, 10.0, 8.0, 11.0, 8.0, 12.0, 2.0, 14.0, 12.0, 16.0]
+    let selected = interval_schedule(acts)
+    // Greedy by end time: [1,4], [5,7], [8,11], [12,16] = 4 activities
+    check("schedule count", len(selected) / 2.0 == 4.0)
+    return 0.0
+end
+
+// ── Coverage ──────────────────────────────────────────────────
+
+fn test_coverage()
+    let mut ints = [1.0, 3.0, 2.0, 5.0, 7.0, 10.0]
+    let cov = interval_coverage(ints)
+    // Merged: [1,5] + [7,10] = 4 + 3 = 7
+    check("coverage", approx(cov, 7.0) == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_create()
+test_overlaps()
+test_contains()
+test_intersection()
+test_union()
+test_gap()
+test_sort()
+test_merge()
+test_merge_all_overlap()
+test_schedule()
+test_coverage()
+print("")
+print("All interval tests passed (11 tests)")

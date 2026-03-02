@@ -1,0 +1,396 @@
+// stdlib/collections/bst.flow — Binary Search Tree
+//
+// Map-based BST with string-keyed nodes.
+// Node storage: "v_{id}" = value, "l_{id}" = left child ID, "r_{id}" = right child ID.
+// Internal: "__root" = root node ID, "__size" = element count, "__counter" = next ID.
+//
+// Functions: bst_create, bst_insert, bst_search, bst_contains,
+//            bst_min, bst_max, bst_remove, bst_size, bst_is_empty,
+//            bst_inorder, bst_preorder, bst_postorder,
+//            bst_height, bst_clear
+//
+// Usage:
+//   use "bst"
+//   let mut t = bst_create()
+//   bst_insert(t, 5.0)
+//   bst_insert(t, 3.0)
+//   bst_insert(t, 7.0)
+//   bst_contains(t, 3.0)    // 1.0
+//   bst_min(t)               // 3.0
+//   let arr = bst_inorder(t) // [3.0, 5.0, 7.0]
+
+fn bst_create()
+    let mut t = map()
+    map_set(t, "__root", "")
+    map_set(t, "__size", "0")
+    map_set(t, "__counter", "0")
+    return t
+end
+
+fn _bst_new_node(t, value)
+    let id = map_get(t, "__counter")
+    let nid = str(float(id) + 1.0)
+    map_set(t, "__counter", nid)
+    map_set(t, "v_" + id, str(value))
+    map_set(t, "l_" + id, "")
+    map_set(t, "r_" + id, "")
+    return id
+end
+
+fn bst_insert(t, value)
+    let root = map_get(t, "__root")
+    if len(root) == 0.0
+        let id = _bst_new_node(t, value)
+        map_set(t, "__root", id)
+        map_set(t, "__size", str(float(map_get(t, "__size")) + 1.0))
+        return 0.0
+    end
+
+    // Iterative insertion
+    let mut current = root
+    let mut done = 0.0
+    while done == 0.0
+        let cur_val = float(map_get(t, "v_" + current))
+        if value < cur_val
+            let left = map_get(t, "l_" + current)
+            if len(left) == 0.0
+                let id = _bst_new_node(t, value)
+                map_set(t, "l_" + current, id)
+                done = 1.0
+            else
+                current = left
+            end
+        elif value > cur_val
+            let right = map_get(t, "r_" + current)
+            if len(right) == 0.0
+                let id = _bst_new_node(t, value)
+                map_set(t, "r_" + current, id)
+                done = 1.0
+            else
+                current = right
+            end
+        else
+            // Duplicate — do nothing
+            return 0.0
+        end
+    end
+    map_set(t, "__size", str(float(map_get(t, "__size")) + 1.0))
+    return 0.0
+end
+
+fn bst_contains(t, value)
+    let mut current = map_get(t, "__root")
+    while len(current) > 0.0
+        let cur_val = float(map_get(t, "v_" + current))
+        if value == cur_val
+            return 1.0
+        elif value < cur_val
+            current = map_get(t, "l_" + current)
+        else
+            current = map_get(t, "r_" + current)
+        end
+    end
+    return 0.0
+end
+
+fn bst_search(t, value)
+    // Alias for bst_contains.
+    return bst_contains(t, value)
+end
+
+fn _bst_find_min_id(t, node_id)
+    // Find the leftmost node starting from node_id. Returns ID.
+    let mut current = node_id
+    let mut left = map_get(t, "l_" + current)
+    while len(left) > 0.0
+        current = left
+        left = map_get(t, "l_" + current)
+    end
+    return current
+end
+
+fn bst_min(t)
+    // Return minimum value. Returns -1.0 if empty.
+    let root = map_get(t, "__root")
+    if len(root) == 0.0
+        return -1.0
+    end
+    let min_id = _bst_find_min_id(t, root)
+    return float(map_get(t, "v_" + min_id))
+end
+
+fn bst_max(t)
+    // Return maximum value. Returns -1.0 if empty.
+    let root = map_get(t, "__root")
+    if len(root) == 0.0
+        return -1.0
+    end
+    let mut current = root
+    let mut right = map_get(t, "r_" + current)
+    while len(right) > 0.0
+        current = right
+        right = map_get(t, "r_" + current)
+    end
+    return float(map_get(t, "v_" + current))
+end
+
+fn bst_remove(t, value)
+    // Remove a value from the BST. Returns 1.0 if found, 0.0 if not.
+    // Uses iterative approach with parent tracking.
+    let root = map_get(t, "__root")
+    if len(root) == 0.0
+        return 0.0
+    end
+
+    let mut parent = ""
+    let mut current = root
+    let mut is_left = 0.0
+
+    // Find the node
+    let mut found = 0.0
+    while len(current) > 0.0 && found == 0.0
+        let cur_val = float(map_get(t, "v_" + current))
+        if value == cur_val
+            found = 1.0
+        elif value < cur_val
+            parent = current
+            is_left = 1.0
+            current = map_get(t, "l_" + current)
+        else
+            parent = current
+            is_left = 0.0
+            current = map_get(t, "r_" + current)
+        end
+    end
+
+    if found == 0.0
+        return 0.0
+    end
+
+    let left = map_get(t, "l_" + current)
+    let right = map_get(t, "r_" + current)
+    let has_left = len(left) > 0.0
+    let has_right = len(right) > 0.0
+
+    if has_left == 0.0 && has_right == 0.0
+        // Case 1: Leaf node
+        if len(parent) == 0.0
+            map_set(t, "__root", "")
+        elif is_left == 1.0
+            map_set(t, "l_" + parent, "")
+        else
+            map_set(t, "r_" + parent, "")
+        end
+    elif has_left == 1.0 && has_right == 0.0
+        // Case 2a: Only left child
+        if len(parent) == 0.0
+            map_set(t, "__root", left)
+        elif is_left == 1.0
+            map_set(t, "l_" + parent, left)
+        else
+            map_set(t, "r_" + parent, left)
+        end
+    elif has_left == 0.0 && has_right == 1.0
+        // Case 2b: Only right child
+        if len(parent) == 0.0
+            map_set(t, "__root", right)
+        elif is_left == 1.0
+            map_set(t, "l_" + parent, right)
+        else
+            map_set(t, "r_" + parent, right)
+        end
+    else
+        // Case 3: Two children — replace with inorder successor
+        let succ_id = _bst_find_min_id(t, right)
+        let succ_val = float(map_get(t, "v_" + succ_id))
+
+        // Remove successor (it has at most one right child)
+        // Find successor's parent
+        let mut sp = current
+        let mut sc = right
+        while sc != succ_id
+            sp = sc
+            sc = map_get(t, "l_" + sc)
+        end
+        let succ_right = map_get(t, "r_" + succ_id)
+        if sp == current
+            map_set(t, "r_" + sp, succ_right)
+        else
+            map_set(t, "l_" + sp, succ_right)
+        end
+
+        // Replace current's value with successor's value
+        map_set(t, "v_" + current, str(succ_val))
+    end
+
+    map_set(t, "__size", str(float(map_get(t, "__size")) - 1.0))
+    return 1.0
+end
+
+fn bst_size(t)
+    return float(map_get(t, "__size"))
+end
+
+fn bst_is_empty(t)
+    if float(map_get(t, "__size")) == 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn bst_inorder(t)
+    // Return values in sorted (ascending) order as an array.
+    // Iterative using explicit stack.
+    let mut result = []
+    let root = map_get(t, "__root")
+    if len(root) == 0.0
+        return result
+    end
+
+    let mut stack = []
+    let mut current = root
+
+    let mut guard = 0.0
+    let size = float(map_get(t, "__size"))
+    let max_iters = size * 3.0 + 10.0
+
+    while (len(current) > 0.0 || len(stack) > 0.0) && guard < max_iters
+        // Go left as far as possible
+        while len(current) > 0.0 && guard < max_iters
+            push(stack, current)
+            current = map_get(t, "l_" + current)
+            guard = guard + 1.0
+        end
+
+        if len(stack) > 0.0
+            current = pop(stack)
+            push(result, float(map_get(t, "v_" + current)))
+            current = map_get(t, "r_" + current)
+        end
+        guard = guard + 1.0
+    end
+    return result
+end
+
+fn bst_preorder(t)
+    // Return values in pre-order (root, left, right) as an array.
+    let mut result = []
+    let root = map_get(t, "__root")
+    if len(root) == 0.0
+        return result
+    end
+
+    let mut stack = []
+    push(stack, root)
+
+    let mut guard = 0.0
+    let size = float(map_get(t, "__size"))
+    let max_iters = size * 2.0 + 10.0
+
+    while len(stack) > 0.0 && guard < max_iters
+        let current = pop(stack)
+        push(result, float(map_get(t, "v_" + current)))
+
+        // Push right first so left is processed first
+        let right = map_get(t, "r_" + current)
+        if len(right) > 0.0
+            push(stack, right)
+        end
+        let left = map_get(t, "l_" + current)
+        if len(left) > 0.0
+            push(stack, left)
+        end
+        guard = guard + 1.0
+    end
+    return result
+end
+
+fn bst_postorder(t)
+    // Return values in post-order (left, right, root) as an array.
+    // Uses two-stack approach.
+    let mut result = []
+    let root = map_get(t, "__root")
+    if len(root) == 0.0
+        return result
+    end
+
+    let mut stack1 = []
+    let mut stack2 = []
+    push(stack1, root)
+
+    let mut guard = 0.0
+    let size = float(map_get(t, "__size"))
+    let max_iters = size * 2.0 + 10.0
+
+    while len(stack1) > 0.0 && guard < max_iters
+        let current = pop(stack1)
+        push(stack2, current)
+
+        let left = map_get(t, "l_" + current)
+        if len(left) > 0.0
+            push(stack1, left)
+        end
+        let right = map_get(t, "r_" + current)
+        if len(right) > 0.0
+            push(stack1, right)
+        end
+        guard = guard + 1.0
+    end
+
+    // Pop stack2 for post-order
+    while len(stack2) > 0.0
+        let node = pop(stack2)
+        push(result, float(map_get(t, "v_" + node)))
+    end
+    return result
+end
+
+fn _bst_height_iter(t, node_id)
+    // Iterative height calculation using level-order traversal.
+    if len(node_id) == 0.0
+        return 0.0
+    end
+
+    let mut queue = []
+    push(queue, node_id)
+    let mut qi = 0.0
+    let mut height = 0.0
+
+    let mut guard = 0.0
+    let max_iters = float(map_get(t, "__size")) * 2.0 + 10.0
+
+    while qi < len(queue) && guard < max_iters
+        let level_size = len(queue) - qi
+        let mut i = 0.0
+        while i < level_size
+            let current = queue[qi]
+            qi = qi + 1.0
+
+            let left = map_get(t, "l_" + current)
+            if len(left) > 0.0
+                push(queue, left)
+            end
+            let right = map_get(t, "r_" + current)
+            if len(right) > 0.0
+                push(queue, right)
+            end
+            i = i + 1.0
+        end
+        height = height + 1.0
+        guard = guard + 1.0
+    end
+    return height
+end
+
+fn bst_height(t)
+    // Return height of the tree (number of levels). Empty tree = 0.
+    let root = map_get(t, "__root")
+    return _bst_height_iter(t, root)
+end
+
+fn bst_clear(t)
+    map_set(t, "__root", "")
+    map_set(t, "__size", "0")
+    map_set(t, "__counter", "0")
+    return 0.0
+end

@@ -131,7 +131,7 @@ fn fx_apply()
     return 0.0
   end
   loom_run(prog)
-  vm_present(_fx[0], _fx[1])
+  loom_present(_fx[0], _fx[1])
   _fx[4] = 0.0
   return 1.0
 end

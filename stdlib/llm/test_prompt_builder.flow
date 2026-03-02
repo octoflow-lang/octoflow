@@ -1,0 +1,185 @@
+// test_prompt_builder.flow — Tests for stdlib/llm/prompt_builder.flow
+use "prompt_builder"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic creation ──────────────────────────────────────
+
+fn test_create()
+    let pb = pb_create(4096.0)
+    check("create count", pb_count(pb) == 0.0)
+    check("create tokens", pb_total_tokens(pb) == 0.0)
+    check("create last role", pb_last_role(pb) == -1.0)
+    return 0.0
+end
+
+// ── Add messages ────────────────────────────────────────
+
+fn test_messages()
+    let pb = pb_create(4096.0)
+    let _s = pb_system(pb, "You are helpful.")
+    let _u = pb_user(pb, "Hello!")
+    let _a = pb_assistant(pb, "Hi there!")
+    check("msg count", pb_count(pb) == 3.0)
+    check("msg role 0", pb_role(pb, 0.0) == PB_SYSTEM)
+    check("msg role 1", pb_role(pb, 1.0) == PB_USER)
+    check("msg role 2", pb_role(pb, 2.0) == PB_ASSISTANT)
+    check("msg last role", pb_last_role(pb) == PB_ASSISTANT)
+    return 0.0
+end
+
+// ── Content retrieval ───────────────────────────────────
+
+fn test_content()
+    let pb = pb_create(4096.0)
+    let _s = pb_system(pb, "System prompt")
+    let _u = pb_user(pb, "User message")
+    check("content sys", pb_content(pb, 0.0) == "System prompt")
+    check("content user", pb_content(pb, 1.0) == "User message")
+    return 0.0
+end
+
+// ── Token estimation ────────────────────────────────────
+
+fn test_tokens()
+    // "Hello!" = 6 chars → ~2 tokens
+    let est = pb_estimate_tokens("Hello!")
+    check("token est > 0", est > 0.0)
+    let pb = pb_create(4096.0)
+    let _s = pb_system(pb, "Short.")
+    let _u = pb_user(pb, "This is a longer message for testing.")
+    let total = pb_total_tokens(pb)
+    check("total > 0", total > 0.0)
+    check("total < budget", total < 4096.0)
+    return 0.0
+end
+
+// ── Budget and fits ─────────────────────────────────────
+
+fn test_budget()
+    let pb = pb_create(50.0)
+    let _s = pb_system(pb, "Short system.")
+    check("fits short", pb_fits(pb, "Hello") == 1.0)
+    // Very long text shouldn't fit in 50 token budget
+    let long_text = "This is an extremely long message that should definitely exceed a very small token budget of fifty tokens because it contains many many words."
+    check("no fit long", pb_fits(pb, long_text) == 0.0)
+    return 0.0
+end
+
+// ── Truncation ──────────────────────────────────────────
+
+fn test_truncate()
+    let pb = pb_create(30.0)
+    let _s = pb_system(pb, "Sys")
+    let _u1 = pb_user(pb, "First user message")
+    let _a1 = pb_assistant(pb, "First reply")
+    let _u2 = pb_user(pb, "Second user message")
+    let _a2 = pb_assistant(pb, "Second reply")
+    let removed = pb_truncate(pb)
+    check("truncate removed", removed > 0.0)
+    // System message should be preserved
+    check("truncate sys", pb_role(pb, 0.0) == PB_SYSTEM)
+    check("truncate under budget", pb_total_tokens(pb) <= 30.0)
+    return 0.0
+end
+
+// ── Clear and pop ───────────────────────────────────────
+
+fn test_clear_pop()
+    let pb = pb_create(4096.0)
+    let _u = pb_user(pb, "Hello")
+    let _a = pb_assistant(pb, "Hi")
+    let _p = pb_pop(pb)
+    check("pop count", pb_count(pb) == 1.0)
+    let _c = pb_clear(pb)
+    check("clear count", pb_count(pb) == 0.0)
+    return 0.0
+end
+
+// ── ChatML format ───────────────────────────────────────
+
+fn test_chatml()
+    let pb = pb_create(4096.0)
+    let _s = pb_system(pb, "Be helpful.")
+    let _u = pb_user(pb, "Hi!")
+    let result = pb_format_chatml(pb)
+    // Should contain im_start tags
+    check("chatml has start", str_contains(result, "<|im_start|>") == 1.0)
+    check("chatml has end", str_contains(result, "<|im_end|>") == 1.0)
+    check("chatml has system", str_contains(result, "system") == 1.0)
+    check("chatml has user", str_contains(result, "user") == 1.0)
+    check("chatml ends assistant", str_contains(result, "assistant") == 1.0)
+    return 0.0
+end
+
+// ── LLaMA format ────────────────────────────────────────
+
+fn test_llama()
+    let pb = pb_create(4096.0)
+    let _s = pb_system(pb, "Be brief.")
+    let _u = pb_user(pb, "What is 2+2?")
+    let result = pb_format_llama(pb)
+    check("llama has INST", str_contains(result, "[INST]") == 1.0)
+    check("llama has SYS", str_contains(result, "<<SYS>>") == 1.0)
+    return 0.0
+end
+
+// ── Raw format ──────────────────────────────────────────
+
+fn test_raw()
+    let pb = pb_create(4096.0)
+    let _u = pb_user(pb, "Hello")
+    let _a = pb_assistant(pb, "World")
+    let result = pb_format_raw(pb)
+    check("raw has user", str_contains(result, "user: Hello") == 1.0)
+    check("raw has asst", str_contains(result, "assistant: World") == 1.0)
+    return 0.0
+end
+
+// ── Tool messages ───────────────────────────────────────
+
+fn test_tool()
+    let pb = pb_create(4096.0)
+    let _u = pb_user(pb, "What time is it?")
+    let _t = pb_tool(pb, "12:30 PM")
+    check("tool role", pb_role(pb, 1.0) == PB_TOOL)
+    check("tool content", pb_content(pb, 1.0) == "12:30 PM")
+    return 0.0
+end
+
+// ── Summary ─────────────────────────────────────────────
+
+fn test_summary()
+    let pb = pb_create(4096.0)
+    let _s = pb_system(pb, "Test")
+    let _u = pb_user(pb, "Hello")
+    let summary = pb_summary(pb)
+    check("summary has count", str_contains(summary, "2") == 1.0)
+    check("summary has budget", str_contains(summary, "4096") == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────
+
+test_create()
+test_messages()
+test_content()
+test_tokens()
+test_budget()
+test_truncate()
+test_clear_pop()
+test_chatml()
+test_llama()
+test_raw()
+test_tool()
+test_summary()
+print("")
+print("All prompt_builder tests passed (12 tests)")

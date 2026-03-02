@@ -1,0 +1,111 @@
+// test_terminal.flow — Tests for stdlib/terminal/ renderers
+//
+// Note: halfblock.flow and sixel.flow use || operator which the preflight
+// checker cannot resolve in imported modules. We test digits_render directly
+// and validate the number-formatting and quantization algorithms inline.
+use "digits"
+
+// ── Inline algorithm tests (same logic as _hb_n2s / _sx_q6) ───────
+
+fn test_n2s(n)
+  if n < 10.0
+    return chr(48.0 + n)
+  end
+  let d = floor(n / 10.0)
+  let r = n - d * 10.0
+  if d < 10.0
+    return chr(48.0 + d) + chr(48.0 + r)
+  end
+  let d2 = floor(d / 10.0)
+  let r2 = d - d2 * 10.0
+  return chr(48.0 + d2) + chr(48.0 + r2) + chr(48.0 + r)
+end
+
+fn test_q6(v)
+  let q = int(floor(v / 42.5))
+  if q > 5.0
+    return 5.0
+  end
+  return q
+end
+
+// ── Number-to-string algorithm ─────────────────────────────────────
+
+fn test_n2s_single_digit()
+  assert(test_n2s(0.0) == "0", "n2s(0)")
+  assert(test_n2s(5.0) == "5", "n2s(5)")
+  assert(test_n2s(9.0) == "9", "n2s(9)")
+  print("PASS: test_n2s_single_digit")
+  return 0.0
+end
+
+fn test_n2s_double_digit()
+  assert(test_n2s(10.0) == "10", "n2s(10)")
+  assert(test_n2s(42.0) == "42", "n2s(42)")
+  assert(test_n2s(99.0) == "99", "n2s(99)")
+  print("PASS: test_n2s_double_digit")
+  return 0.0
+end
+
+fn test_n2s_triple_digit()
+  assert(test_n2s(100.0) == "100", "n2s(100)")
+  assert(test_n2s(128.0) == "128", "n2s(128)")
+  assert(test_n2s(255.0) == "255", "n2s(255)")
+  print("PASS: test_n2s_triple_digit")
+  return 0.0
+end
+
+// ── Color quantization algorithm ───────────────────────────────────
+
+fn test_q6_values()
+  assert(test_q6(0.0) == 0.0, "q6(0) should be 0")
+  assert(test_q6(42.0) == 0.0, "q6(42) should be 0")
+  assert(test_q6(43.0) == 1.0, "q6(43) should be 1")
+  assert(test_q6(85.0) == 2.0, "q6(85) should be 2")
+  assert(test_q6(170.0) == 4.0, "q6(170) should be 4")
+  assert(test_q6(255.0) == 5.0, "q6(255) should clamp to 5")
+  print("PASS: test_q6_values")
+  return 0.0
+end
+
+// ── Digits renderer ────────────────────────────────────────────────
+
+fn test_digits_render_black()
+  let mut r = [0.0, 0.0, 0.0, 0.0]
+  let mut g = [0.0, 0.0, 0.0, 0.0]
+  let mut b = [0.0, 0.0, 0.0, 0.0]
+  let ret = digits_render(2.0, 2.0, r, g, b)
+  assert(ret == 0.0, "digits_render(black) should return 0.0")
+  print("PASS: test_digits_render_black")
+  return 0.0
+end
+
+fn test_digits_render_white()
+  let mut r = [255.0, 255.0, 255.0, 255.0]
+  let mut g = [255.0, 255.0, 255.0, 255.0]
+  let mut b = [255.0, 255.0, 255.0, 255.0]
+  let ret = digits_render(2.0, 2.0, r, g, b)
+  assert(ret == 0.0, "digits_render(white) should return 0.0")
+  print("PASS: test_digits_render_white")
+  return 0.0
+end
+
+fn test_digits_render_mixed()
+  let mut r = [255.0, 0.0, 128.0, 64.0]
+  let mut g = [0.0, 255.0, 128.0, 64.0]
+  let mut b = [0.0, 0.0, 128.0, 64.0]
+  let ret = digits_render(2.0, 2.0, r, g, b)
+  assert(ret == 0.0, "digits_render(mixed) should return 0.0")
+  print("PASS: test_digits_render_mixed")
+  return 0.0
+end
+
+// Run tests
+test_n2s_single_digit()
+test_n2s_double_digit()
+test_n2s_triple_digit()
+test_q6_values()
+test_digits_render_black()
+test_digits_render_white()
+test_digits_render_mixed()
+print("All terminal tests passed.")

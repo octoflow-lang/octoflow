@@ -1,0 +1,181 @@
+// stdlib/llm/ocp_layer_loader.flow — OctoPress Layer Loader
+//
+// Loads transformer layer weights from per-tensor .ocp files.
+// Uses streaming decompression for memory efficiency.
+// Returns flat float arrays ready for GPU upload via loom_write.
+//
+// Expects the directory structure produced by decompose_ocp.flow:
+//   {dir}/blk_NNN_attn_q.ocp, blk_NNN_attn_k.ocp, etc.
+//
+// Usage:
+//   use "ocp_layer_loader"
+//   let weights = ocp_load_layer(model_dir, 0.0)
+//   let q_weight = map_get(weights, "attn_q")
+//   // q_weight is a flat float array [n_embd * n_embd]
+
+use "../loom/octopress_stream"
+
+// ── Layer Loader ─────────────────────────────────────────────────
+
+fn ocp_layer_path(ocp_dir, layer_idx, short_name)
+    // Build .ocp file path for a layer tensor.
+    let lis = str(int(layer_idx))
+    let mut pad = ""
+    if layer_idx < 10.0
+        pad = "00"
+    elif layer_idx < 100.0
+        pad = "0"
+    end
+    return ocp_dir + "/blk_" + pad + lis + "_" + short_name + ".ocp"
+end
+
+fn ocp_load_tensor(ocp_dir, layer_idx, short_name)
+    // Load a single compressed tensor from .ocp file.
+    // Returns: flat float array (decompressed)
+    let path = ocp_layer_path(ocp_dir, layer_idx, short_name)
+    let data = ocp_load_streaming(path)
+    return data
+end
+
+fn ocp_load_layer(ocp_dir, layer_idx)
+    // Load all 9 weight tensors for a transformer layer.
+    // Returns: map of short_name → float array
+    //
+    // Keys: attn_norm, attn_q, attn_k, attn_v, attn_output,
+    //       ffn_norm, ffn_gate, ffn_up, ffn_down
+    let mut weights = map()
+
+    let an = ocp_load_tensor(ocp_dir, layer_idx, "attn_norm")
+    map_set(weights, "attn_norm", an)
+
+    let aq = ocp_load_tensor(ocp_dir, layer_idx, "attn_q")
+    map_set(weights, "attn_q", aq)
+
+    let ak = ocp_load_tensor(ocp_dir, layer_idx, "attn_k")
+    map_set(weights, "attn_k", ak)
+
+    let av = ocp_load_tensor(ocp_dir, layer_idx, "attn_v")
+    map_set(weights, "attn_v", av)
+
+    let ao = ocp_load_tensor(ocp_dir, layer_idx, "attn_output")
+    map_set(weights, "attn_output", ao)
+
+    let fn_w = ocp_load_tensor(ocp_dir, layer_idx, "ffn_norm")
+    map_set(weights, "ffn_norm", fn_w)
+
+    let fg = ocp_load_tensor(ocp_dir, layer_idx, "ffn_gate")
+    map_set(weights, "ffn_gate", fg)
+
+    let fu = ocp_load_tensor(ocp_dir, layer_idx, "ffn_up")
+    map_set(weights, "ffn_up", fu)
+
+    let fd = ocp_load_tensor(ocp_dir, layer_idx, "ffn_down")
+    map_set(weights, "ffn_down", fd)
+
+    return weights
+end
+
+// ── Persistent Tensors ──────────────────────────────────────────
+
+fn ocp_load_embedding(ocp_dir)
+    // Load compressed token embedding table.
+    return ocp_load_streaming(ocp_dir + "/token_embd.ocp")
+end
+
+fn ocp_load_output_norm(ocp_dir)
+    // Load output normalization weights.
+    return ocp_load_streaming(ocp_dir + "/output_norm.ocp")
+end
+
+fn ocp_load_output_weight(ocp_dir)
+    // Load separate output weight matrix (if model has untied weights).
+    // Returns empty array if file doesn't exist.
+    let path = ocp_dir + "/output_weight.ocp"
+    if file_exists(path) < 0.5
+        return []
+    end
+    return ocp_load_streaming(path)
+end
+
+// ── Manifest Loader ─────────────────────────────────────────────
+
+fn ocp_load_manifest(ocp_dir)
+    // Load model manifest and return as map.
+    // Keys: arch, n_embd, n_head, n_kv_head, n_ff, n_layer, vocab_size,
+    //       eps, rope_theta, has_output, total_floats
+    let path = ocp_dir + "/manifest_ocp.txt"
+    let content = read_file(path)
+    let lines = split(content, "\n")
+
+    let mut manifest = map()
+    let mut i = 0.0
+    while i < len(lines)
+        let line = lines[i]
+        // Skip comments and empty lines
+        if len(line) > 2.0
+            let first = substr(line, 0.0, 1.0)
+            if first != "#"
+                // Parse key=value
+                let parts = split(line, "=")
+                if len(parts) >= 2.0
+                    let key = parts[0]
+                    let val = parts[1]
+                    map_set(manifest, key, val)
+                end
+            end
+        end
+        i = i + 1.0
+    end
+
+    return manifest
+end
+
+fn ocp_manifest_float(manifest, key)
+    // Get a float value from manifest.
+    if map_has(manifest, key) > 0.5
+        return float(map_get(manifest, key))
+    end
+    return 0.0
+end
+
+// ── GPU Upload Helpers ──────────────────────────────────────────
+
+fn ocp_load_layer_to_gpu(ocp_dir, layer_idx, vm, base_reg)
+    // Load layer weights from .ocp and upload to Loom VM registers.
+    // Uploads 9 tensors starting at base_reg:
+    //   base_reg+0: attn_norm
+    //   base_reg+1: attn_q
+    //   base_reg+2: attn_k
+    //   base_reg+3: attn_v
+    //   base_reg+4: attn_output
+    //   base_reg+5: ffn_norm
+    //   base_reg+6: ffn_gate
+    //   base_reg+7: ffn_up
+    //   base_reg+8: ffn_down
+    //
+    // Returns: total floats uploaded
+    let weights = ocp_load_layer(ocp_dir, layer_idx)
+    let mut total = 0.0
+
+    let mut names = []
+    push(names, "attn_norm")
+    push(names, "attn_q")
+    push(names, "attn_k")
+    push(names, "attn_v")
+    push(names, "attn_output")
+    push(names, "ffn_norm")
+    push(names, "ffn_gate")
+    push(names, "ffn_up")
+    push(names, "ffn_down")
+
+    let mut ni = 0.0
+    while ni < len(names)
+        let data = map_get(weights, names[ni])
+        let reg = base_reg + ni
+        loom_write(vm, reg, data)
+        total = total + len(data)
+        ni = ni + 1.0
+    end
+
+    return total
+end

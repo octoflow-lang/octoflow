@@ -1,0 +1,51 @@
+// octopress.flow — OctoPress compression library
+//
+// High-level .flow wrappers for the OctoPress builtins.
+// Provides compress/decompress/auto/ratio and file I/O.
+//
+// NOTE: Requires OctoPress builtins (octopress_init, octopress_analyze,
+// octopress_encode, octopress_decode, octopress_save, octopress_load).
+// These wrappers are ready for when Dev 1 ships those builtins.
+
+fn octopress_compress(data, method)
+  // method: "raw" (0), "delta" (1), "fractal" (2)
+  let mut m = 0.0
+  if method == "delta"
+    m = 1.0
+  end
+  if method == "fractal"
+    m = 2.0
+  end
+  return octopress_encode(data, m)
+end
+
+fn octopress_decompress(compressed)
+  return octopress_decode(compressed)
+end
+
+fn octopress_auto(data)
+  // Analyze data and pick best method automatically
+  let stats = octopress_analyze(data)
+  let method = map_get(stats, "recommended_method")
+  return octopress_encode(data, method)
+end
+
+fn octopress_ratio(original, compressed)
+  // Compression ratio (higher = better compression)
+  let clen = len(compressed)
+  if clen < 0.5
+    return 1.0
+  end
+  return len(original) / clen
+end
+
+fn octopress_save_compressed(data, path)
+  let compressed = octopress_auto(data)
+  octopress_save(compressed, path)
+  return compressed
+end
+
+fn octopress_load_decompressed(path)
+  let compressed = octopress_load(path)
+  return octopress_decompress(compressed)
+end

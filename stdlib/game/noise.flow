@@ -218,7 +218,7 @@ fn noise_perlin_2d_gpu(width, height, scale, octaves, seed)
   let prog = loom_build(vm)
   if prog >= 0.0
     loom_run(prog)
-    vm_present(vm, total)
+    loom_present(vm, total)
   end
   return 1.0
 end

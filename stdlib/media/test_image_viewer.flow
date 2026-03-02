@@ -1,0 +1,332 @@
+// test_image_viewer.flow — Tests for stdlib/media/image_viewer.flow
+use "image_viewer"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn test_create()
+    let v = iv_create(800.0, 600.0, 1024.0, 768.0)
+    check("create id", v >= 0.0)
+    check("create w", iv_img_width(v) == 800.0)
+    check("create h", iv_img_height(v) == 600.0)
+    check("create vw", iv_view_width(v) == 1024.0)
+    check("create vh", iv_view_height(v) == 768.0)
+    check("create zoom", iv_get_zoom(v) == 1.0)
+    check("create fit", iv_get_fit_mode(v) == IV_FIT_CONTAIN)
+    check("create rot", iv_get_rotation(v) == 0.0)
+    return 0.0
+end
+
+fn test_destroy()
+    let v = iv_create(100.0, 100.0, 200.0, 200.0)
+    let r = iv_destroy(v)
+    check("destroy ok", r == 0.0)
+    check("destroy zoom", iv_get_zoom(v) == 1.0)  // returns default
+    let r2 = iv_destroy(-1.0)
+    check("destroy bad", r2 == -1.0)
+    return 0.0
+end
+
+// ── Zoom ─────────────────────────────────────────────────
+
+fn test_zoom()
+    let v = iv_create(800.0, 600.0, 1024.0, 768.0)
+
+    iv_set_zoom(v, 2.0)
+    check("zoom set", iv_get_zoom(v) == 2.0)
+
+    iv_zoom_in(v, 2.0)
+    check("zoom in", iv_get_zoom(v) == 4.0)
+
+    iv_zoom_out(v, 2.0)
+    check("zoom out", iv_get_zoom(v) == 2.0)
+
+    // Clamp
+    iv_set_zoom(v, 0.001)
+    check("zoom clamp lo", iv_get_zoom(v) == 0.01)
+
+    iv_set_zoom(v, 999.0)
+    check("zoom clamp hi", iv_get_zoom(v) == 100.0)
+
+    // Zoom 100%
+    iv_zoom_100(v)
+    check("zoom 100", iv_get_zoom(v) == 1.0)
+
+    return 0.0
+end
+
+// ── Zoom to fit ──────────────────────────────────────────
+
+fn test_zoom_fit()
+    // Image 800x600, viewport 400x300 → zoom = 0.5
+    let v = iv_create(800.0, 600.0, 400.0, 300.0)
+    let z = iv_zoom_to_fit(v)
+    check("fit zoom", approx(z, 0.5) == 1.0)
+
+    // Image 200x400, viewport 400x400 → zoom = 1.0 (height limited)
+    let v2 = iv_create(200.0, 400.0, 400.0, 400.0)
+    let z2 = iv_zoom_to_fit(v2)
+    check("fit zoom tall", approx(z2, 1.0) == 1.0)
+
+    return 0.0
+end
+
+fn test_zoom_fill()
+    // Image 800x600, viewport 400x300 → fill = 0.5
+    let v = iv_create(800.0, 600.0, 400.0, 300.0)
+    let z = iv_zoom_to_fill(v)
+    check("fill zoom", approx(z, 0.5) == 1.0)
+
+    // Image 200x400, viewport 400x400 → fill = 2.0 (width limited)
+    let v2 = iv_create(200.0, 400.0, 400.0, 400.0)
+    let z2 = iv_zoom_to_fill(v2)
+    check("fill zoom tall", approx(z2, 2.0) == 1.0)
+
+    return 0.0
+end
+
+// ── Pan ──────────────────────────────────────────────────
+
+fn test_pan()
+    let v = iv_create(800.0, 600.0, 400.0, 300.0)
+
+    iv_pan(v, 50.0, -30.0)
+    check("pan x", iv_get_pan_x(v) == 50.0)
+    check("pan y", iv_get_pan_y(v) == -30.0)
+
+    iv_set_pan(v, 100.0, 200.0)
+    check("set pan x", iv_get_pan_x(v) == 100.0)
+    check("set pan y", iv_get_pan_y(v) == 200.0)
+
+    iv_center(v)
+    check("center x", iv_get_pan_x(v) == 0.0)
+    check("center y", iv_get_pan_y(v) == 0.0)
+
+    return 0.0
+end
+
+// ── Rotation ─────────────────────────────────────────────
+
+fn test_rotation()
+    let v = iv_create(800.0, 600.0, 400.0, 300.0)
+
+    iv_rotate_cw(v)
+    check("rot cw 90", iv_get_rotation(v) == 90.0)
+
+    iv_rotate_cw(v)
+    check("rot cw 180", iv_get_rotation(v) == 180.0)
+
+    iv_rotate_ccw(v)
+    check("rot ccw 90", iv_get_rotation(v) == 90.0)
+
+    // Full rotation wraps
+    iv_set_rotation(v, 0.0)
+    iv_rotate_ccw(v)
+    check("rot ccw wrap", iv_get_rotation(v) == 270.0)
+
+    iv_rotate_cw(v)
+    check("rot cw wrap", iv_get_rotation(v) == 0.0)
+
+    // Snap to nearest 90
+    iv_set_rotation(v, 50.0)
+    check("rot snap 90", iv_get_rotation(v) == 90.0)
+
+    iv_set_rotation(v, 170.0)
+    check("rot snap 180", iv_get_rotation(v) == 180.0)
+
+    return 0.0
+end
+
+// ── Fit mode ─────────────────────────────────────────────
+
+fn test_fit_mode()
+    let v = iv_create(800.0, 600.0, 400.0, 300.0)
+
+    iv_set_fit_mode(v, IV_FIT_NONE)
+    check("fit none", iv_get_fit_mode(v) == IV_FIT_NONE)
+
+    iv_set_fit_mode(v, IV_FIT_STRETCH)
+    check("fit stretch", iv_get_fit_mode(v) == IV_FIT_STRETCH)
+
+    // Invalid mode
+    let r = iv_set_fit_mode(v, 99.0)
+    check("fit bad", r == -1.0)
+
+    return 0.0
+end
+
+// ── Viewport resize ──────────────────────────────────────
+
+fn test_resize()
+    let v = iv_create(800.0, 600.0, 400.0, 300.0)
+    iv_resize_viewport(v, 1920.0, 1080.0)
+    check("resize w", iv_view_width(v) == 1920.0)
+    check("resize h", iv_view_height(v) == 1080.0)
+
+    // Clamp small
+    iv_resize_viewport(v, 0.0, 0.0)
+    check("resize clamp w", iv_view_width(v) == 1.0)
+    check("resize clamp h", iv_view_height(v) == 1.0)
+
+    return 0.0
+end
+
+// ── Image change ─────────────────────────────────────────
+
+fn test_set_image()
+    let v = iv_create(100.0, 100.0, 400.0, 300.0)
+    iv_pan(v, 50.0, 50.0)
+    iv_set_image(v, 1920.0, 1080.0)
+    check("set img w", iv_img_width(v) == 1920.0)
+    check("set img h", iv_img_height(v) == 1080.0)
+    check("set img pan reset x", iv_get_pan_x(v) == 0.0)
+    check("set img pan reset y", iv_get_pan_y(v) == 0.0)
+
+    return 0.0
+end
+
+// ── Coordinate mapping ──────────────────────────────────
+
+fn test_coords()
+    // 800x600 image, 800x600 viewport, zoom 1.0, no pan → 1:1
+    let v = iv_create(800.0, 600.0, 800.0, 600.0)
+    iv_set_fit_mode(v, IV_FIT_NONE)
+    iv_set_zoom(v, 1.0)
+
+    let mut result = [0.0, 0.0]
+
+    // Center of screen → center of image
+    iv_screen_to_image(v, 400.0, 300.0, result)
+    check("s2i center x", approx(result[0], 400.0) == 1.0)
+    check("s2i center y", approx(result[1], 300.0) == 1.0)
+
+    // Roundtrip
+    let mut result2 = [0.0, 0.0]
+    iv_image_to_screen(v, 400.0, 300.0, result2)
+    check("i2s center x", approx(result2[0], 400.0) == 1.0)
+    check("i2s center y", approx(result2[1], 300.0) == 1.0)
+
+    return 0.0
+end
+
+// ── Gallery ──────────────────────────────────────────────
+
+fn test_gallery()
+    let v = iv_create(100.0, 100.0, 400.0, 300.0)
+
+    // Add images to gallery
+    iv_gallery_add(v, 800.0, 600.0)
+    iv_gallery_add(v, 1920.0, 1080.0)
+    iv_gallery_add(v, 640.0, 480.0)
+
+    check("gal count", iv_gallery_count(v) == 3.0)
+    check("gal idx", iv_gallery_index(v) == 0.0)
+
+    // Next
+    iv_gallery_next(v)
+    check("gal next 1", iv_gallery_index(v) == 1.0)
+    check("gal next w", iv_img_width(v) == 1920.0)
+
+    iv_gallery_next(v)
+    check("gal next 2", iv_gallery_index(v) == 2.0)
+
+    // Wrap around
+    iv_gallery_next(v)
+    check("gal wrap", iv_gallery_index(v) == 0.0)
+
+    // Prev wrap
+    iv_gallery_prev(v)
+    check("gal prev wrap", iv_gallery_index(v) == 2.0)
+
+    // Goto
+    iv_gallery_goto(v, 1.0)
+    check("gal goto", iv_gallery_index(v) == 1.0)
+
+    // Bad goto
+    let r = iv_gallery_goto(v, 99.0)
+    check("gal bad goto", r == -1.0)
+
+    return 0.0
+end
+
+// ── Effective zoom ───────────────────────────────────────
+
+fn test_effective_zoom()
+    // 800x600 image in 400x300 viewport, FIT_CONTAIN → zoom = 0.5
+    let v = iv_create(800.0, 600.0, 400.0, 300.0)
+    iv_set_fit_mode(v, IV_FIT_CONTAIN)
+    let ez = iv_effective_zoom(v)
+    check("eff zoom contain", approx(ez, 0.5) == 1.0)
+
+    iv_set_fit_mode(v, IV_FIT_NONE)
+    iv_set_zoom(v, 3.0)
+    let ez2 = iv_effective_zoom(v)
+    check("eff zoom none", ez2 == 3.0)
+
+    return 0.0
+end
+
+// ── Edge cases ───────────────────────────────────────────
+
+fn test_edges()
+    // Invalid IDs
+    check("bad zoom", iv_set_zoom(-1.0, 2.0) == -1.0)
+    check("bad pan", iv_pan(-1.0, 0.0, 0.0) == -1.0)
+    check("bad rot", iv_rotate_cw(-1.0) == -1.0)
+    check("bad fit", iv_set_fit_mode(-1.0, 0.0) == -1.0)
+    check("bad w", iv_img_width(-1.0) == 0.0)
+
+    // Zero dimensions clamped
+    let v = iv_create(0.0, 0.0, 0.0, 0.0)
+    check("zero w", iv_img_width(v) == 1.0)
+    check("zero h", iv_img_height(v) == 1.0)
+    check("zero vw", iv_view_width(v) == 1.0)
+    check("zero vh", iv_view_height(v) == 1.0)
+
+    // Short result array for coords
+    let mut short = [0.0]
+    let r = iv_screen_to_image(v, 0.0, 0.0, short)
+    check("short result", r == -1.0)
+
+    // Empty gallery nav
+    let v2 = iv_create(100.0, 100.0, 200.0, 200.0)
+    check("empty gal next", iv_gallery_next(v2) == -1.0)
+    check("empty gal prev", iv_gallery_prev(v2) == -1.0)
+
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────────
+
+test_create()
+test_destroy()
+test_zoom()
+test_zoom_fit()
+test_zoom_fill()
+test_pan()
+test_rotation()
+test_fit_mode()
+test_resize()
+test_set_image()
+test_coords()
+test_gallery()
+test_effective_zoom()
+test_edges()
+print("")
+print("All image_viewer tests passed (14 tests)")

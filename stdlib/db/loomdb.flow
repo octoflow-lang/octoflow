@@ -1,12 +1,12 @@
-// stdlib/db/loomdb.flow — LoomDB: GPU-resident computed-data log with I/O isolation
+// stdlib/db/loomdb.flow — Loom State: GPU-resident state log with I/O isolation
 //
-// Architecture: Main Loom does ZERO I/O. LoomDB owns the full I/O boundary.
+// Architecture: Main Loom does ZERO I/O. Loom State owns the full I/O boundary.
 //
 //   Main Loom (zero I/O)
 //       │ capture()        ▲ search()
 //       │ (GPU→GPU)        │ (GPU→GPU)
 //       ▼                  │
-//   LoomDB Loom (owns ALL I/O)
+//   Loom State (owns ALL I/O)
 //       │ flush()          ▲ restore()
 //       │ (async)          │ (startup)
 //       ▼                  │
@@ -21,14 +21,14 @@
 //   loomdb_gpu_search, loomdb_normalize, loomdb_needs_flush,
 //   loomdb_extract_vector, loomdb_result_count/id/score/meta
 //
-// I/O boundary (LoomDB Loom only):
+// I/O boundary (Loom State only):
 //   loomdb_flush, loomdb_restore_meta, loomdb_restore_vectors
 //
 // NOTE: loom_stream_save/load are defined in vector.flow.
-// Import vector.flow if you need Loom stream persistence alongside LoomDB.
+// Import vector.flow if you need Loom stream persistence alongside Loom State.
 
 fn loomdb_create(dims, capacity)
-  // Create LoomDB metadata map
+  // Create Loom State metadata map
   //   dims     = embedding dimensions (clamped to >= 1)
   //   capacity = auto-flush threshold (0 = manual flush only)
   let mut actual_dims = dims

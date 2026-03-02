@@ -1,0 +1,140 @@
+// test_combinatorics.flow — Tests for stdlib/algo/combinatorics.flow
+use "combinatorics"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Factorial ───────────────────────────────────────────────
+
+fn test_factorial()
+    check("0!", comb_factorial(0.0) == 1.0)
+    check("1!", comb_factorial(1.0) == 1.0)
+    check("5!", comb_factorial(5.0) == 120.0)
+    check("7!", comb_factorial(7.0) == 5040.0)
+    return 0.0
+end
+
+// ── Binomial ────────────────────────────────────────────────
+
+fn test_binomial()
+    check("C(5,2)", comb_binomial(5.0, 2.0) == 10.0)
+    check("C(10,3)", comb_binomial(10.0, 3.0) == 120.0)
+    check("C(5,0)", comb_binomial(5.0, 0.0) == 1.0)
+    check("C(5,5)", comb_binomial(5.0, 5.0) == 1.0)
+    return 0.0
+end
+
+// ── Catalan ─────────────────────────────────────────────────
+
+fn test_catalan()
+    check("C_0", comb_catalan(0.0) == 1.0)
+    check("C_1", comb_catalan(1.0) == 1.0)
+    check("C_4", comb_catalan(4.0) == 14.0)
+    check("C_5", comb_catalan(5.0) == 42.0)
+    return 0.0
+end
+
+// ── Pascal's triangle ───────────────────────────────────────
+
+fn test_pascal()
+    let r0 = comb_pascal_row(0.0)
+    check("pascal r0", len(r0) == 1.0 && r0[0] == 1.0)
+
+    let r4 = comb_pascal_row(4.0)
+    check("pascal r4 len", len(r4) == 5.0)
+    check("pascal r4 mid", r4[2] == 6.0)
+    return 0.0
+end
+
+// ── Next permutation ────────────────────────────────────────
+
+fn test_next_perm()
+    let mut arr = [1.0, 2.0, 3.0]
+    let has_next = comb_next_permutation(arr)
+    check("next perm exists", has_next == 1.0)
+    check("next perm 132", arr[0] == 1.0 && arr[1] == 3.0 && arr[2] == 2.0)
+    return 0.0
+end
+
+fn test_next_perm_wrap()
+    let mut arr = [3.0, 2.0, 1.0]
+    let has_next = comb_next_permutation(arr)
+    check("perm wrap", has_next == 0.0)
+    check("perm wrapped to 123", arr[0] == 1.0 && arr[1] == 2.0 && arr[2] == 3.0)
+    return 0.0
+end
+
+// ── Generate permutations ───────────────────────────────────
+
+fn test_permutations()
+    let perms = comb_permutations(3.0)
+    // 3! = 6 permutations, 3 elements each = 18 total
+    check("perms count", len(perms) == 18.0)
+    // First perm should be [1,2,3]
+    check("perms first", perms[0] == 1.0 && perms[1] == 2.0 && perms[2] == 3.0)
+    return 0.0
+end
+
+// ── Generate combinations ───────────────────────────────────
+
+fn test_combinations()
+    let combos = comb_combinations(4.0, 2.0)
+    // C(4,2) = 6 combinations, 2 elements each = 12 total
+    check("combos count", len(combos) == 12.0)
+    // First combo should be [1,2]
+    check("combos first", combos[0] == 1.0 && combos[1] == 2.0)
+    // Last combo should be [3,4]
+    check("combos last", combos[10] == 3.0 && combos[11] == 4.0)
+    return 0.0
+end
+
+// ── Derangements ────────────────────────────────────────────
+
+fn test_derangements()
+    check("D(0)", comb_derangements(0.0) == 1.0)
+    check("D(1)", comb_derangements(1.0) == 0.0)
+    check("D(2)", comb_derangements(2.0) == 1.0)
+    check("D(4)", comb_derangements(4.0) == 9.0)
+    return 0.0
+end
+
+// ── Stirling second kind ────────────────────────────────────
+
+fn test_stirling()
+    check("S(4,2)", comb_stirling_second(4.0, 2.0) == 7.0)
+    check("S(5,3)", comb_stirling_second(5.0, 3.0) == 25.0)
+    check("S(n,1)", comb_stirling_second(5.0, 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Bell numbers ────────────────────────────────────────────
+
+fn test_bell()
+    check("B(0)", comb_bell(0.0) == 1.0)
+    check("B(3)", comb_bell(3.0) == 5.0)
+    check("B(4)", comb_bell(4.0) == 15.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_factorial()
+test_binomial()
+test_catalan()
+test_pascal()
+test_next_perm()
+test_next_perm_wrap()
+test_permutations()
+test_combinations()
+test_derangements()
+test_stirling()
+test_bell()
+print("")
+print("All combinatorics tests passed (11 tests)")

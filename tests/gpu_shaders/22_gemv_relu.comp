@@ -1,0 +1,45 @@
+#version 450
+// gemv_relu — General Matrix-Vector multiply with ReLU activation
+// y[row] = max(0, sum_i(W[row*N+i] * x[i]) + b[row])
+//
+// Each WORKGROUP computes one output neuron.
+// Threads cooperatively reduce the dot product via shared memory.
+// 4 bindings (W, x, b, y), 1 push constant (N = input dimension).
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Weights { float data[]; } w;
+layout(set=0, binding=1) buffer Input   { float data[]; } x;
+layout(set=0, binding=2) buffer Bias    { float data[]; } b;
+layout(set=0, binding=3) buffer Output  { float data[]; } y;
+
+layout(push_constant) uniform PC { float n_input; } pc;
+
+shared float partial[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;        // output neuron index
+    uint tid = gl_LocalInvocationID.x;  // thread within workgroup
+    uint N = uint(pc.n_input);
+
+    // Each thread accumulates partial dot product (strided access)
+    float sum = 0.0;
+    for (uint i = tid; i < N; i += 256u) {
+        sum += w.data[row * N + i] * x.data[i];
+    }
+
+    partial[tid] = sum;
+    barrier();
+
+    // Tree reduction in shared memory
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            partial[tid] += partial[tid + s];
+        }
+        barrier();
+    }
+
+    // Thread 0 writes result with bias + ReLU
+    if (tid == 0u) {
+        y.data[row] = max(partial[0] + b.data[row], 0.0);
+    }
+}

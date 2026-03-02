@@ -1,0 +1,275 @@
+// stdlib/algo/backtracking.flow — Classic backtracking algorithms
+//
+// N-Queens, Sudoku solver, subset generation, parentheses generation.
+// Uses flat arrays for board representation and iterative backtracking
+// to avoid recursion depth issues.
+//
+// Functions: bt_n_queens, bt_n_queens_count, bt_sudoku_solve,
+//            bt_generate_subsets_count, bt_generate_parentheses,
+//            bt_is_valid_sudoku
+//
+// Usage:
+//   use "backtracking"
+//   let count = bt_n_queens_count(8.0)    // 92
+//   let board = bt_sudoku_solve(puzzle)    // solved flat 81-element array
+
+fn _nq_is_safe(queens, row, col)
+    // Check if placing queen at (row, col) is safe.
+    // queens[i] = column of queen in row i.
+    let mut i = 0.0
+    while i < row
+        let qc = queens[i]
+        if qc == col
+            return 0.0
+        end
+        if abs(qc - col) == abs(i - row)
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn bt_n_queens(n)
+    // Solve N-Queens problem. Returns first solution as flat array
+    // where result[i] = column of queen in row i.
+    // Returns empty array if no solution exists.
+    let mut queens = []
+    let mut i = 0.0
+    while i < n
+        push(queens, -1.0)
+        i = i + 1.0
+    end
+
+    // Iterative backtracking
+    let mut row = 0.0
+    while row >= 0.0 && row < n
+        let mut col = queens[row] + 1.0
+        let mut placed = 0.0
+
+        while col < n && placed == 0.0
+            if _nq_is_safe(queens, row, col) == 1.0
+                queens[row] = col
+                placed = 1.0
+            else
+                col = col + 1.0
+            end
+        end
+
+        if placed == 1.0
+            row = row + 1.0
+        else
+            // Backtrack
+            queens[row] = -1.0
+            row = row - 1.0
+        end
+    end
+
+    if row < 0.0
+        let mut empty = []
+        return empty
+    end
+    return queens
+end
+
+fn bt_n_queens_count(n)
+    // Count all solutions to N-Queens problem.
+    let mut queens = []
+    let mut i = 0.0
+    while i < n
+        push(queens, -1.0)
+        i = i + 1.0
+    end
+
+    let mut count = 0.0
+    let mut row = 0.0
+
+    while row >= 0.0
+        let mut col = queens[row] + 1.0
+        let mut placed = 0.0
+
+        while col < n && placed == 0.0
+            if _nq_is_safe(queens, row, col) == 1.0
+                queens[row] = col
+                placed = 1.0
+            else
+                col = col + 1.0
+            end
+        end
+
+        if placed == 1.0
+            if row == n - 1.0
+                // Found a solution
+                count = count + 1.0
+                // Continue searching — backtrack from here
+                queens[row] = -1.0
+                row = row - 1.0
+            else
+                row = row + 1.0
+            end
+        else
+            queens[row] = -1.0
+            row = row - 1.0
+        end
+    end
+    return count
+end
+
+fn bt_is_valid_sudoku(board, row, col, num)
+    // Check if placing num at (row, col) on 9x9 board is valid.
+    // Board is flat array of 81 elements (0 = empty).
+    let mut i = 0.0
+
+    // Check row
+    while i < 9.0
+        if board[row * 9.0 + i] == num
+            return 0.0
+        end
+        i = i + 1.0
+    end
+
+    // Check column
+    i = 0.0
+    while i < 9.0
+        if board[i * 9.0 + col] == num
+            return 0.0
+        end
+        i = i + 1.0
+    end
+
+    // Check 3x3 box
+    let box_r = floor(row / 3.0) * 3.0
+    let box_c = floor(col / 3.0) * 3.0
+    let mut r = box_r
+    while r < box_r + 3.0
+        let mut c = box_c
+        while c < box_c + 3.0
+            if board[r * 9.0 + c] == num
+                return 0.0
+            end
+            c = c + 1.0
+        end
+        r = r + 1.0
+    end
+    return 1.0
+end
+
+fn bt_sudoku_solve(board)
+    // Solve a 9x9 Sudoku puzzle using iterative backtracking.
+    // Board is flat 81-element array where 0 = empty cell.
+    // Modifies board in-place. Returns 1.0 if solved, 0.0 if unsolvable.
+
+    // Find all empty cells
+    let mut empties = []
+    let mut i = 0.0
+    while i < 81.0
+        if board[i] == 0.0
+            push(empties, i)
+        end
+        i = i + 1.0
+    end
+
+    let n_empty = len(empties)
+    if n_empty == 0.0
+        return 1.0
+    end
+
+    // Track what value we've tried at each empty position
+    let mut tries = []
+    i = 0.0
+    while i < n_empty
+        push(tries, 0.0)
+        i = i + 1.0
+    end
+
+    let mut idx = 0.0
+    while idx >= 0.0 && idx < n_empty
+        let pos = empties[idx]
+        let row = floor(pos / 9.0)
+        let col = pos - row * 9.0
+        let mut num = tries[idx] + 1.0
+        let mut placed = 0.0
+
+        while num <= 9.0 && placed == 0.0
+            if bt_is_valid_sudoku(board, row, col, num) == 1.0
+                board[pos] = num
+                tries[idx] = num
+                placed = 1.0
+            else
+                num = num + 1.0
+            end
+        end
+
+        if placed == 1.0
+            idx = idx + 1.0
+        else
+            // Backtrack
+            board[pos] = 0.0
+            tries[idx] = 0.0
+            idx = idx - 1.0
+        end
+    end
+
+    if idx < 0.0
+        return 0.0
+    end
+    return 1.0
+end
+
+fn bt_generate_subsets_count(n)
+    // Count total subsets of a set with n elements: 2^n.
+    let mut result = 1.0
+    let mut i = 0.0
+    while i < n
+        result = result * 2.0
+        i = i + 1.0
+    end
+    return result
+end
+
+fn bt_generate_parentheses(n)
+    // Generate all valid combinations of n pairs of parentheses.
+    // Returns flat string array where each string is a valid combination.
+    // Uses iterative approach with explicit stack.
+    if n == 0.0
+        let mut r = []
+        push(r, "")
+        return r
+    end
+
+    let mut results = []
+
+    // Stack entries: [string_so_far_in_map, open_count, close_count]
+    // We'll use parallel arrays for the stack
+    let mut st_str = []    // strings
+    let mut st_open = []   // open count
+    let mut st_close = []  // close count
+
+    push(st_str, "")
+    push(st_open, 0.0)
+    push(st_close, 0.0)
+
+    while len(st_str) > 0.0
+        let s = pop(st_str)
+        let open = pop(st_open)
+        let close = pop(st_close)
+
+        if open == n && close == n
+            push(results, s)
+        else
+            // Can add closing paren?
+            if close < open
+                push(st_str, s + ")")
+                push(st_open, open)
+                push(st_close, close + 1.0)
+            end
+            // Can add opening paren?
+            if open < n
+                push(st_str, s + "(")
+                push(st_open, open + 1.0)
+                push(st_close, close)
+            end
+        end
+    end
+    return results
+end

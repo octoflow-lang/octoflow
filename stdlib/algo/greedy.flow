@@ -1,0 +1,352 @@
+// stdlib/algo/greedy.flow — Classic greedy algorithms
+//
+// Activity selection, fractional knapsack, coin change (greedy),
+// job sequencing, minimum platforms, and Huffman code lengths.
+// All use flat arrays.
+//
+// Functions: greedy_activity_selection, greedy_fractional_knapsack,
+//            greedy_coin_change, greedy_job_sequencing,
+//            greedy_min_platforms, greedy_huffman_lengths
+//
+// Usage:
+//   use "greedy"
+//   // Activities: [start0, end0, start1, end1, ...]
+//   let mut acts = [1.0, 4.0, 3.0, 5.0, 0.0, 6.0, 5.0, 7.0]
+//   let selected = greedy_activity_selection(acts, 4.0)
+
+fn greedy_activity_selection(activities, n)
+    // Select maximum non-overlapping activities.
+    // Input: flat array [start0, end0, start1, end1, ...], n = count.
+    // Returns flat array of selected activity indices.
+    if n == 0.0
+        let mut empty = []
+        return empty
+    end
+
+    // Sort by end time (insertion sort on pairs)
+    let mut sorted = []
+    let mut i = 0.0
+    while i < n
+        push(sorted, activities[i * 2.0])
+        push(sorted, activities[i * 2.0 + 1.0])
+        push(sorted, i)  // original index
+        i = i + 1.0
+    end
+
+    i = 1.0
+    while i < n
+        let ks = sorted[i * 3.0]
+        let ke = sorted[i * 3.0 + 1.0]
+        let ki = sorted[i * 3.0 + 2.0]
+        let mut j = i - 1.0
+        while j >= 0.0 && sorted[j * 3.0 + 1.0] > ke
+            sorted[(j + 1.0) * 3.0] = sorted[j * 3.0]
+            sorted[(j + 1.0) * 3.0 + 1.0] = sorted[j * 3.0 + 1.0]
+            sorted[(j + 1.0) * 3.0 + 2.0] = sorted[j * 3.0 + 2.0]
+            j = j - 1.0
+        end
+        sorted[(j + 1.0) * 3.0] = ks
+        sorted[(j + 1.0) * 3.0 + 1.0] = ke
+        sorted[(j + 1.0) * 3.0 + 2.0] = ki
+        i = i + 1.0
+    end
+
+    // Greedy selection
+    let mut result = []
+    push(result, sorted[2])  // select first activity
+    let mut last_end = sorted[1]
+
+    i = 1.0
+    while i < n
+        let start = sorted[i * 3.0]
+        if start >= last_end
+            push(result, sorted[i * 3.0 + 2.0])
+            last_end = sorted[i * 3.0 + 1.0]
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn greedy_fractional_knapsack(values, weights, n, capacity)
+    // Fractional knapsack: maximize value within capacity.
+    // Items can be fractionally included.
+    // Returns total value achieved.
+    if n == 0.0 || capacity <= 0.0
+        return 0.0
+    end
+
+    // Sort by value/weight ratio (descending) — insertion sort
+    let mut ratio = []
+    let mut i = 0.0
+    while i < n
+        push(ratio, values[i] / weights[i])
+        push(ratio, values[i])
+        push(ratio, weights[i])
+        i = i + 1.0
+    end
+
+    i = 1.0
+    while i < n
+        let kr = ratio[i * 3.0]
+        let kv = ratio[i * 3.0 + 1.0]
+        let kw = ratio[i * 3.0 + 2.0]
+        let mut j = i - 1.0
+        while j >= 0.0 && ratio[j * 3.0] < kr
+            ratio[(j + 1.0) * 3.0] = ratio[j * 3.0]
+            ratio[(j + 1.0) * 3.0 + 1.0] = ratio[j * 3.0 + 1.0]
+            ratio[(j + 1.0) * 3.0 + 2.0] = ratio[j * 3.0 + 2.0]
+            j = j - 1.0
+        end
+        ratio[(j + 1.0) * 3.0] = kr
+        ratio[(j + 1.0) * 3.0 + 1.0] = kv
+        ratio[(j + 1.0) * 3.0 + 2.0] = kw
+        i = i + 1.0
+    end
+
+    // Greedy fill
+    let mut total = 0.0
+    let mut remaining = capacity
+    i = 0.0
+    while i < n && remaining > 0.0
+        let w = ratio[i * 3.0 + 2.0]
+        let v = ratio[i * 3.0 + 1.0]
+        if w <= remaining
+            total = total + v
+            remaining = remaining - w
+        else
+            total = total + v * (remaining / w)
+            remaining = 0.0
+        end
+        i = i + 1.0
+    end
+    return total
+end
+
+fn greedy_coin_change(coins, n, amount)
+    // Greedy coin change (works optimally for canonical coin systems).
+    // Coins should be sorted descending. Returns array of coin counts.
+    let mut result = []
+    let mut remaining = amount
+    let mut i = 0.0
+    while i < n
+        let count = floor(remaining / coins[i])
+        push(result, count)
+        remaining = remaining - count * coins[i]
+        i = i + 1.0
+    end
+    return result
+end
+
+fn greedy_job_sequencing(deadlines, profits, n)
+    // Job sequencing with deadlines: maximize profit.
+    // Each job takes 1 unit of time. Jobs must finish by deadline.
+    // Returns total profit.
+    if n == 0.0
+        return 0.0
+    end
+
+    // Sort by profit descending
+    let mut jobs = []
+    let mut i = 0.0
+    while i < n
+        push(jobs, profits[i])
+        push(jobs, deadlines[i])
+        i = i + 1.0
+    end
+
+    i = 1.0
+    while i < n
+        let kp = jobs[i * 2.0]
+        let kd = jobs[i * 2.0 + 1.0]
+        let mut j = i - 1.0
+        while j >= 0.0 && jobs[j * 2.0] < kp
+            jobs[(j + 1.0) * 2.0] = jobs[j * 2.0]
+            jobs[(j + 1.0) * 2.0 + 1.0] = jobs[j * 2.0 + 1.0]
+            j = j - 1.0
+        end
+        jobs[(j + 1.0) * 2.0] = kp
+        jobs[(j + 1.0) * 2.0 + 1.0] = kd
+        i = i + 1.0
+    end
+
+    // Find max deadline
+    let mut max_d = 0.0
+    i = 0.0
+    while i < n
+        if jobs[i * 2.0 + 1.0] > max_d
+            max_d = jobs[i * 2.0 + 1.0]
+        end
+        i = i + 1.0
+    end
+
+    // Schedule: slot[t] = 1 means time slot t is taken
+    let mut slots = []
+    i = 0.0
+    while i <= max_d
+        push(slots, 0.0)
+        i = i + 1.0
+    end
+
+    let mut total_profit = 0.0
+    i = 0.0
+    while i < n
+        let profit = jobs[i * 2.0]
+        let deadline = jobs[i * 2.0 + 1.0]
+        // Find latest available slot before deadline
+        let mut t = deadline
+        while t > 0.0
+            if slots[t] == 0.0
+                slots[t] = 1.0
+                total_profit = total_profit + profit
+                t = -1.0  // break
+            else
+                t = t - 1.0
+            end
+        end
+        i = i + 1.0
+    end
+    return total_profit
+end
+
+fn greedy_min_platforms(arrivals, departures, n)
+    // Minimum platforms needed at a train station.
+    // Arrivals and departures are sorted arrays.
+    // Returns minimum platforms needed.
+    if n == 0.0
+        return 0.0
+    end
+
+    // Sort both arrays (insertion sort)
+    let mut arr = []
+    let mut dep = []
+    let mut i = 0.0
+    while i < n
+        push(arr, arrivals[i])
+        push(dep, departures[i])
+        i = i + 1.0
+    end
+
+    // Sort arrivals
+    i = 1.0
+    while i < n
+        let key = arr[i]
+        let mut j = i - 1.0
+        while j >= 0.0 && arr[j] > key
+            arr[j + 1.0] = arr[j]
+            j = j - 1.0
+        end
+        arr[j + 1.0] = key
+        i = i + 1.0
+    end
+
+    // Sort departures
+    i = 1.0
+    while i < n
+        let key = dep[i]
+        let mut j = i - 1.0
+        while j >= 0.0 && dep[j] > key
+            dep[j + 1.0] = dep[j]
+            j = j - 1.0
+        end
+        dep[j + 1.0] = key
+        i = i + 1.0
+    end
+
+    // Two-pointer sweep
+    let mut platforms = 1.0
+    let mut max_platforms = 1.0
+    let mut ai = 1.0
+    let mut di = 0.0
+    while ai < n && di < n
+        if arr[ai] <= dep[di]
+            platforms = platforms + 1.0
+            ai = ai + 1.0
+        else
+            platforms = platforms - 1.0
+            di = di + 1.0
+        end
+        if platforms > max_platforms
+            max_platforms = platforms
+        end
+    end
+    return max_platforms
+end
+
+fn greedy_huffman_lengths(freqs, n)
+    // Compute Huffman code lengths for n symbols with given frequencies.
+    // Returns array of code lengths.
+    // Uses iterative bottom-up approach with a simple priority extraction.
+    if n == 0.0
+        let mut empty = []
+        return empty
+    end
+    if n == 1.0
+        let mut r = [1.0]
+        return r
+    end
+
+    // Track: freq[], depth[] — merge smallest two repeatedly
+    let mut freq_arr = []
+    let mut depth_arr = []
+    let mut active = []  // 1.0 if still in play
+    let mut i = 0.0
+    while i < n
+        push(freq_arr, freqs[i])
+        push(depth_arr, 0.0)
+        push(active, 1.0)
+        i = i + 1.0
+    end
+
+    let total = n
+    let mut merges = n - 1.0
+    let mut guard = 0.0
+
+    while merges > 0.0 && guard < total * total
+        // Find two smallest active entries
+        let mut min1_idx = -1.0
+        let mut min2_idx = -1.0
+        let mut min1_val = 999999999.0
+        let mut min2_val = 999999999.0
+
+        i = 0.0
+        while i < len(freq_arr)
+            if active[i] == 1.0
+                if freq_arr[i] < min1_val
+                    min2_val = min1_val
+                    min2_idx = min1_idx
+                    min1_val = freq_arr[i]
+                    min1_idx = i
+                elif freq_arr[i] < min2_val
+                    min2_val = freq_arr[i]
+                    min2_idx = i
+                end
+            end
+            i = i + 1.0
+        end
+
+        if min1_idx < 0.0 || min2_idx < 0.0
+            merges = 0.0
+        else
+            // Merge: increase depth of all symbols in both groups
+            // For simplicity, increment depths of min1 and min2
+            depth_arr[min1_idx] = depth_arr[min1_idx] + 1.0
+            depth_arr[min2_idx] = depth_arr[min2_idx] + 1.0
+
+            // Merge into min1, deactivate min2
+            freq_arr[min1_idx] = freq_arr[min1_idx] + freq_arr[min2_idx]
+            active[min2_idx] = 0.0
+            merges = merges - 1.0
+        end
+        guard = guard + 1.0
+    end
+
+    // Return just the original n depths
+    let mut result = []
+    i = 0.0
+    while i < n
+        push(result, depth_arr[i])
+        i = i + 1.0
+    end
+    return result
+end

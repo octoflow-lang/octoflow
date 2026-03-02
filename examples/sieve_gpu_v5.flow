@@ -212,7 +212,7 @@ let REG_SIZE = OFFSET_BASE + num_primes
 let mut vms = []
 let mut bi = 0.0
 while bi < NUM_VMS
-  let r = try(vm_boot(1.0, REG_SIZE, GLOBALS_SIZE))
+  let r = try(loom_boot(1.0, REG_SIZE, GLOBALS_SIZE))
   if r.ok > 0.5
     push(vms, r.value)
     let _w = vm_write_globals(r.value, 0.0, small_primes)
@@ -358,7 +358,7 @@ let t0_exec = now_ms()
 
 let mut ei = 0.0
 while ei < active_vms
-  let _ea = vm_execute_async(progs[ei])
+  let _ea = loom_launch(progs[ei])
   ei = ei + 1.0
 end
 
@@ -374,7 +374,7 @@ while done_count < active_vms
   let mut pi = 0.0
   while pi < active_vms
     if done_flags[pi] < 0.5
-      let status = vm_poll(progs[pi])
+      let status = loom_poll(progs[pi])
       if status > 0.5
         done_flags[pi] = 1.0
         done_count = done_count + 1.0

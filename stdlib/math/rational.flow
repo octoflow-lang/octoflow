@@ -1,0 +1,183 @@
+// stdlib/math/rational.flow — Exact rational number arithmetic
+//
+// Rationals stored as [numerator, denominator] pairs.
+// Always kept in lowest terms with positive denominator.
+//
+// Functions: rat, rat_num, rat_den, rat_simplify,
+//            rat_add, rat_sub, rat_mul, rat_div,
+//            rat_neg, rat_abs, rat_inv,
+//            rat_eq, rat_cmp, rat_lt, rat_gt,
+//            rat_to_float, rat_from_int,
+//            rat_to_string, rat_is_zero, rat_is_integer
+//
+// Usage:
+//   use "rational"
+//   let a = rat(1.0, 3.0)    // 1/3
+//   let b = rat(1.0, 6.0)    // 1/6
+//   let c = rat_add(a, b)    // 1/2
+//   rat_to_string(c)          // "1/2"
+//   rat_to_float(c)           // 0.5
+
+fn _rat_gcd(a, b)
+    let mut x = abs(a)
+    let mut y = abs(b)
+    while y > 0.5
+        let temp = y
+        y = x - floor(x / y) * y
+        x = temp
+    end
+    return x
+end
+
+fn rat(num, den)
+    // Create a rational number num/den in lowest terms.
+    if den == 0.0
+        // Division by zero → return 0/1
+        let mut r = [0.0, 1.0]
+        return r
+    end
+
+    let mut n = num
+    let mut d = den
+
+    // Ensure positive denominator
+    if d < 0.0
+        n = 0.0 - n
+        d = 0.0 - d
+    end
+
+    // Reduce to lowest terms
+    let g = _rat_gcd(abs(n), d)
+    if g > 0.5
+        n = n / g
+        d = d / g
+    end
+
+    let mut r = [n, d]
+    return r
+end
+
+fn rat_num(r)
+    return r[0]
+end
+
+fn rat_den(r)
+    return r[1]
+end
+
+fn rat_simplify(r)
+    return rat(r[0], r[1])
+end
+
+fn rat_add(a, b)
+    // a/b + c/d = (a*d + c*b) / (b*d)
+    let num = a[0] * b[1] + b[0] * a[1]
+    let den = a[1] * b[1]
+    return rat(num, den)
+end
+
+fn rat_sub(a, b)
+    let num = a[0] * b[1] - b[0] * a[1]
+    let den = a[1] * b[1]
+    return rat(num, den)
+end
+
+fn rat_mul(a, b)
+    let num = a[0] * b[0]
+    let den = a[1] * b[1]
+    return rat(num, den)
+end
+
+fn rat_div(a, b)
+    // a / b = a * (1/b)
+    if b[0] == 0.0
+        let mut r = [0.0, 1.0]
+        return r
+    end
+    let num = a[0] * b[1]
+    let den = a[1] * b[0]
+    return rat(num, den)
+end
+
+fn rat_neg(r)
+    return rat(0.0 - r[0], r[1])
+end
+
+fn rat_abs(r)
+    return rat(abs(r[0]), r[1])
+end
+
+fn rat_inv(r)
+    // Reciprocal: 1/r
+    if r[0] == 0.0
+        let mut result = [0.0, 1.0]
+        return result
+    end
+    return rat(r[1], r[0])
+end
+
+fn rat_eq(a, b)
+    // Check if two rationals are equal (both should be simplified).
+    if a[0] == b[0] && a[1] == b[1]
+        return 1.0
+    end
+    return 0.0
+end
+
+fn rat_cmp(a, b)
+    // Compare: returns -1.0 if a < b, 0.0 if equal, 1.0 if a > b.
+    let diff = a[0] * b[1] - b[0] * a[1]
+    if diff < 0.0
+        return -1.0
+    end
+    if diff > 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn rat_lt(a, b)
+    if rat_cmp(a, b) < 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn rat_gt(a, b)
+    if rat_cmp(a, b) > 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn rat_to_float(r)
+    if r[1] == 0.0
+        return 0.0
+    end
+    return r[0] / r[1]
+end
+
+fn rat_from_int(n)
+    return rat(n, 1.0)
+end
+
+fn rat_to_string(r)
+    if r[1] == 1.0
+        return str(r[0])
+    end
+    return str(r[0]) + "/" + str(r[1])
+end
+
+fn rat_is_zero(r)
+    if r[0] == 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn rat_is_integer(r)
+    if r[1] == 1.0
+        return 1.0
+    end
+    return 0.0
+end

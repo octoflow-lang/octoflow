@@ -1,0 +1,183 @@
+// test_string_algo.flow — Tests for stdlib/string/string_algo.flow
+use "string_algo"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Edit Distance ─────────────────────────────────────────────
+
+fn test_levenshtein()
+    check("lev same", levenshtein("hello", "hello") == 0.0)
+    check("lev kitten", levenshtein("kitten", "sitting") == 3.0)
+    check("lev empty a", levenshtein("", "abc") == 3.0)
+    check("lev empty b", levenshtein("abc", "") == 3.0)
+    check("lev both empty", levenshtein("", "") == 0.0)
+    check("lev single", levenshtein("a", "b") == 1.0)
+    return 0.0
+end
+
+fn test_hamming()
+    check("ham same", hamming_distance("hello", "hello") == 0.0)
+    check("ham diff", hamming_distance("karolin", "kathrin") == 3.0)
+    check("ham len mismatch", hamming_distance("ab", "abc") == -1.0)
+    return 0.0
+end
+
+fn test_similarity()
+    check("sim identical", approx(str_similarity("hello", "hello"), 1.0) == 1.0)
+    check("sim empty", approx(str_similarity("", ""), 1.0) == 1.0)
+    check("sim diff", str_similarity("abc", "xyz") < 0.1)
+    check("sim close", str_similarity("hello", "hallo") > 0.7)
+    return 0.0
+end
+
+fn test_lcs()
+    check("lcs basic", str_lcs_length("abcde", "ace") == 3.0)
+    check("lcs same", str_lcs_length("abc", "abc") == 3.0)
+    check("lcs none", str_lcs_length("abc", "xyz") == 0.0)
+    check("lcs empty", str_lcs_length("abc", "") == 0.0)
+    return 0.0
+end
+
+// ── Case Conversion ───────────────────────────────────────────
+
+fn test_to_snake()
+    check("snake camel", str_to_snake("helloWorld") == "hello_world")
+    check("snake pascal", str_to_snake("HelloWorld") == "hello_world")
+    check("snake kebab", str_to_snake("hello-world") == "hello_world")
+    check("snake already", str_to_snake("hello_world") == "hello_world")
+    return 0.0
+end
+
+fn test_to_camel()
+    check("camel snake", str_to_camel("hello_world") == "helloWorld")
+    check("camel kebab", str_to_camel("hello-world") == "helloWorld")
+    check("camel spaces", str_to_camel("hello world") == "helloWorld")
+    return 0.0
+end
+
+fn test_to_pascal()
+    check("pascal snake", str_to_pascal("hello_world") == "HelloWorld")
+    check("pascal kebab", str_to_pascal("hello-world") == "HelloWorld")
+    return 0.0
+end
+
+fn test_to_kebab()
+    check("kebab camel", str_to_kebab("helloWorld") == "hello-world")
+    check("kebab snake", str_to_kebab("hello_world") == "hello-world")
+    return 0.0
+end
+
+fn test_capitalize_words()
+    check("cap words", str_capitalize_words("hello world") == "Hello World")
+    check("cap single", str_capitalize_words("hello") == "Hello")
+    return 0.0
+end
+
+// ── String Tests ──────────────────────────────────────────────
+
+fn test_palindrome()
+    check("pal yes", str_is_palindrome("racecar") == 1.0)
+    check("pal no", str_is_palindrome("hello") == 0.0)
+    check("pal single", str_is_palindrome("a") == 1.0)
+    check("pal empty", str_is_palindrome("") == 1.0)
+    check("pal abba", str_is_palindrome("abba") == 1.0)
+    return 0.0
+end
+
+fn test_starts_ends()
+    check("starts yes", str_starts_with("hello world", "hello") == 1.0)
+    check("starts no", str_starts_with("hello world", "world") == 0.0)
+    check("starts empty", str_starts_with("hello", "") == 1.0)
+    check("ends yes", str_ends_with("hello world", "world") == 1.0)
+    check("ends no", str_ends_with("hello world", "hello") == 0.0)
+    check("ends empty", str_ends_with("hello", "") == 1.0)
+    return 0.0
+end
+
+// ── Common Prefix / Suffix ────────────────────────────────────
+
+fn test_common_prefix()
+    check("prefix basic", str_common_prefix("interface", "internet") == "inter")
+    check("prefix none", str_common_prefix("abc", "xyz") == "")
+    check("prefix same", str_common_prefix("hello", "hello") == "hello")
+    return 0.0
+end
+
+fn test_common_suffix()
+    check("suffix basic", str_common_suffix("testing", "running") == "ing")
+    check("suffix none", str_common_suffix("abc", "xyz") == "")
+    return 0.0
+end
+
+// ── Utilities ─────────────────────────────────────────────────
+
+fn test_repeat()
+    check("repeat 3", str_repeat("ab", 3.0) == "ababab")
+    check("repeat 0", str_repeat("ab", 0.0) == "")
+    check("repeat 1", str_repeat("x", 1.0) == "x")
+    return 0.0
+end
+
+fn test_contains_any()
+    check("contains any yes", str_contains_any("hello", "aeiou") == 1.0)
+    check("contains any no", str_contains_any("xyz", "aeiou") == 0.0)
+    return 0.0
+end
+
+fn test_replace_all()
+    check("replace basic", str_replace_all("hello world", "o", "0") == "hell0 w0rld")
+    check("replace multi", str_replace_all("aabbcc", "bb", "XX") == "aaXXcc")
+    check("replace none", str_replace_all("hello", "z", "!") == "hello")
+    return 0.0
+end
+
+fn test_count_occurrences()
+    check("count occ", str_count_occurrences("banana", "an") == 2.0)
+    check("count occ none", str_count_occurrences("hello", "xyz") == 0.0)
+    return 0.0
+end
+
+fn test_index_of()
+    check("index found", str_index_of("hello world", "world") == 6.0)
+    check("index start", str_index_of("hello", "hel") == 0.0)
+    check("index not found", str_index_of("hello", "xyz") == -1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_levenshtein()
+test_hamming()
+test_similarity()
+test_lcs()
+test_to_snake()
+test_to_camel()
+test_to_pascal()
+test_to_kebab()
+test_capitalize_words()
+test_palindrome()
+test_starts_ends()
+test_common_prefix()
+test_common_suffix()
+test_repeat()
+test_contains_any()
+test_replace_all()
+test_count_occurrences()
+test_index_of()
+print("")
+print("All string algorithm tests passed (18 tests)")

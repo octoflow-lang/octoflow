@@ -1,0 +1,743 @@
+// video_editor.flow — Video timeline editor
+// Clip management, track arrangement, preview, render queue, markers, undo.
+// Builds on timeline.flow, video_player.flow.
+// Depends on: timeline.flow, video_player.flow
+
+// ── Editor state ─────────────────────────────────────────
+let VE_STATE_IDLE    = 0.0
+let VE_STATE_PREVIEW = 1.0
+let VE_STATE_RENDER  = 2.0
+
+// ── Snap modes ───────────────────────────────────────────
+let VE_SNAP_NONE     = 0.0
+let VE_SNAP_CLIP     = 1.0   // Snap to clip edges
+let VE_SNAP_MARKER   = 2.0   // Snap to markers
+let VE_SNAP_FRAME    = 3.0   // Snap to frame boundaries
+
+// ── Internal storage ─────────────────────────────────────
+let mut _ve_tl_id       = []   // Timeline ID
+let mut _ve_vp_id       = []   // Video player ID for preview
+let mut _ve_state       = []   // Editor state
+let mut _ve_cursor      = []   // Playhead position (seconds)
+let mut _ve_sel_clip    = []   // Selected clip ID (-1 = none)
+let mut _ve_sel_track   = []   // Selected track index (-1 = none)
+let mut _ve_in_point    = []   // In-point for marking (seconds)
+let mut _ve_out_point   = []   // Out-point for marking (seconds)
+let mut _ve_snap_mode   = []   // Snap mode
+let mut _ve_snap_thresh = []   // Snap threshold (seconds)
+let mut _ve_zoom        = []   // Timeline zoom (pixels per second)
+let mut _ve_scroll      = []   // Horizontal scroll (seconds)
+let mut _ve_track_h     = []   // Track height in pixels
+let mut _ve_view_w      = []   // View width in pixels
+let mut _ve_view_h      = []   // View height in pixels
+let mut _ve_alive       = []
+
+// Markers: [editor_id, time, type, 0] per marker
+let VE_MARKER_STRIDE = 4.0
+let mut _ve_marker_data  = []
+let mut _ve_marker_count = []
+
+// Render queue: [editor_id, start, end, out_id, status] per entry
+let VE_RQ_STRIDE = 5.0
+let VE_RQ_PENDING  = 0.0
+let VE_RQ_RUNNING  = 1.0
+let VE_RQ_DONE     = 2.0
+let mut _ve_rq_data  = []
+let mut _ve_rq_count = []
+
+// Undo: [editor_id, action, clip_id, param1, param2, 0, 0, 0]
+let VE_UNDO_STRIDE = 8.0
+let VE_MAX_UNDO = 50.0
+let mut _ve_undo_data  = []
+let mut _ve_undo_count = []
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn ve_create(fps, view_w, view_h)
+    let id = len(_ve_alive)
+    let mut f = fps
+    if f < 1.0
+        f = 30.0
+    end
+    if f > 240.0
+        f = 240.0
+    end
+    let tl = tl_create(f)
+    let vp = vp_create(tl, f)
+    push(_ve_tl_id, tl)
+    push(_ve_vp_id, vp)
+    push(_ve_state, VE_STATE_IDLE)
+    push(_ve_cursor, 0.0)
+    push(_ve_sel_clip, -1.0)
+    push(_ve_sel_track, -1.0)
+    push(_ve_in_point, -1.0)
+    push(_ve_out_point, -1.0)
+    push(_ve_snap_mode, VE_SNAP_CLIP)
+    push(_ve_snap_thresh, 0.1)
+    let mut vw = view_w
+    let mut vh = view_h
+    if vw < 1.0
+        vw = 800.0
+    end
+    if vh < 1.0
+        vh = 400.0
+    end
+    push(_ve_zoom, 100.0)   // 100 pixels per second
+    push(_ve_scroll, 0.0)
+    push(_ve_track_h, 60.0)
+    push(_ve_view_w, vw)
+    push(_ve_view_h, vh)
+    push(_ve_alive, 1.0)
+    push(_ve_marker_count, 0.0)
+    push(_ve_rq_count, 0.0)
+    push(_ve_undo_count, 0.0)
+    return id
+end
+
+fn ve_destroy(id)
+    if id < 0.0 || id >= len(_ve_alive)
+        return -1.0
+    end
+    _ve_alive[id] = 0.0
+    if _ve_vp_id[id] >= 0.0
+        vp_destroy(_ve_vp_id[id])
+    end
+    return 0.0
+end
+
+fn _ve_valid(id)
+    if id < 0.0 || id >= len(_ve_alive)
+        return 0.0
+    end
+    if _ve_alive[id] < 0.5
+        return 0.0
+    end
+    return 1.0
+end
+
+fn _ve_push_undo(id, action, clip_id, p1, p2)
+    let cnt = _ve_undo_count[id]
+    if cnt >= VE_MAX_UNDO
+        return 0.0
+    end
+    push(_ve_undo_data, id)
+    push(_ve_undo_data, action)
+    push(_ve_undo_data, clip_id)
+    push(_ve_undo_data, p1)
+    push(_ve_undo_data, p2)
+    push(_ve_undo_data, 0.0)
+    push(_ve_undo_data, 0.0)
+    push(_ve_undo_data, 0.0)
+    _ve_undo_count[id] = cnt + 1.0
+    return 1.0
+end
+
+// ── Track management ─────────────────────────────────────
+
+fn ve_add_video_track(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    return tl_add_track(_ve_tl_id[id], TL_VIDEO)
+end
+
+fn ve_add_audio_track(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    return tl_add_track(_ve_tl_id[id], TL_AUDIO)
+end
+
+fn ve_track_count(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    return tl_track_count(_ve_tl_id[id])
+end
+
+fn ve_select_track(id, track_idx)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    _ve_sel_track[id] = track_idx
+    return track_idx
+end
+
+// ── Clip management ──────────────────────────────────────
+
+fn ve_add_clip(id, track_idx, start, duration, source_id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    let tl = _ve_tl_id[id]
+    let mut s = start
+    // Snap
+    if _ve_snap_mode[id] > 2.5
+        // Snap to frame
+        let fps = tl_fps(tl)
+        if fps > 0.0
+            s = floor(s * fps) / fps
+        end
+    end
+    let clip = tl_add_clip(tl, track_idx, s, duration, source_id)
+    if clip >= 0.0
+        _ve_push_undo(id, 1.0, clip, s, duration)
+    end
+    return clip
+end
+
+fn ve_remove_clip(id, clip_id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    _ve_push_undo(id, 2.0, clip_id, tl_clip_start(clip_id), tl_clip_duration(clip_id))
+    let r = tl_remove_clip(clip_id)
+    if _ve_sel_clip[id] == clip_id
+        _ve_sel_clip[id] = -1.0
+    end
+    return r
+end
+
+fn ve_move_clip(id, clip_id, new_start)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    let old_start = tl_clip_start(clip_id)
+    let mut s = new_start
+    // Snap to clip edges
+    if _ve_snap_mode[id] > 0.5 && _ve_snap_mode[id] < 1.5
+        s = _ve_snap_to_clips(id, s)
+    end
+    // Snap to frame
+    if _ve_snap_mode[id] > 2.5
+        let fps = tl_fps(_ve_tl_id[id])
+        if fps > 0.0
+            s = floor(s * fps) / fps
+        end
+    end
+    _ve_push_undo(id, 3.0, clip_id, old_start, 0.0)
+    return tl_move_clip(clip_id, s)
+end
+
+fn ve_trim_clip(id, clip_id, new_duration)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    let old_dur = tl_clip_duration(clip_id)
+    _ve_push_undo(id, 4.0, clip_id, old_dur, 0.0)
+    return tl_trim_clip(clip_id, new_duration)
+end
+
+fn ve_split_clip(id, clip_id, split_time)
+    // Split a clip at split_time, creating two clips
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    let start = tl_clip_start(clip_id)
+    let dur = tl_clip_duration(clip_id)
+    let source = tl_clip_source(clip_id)
+    if split_time <= start || split_time >= start + dur
+        return -1.0
+    end
+    let dur1 = split_time - start
+    let dur2 = dur - dur1
+    // Trim original to first part
+    tl_trim_clip(clip_id, dur1)
+    // Add second part (need track — find it)
+    let tl = _ve_tl_id[id]
+    let tc = tl_track_count(tl)
+    let mut track = 0.0
+    let mut found = 0.0
+    while track < tc && found < 0.5
+        let cc = tl_clip_count(tl, track)
+        let mut ci = 0.0
+        while ci < cc
+            let q = tl_get_clip_at(tl, track, start + 0.01)
+            if q == clip_id
+                found = 1.0
+                ci = cc
+            end
+            ci = ci + 1.0
+        end
+        if found < 0.5
+            track = track + 1.0
+        end
+    end
+    if found < 0.5
+        track = 0.0
+    end
+    let c2 = tl_add_clip(tl, track, split_time, dur2, source)
+    _ve_push_undo(id, 5.0, clip_id, split_time, c2)
+    return c2
+end
+
+fn ve_select_clip(id, clip_id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    _ve_sel_clip[id] = clip_id
+    return clip_id
+end
+
+fn ve_selected_clip(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    return _ve_sel_clip[id]
+end
+
+fn ve_deselect_clip(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    _ve_sel_clip[id] = -1.0
+    return 0.0
+end
+
+// ── Snap helper ──────────────────────────────────────────
+
+fn _ve_snap_to_clips(id, time)
+    let tl = _ve_tl_id[id]
+    let thresh = _ve_snap_thresh[id]
+    let mut best = time
+    let mut best_dist = thresh + 1.0
+    // Snap to cursor
+    let cursor = _ve_cursor[id]
+    let d_cur = abs(time - cursor)
+    if d_cur < thresh && d_cur < best_dist
+        best = cursor
+        best_dist = d_cur
+    end
+    // Snap to in/out points
+    let ip = _ve_in_point[id]
+    if ip >= 0.0
+        let d_ip = abs(time - ip)
+        if d_ip < thresh && d_ip < best_dist
+            best = ip
+            best_dist = d_ip
+        end
+    end
+    let op = _ve_out_point[id]
+    if op >= 0.0
+        let d_op = abs(time - op)
+        if d_op < thresh && d_op < best_dist
+            best = op
+            best_dist = d_op
+        end
+    end
+    return best
+end
+
+// ── Playhead / Cursor ────────────────────────────────────
+
+fn ve_set_cursor(id, time)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    let mut t = time
+    if t < 0.0
+        t = 0.0
+    end
+    _ve_cursor[id] = t
+    // Sync video player
+    vp_seek(_ve_vp_id[id], t)
+    return t
+end
+
+fn ve_cursor(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    return _ve_cursor[id]
+end
+
+fn ve_step_forward(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    vp_step_forward(_ve_vp_id[id])
+    _ve_cursor[id] = vp_current_time(_ve_vp_id[id])
+    return _ve_cursor[id]
+end
+
+fn ve_step_backward(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    vp_step_backward(_ve_vp_id[id])
+    _ve_cursor[id] = vp_current_time(_ve_vp_id[id])
+    return _ve_cursor[id]
+end
+
+// ── In/Out points ────────────────────────────────────────
+
+fn ve_set_in_point(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    _ve_in_point[id] = _ve_cursor[id]
+    return _ve_in_point[id]
+end
+
+fn ve_set_out_point(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    _ve_out_point[id] = _ve_cursor[id]
+    return _ve_out_point[id]
+end
+
+fn ve_clear_in_out(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    _ve_in_point[id] = -1.0
+    _ve_out_point[id] = -1.0
+    return 0.0
+end
+
+fn ve_in_point(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    return _ve_in_point[id]
+end
+
+fn ve_out_point(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    return _ve_out_point[id]
+end
+
+fn ve_in_out_duration(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    let i = _ve_in_point[id]
+    let o = _ve_out_point[id]
+    if i < 0.0 || o < 0.0 || o <= i
+        return 0.0
+    end
+    return o - i
+end
+
+// ── Preview transport ────────────────────────────────────
+
+fn ve_play(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    _ve_state[id] = VE_STATE_PREVIEW
+    vp_play(_ve_vp_id[id])
+    return 0.0
+end
+
+fn ve_pause(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    vp_pause(_ve_vp_id[id])
+    _ve_cursor[id] = vp_current_time(_ve_vp_id[id])
+    _ve_state[id] = VE_STATE_IDLE
+    return 0.0
+end
+
+fn ve_stop(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    vp_stop(_ve_vp_id[id])
+    _ve_cursor[id] = 0.0
+    _ve_state[id] = VE_STATE_IDLE
+    return 0.0
+end
+
+fn ve_toggle(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    if _ve_state[id] > 0.5 && _ve_state[id] < 1.5
+        ve_pause(id)
+    else
+        ve_play(id)
+    end
+    return _ve_state[id]
+end
+
+fn ve_advance(id, dt)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    if _ve_state[id] < 0.5 || _ve_state[id] > 1.5
+        return _ve_cursor[id]
+    end
+    vp_advance(_ve_vp_id[id], dt)
+    _ve_cursor[id] = vp_current_time(_ve_vp_id[id])
+    return _ve_cursor[id]
+end
+
+fn ve_is_playing(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    if _ve_state[id] > 0.5 && _ve_state[id] < 1.5
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Snap settings ────────────────────────────────────────
+
+fn ve_set_snap(id, mode)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    if mode < 0.0 || mode > 3.0
+        return -1.0
+    end
+    _ve_snap_mode[id] = mode
+    return mode
+end
+
+fn ve_get_snap(id)
+    if _ve_valid(id) < 0.5
+        return VE_SNAP_NONE
+    end
+    return _ve_snap_mode[id]
+end
+
+fn ve_set_snap_threshold(id, seconds)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    let mut s = seconds
+    if s < 0.01
+        s = 0.01
+    end
+    if s > 5.0
+        s = 5.0
+    end
+    _ve_snap_thresh[id] = s
+    return s
+end
+
+// ── Zoom / Scroll ────────────────────────────────────────
+
+fn ve_set_zoom(id, pixels_per_second)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    let mut z = pixels_per_second
+    if z < 1.0
+        z = 1.0
+    end
+    if z > 10000.0
+        z = 10000.0
+    end
+    _ve_zoom[id] = z
+    return z
+end
+
+fn ve_get_zoom(id)
+    if _ve_valid(id) < 0.5
+        return 100.0
+    end
+    return _ve_zoom[id]
+end
+
+fn ve_zoom_in(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    return ve_set_zoom(id, _ve_zoom[id] * 1.5)
+end
+
+fn ve_zoom_out(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    return ve_set_zoom(id, _ve_zoom[id] / 1.5)
+end
+
+fn ve_set_scroll(id, seconds)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    let mut s = seconds
+    if s < 0.0
+        s = 0.0
+    end
+    _ve_scroll[id] = s
+    return s
+end
+
+fn ve_get_scroll(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    return _ve_scroll[id]
+end
+
+fn ve_set_track_height(id, height)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    let mut h = height
+    if h < 20.0
+        h = 20.0
+    end
+    if h > 300.0
+        h = 300.0
+    end
+    _ve_track_h[id] = h
+    return h
+end
+
+fn ve_get_track_height(id)
+    if _ve_valid(id) < 0.5
+        return 60.0
+    end
+    return _ve_track_h[id]
+end
+
+// ── Time ↔ Pixel ─────────────────────────────────────────
+
+fn ve_time_to_pixel(id, time)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    return (time - _ve_scroll[id]) * _ve_zoom[id]
+end
+
+fn ve_pixel_to_time(id, pixel)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    let z = _ve_zoom[id]
+    if z < 0.001
+        return 0.0
+    end
+    return _ve_scroll[id] + pixel / z
+end
+
+// ── Markers ──────────────────────────────────────────────
+
+fn ve_add_marker(id, time, marker_type)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    if time < 0.0
+        return -1.0
+    end
+    push(_ve_marker_data, id)
+    push(_ve_marker_data, time)
+    push(_ve_marker_data, marker_type)
+    push(_ve_marker_data, 0.0)
+    let cnt = _ve_marker_count[id]
+    _ve_marker_count[id] = cnt + 1.0
+    return cnt
+end
+
+fn ve_marker_count(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    return _ve_marker_count[id]
+end
+
+// ── Render queue ─────────────────────────────────────────
+
+fn ve_render_enqueue(id, start, end_time, output_id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    if end_time <= start
+        return -1.0
+    end
+    push(_ve_rq_data, id)
+    push(_ve_rq_data, start)
+    push(_ve_rq_data, end_time)
+    push(_ve_rq_data, output_id)
+    push(_ve_rq_data, VE_RQ_PENDING)
+    let cnt = _ve_rq_count[id]
+    _ve_rq_count[id] = cnt + 1.0
+    return cnt
+end
+
+fn ve_render_queue_count(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    return _ve_rq_count[id]
+end
+
+// ── Undo ─────────────────────────────────────────────────
+
+fn ve_undo_count(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    return _ve_undo_count[id]
+end
+
+fn ve_can_undo(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    if _ve_undo_count[id] > 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Query ────────────────────────────────────────────────
+
+fn ve_timeline_id(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    return _ve_tl_id[id]
+end
+
+fn ve_player_id(id)
+    if _ve_valid(id) < 0.5
+        return -1.0
+    end
+    return _ve_vp_id[id]
+end
+
+fn ve_duration(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    return tl_duration(_ve_tl_id[id])
+end
+
+fn ve_fps(id)
+    if _ve_valid(id) < 0.5
+        return 30.0
+    end
+    return tl_fps(_ve_tl_id[id])
+end
+
+fn ve_state(id)
+    if _ve_valid(id) < 0.5
+        return VE_STATE_IDLE
+    end
+    return _ve_state[id]
+end
+
+fn ve_view_width(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    return _ve_view_w[id]
+end
+
+fn ve_view_height(id)
+    if _ve_valid(id) < 0.5
+        return 0.0
+    end
+    return _ve_view_h[id]
+end

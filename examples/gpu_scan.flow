@@ -9,16 +9,13 @@
 //
 // Run: octoflow run examples/gpu_scan.flow --allow-ffi --allow-read
 
-use "../stdlib/loom/ops/runtime"
-
 let N = 65536.0
 let BLOCK = 512.0
 let N_BLOCKS = N / BLOCK
 
-rt_init()
-
-let pipe_scan = rt_load_pipeline("tests/gpu_shaders/32_scan_sum.spv", 2.0, 4.0)
-let pipe_fixup = rt_load_pipeline("tests/gpu_shaders/33_scan_add_offset.spv", 2.0, 4.0)
+let vm = loom_boot(1.0, 2.0, N)
+loom_prefetch("tests/gpu_shaders/32_scan_sum.spv")
+loom_prefetch("tests/gpu_shaders/33_scan_add_offset.spv")
 
 // ── Input: [1, 1, 1, ..., 1] — prefix sum should give [1, 2, 3, ..., N] ──
 let mut input = []
@@ -27,10 +24,7 @@ while i < N
   push(input, 1.0)
   i = i + 1.0
 end
-
-let buf_input = rt_create_buffer(N * 4.0)
-let buf_scanned = rt_create_buffer(N * 4.0)
-rt_upload(buf_input, input)
+vm_write_register(vm, 0.0, 0.0, input)
 
 let mut zeros = []
 let mut i = 0.0
@@ -38,41 +32,24 @@ while i < N
   push(zeros, 0.0)
   i = i + 1.0
 end
-rt_upload(buf_scanned, zeros)
-
-// Buffer for block totals (128 values)
-let buf_totals = rt_create_buffer(BLOCK * 4.0)
-let buf_totals_scanned = rt_create_buffer(BLOCK * 4.0)
-
-let mut zeros_small = []
-let mut i = 0.0
-while i < BLOCK
-  push(zeros_small, 0.0)
-  i = i + 1.0
-end
-rt_upload(buf_totals, zeros_small)
-rt_upload(buf_totals_scanned, zeros_small)
+vm_write_register(vm, 0.0, 1.0, zeros)
 
 // ── Pass 1: Scan each block independently ────────────────────────────
 let t0 = time()
 
-rt_chain_begin(1.0, 2.0)
-let mut pc1 = [N]
-rt_chain_push_constants(pipe_scan, pc1)
-let mut bufs1 = [buf_input, buf_scanned]
-rt_chain_dispatch(pipe_scan, bufs1, N_BLOCKS)
-rt_chain_end()
-rt_chain_submit_wait()
+loom_dispatch(vm, "tests/gpu_shaders/32_scan_sum.spv", [N], N_BLOCKS)
+let prog1 = loom_build(vm)
+loom_run(prog1)
+loom_free(prog1)
 
 // ── Extract block totals (last element of each scanned block) ────────
-// Block k's total = scanned[k * BLOCK + BLOCK - 1]
-rt_download(buf_scanned, N)
+let scanned = loom_read(vm, 0.0, 1.0, N)
 
 let mut totals = []
 let mut k = 0.0
 while k < N_BLOCKS
   let idx = k * BLOCK + BLOCK - 1.0
-  push(totals, rt_result[int(idx)])
+  push(totals, scanned[int(idx)])
   k = k + 1.0
 end
 
@@ -83,49 +60,62 @@ while i < BLOCK
   i = i + 1.0
 end
 
-rt_upload(buf_totals, totals)
-rt_upload(buf_totals_scanned, zeros_small)
-
 // ── Pass 2: Scan the block totals ────────────────────────────────────
-rt_chain_begin(1.0, 2.0)
-let mut pc2 = [N_BLOCKS]
-rt_chain_push_constants(pipe_scan, pc2)
-let mut bufs2 = [buf_totals, buf_totals_scanned]
-rt_chain_dispatch(pipe_scan, bufs2, 1.0)
-rt_chain_end()
-rt_chain_submit_wait()
+let vm2 = loom_boot(1.0, 2.0, BLOCK)
+vm_write_register(vm2, 0.0, 0.0, totals)
+
+let mut zeros_small = []
+let mut i = 0.0
+while i < BLOCK
+  push(zeros_small, 0.0)
+  i = i + 1.0
+end
+vm_write_register(vm2, 0.0, 1.0, zeros_small)
+
+loom_dispatch(vm2, "tests/gpu_shaders/32_scan_sum.spv", [N_BLOCKS], 1.0)
+let prog2 = loom_build(vm2)
+loom_run(prog2)
+loom_free(prog2)
+
+let scanned_totals = loom_read(vm2, 0.0, 1.0, BLOCK)
+loom_shutdown(vm2)
 
 // ── Pass 3: Add scanned totals back to each block ────────────────────
-// The fixup kernel expects 512-element blocks
-// Each thread in block k adds scanned_totals[k-1]
-// We need to re-dispatch with the scan_add_offset kernel
-// But this kernel reads 1 element per thread at global index
-// So we need N/256 workgroups (not N/512) since kernel has local_size=256
-rt_chain_begin(1.0, 2.0)
-let mut pc3 = [N]
-rt_chain_push_constants(pipe_fixup, pc3)
-let mut bufs3 = [buf_scanned, buf_totals_scanned]
-rt_chain_dispatch(pipe_fixup, bufs3, N / 256.0)
-rt_chain_end()
-rt_chain_submit_wait()
+// Write scanned_totals into register 0 of a fixup VM, scanned data in register 1
+// But the fixup shader reads from binding 0 (scanned data) and binding 1 (totals)
+let vm3 = loom_boot(1.0, 2.0, N)
+vm_write_register(vm3, 0.0, 0.0, scanned)
+// Pad scanned_totals to N size (each block reads its total)
+let mut totals_expanded = []
+let mut bi = 0.0
+while bi < N
+  let block_idx = floor(bi / BLOCK)
+  push(totals_expanded, scanned_totals[int(block_idx)])
+  bi = bi + 1.0
+end
+vm_write_register(vm3, 0.0, 1.0, totals_expanded)
+
+loom_dispatch(vm3, "tests/gpu_shaders/33_scan_add_offset.spv", [N], N / 256.0)
+let prog3 = loom_build(vm3)
+loom_run(prog3)
+loom_free(prog3)
 
 let t1 = time()
 let total_ms = (t1 - t0) * 1000.0
 
 // ── Verify ───────────────────────────────────────────────────────────
-rt_download(buf_scanned, N)
+// Read from register 0 (fixup overwrites in-place on binding 0)
+let final_scan = loom_read(vm3, 0.0, 0.0, N)
+loom_shutdown(vm3)
 
-// Check first few elements
-let v0 = rt_result[0]
-let v511 = rt_result[511]
-let v512 = rt_result[512]
-let v1023 = rt_result[1023]
-let vlast = rt_result[int(N - 1.0)]
+let v0 = final_scan[0]
+let v511 = final_scan[511]
+let v512 = final_scan[512]
+let v1023 = final_scan[1023]
+let vlast = final_scan[int(N - 1.0)]
 
-// Verify exact values at block boundaries
 let mut pass = 1.0
 
-// First block should be [1, 2, 3, ..., 512]
 if v0 != 1.0
   print("FAIL: element 0 = {v0}, expected 1")
   pass = 0.0
@@ -134,7 +124,6 @@ if v511 != 512.0
   print("FAIL: element 511 = {v511}, expected 512")
   pass = 0.0
 end
-// Second block should continue: element 512 = 513
 if v512 != 513.0
   print("FAIL: element 512 = {v512}, expected 513")
   pass = 0.0
@@ -143,7 +132,6 @@ if v1023 != 1024.0
   print("FAIL: element 1023 = {v1023}, expected 1024")
   pass = 0.0
 end
-// Last element should be N
 if vlast != N
   print("FAIL: element {N}-1 = {vlast}, expected {N}")
   pass = 0.0
@@ -153,7 +141,7 @@ end
 let mut spot_pass = 1.0
 let mut i = 0.0
 while i < N
-  let got = rt_result[int(i)]
+  let got = final_scan[int(i)]
   let exp = i + 1.0
   if got != exp
     spot_pass = 0.0
@@ -190,4 +178,4 @@ else
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm)

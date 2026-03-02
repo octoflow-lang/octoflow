@@ -1,0 +1,596 @@
+// viz_data.flow — ASE Brain: Data Fingerprinting + Viz Type Scoring
+//
+// Analyzes data shape to auto-select the best visualization type.
+// Reuses stats.flow for statistical measures.
+//
+// Usage:
+//   use "viz/viz_data"
+//   let fp = viz_fingerprint(data)
+//   let scores = viz_score(fp)
+//   let best = viz_best(data)
+
+// No cross-module import of stats — inline needed functions to avoid
+// nested import parameter scope issue.
+
+// === Visualization Type Constants ===
+let VIZ_LINE      = 1.0
+let VIZ_SCATTER   = 2.0
+let VIZ_BAR       = 3.0
+let VIZ_HEATMAP   = 4.0
+let VIZ_HISTOGRAM = 5.0
+let VIZ_PIE       = 6.0
+let VIZ_SPARKLINE = 7.0
+let VIZ_PARTICLES = 8.0
+let VIZ_GRID      = 9.0
+let VIZ_GENOME    = 10.0
+
+// === Fingerprint Index Constants ===
+let FP_LENGTH     = 0.0
+let FP_MIN        = 1.0
+let FP_MAX        = 2.0
+let FP_MEAN       = 3.0
+let FP_STD        = 4.0
+let FP_SKEW       = 5.0
+let FP_SPARSITY   = 6.0
+let FP_PERIODICITY = 7.0
+let FP_N_CLUSTERS = 8.0
+let FP_N_OUTLIERS = 9.0
+let FP_MONOTONIC  = 10.0
+let FP_ENTROPY    = 11.0
+let FP_IS_INTEGER = 12.0
+let FP_IS_BINARY  = 13.0
+let FP_IS_BOUNDED = 14.0
+let FP_UNIQUE_RATIO = 15.0
+let FP_SIZE       = 16.0
+
+// === Internal Helpers (inlined from stats to avoid nested import scope issue) ===
+
+fn _viz_variance(arr)
+  let n = len(arr)
+  if n < 2.0
+    return 0.0
+  end
+  let avg = _viz_mean(arr)
+  let mut sum_sq = 0.0
+  let mut i = 0.0
+  while i < n
+    let diff = arr[int(i)] - avg
+    sum_sq = sum_sq + diff * diff
+    i = i + 1.0
+  end
+  return sum_sq / n
+end
+
+fn _viz_std_dev(arr)
+  let v = _viz_variance(arr)
+  return sqrt(v)
+end
+
+fn _viz_skewness(arr)
+  let n = len(arr)
+  if n < 3.0
+    return 0.0
+  end
+  let avg = _viz_mean(arr)
+  let sd = _viz_std_dev(arr)
+  if sd == 0.0
+    return 0.0
+  end
+  let mut sum_cube = 0.0
+  let mut i = 0.0
+  while i < n
+    let z = (arr[int(i)] - avg) / sd
+    sum_cube = sum_cube + z * z * z
+    i = i + 1.0
+  end
+  return sum_cube / n
+end
+
+fn _viz_min(arr)
+  let n = len(arr)
+  if n == 0.0
+    return 0.0
+  end
+  let mut m = arr[0]
+  let mut i = 1.0
+  while i < n
+    if arr[int(i)] < m
+      m = arr[int(i)]
+    end
+    i = i + 1.0
+  end
+  return m
+end
+
+fn _viz_max(arr)
+  let n = len(arr)
+  if n == 0.0
+    return 0.0
+  end
+  let mut m = arr[0]
+  let mut i = 1.0
+  while i < n
+    if arr[int(i)] > m
+      m = arr[int(i)]
+    end
+    i = i + 1.0
+  end
+  return m
+end
+
+fn _viz_mean(arr)
+  let n = len(arr)
+  if n == 0.0
+    return 0.0
+  end
+  let mut s = 0.0
+  let mut i = 0.0
+  while i < n
+    s = s + arr[int(i)]
+    i = i + 1.0
+  end
+  return s / n
+end
+
+fn _viz_abs(x)
+  if x < 0.0
+    return 0.0 - x
+  end
+  return x
+end
+
+fn _viz_log2(x)
+  if x <= 0.0
+    return 0.0
+  end
+  // ln(x) / ln(2) approximation via natural log
+  // Use change-of-base: log2(x) = ln(x) / 0.693147
+  // Approximate ln via series for reasonable ranges
+  // For simplicity, use iterative halving
+  let mut result = 0.0
+  let mut val = x
+  while val >= 2.0
+    val = val / 2.0
+    result = result + 1.0
+  end
+  // Fractional part via linear interpolation [1, 2)
+  result = result + (val - 1.0)
+  return result
+end
+
+// === Fingerprinting ===
+
+fn viz_fingerprint(data)
+  // Returns flat array of 16 dimensions describing data shape
+  let n = len(data)
+  let mut fp = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+  if n == 0.0
+    return fp
+  end
+
+  // [0] length
+  fp[0] = n
+
+  // [1] min, [2] max
+  let mn = _viz_min(data)
+  let mx = _viz_max(data)
+  fp[1] = mn
+  fp[2] = mx
+
+  // [3] mean
+  let avg = _viz_mean(data)
+  fp[3] = avg
+
+  // [4] std_dev (inlined)
+  let sd = _viz_std_dev(data)
+  fp[4] = sd
+
+  // [5] skewness (inlined)
+  fp[5] = _viz_skewness(data)
+
+  // [6] sparsity — fraction of zeros
+  let mut n_zeros = 0.0
+  let mut i = 0.0
+  while i < n
+    if data[int(i)] == 0.0
+      n_zeros = n_zeros + 1.0
+    end
+    i = i + 1.0
+  end
+  fp[6] = n_zeros / n
+
+  // [7] periodicity — autocorrelation at lag 1 normalized
+  let mut ac = 0.0
+  if n > 2.0
+    let mut j = 0.0
+    while j < n - 1.0
+      ac = ac + (data[int(j)] - avg) * (data[int(j + 1.0)] - avg)
+      j = j + 1.0
+    end
+    let v = _viz_variance(data)
+    if v > 0.0
+      ac = ac / ((n - 1.0) * v)
+    end
+  end
+  // Clamp to [0, 1]
+  if ac < 0.0
+    ac = 0.0
+  end
+  if ac > 1.0
+    ac = 1.0
+  end
+  fp[7] = ac
+
+  // [8] n_clusters — simple: count sign changes in derivative > threshold
+  let mut n_clusters = 1.0
+  if n > 2.0
+    let mut prev_dir = 0.0
+    let mut k = 1.0
+    while k < n
+      let diff = data[int(k)] - data[int(k - 1.0)]
+      let mut dir = 0.0
+      if diff > 0.0
+        dir = 1.0
+      elif diff < 0.0
+        dir = -1.0
+      end
+      if dir != 0.0
+        if prev_dir != 0.0
+          if dir != prev_dir
+            n_clusters = n_clusters + 1.0
+          end
+        end
+        prev_dir = dir
+      end
+      k = k + 1.0
+    end
+  end
+  fp[8] = n_clusters
+
+  // [9] n_outliers — values beyond 2 * std_dev from mean
+  let mut n_out = 0.0
+  if sd > 0.0
+    i = 0.0
+    while i < n
+      if _viz_abs(data[int(i)] - avg) > 2.0 * sd
+        n_out = n_out + 1.0
+      end
+      i = i + 1.0
+    end
+  end
+  fp[9] = n_out
+
+  // [10] monotonic — 1.0 if strictly increasing or decreasing
+  let mut inc = 1.0
+  let mut dec = 1.0
+  i = 1.0
+  while i < n
+    if data[int(i)] < data[int(i - 1.0)]
+      inc = 0.0
+    end
+    if data[int(i)] > data[int(i - 1.0)]
+      dec = 0.0
+    end
+    i = i + 1.0
+  end
+  if inc == 1.0 || dec == 1.0
+    fp[10] = 1.0
+  end
+
+  // [11] entropy — Shannon entropy of histogram (10 bins)
+  let range = mx - mn
+  if range > 0.0
+    let bins = 10.0
+    let mut counts = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    i = 0.0
+    while i < n
+      let mut bin = floor((data[int(i)] - mn) / range * bins)
+      if bin >= bins
+        bin = bins - 1.0
+      end
+      if bin < 0.0
+        bin = 0.0
+      end
+      counts[int(bin)] = counts[int(bin)] + 1.0
+      i = i + 1.0
+    end
+    let mut ent = 0.0
+    let mut b = 0.0
+    while b < bins
+      let p = counts[int(b)] / n
+      if p > 0.0
+        ent = ent - p * _viz_log2(p)
+      end
+      b = b + 1.0
+    end
+    fp[11] = ent
+  end
+
+  // [12] is_integer — all values are whole numbers
+  let mut all_int = 1.0
+  i = 0.0
+  while i < n
+    let v = data[int(i)]
+    if v != floor(v)
+      all_int = 0.0
+      i = n
+    end
+    i = i + 1.0
+  end
+  fp[12] = all_int
+
+  // [13] is_binary — all values are 0 or 1
+  let mut all_bin = 1.0
+  i = 0.0
+  while i < n
+    let v = data[int(i)]
+    if v != 0.0 && v != 1.0
+      all_bin = 0.0
+      i = n
+    end
+    i = i + 1.0
+  end
+  fp[13] = all_bin
+
+  // [14] is_bounded_01 — all values in [0, 1]
+  let mut bounded = 1.0
+  if mn < 0.0 || mx > 1.0
+    bounded = 0.0
+  end
+  fp[14] = bounded
+
+  // [15] unique_ratio — distinct values / N
+  // Simple O(n^2) count for moderate N
+  let mut n_unique = 0.0
+  i = 0.0
+  while i < n
+    let mut found = 0.0
+    let mut j2 = 0.0
+    while j2 < i
+      if data[int(j2)] == data[int(i)]
+        found = 1.0
+        j2 = i
+      end
+      j2 = j2 + 1.0
+    end
+    if found == 0.0
+      n_unique = n_unique + 1.0
+    end
+    i = i + 1.0
+  end
+  fp[15] = n_unique / n
+
+  return fp
+end
+
+// === Scoring ===
+
+fn viz_score(fp)
+  // Score each viz type against a fingerprint
+  // Returns flat array: [line, scatter, bar, heatmap, histogram, pie, sparkline, particles, grid, genome]
+  let mut scores = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+  let n = fp[int(FP_LENGTH)]
+  if n == 0.0
+    return scores
+  end
+
+  let sd = fp[int(FP_STD)]
+  let mono = fp[int(FP_MONOTONIC)]
+  let entropy = fp[int(FP_ENTROPY)]
+  let is_int = fp[int(FP_IS_INTEGER)]
+  let is_bin = fp[int(FP_IS_BINARY)]
+  let bounded = fp[int(FP_IS_BOUNDED)]
+  let uniq = fp[int(FP_UNIQUE_RATIO)]
+  let sparse = fp[int(FP_SPARSITY)]
+  let period = fp[int(FP_PERIODICITY)]
+  let range = fp[int(FP_MAX)] - fp[int(FP_MIN)]
+
+  // Line: good for sequential, trends, moderate N
+  let mut s_line = 50.0
+  if mono == 1.0
+    s_line = s_line + 20.0
+  end
+  if period > 0.5
+    s_line = s_line + 15.0
+  end
+  if n >= 5.0 && n <= 500.0
+    s_line = s_line + 10.0
+  end
+  if n > 500.0
+    s_line = s_line - 10.0
+  end
+  scores[0] = s_line
+
+  // Scatter: good for paired data, clusters, moderate-large N
+  let mut s_scatter = 30.0
+  if n >= 20.0
+    s_scatter = s_scatter + 10.0
+  end
+  if uniq > 0.8
+    s_scatter = s_scatter + 10.0
+  end
+  if is_int == 0.0
+    s_scatter = s_scatter + 5.0
+  end
+  scores[1] = s_scatter
+
+  // Bar: good for small N, categorical (integer, high unique_ratio)
+  let mut s_bar = 30.0
+  if n <= 20.0
+    s_bar = s_bar + 30.0
+  elif n <= 50.0
+    s_bar = s_bar + 10.0
+  end
+  if is_int == 1.0
+    s_bar = s_bar + 10.0
+  end
+  if uniq > 0.5
+    s_bar = s_bar + 5.0
+  end
+  scores[2] = s_bar
+
+  // Heatmap: good for grid-shaped data (N is perfect square, bounded)
+  let mut s_heat = 20.0
+  let sqrt_n = floor(sqrt(n))
+  if sqrt_n * sqrt_n == n && n >= 16.0
+    s_heat = s_heat + 40.0
+  end
+  if bounded == 1.0
+    s_heat = s_heat + 15.0
+  end
+  if n >= 100.0
+    s_heat = s_heat + 10.0
+  end
+  scores[3] = s_heat
+
+  // Histogram: good for continuous distributions, high entropy, larger N
+  let mut s_hist = 30.0
+  if entropy > 2.0
+    s_hist = s_hist + 15.0
+  end
+  if is_int == 0.0
+    s_hist = s_hist + 10.0
+  end
+  if n >= 30.0
+    s_hist = s_hist + 10.0
+  end
+  if uniq > 0.7
+    s_hist = s_hist + 5.0
+  end
+  scores[4] = s_hist
+
+  // Pie: good for proportions (bounded_01, small N, positive)
+  let mut s_pie = 10.0
+  if bounded == 1.0
+    s_pie = s_pie + 20.0
+  end
+  if n <= 10.0
+    s_pie = s_pie + 25.0
+  end
+  if fp[int(FP_MIN)] >= 0.0
+    s_pie = s_pie + 10.0
+  end
+  scores[5] = s_pie
+
+  // Sparkline: good for large N, time-series
+  let mut s_spark = 20.0
+  if n > 50.0
+    s_spark = s_spark + 25.0
+  end
+  if n > 200.0
+    s_spark = s_spark + 15.0
+  end
+  if period > 0.3
+    s_spark = s_spark + 10.0
+  end
+  scores[6] = s_spark
+
+  // Particles: good for 2D/3D position data with velocity (even N, large)
+  let mut s_part = 10.0
+  let half_n = n / 2.0
+  if floor(half_n) == half_n && n >= 20.0
+    s_part = s_part + 15.0
+  end
+  if n >= 100.0
+    s_part = s_part + 10.0
+  end
+  scores[7] = s_part
+
+  // Grid: good for small-medium N, binary/integer, sparse
+  let mut s_grid = 20.0
+  if is_bin == 1.0
+    s_grid = s_grid + 30.0
+  end
+  if is_int == 1.0
+    s_grid = s_grid + 10.0
+  end
+  if sparse > 0.3
+    s_grid = s_grid + 10.0
+  end
+  if n <= 100.0
+    s_grid = s_grid + 10.0
+  end
+  scores[8] = s_grid
+
+  // Genome: good for fixed-length sequences, evolution data
+  let mut s_genome = 10.0
+  if bounded == 1.0
+    s_genome = s_genome + 10.0
+  end
+  if n >= 10.0 && n <= 200.0
+    s_genome = s_genome + 10.0
+  end
+  scores[9] = s_genome
+
+  return scores
+end
+
+// === Auto-Selection ===
+
+fn viz_best(data)
+  // Pick the best visualization type for the given data
+  let fp = viz_fingerprint(data)
+  let scores = viz_score(fp)
+  let n_types = len(scores)
+
+  let mut best_idx = 0.0
+  let mut best_score = scores[0]
+  let mut i = 1.0
+  while i < n_types
+    if scores[int(i)] > best_score
+      best_score = scores[int(i)]
+      best_idx = i
+    end
+    i = i + 1.0
+  end
+
+  // Map index to viz type constant (1-indexed)
+  return best_idx + 1.0
+end
+
+fn viz_score_for(data, viz_type)
+  // Get score for a specific viz type
+  let fp = viz_fingerprint(data)
+  let scores = viz_score(fp)
+  let idx = int(viz_type - 1.0)
+  if idx >= 0.0 && idx < len(scores)
+    return scores[idx]
+  end
+  return 0.0
+end
+
+fn viz_type_name(viz_type)
+  if viz_type == VIZ_LINE
+    return "line"
+  end
+  if viz_type == VIZ_SCATTER
+    return "scatter"
+  end
+  if viz_type == VIZ_BAR
+    return "bar"
+  end
+  if viz_type == VIZ_HEATMAP
+    return "heatmap"
+  end
+  if viz_type == VIZ_HISTOGRAM
+    return "histogram"
+  end
+  if viz_type == VIZ_PIE
+    return "pie"
+  end
+  if viz_type == VIZ_SPARKLINE
+    return "sparkline"
+  end
+  if viz_type == VIZ_PARTICLES
+    return "particles"
+  end
+  if viz_type == VIZ_GRID
+    return "grid"
+  end
+  if viz_type == VIZ_GENOME
+    return "genome"
+  end
+  return "unknown"
+end

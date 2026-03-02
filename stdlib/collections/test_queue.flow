@@ -1,0 +1,110 @@
+// test_queue.flow — Tests for stdlib/collections/queue.flow
+use "queue"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic operations ────────────────────────────────────────
+
+fn test_create()
+    let mut q = queue_create()
+    check("create empty", queue_size(q) == 0.0)
+    check("create is_empty", queue_is_empty(q) == 1.0)
+    return 0.0
+end
+
+fn test_enqueue_dequeue()
+    let mut q = queue_create()
+    queue_enqueue(q, 10.0)
+    queue_enqueue(q, 20.0)
+    queue_enqueue(q, 30.0)
+    check("enqueue size", queue_size(q) == 3.0)
+    check("dequeue first", queue_dequeue(q) == "10")
+    check("dequeue second", queue_dequeue(q) == "20")
+    check("dequeue third", queue_dequeue(q) == "30")
+    check("dequeue empty", queue_dequeue(q) == "")
+    return 0.0
+end
+
+fn test_peek()
+    let mut q = queue_create()
+    check("peek empty", queue_peek(q) == "")
+    queue_enqueue(q, 42.0)
+    check("peek val", queue_peek(q) == "42")
+    check("peek no remove", queue_size(q) == 1.0)
+    return 0.0
+end
+
+fn test_fifo_order()
+    let mut q = queue_create()
+    queue_enqueue(q, 1.0)
+    queue_enqueue(q, 2.0)
+    queue_enqueue(q, 3.0)
+    check("fifo 1", queue_dequeue(q) == "1")
+    queue_enqueue(q, 4.0)
+    check("fifo 2", queue_dequeue(q) == "2")
+    check("fifo 3", queue_dequeue(q) == "3")
+    check("fifo 4", queue_dequeue(q) == "4")
+    return 0.0
+end
+
+fn test_clear()
+    let mut q = queue_create()
+    queue_enqueue(q, 1.0)
+    queue_enqueue(q, 2.0)
+    queue_clear(q)
+    check("clear empty", queue_is_empty(q) == 1.0)
+    check("clear size", queue_size(q) == 0.0)
+    return 0.0
+end
+
+fn test_to_array()
+    let mut q = queue_create()
+    queue_enqueue(q, 10.0)
+    queue_enqueue(q, 20.0)
+    queue_enqueue(q, 30.0)
+    let arr = queue_to_array(q)
+    check("to_array len", len(arr) == 3.0)
+    check("to_array[0]", arr[0] == 10.0)
+    check("to_array[2]", arr[2] == 30.0)
+    return 0.0
+end
+
+fn test_contains()
+    let mut q = queue_create()
+    queue_enqueue(q, 5.0)
+    queue_enqueue(q, 15.0)
+    check("contains yes", queue_contains(q, 15.0) == 1.0)
+    check("contains no", queue_contains(q, 99.0) == 0.0)
+    return 0.0
+end
+
+fn test_enqueue_all()
+    let mut q = queue_create()
+    let mut data = [1.0, 2.0, 3.0, 4.0]
+    queue_enqueue_all(q, data)
+    check("enqueue_all size", queue_size(q) == 4.0)
+    check("enqueue_all first", queue_dequeue(q) == "1")
+    check("enqueue_all last", float(queue_peek(q)) == 2.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_create()
+test_enqueue_dequeue()
+test_peek()
+test_fifo_order()
+test_clear()
+test_to_array()
+test_contains()
+test_enqueue_all()
+print("")
+print("All queue tests passed (8 tests)")

@@ -1,0 +1,88 @@
+#version 450
+// scan_sum — Work-efficient inclusive prefix sum (Blelloch scan)
+//
+// Phase 1 (up-sweep/reduce): build partial sums tree in shared memory
+// Phase 2 (down-sweep): propagate prefix sums back down
+//
+// For arrays larger than workgroup_size, run in multi-pass:
+//   Pass 1: scan each workgroup's chunk, store per-WG totals
+//   Pass 2: scan the totals array (recursive)
+//   Pass 3: add scanned totals back to each chunk
+//
+// This kernel handles one workgroup chunk (up to 512 elements per WG).
+// For multi-pass, the caller chains: scan_sum → scan_sum → scan_add_offset
+//
+// 2 bindings, 1 push constant (n_elements)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Input  { float data[]; } inp;
+layout(set=0, binding=1) buffer Output { float data[]; } out_;
+layout(push_constant) uniform PC { float n_elements; } pc;
+
+shared float temp[512];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint wg = gl_WorkGroupID.x;
+    uint N = uint(pc.n_elements);
+    uint block_size = 512u;
+    uint offset = wg * block_size;
+
+    // Each thread loads 2 elements into shared memory
+    uint ai = tid;
+    uint bi = tid + 256u;
+
+    temp[ai] = (offset + ai < N) ? inp.data[offset + ai] : 0.0;
+    temp[bi] = (offset + bi < N) ? inp.data[offset + bi] : 0.0;
+
+    // Up-sweep (reduce) phase
+    uint stride = 1u;
+    for (uint d = 256u; d > 0u; d >>= 1u) {
+        barrier();
+        if (tid < d) {
+            uint ai2 = stride * (2u * tid + 1u) - 1u;
+            uint bi2 = stride * (2u * tid + 2u) - 1u;
+            temp[bi2] += temp[ai2];
+        }
+        stride <<= 1u;
+    }
+
+    // Store the total for this workgroup (for multi-pass)
+    // The total is at the last position after up-sweep
+    // We'll use the output's last position in this block
+
+    // Set last element to identity (0) for exclusive scan
+    // But we want INCLUSIVE scan, so we save the total first
+    barrier();
+    float block_total = temp[511];
+
+    if (tid == 0u) {
+        temp[511] = 0.0;
+    }
+
+    // Down-sweep phase
+    for (uint d = 1u; d < 512u; d <<= 1u) {
+        stride >>= 1u;
+        barrier();
+        if (tid < d) {
+            uint ai2 = stride * (2u * tid + 1u) - 1u;
+            uint bi2 = stride * (2u * tid + 2u) - 1u;
+            float t = temp[ai2];
+            temp[ai2] = temp[bi2];
+            temp[bi2] += t;
+        }
+    }
+    barrier();
+
+    // Write inclusive scan: exclusive scan + original value
+    // exclusive[i] is in temp[i], original values were loaded above
+    float orig_ai = (offset + ai < N) ? inp.data[offset + ai] : 0.0;
+    float orig_bi = (offset + bi < N) ? inp.data[offset + bi] : 0.0;
+
+    if (offset + ai < N) out_.data[offset + ai] = temp[ai] + orig_ai;
+    if (offset + bi < N) out_.data[offset + bi] = temp[bi] + orig_bi;
+
+    // Store block total in a predictable location for multi-pass
+    // Convention: output[offset + block_size - 1] already has the inclusive sum total
+    // which equals block_total. The caller can read out_[wg * block_size + block_size - 1]
+}

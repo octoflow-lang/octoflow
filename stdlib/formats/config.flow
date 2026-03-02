@@ -1,0 +1,204 @@
+// stdlib/formats/config.flow — INI-style configuration file parser
+//
+// Parses and generates INI/config files with sections, key-value pairs,
+// and comments. Widely used for application configuration.
+//
+// Format:
+//   # Comment
+//   ; Comment
+//   [section]
+//   key = value
+//   key2 = value2
+//
+// Sections are optional — keys without a section belong to "__default".
+// Whitespace around keys and values is trimmed.
+//
+// Functions: config_parse, config_get, config_set, config_has,
+//            config_sections, config_keys, config_to_string,
+//            config_remove, config_from_file, config_to_file
+//
+// Usage:
+//   use "config"
+//   let cfg = config_parse("[server]\nhost = localhost\nport = 8080")
+//   let host = config_get(cfg, "server", "host", "")  // "localhost"
+
+fn config_parse(text)
+    // Parse INI-style text into a map.
+    // Keys stored as "section.key" → value.
+    // Sections list stored as "__sections".
+    let mut cfg = map()
+    map_set(cfg, "__sections", "__default")
+    let mut current_section = "__default"
+
+    let lines = split(text, "\n")
+    let n = len(lines)
+    let mut i = 0.0
+    while i < n
+        let raw_line = lines[i]
+        let line = trim(raw_line)
+        let line_len = len(line)
+
+        if line_len > 0.0
+            let first = char_at(line, 0.0)
+
+            if first == "#" || first == ";"
+                // Comment — skip
+            elif first == "["
+                // Section header
+                let close = index_of(line, "]")
+                if close > 1.0
+                    current_section = trim(substr(line, 1.0, close - 1.0))
+                    // Add to sections list if new
+                    let sections = map_get(cfg, "__sections")
+                    let delimited = "," + sections + ","
+                    if contains(delimited, "," + current_section + ",") == 0.0
+                        map_set(cfg, "__sections", sections + "," + current_section)
+                    end
+                end
+            else
+                // Key = value
+                let eq_pos = index_of(line, "=")
+                if eq_pos > 0.0
+                    let key = trim(substr(line, 0.0, eq_pos))
+                    let value = trim(substr(line, eq_pos + 1.0, line_len))
+                    let full_key = current_section + "." + key
+                    map_set(cfg, full_key, value)
+
+                    // Track keys per section
+                    let keys_key = "__keys_" + current_section
+                    if map_has(cfg, keys_key)
+                        let existing = map_get(cfg, keys_key)
+                        map_set(cfg, keys_key, existing + "," + key)
+                    else
+                        map_set(cfg, keys_key, key)
+                    end
+                end
+            end
+        end
+        i = i + 1.0
+    end
+    return cfg
+end
+
+fn config_get(cfg, section, key, default_val)
+    // Get a value from config. Returns default_val if not found.
+    let full_key = section + "." + key
+    if map_has(cfg, full_key)
+        return map_get(cfg, full_key)
+    end
+    return default_val
+end
+
+fn config_get_float(cfg, section, key, default_val)
+    // Get a value as float.
+    let val = config_get(cfg, section, key, "")
+    if len(val) > 0.0
+        return float(val)
+    end
+    return default_val
+end
+
+fn config_set(cfg, section, key, value)
+    // Set a value in config (creates section if needed).
+    let full_key = section + "." + key
+    map_set(cfg, full_key, value)
+
+    // Ensure section exists
+    let sections = map_get(cfg, "__sections")
+    let delimited = "," + sections + ","
+    if contains(delimited, "," + section + ",") == 0.0
+        map_set(cfg, "__sections", sections + "," + section)
+    end
+
+    // Track key
+    let keys_key = "__keys_" + section
+    if map_has(cfg, keys_key)
+        let existing = map_get(cfg, keys_key)
+        let key_delimited = "," + existing + ","
+        if contains(key_delimited, "," + key + ",") == 0.0
+            map_set(cfg, keys_key, existing + "," + key)
+        end
+    else
+        map_set(cfg, keys_key, key)
+    end
+    return 0.0
+end
+
+fn config_has(cfg, section, key)
+    // Check if a key exists in a section.
+    let full_key = section + "." + key
+    if map_has(cfg, full_key)
+        return 1.0
+    end
+    return 0.0
+end
+
+fn config_remove(cfg, section, key)
+    // Remove a key from config.
+    let full_key = section + "." + key
+    if map_has(cfg, full_key)
+        map_remove(cfg, full_key)
+    end
+    return 0.0
+end
+
+fn config_sections(cfg)
+    // Get all section names as array.
+    let sections_str = map_get(cfg, "__sections")
+    return split(sections_str, ",")
+end
+
+fn config_keys(cfg, section)
+    // Get all keys in a section as array.
+    let keys_key = "__keys_" + section
+    if map_has(cfg, keys_key)
+        return split(map_get(cfg, keys_key), ",")
+    end
+    let mut empty = []
+    return empty
+end
+
+fn config_to_string(cfg)
+    // Serialize config back to INI format string.
+    let mut result = ""
+    let sections = config_sections(cfg)
+    let ns = len(sections)
+    let mut si = 0.0
+    while si < ns
+        let section = sections[si]
+        let keys = config_keys(cfg, section)
+        let nk = len(keys)
+
+        if nk > 0.0
+            if section != "__default"
+                if len(result) > 0.0
+                    result = result + "\n"
+                end
+                result = result + "[" + section + "]\n"
+            end
+
+            let mut ki = 0.0
+            while ki < nk
+                let key = keys[ki]
+                let val = config_get(cfg, section, key, "")
+                result = result + key + " = " + val + "\n"
+                ki = ki + 1.0
+            end
+        end
+        si = si + 1.0
+    end
+    return result
+end
+
+fn config_from_file(path)
+    // Read and parse a config file.
+    let content = read_file(path)
+    return config_parse(content)
+end
+
+fn config_to_file(cfg, path)
+    // Write config to file.
+    let content = config_to_string(cfg)
+    write_file(path, content)
+    return 0.0
+end

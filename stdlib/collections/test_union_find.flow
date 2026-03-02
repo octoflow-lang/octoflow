@@ -1,0 +1,143 @@
+// test_union_find.flow — Tests for stdlib/collections/union_find.flow
+use "union_find"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Creation ──────────────────────────────────────────────────
+
+fn test_uf_create()
+    let mut uf = uf_create(5.0)
+    check("create size", uf_size(uf) == 5.0)
+    check("create count", uf_count(uf) == 5.0)
+    return 0.0
+end
+
+// ── Find ──────────────────────────────────────────────────────
+
+fn test_uf_find()
+    let mut uf = uf_create(5.0)
+    // Initially each element is its own root
+    check("find 0", uf_find(uf, 0.0) == 0.0)
+    check("find 3", uf_find(uf, 3.0) == 3.0)
+    return 0.0
+end
+
+// ── Union + Connected ─────────────────────────────────────────
+
+fn test_uf_union()
+    let mut uf = uf_create(5.0)
+    let merged = uf_union(uf, 0.0, 1.0)
+    check("union merged", merged == 1.0)
+    check("union connected", uf_connected(uf, 0.0, 1.0) == 1.0)
+    check("union not connected", uf_connected(uf, 0.0, 2.0) == 0.0)
+    check("union count", uf_count(uf) == 4.0)
+    return 0.0
+end
+
+fn test_uf_union_same()
+    let mut uf = uf_create(5.0)
+    uf_union(uf, 0.0, 1.0)
+    let merged = uf_union(uf, 0.0, 1.0)
+    check("union same set", merged == 0.0)
+    check("count unchanged", uf_count(uf) == 4.0)
+    return 0.0
+end
+
+fn test_uf_transitive()
+    let mut uf = uf_create(6.0)
+    uf_union(uf, 0.0, 1.0)
+    uf_union(uf, 2.0, 3.0)
+    uf_union(uf, 1.0, 3.0)  // merges {0,1} with {2,3}
+    check("transitive 0-3", uf_connected(uf, 0.0, 3.0) == 1.0)
+    check("transitive 0-2", uf_connected(uf, 0.0, 2.0) == 1.0)
+    check("transitive not 4", uf_connected(uf, 0.0, 4.0) == 0.0)
+    check("transitive count", uf_count(uf) == 3.0)
+    return 0.0
+end
+
+fn test_uf_all_merged()
+    let mut uf = uf_create(4.0)
+    uf_union(uf, 0.0, 1.0)
+    uf_union(uf, 2.0, 3.0)
+    uf_union(uf, 0.0, 2.0)
+    check("all merged count", uf_count(uf) == 1.0)
+    check("all connected 0-3", uf_connected(uf, 0.0, 3.0) == 1.0)
+    check("all connected 1-2", uf_connected(uf, 1.0, 2.0) == 1.0)
+    return 0.0
+end
+
+// ── Set Size ──────────────────────────────────────────────────
+
+fn test_uf_set_size()
+    let mut uf = uf_create(6.0)
+    uf_union(uf, 0.0, 1.0)
+    uf_union(uf, 0.0, 2.0)
+    check("set size 3", uf_set_size(uf, 0.0) == 3.0)
+    check("set size 3 via 2", uf_set_size(uf, 2.0) == 3.0)
+    check("set size 1 isolated", uf_set_size(uf, 5.0) == 1.0)
+    return 0.0
+end
+
+// ── Roots ─────────────────────────────────────────────────────
+
+fn test_uf_roots()
+    let mut uf = uf_create(5.0)
+    uf_union(uf, 0.0, 1.0)
+    uf_union(uf, 2.0, 3.0)
+    let roots = uf_roots(uf)
+    check("roots count", len(roots) == 3.0)
+    return 0.0
+end
+
+// ── Sets ──────────────────────────────────────────────────────
+
+fn test_uf_sets()
+    let mut uf = uf_create(4.0)
+    uf_union(uf, 0.0, 1.0)
+    let pairs = uf_sets(uf)
+    // 4 elements × 2 = 8 entries
+    check("sets pairs", len(pairs) == 8.0)
+    return 0.0
+end
+
+// ── Path Compression ──────────────────────────────────────────
+
+fn test_path_compression()
+    // Build a chain: 0→1→2→3
+    let mut uf = uf_create(10.0)
+    uf_union(uf, 0.0, 1.0)
+    uf_union(uf, 1.0, 2.0)
+    uf_union(uf, 2.0, 3.0)
+    uf_union(uf, 3.0, 4.0)
+
+    // Find should compress path — all point to same root
+    let r0 = uf_find(uf, 0.0)
+    let r4 = uf_find(uf, 4.0)
+    check("compression same root", r0 == r4)
+    check("compression connected", uf_connected(uf, 0.0, 4.0) == 1.0)
+    check("compression set size", uf_set_size(uf, 0.0) == 5.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_uf_create()
+test_uf_find()
+test_uf_union()
+test_uf_union_same()
+test_uf_transitive()
+test_uf_all_merged()
+test_uf_set_size()
+test_uf_roots()
+test_uf_sets()
+test_path_compression()
+print("")
+print("All union-find tests passed (10 tests)")

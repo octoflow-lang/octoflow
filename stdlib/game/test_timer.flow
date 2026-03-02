@@ -1,0 +1,205 @@
+// test_timer.flow — Tests for stdlib/game/timer.flow
+use "timer"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── One-shot timer ───────────────────────────────────
+
+fn test_after()
+    let t = timer_after(1.0)
+    check("after active", timer_done(t) == 0.0)
+    check("after not fired", timer_fired(t) == 0.0)
+    // Not yet
+    let _u1 = timer_update(t, 0.5)
+    check("after half", timer_fired(t) == 0.0)
+    check("after progress", approx(timer_progress(t), 0.5) == 1.0)
+    check("after remaining", approx(timer_remaining(t), 0.5) == 1.0)
+    // Fire!
+    let f = timer_update(t, 0.6)
+    check("after fired", f == 1.0)
+    check("after fired q", timer_fired(t) == 1.0)
+    check("after done", timer_done(t) == 1.0)
+    check("after count", timer_fire_count(t) == 1.0)
+    return 0.0
+end
+
+// ── Repeating timer ──────────────────────────────────
+
+fn test_every()
+    let t = timer_every(0.5)
+    // First fire
+    let _u1 = timer_update(t, 0.5)
+    check("every fire1", timer_fired(t) == 1.0)
+    check("every not done", timer_done(t) == 0.0)
+    // Second fire
+    let _u2 = timer_update(t, 0.5)
+    check("every fire2", timer_fired(t) == 1.0)
+    check("every count", timer_fire_count(t) == 2.0)
+    // Not yet
+    let _u3 = timer_update(t, 0.3)
+    check("every no fire", timer_fired(t) == 0.0)
+    return 0.0
+end
+
+// ── Counted timer ────────────────────────────────────
+
+fn test_count()
+    let t = timer_count(0.2, 3.0)
+    let _u1 = timer_update(t, 0.2)
+    check("count fire1", timer_fired(t) == 1.0)
+    let _u2 = timer_update(t, 0.2)
+    check("count fire2", timer_fired(t) == 1.0)
+    let _u3 = timer_update(t, 0.2)
+    check("count fire3", timer_fired(t) == 1.0)
+    check("count done", timer_done(t) == 1.0)
+    check("count total", timer_fire_count(t) == 3.0)
+    // Should not fire again
+    let _u4 = timer_update(t, 0.2)
+    check("count no more", timer_fired(t) == 0.0)
+    return 0.0
+end
+
+// ── Pause/resume ─────────────────────────────────────
+
+fn test_pause()
+    let t = timer_after(1.0)
+    let _u1 = timer_update(t, 0.3)
+    let _p = timer_pause(t)
+    check("pause is paused", timer_is_paused(t) == 1.0)
+    // Should not advance
+    let _u2 = timer_update(t, 5.0)
+    check("pause no advance", timer_fired(t) == 0.0)
+    check("pause elapsed", approx(timer_elapsed(t), 0.3) == 1.0)
+    // Resume
+    let _r = timer_resume(t)
+    check("resume unpaused", timer_is_paused(t) == 0.0)
+    let _u3 = timer_update(t, 0.8)
+    check("resume fired", timer_fired(t) == 1.0)
+    return 0.0
+end
+
+// ── Reset ────────────────────────────────────────────
+
+fn test_reset()
+    let t = timer_after(0.5)
+    let _u1 = timer_update(t, 0.5)
+    check("reset done", timer_done(t) == 1.0)
+    let _r = timer_reset(t)
+    check("reset active", timer_done(t) == 0.0)
+    check("reset elapsed", timer_elapsed(t) == 0.0)
+    check("reset count", timer_fire_count(t) == 0.0)
+    // Should fire again
+    let _u2 = timer_update(t, 0.5)
+    check("reset re-fire", timer_fired(t) == 1.0)
+    return 0.0
+end
+
+// ── Cancel ───────────────────────────────────────────
+
+fn test_cancel()
+    let t = timer_after(1.0)
+    let _c = timer_cancel(t)
+    check("cancel done", timer_done(t) == 1.0)
+    let _u = timer_update(t, 2.0)
+    check("cancel no fire", timer_fired(t) == 0.0)
+    return 0.0
+end
+
+// ── Action IDs ───────────────────────────────────────
+
+fn test_action()
+    let t = timer_after_action(0.5, 42.0)
+    check("action id", timer_action(t) == 42.0)
+    let _u = timer_update(t, 0.5)
+    check("action fired", timer_fired(t) == 1.0)
+    return 0.0
+end
+
+// ── Bulk update ──────────────────────────────────────
+
+fn test_bulk()
+    // Create several timers
+    let t1 = timer_after(0.1)
+    let t2 = timer_after(0.1)
+    let t3 = timer_after(10.0)
+    let n = timer_update_all(0.2)
+    check("bulk fired", n >= 2.0)
+    check("bulk active", timer_active_count() >= 1.0)
+    return 0.0
+end
+
+// ── Scheduler ────────────────────────────────────────
+
+fn test_scheduler()
+    let s = sched_create()
+    let t1 = timer_after_action(0.5, 10.0)
+    let t2 = timer_after_action(0.3, 20.0)
+    let t3 = timer_after_action(0.2, 30.0)
+    let _a1 = sched_add(s, t1)
+    let _a2 = sched_add(s, t2)
+    let _a3 = sched_add(s, t3)
+    check("sched start", sched_current(s) == 0.0)
+    check("sched not done", sched_done(s) == 0.0)
+    // Fire first
+    let act1 = sched_update(s, 0.5)
+    check("sched act1", act1 == 10.0)
+    check("sched cur1", sched_current(s) == 1.0)
+    // Fire second
+    let act2 = sched_update(s, 0.3)
+    check("sched act2", act2 == 20.0)
+    check("sched cur2", sched_current(s) == 2.0)
+    // Fire third
+    let act3 = sched_update(s, 0.2)
+    check("sched act3", act3 == 30.0)
+    check("sched done", sched_done(s) == 1.0)
+    return 0.0
+end
+
+// ── Edge cases ───────────────────────────────────────
+
+fn test_edges()
+    // Zero duration gets clamped
+    let t = timer_after(0.0)
+    let _u = timer_update(t, 0.001)
+    check("edge zero dur", timer_fired(t) == 1.0)
+    // Invalid ID
+    check("edge bad id", timer_fired(-1.0) == 0.0)
+    check("edge bad done", timer_done(-1.0) == 1.0)
+    check("edge bad action", timer_action(-1.0) == -1.0)
+    // Overshoot on repeat
+    let tr = timer_every(1.0)
+    let _u2 = timer_update(tr, 1.5)
+    check("edge overshoot", timer_fired(tr) == 1.0)
+    check("edge overshoot elapsed", timer_elapsed(tr) < 1.0)
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────
+
+test_after()
+test_every()
+test_count()
+test_pause()
+test_reset()
+test_cancel()
+test_action()
+test_bulk()
+test_scheduler()
+test_edges()
+print("")
+print("All timer tests passed (10 tests)")

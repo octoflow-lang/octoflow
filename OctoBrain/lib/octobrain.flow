@@ -1,0 +1,359 @@
+// OctoBrain Public API
+// General-purpose adaptive brain with recursive self-learning and pruning.
+// Takes streaming numeric data, discovers prototypes, learns connections,
+// and scores actions.
+//
+// The brain map holds scalar config. External mutable arrays hold the data.
+// All state is modified in-place via shared mutation semantics.
+//
+// Caller must create all external arrays (see octobrain_new documentation).
+
+use "vecmath"
+use "embed"
+use "proto"
+use "edges"
+use "hebbian"
+use "recall"
+use "plasticity"
+use "gpu_match"
+
+// ── octobrain_new ──────────────────────────────────────────────────
+// Create a new brain. Returns a map with scalar config.
+// action_count: number of output actions (f32)
+//
+// The caller must ALSO create all external arrays:
+//   // Proto arrays
+//   let mut p_state = proto_new()
+//   let mut p_embs = []
+//   let mut p_mc = []
+//   // Embed arrays
+//   let mut e_state = embed_new()
+//   let mut W_embed = []
+//   let mut obs_buffer = []
+//   // Edge arrays
+//   let mut edge_state = edges_new()
+//   let mut en = []
+//   let mut ea = []
+//   let mut eo = []
+//   let mut ep = []
+//   let mut ew = []
+//   let mut eact = []
+//   // Context window
+//   let mut window = []
+//   // Action weights
+//   let mut W_score = []
+fn octobrain_new(action_count)
+  let mut brain = map()
+  map_set(brain, "action_count", action_count)
+  map_set(brain, "obs_count", 0.0)
+  map_set(brain, "input_dim", 0.0)
+  map_set(brain, "embed_dim", 0.0)
+  map_set(brain, "window_size", 20.0)
+  map_set(brain, "self_learn_interval", 10.0)
+  map_set(brain, "prune_interval", 50.0)
+  map_set(brain, "decay_factor", 0.995)
+  map_set(brain, "initialized", 0.0)
+  map_set(brain, "gpu_enabled", 0.0)
+  return brain
+end
+
+// ── octobrain_init_gpu ──────────────────────────────────────────────
+// Initialize GPU for accelerated prototype matching.
+// Call once after octobrain_new, before any observe calls.
+// Returns 1.0 if GPU initialized, 0.0 if not.
+fn octobrain_init_gpu(brain)
+  let result = gpu_match_init()
+  map_set(brain, "gpu_enabled", result)
+  return result
+end
+
+// ── octobrain_cleanup_gpu ───────────────────────────────────────────
+// Release GPU resources. Call at brain shutdown.
+fn octobrain_cleanup_gpu(brain)
+  gpu_match_cleanup()
+  map_set(brain, "gpu_enabled", 0.0)
+  return 0.0
+end
+
+// ── _init_weights ──────────────────────────────────────────────────
+// Helper: Initialize W_embed (identity) and W_score (small uniform).
+// Called once on the first observation when dimensions are discovered.
+// W_embed: identity matrix [input_dim x embed_dim], row-major
+// W_score: small uniform [embed_dim x action_count], row-major
+// Returns 0.0.
+fn _init_weights(brain, e_state, W_embed, W_score, input_dim, embed_dim)
+  let action_count = map_get(brain, "action_count")
+
+  // Initialize embedding layer (identity projection)
+  let dummy_e = embed_set_dims(e_state, W_embed, input_dim, embed_dim)
+
+  // Initialize W_score with small uniform values (0.1)
+  // Shape: [embed_dim x action_count], row-major
+  let mut d = 0.0
+  while d < embed_dim
+    let mut a = 0.0
+    while a < action_count
+      push(W_score, 0.1)
+      a = a + 1.0
+    end
+    d = d + 1.0
+  end
+
+  return 0.0
+end
+
+// ── _window_push ───────────────────────────────────────────────────
+// Push proto_id to end of window. If window exceeds max_size, remove
+// the oldest element (index 0) by rebuilding the array.
+// Returns 0.0. Window is modified in-place.
+fn _window_push(window, proto_id, max_size)
+  push(window, proto_id)
+  let wlen = len(window)
+  if wlen > max_size
+    // Remove oldest: pop all, re-push without first element
+    let mut tmp = []
+    let mut i = 1.0
+    while i < wlen
+      push(tmp, window[i])
+      i = i + 1.0
+    end
+    // Clear window
+    let old_len = len(window)
+    let mut k = 0.0
+    while k < old_len
+      pop(window)
+      k = k + 1.0
+    end
+    // Refill from tmp
+    let new_len = len(tmp)
+    k = 0.0
+    while k < new_len
+      push(window, tmp[k])
+      k = k + 1.0
+    end
+  end
+  return 0.0
+end
+
+// ── _self_learn_step ───────────────────────────────────────────────
+// Self-learning: strengthen edges between recent context window protos.
+// Takes the last few protos from the window and learns edges between them.
+// Returns 0.0.
+fn _self_learn_step(p_embs, embed_dim, edge_state, en, ea, eo, ep, ew, eact, window)
+  let wlen = len(window)
+  if wlen < 2.0
+    return 0.0
+  end
+
+  // Learn edges between consecutive pairs in the last 4 window entries
+  let mut lookback = 4.0
+  if lookback > wlen
+    lookback = wlen
+  end
+  let start = wlen - lookback
+
+  let mut i = start
+  while i < wlen - 1.0
+    let pid_a = window[i]
+    let pid_b = window[i + 1.0]
+    if pid_a != pid_b
+      let mut pair = []
+      push(pair, pid_a)
+      push(pair, pid_b)
+      let dummy = learn_edge(p_embs, embed_dim, edge_state, en, ea, eo, ep, ew, eact, pair, 0.5)
+    end
+    i = i + 1.0
+  end
+
+  return 0.0
+end
+
+// ── octobrain_observe ──────────────────────────────────────────────
+// Main observe function. Feeds raw data into the brain.
+// On first call: discovers input_dim, sets embed_dim = input_dim,
+// initializes weights.
+// Projects data through embedding, matches against prototypes,
+// updates context window, learns edges on transitions,
+// periodically self-learns and prunes.
+// Returns 0.0.
+fn octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, data)
+  let input_dim = len(data)
+
+  // Step 1: First-time initialization
+  let initialized = map_get(brain, "initialized")
+  if initialized < 0.5
+    let embed_dim = input_dim
+    map_set(brain, "input_dim", input_dim)
+    map_set(brain, "embed_dim", embed_dim)
+    map_set(brain, "initialized", 1.0)
+    let dummy_init = _init_weights(brain, e_state, W_embed, W_score, input_dim, embed_dim)
+  end
+
+  let embed_dim = map_get(brain, "embed_dim")
+
+  // Step 2: Project data through embedding layer
+  // If embed_dim == input_dim (identity projection), use raw data directly
+  let mut projected = []
+  if embed_dim == input_dim
+    // Use raw data normalized
+    let normed = normalize(data, input_dim)
+    let mut ni = 0.0
+    while ni < input_dim
+      push(projected, normed[ni])
+      ni = ni + 1.0
+    end
+  else
+    let proj = embed_project(W_embed, data, input_dim, embed_dim)
+    let mut pi = 0.0
+    while pi < embed_dim
+      push(projected, proj[pi])
+      pi = pi + 1.0
+    end
+  end
+
+  // Step 3: Match against prototypes
+  let proto_id = proto_observe(p_state, p_embs, p_mc, projected, embed_dim)
+
+  // Step 4: Update context window
+  let window_size = map_get(brain, "window_size")
+  let dummy_wp = _window_push(window, proto_id, window_size)
+
+  // Step 5: If transition detected AND window >= 2, learn edge
+  let transition = map_get(p_state, "transition_detected")
+  let wlen = len(window)
+  if transition > 0.5 && wlen >= 2.0
+    let prev_id = window[wlen - 2.0]
+    let curr_id = window[wlen - 1.0]
+    if prev_id != curr_id
+      let mut edge_pair = []
+      push(edge_pair, prev_id)
+      push(edge_pair, curr_id)
+      let dummy_le = learn_edge(p_embs, embed_dim, edge_state, en, ea, eo, ep, ew, eact, edge_pair, 1.0)
+    end
+  end
+
+  // Step 6: Increment observation count
+  let obs_count = map_get(brain, "obs_count")
+  let new_obs = obs_count + 1.0
+  map_set(brain, "obs_count", new_obs)
+
+  // Step 7: Periodic self-learning
+  let self_interval = map_get(brain, "self_learn_interval")
+  if self_interval > 0.0
+    // Check if obs_count is a multiple of self_learn_interval
+    let remainder = new_obs - floor(new_obs / self_interval) * self_interval
+    if remainder < 0.5
+      let dummy_sl = _self_learn_step(p_embs, embed_dim, edge_state, en, ea, eo, ep, ew, eact, window)
+    end
+  end
+
+  // Step 8: Periodic pruning
+  let prune_interval = map_get(brain, "prune_interval")
+  if prune_interval > 0.0
+    let remainder2 = new_obs - floor(new_obs / prune_interval) * prune_interval
+    if remainder2 < 0.5
+      let decay_factor = map_get(brain, "decay_factor")
+      let dummy_decay = decay_all_edges(edge_state, ep, decay_factor)
+    end
+  end
+
+  return 0.0
+end
+
+// ── octobrain_recall ───────────────────────────────────────────────
+// Recall action scores given current brain state.
+// Returns array [action_count] of action scores.
+fn octobrain_recall(brain, p_state, p_embs, edge_state, en, ea, eo, ep, window, W_score)
+  let embed_dim = map_get(brain, "embed_dim")
+  let proto_count = map_get(p_state, "proto_count")
+  let action_count = map_get(brain, "action_count")
+
+  let scores = recall(p_embs, embed_dim, proto_count, edge_state, en, ea, eo, ep, window, action_count, W_score)
+  return scores
+end
+
+// ── octobrain_teach ────────────────────────────────────────────────
+// External teaching signal. Strengthens edges between recent window protos.
+// action_id: which action was taken (f32)
+// outcome: positive/negative outcome (f32)
+// weight: teaching signal strength (f32)
+// Returns 0.0.
+fn octobrain_teach(brain, p_state, p_embs, p_mc, edge_state, en, ea, eo, ep, ew, eact, window, action_id, outcome, weight)
+  let wlen = len(window)
+  let embed_dim = map_get(brain, "embed_dim")
+
+  if wlen < 2.0
+    return 0.0
+  end
+
+  // Learn edge between last 2 protos in window
+  let pid_a = window[wlen - 2.0]
+  let pid_b = window[wlen - 1.0]
+  if pid_a != pid_b
+    let mut pair = []
+    push(pair, pid_a)
+    push(pair, pid_b)
+    let dummy = learn_edge(p_embs, embed_dim, edge_state, en, ea, eo, ep, ew, eact, pair, weight * outcome)
+  end
+
+  // If window >= 3, also learn edge between last 3 protos
+  if wlen >= 3.0
+    let pid_c = window[wlen - 3.0]
+    if pid_c != pid_b
+      let mut triple = []
+      push(triple, pid_c)
+      push(triple, pid_a)
+      push(triple, pid_b)
+      let dummy2 = learn_edge(p_embs, embed_dim, edge_state, en, ea, eo, ep, ew, eact, triple, weight * outcome * 0.5)
+    end
+  end
+
+  return 0.0
+end
+
+// ── octobrain_prune ────────────────────────────────────────────────
+// Explicit pruning: decay edges, run homeostasis check, print diagnostics.
+// Actual split/merge implementation deferred to later phases.
+// Returns 0.0.
+fn octobrain_prune(brain, p_state, p_embs, p_mc, edge_state, en, ea, eo, ep, ew, eact)
+  let decay_factor = map_get(brain, "decay_factor")
+  let embed_dim = map_get(brain, "embed_dim")
+
+  // Step 1: Decay all edges
+  let dummy_d = decay_all_edges(edge_state, ep, decay_factor)
+
+  // Step 2: Run homeostasis check
+  let mut h_result = map()
+  let mut splits = []
+  let mut merges = []
+  let dummy_h = homeostasis_check(p_state, p_embs, p_mc, embed_dim, h_result, splits, merges)
+
+  let split_count = map_get(h_result, "split_count")
+  let merge_count = map_get(h_result, "merge_count")
+
+  // Step 3: Print diagnostics
+  print("[prune] split candidates: {split_count}, merge candidates: {merge_count}")
+
+  return 0.0
+end
+
+// ── octobrain_transition_detected ──────────────────────────────────
+// Check if last observe caused a prototype transition.
+// Returns 1.0 if transition detected, 0.0 otherwise.
+fn octobrain_transition_detected(p_state)
+  return map_get(p_state, "transition_detected")
+end
+
+// ── octobrain_stats ────────────────────────────────────────────────
+// Return a diagnostic map with brain statistics.
+// Keys: embed_dim, proto_count, edge_count, obs_count, transition_count
+fn octobrain_stats(brain, p_state, edge_state)
+  let mut stats = map()
+  map_set(stats, "embed_dim", map_get(brain, "embed_dim"))
+  map_set(stats, "proto_count", map_get(p_state, "proto_count"))
+  map_set(stats, "edge_count", map_get(edge_state, "edge_count"))
+  map_set(stats, "obs_count", map_get(brain, "obs_count"))
+  map_set(stats, "transition_count", map_get(p_state, "transition_count"))
+  map_set(stats, "gpu_enabled", map_get(brain, "gpu_enabled"))
+  return stats
+end

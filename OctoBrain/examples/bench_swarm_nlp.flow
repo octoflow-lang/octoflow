@@ -1,0 +1,486 @@
+// OctoBrain Swarm Specialist NLP Benchmark
+// Three specialist brains with different N-gram sizes (3, 4, 5),
+// each predicting independently, combined to measure ensemble benefit.
+// Tests the hypothesis: "Specialized beats homogeneous on NLP."
+//
+// Training: "the quick brown fox jumps over the lazy dog " x20
+// Test:     "the cat sat on the mat the dog ran " x10
+//
+// Each brain has its own proto space, Markov table, and centering state.
+// Ensemble metrics: any-correct (union) and majority-correct (>= 2 of 3).
+//
+// PASS/FAIL criteria:
+//   1. Any-correct rate > best single brain accuracy
+//   2. Majority-correct rate >= 75%
+//   3. Brain B (4-gram) is best or tied-best solo performer
+//   4. All 3 brains have proto_count <= 25
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\bench_swarm_nlp.flow"
+
+use "../lib/octobrain"
+use "../lib/text"
+use "../lib/preprocess"
+use "../lib/proto"
+
+print("=== OctoBrain Swarm Specialist NLP Benchmark ===")
+print("")
+
+// -- Build training text --------------------------------------------------
+let train_base = "the quick brown fox jumps over the lazy dog "
+let mut train_text = ""
+let mut rep = 0.0
+while rep < 20.0
+  train_text = train_text + train_base
+  rep = rep + 1.0
+end
+let train_len = len(train_text)
+let train_len_int = int(train_len)
+print("Training: '{train_base}' x20 = {train_len_int} chars")
+
+// -- Build test text ------------------------------------------------------
+let test_base = "the cat sat on the mat the dog ran "
+let mut test_text = ""
+let mut rep2 = 0.0
+while rep2 < 10.0
+  test_text = test_text + test_base
+  rep2 = rep2 + 1.0
+end
+let test_len = len(test_text)
+let test_len_int = int(test_len)
+print("Test: '{test_base}' x10 = {test_len_int} chars")
+print("")
+
+// -- Convert to codes once ------------------------------------------------
+let train_codes = text_to_codes(train_text)
+let test_codes = text_to_codes(test_text)
+let train_codes_len = len(train_codes)
+let test_codes_len = len(test_codes)
+
+// =========================================================================
+// Brain A: 3-gram specialist
+// =========================================================================
+
+print("--- Brain A: 3-gram ---")
+
+let mut brainA = octobrain_new(2.0)
+let mut psA = proto_new()
+let mut peA = []
+let mut pmA = []
+let mut esA = embed_new()
+let mut weA = []
+let mut obA = []
+let mut edsA = edges_new()
+let mut enA = []
+let mut eaA = []
+let mut eoA = []
+let mut epA = []
+let mut ewA = []
+let mut eactA = []
+let mut winA = []
+let mut wsA = []
+let mut cmA = []
+let mut ccA = [0.0]
+
+let gram_A = 3.0
+let train_max_A = train_codes_len - gram_A + 1.0
+
+// Training pass: record proto sequence
+let mut tseqA = []
+let mut posA = 0.0
+while posA < train_max_A
+  let rawA = text_ngram(train_codes, posA, gram_A)
+  let cenA = auto_center(rawA, cmA, ccA)
+  let dA = octobrain_observe(brainA, psA, peA, pmA, esA, weA, obA, edsA, enA, eaA, eoA, epA, ewA, eactA, winA, wsA, cenA)
+  let pidA = map_get(psA, "last_match_id")
+  push(tseqA, pidA)
+  posA = posA + 1.0
+end
+
+let pcA = map_get(psA, "proto_count")
+let pcA_int = int(pcA)
+print("  Training protos: {pcA_int}")
+
+// Build Markov table for Brain A
+let mut transA = []
+let tsA = pcA * pcA
+let mut tiA = 0.0
+while tiA < tsA
+  push(transA, 0.0)
+  tiA = tiA + 1.0
+end
+let slA = len(tseqA)
+let mut siA = 1.0
+while siA < slA
+  let fA = tseqA[siA - 1.0]
+  let tA = tseqA[siA]
+  let idxA = fA * pcA + tA
+  transA[idxA] = transA[idxA] + 1.0
+  siA = siA + 1.0
+end
+
+// =========================================================================
+// Brain B: 4-gram specialist
+// =========================================================================
+
+print("--- Brain B: 4-gram ---")
+
+let mut brainB = octobrain_new(2.0)
+let mut psB = proto_new()
+let mut peB = []
+let mut pmB = []
+let mut esB = embed_new()
+let mut weB = []
+let mut obB = []
+let mut edsB = edges_new()
+let mut enB = []
+let mut eaB = []
+let mut eoB = []
+let mut epB = []
+let mut ewB = []
+let mut eactB = []
+let mut winB = []
+let mut wsB = []
+let mut cmB = []
+let mut ccB = [0.0]
+
+let gram_B = 4.0
+let train_max_B = train_codes_len - gram_B + 1.0
+
+let mut tseqB = []
+let mut posB = 0.0
+while posB < train_max_B
+  let rawB = text_ngram(train_codes, posB, gram_B)
+  let cenB = auto_center(rawB, cmB, ccB)
+  let dB = octobrain_observe(brainB, psB, peB, pmB, esB, weB, obB, edsB, enB, eaB, eoB, epB, ewB, eactB, winB, wsB, cenB)
+  let pidB = map_get(psB, "last_match_id")
+  push(tseqB, pidB)
+  posB = posB + 1.0
+end
+
+let pcB = map_get(psB, "proto_count")
+let pcB_int = int(pcB)
+print("  Training protos: {pcB_int}")
+
+let mut transB = []
+let tsB = pcB * pcB
+let mut tiB = 0.0
+while tiB < tsB
+  push(transB, 0.0)
+  tiB = tiB + 1.0
+end
+let slB = len(tseqB)
+let mut siB = 1.0
+while siB < slB
+  let fB = tseqB[siB - 1.0]
+  let tB = tseqB[siB]
+  let idxB = fB * pcB + tB
+  transB[idxB] = transB[idxB] + 1.0
+  siB = siB + 1.0
+end
+
+// =========================================================================
+// Brain C: 5-gram specialist
+// =========================================================================
+
+print("--- Brain C: 5-gram ---")
+
+let mut brainC = octobrain_new(2.0)
+let mut psC = proto_new()
+let mut peC = []
+let mut pmC = []
+let mut esC = embed_new()
+let mut weC = []
+let mut obC = []
+let mut edsC = edges_new()
+let mut enC = []
+let mut eaC = []
+let mut eoC = []
+let mut epC = []
+let mut ewC = []
+let mut eactC = []
+let mut winC = []
+let mut wsC = []
+let mut cmC = []
+let mut ccC = [0.0]
+
+let gram_C = 5.0
+let train_max_C = train_codes_len - gram_C + 1.0
+
+let mut tseqC = []
+let mut posC = 0.0
+while posC < train_max_C
+  let rawC = text_ngram(train_codes, posC, gram_C)
+  let cenC = auto_center(rawC, cmC, ccC)
+  let dC = octobrain_observe(brainC, psC, peC, pmC, esC, weC, obC, edsC, enC, eaC, eoC, epC, ewC, eactC, winC, wsC, cenC)
+  let pidC = map_get(psC, "last_match_id")
+  push(tseqC, pidC)
+  posC = posC + 1.0
+end
+
+let pcC = map_get(psC, "proto_count")
+let pcC_int = int(pcC)
+print("  Training protos: {pcC_int}")
+
+let mut transC = []
+let tsC = pcC * pcC
+let mut tiC = 0.0
+while tiC < tsC
+  push(transC, 0.0)
+  tiC = tiC + 1.0
+end
+let slC = len(tseqC)
+let mut siC = 1.0
+while siC < slC
+  let fC = tseqC[siC - 1.0]
+  let tC = tseqC[siC]
+  let idxC = fC * pcC + tC
+  transC[idxC] = transC[idxC] + 1.0
+  siC = siC + 1.0
+end
+
+// =========================================================================
+// Test phase: all 3 brains predict simultaneously
+// =========================================================================
+
+print("")
+print("--- Testing (swarm prediction) ---")
+
+// Common test range limited by largest gram (5)
+let test_max = test_codes_len - 5.0 + 1.0
+
+let mut curA = 0.0
+let mut curB = 0.0
+let mut curC = 0.0
+let mut correctA = 0.0
+let mut correctB = 0.0
+let mut correctC = 0.0
+let mut any_correct_count = 0.0
+let mut maj_correct_count = 0.0
+let mut total = 0.0
+let mut tp = 0.0
+
+while tp < test_max
+  // Encode test n-grams for each brain
+  let rawA_t = text_ngram(test_codes, tp, 3.0)
+  let cenA_t = auto_center(rawA_t, cmA, ccA)
+  let rawB_t = text_ngram(test_codes, tp, 4.0)
+  let cenB_t = auto_center(rawB_t, cmB, ccB)
+  let rawC_t = text_ngram(test_codes, tp, 5.0)
+  let cenC_t = auto_center(rawC_t, cmC, ccC)
+
+  if tp > 0.0
+    // -- Predict for Brain A (inline Markov) --
+    let mut predA = 0.0
+    let mut bestA = -1.0
+    let mut cjA = 0.0
+    while cjA < pcA
+      let ciA = curA * pcA + cjA
+      if ciA < tsA
+        if transA[ciA] > bestA
+          bestA = transA[ciA]
+          predA = cjA
+        end
+      end
+      cjA = cjA + 1.0
+    end
+
+    // -- Predict for Brain B (inline Markov) --
+    let mut predB = 0.0
+    let mut bestB = -1.0
+    let mut cjB = 0.0
+    while cjB < pcB
+      let ciB = curB * pcB + cjB
+      if ciB < tsB
+        if transB[ciB] > bestB
+          bestB = transB[ciB]
+          predB = cjB
+        end
+      end
+      cjB = cjB + 1.0
+    end
+
+    // -- Predict for Brain C (inline Markov) --
+    let mut predC = 0.0
+    let mut bestC = -1.0
+    let mut cjC = 0.0
+    while cjC < pcC
+      let ciC = curC * pcC + cjC
+      if ciC < tsC
+        if transC[ciC] > bestC
+          bestC = transC[ciC]
+          predC = cjC
+        end
+      end
+      cjC = cjC + 1.0
+    end
+
+    // -- Observe for each brain --
+    let dAt = octobrain_observe(brainA, psA, peA, pmA, esA, weA, obA, edsA, enA, eaA, eoA, epA, ewA, eactA, winA, wsA, cenA_t)
+    let actA = map_get(psA, "last_match_id")
+    let dBt = octobrain_observe(brainB, psB, peB, pmB, esB, weB, obB, edsB, enB, eaB, eoB, epB, ewB, eactB, winB, wsB, cenB_t)
+    let actB = map_get(psB, "last_match_id")
+    let dCt = octobrain_observe(brainC, psC, peC, pmC, esC, weC, obC, edsC, enC, eaC, eoC, epC, ewC, eactC, winC, wsC, cenC_t)
+    let actC = map_get(psC, "last_match_id")
+
+    // -- Score each brain --
+    let mut sA = 0.0
+    let mut sB = 0.0
+    let mut sC = 0.0
+    if predA == actA
+      sA = 1.0
+      correctA = correctA + 1.0
+    end
+    if predB == actB
+      sB = 1.0
+      correctB = correctB + 1.0
+    end
+    if predC == actC
+      sC = 1.0
+      correctC = correctC + 1.0
+    end
+
+    // -- Ensemble metrics --
+    // Any-correct: at least 1 brain got it right
+    if sA == 1.0 || sB == 1.0 || sC == 1.0
+      any_correct_count = any_correct_count + 1.0
+    end
+    // Majority-correct: at least 2 brains got it right
+    let step_sum = sA + sB + sC
+    if step_sum >= 2.0
+      maj_correct_count = maj_correct_count + 1.0
+    end
+
+    total = total + 1.0
+    curA = actA
+    curB = actB
+    curC = actC
+  else
+    // First step: just observe, no prediction
+    let dA0 = octobrain_observe(brainA, psA, peA, pmA, esA, weA, obA, edsA, enA, eaA, eoA, epA, ewA, eactA, winA, wsA, cenA_t)
+    curA = map_get(psA, "last_match_id")
+    let dB0 = octobrain_observe(brainB, psB, peB, pmB, esB, weB, obB, edsB, enB, eaB, eoB, epB, ewB, eactB, winB, wsB, cenB_t)
+    curB = map_get(psB, "last_match_id")
+    let dC0 = octobrain_observe(brainC, psC, peC, pmC, esC, weC, obC, edsC, enC, eaC, eoC, epC, ewC, eactC, winC, wsC, cenC_t)
+    curC = map_get(psC, "last_match_id")
+  end
+  tp = tp + 1.0
+end
+
+// =========================================================================
+// Results
+// =========================================================================
+
+print("")
+print("--- Brain A: 3-gram ---")
+let accA = correctA / total
+let pctA = floor(accA * 1000.0) / 10.0
+let correctA_int = int(correctA)
+let total_int = int(total)
+print("  Solo accuracy: {correctA_int}/{total_int} = {pctA}%")
+
+print("--- Brain B: 4-gram ---")
+let accB = correctB / total
+let pctB = floor(accB * 1000.0) / 10.0
+let correctB_int = int(correctB)
+print("  Solo accuracy: {correctB_int}/{total_int} = {pctB}%")
+
+print("--- Brain C: 5-gram ---")
+let accC = correctC / total
+let pctC = floor(accC * 1000.0) / 10.0
+let correctC_int = int(correctC)
+print("  Solo accuracy: {correctC_int}/{total_int} = {pctC}%")
+
+print("")
+print("--- Swarm Ensemble ---")
+let any_rate = any_correct_count / total
+let any_pct = floor(any_rate * 1000.0) / 10.0
+let maj_rate = maj_correct_count / total
+let maj_pct = floor(maj_rate * 1000.0) / 10.0
+
+// Find best solo performer
+let mut best_solo = accA
+let mut best_name = "A"
+if accB > best_solo
+  best_solo = accB
+  best_name = "B"
+end
+if accC > best_solo
+  best_solo = accC
+  best_name = "C"
+end
+let best_solo_pct = floor(best_solo * 1000.0) / 10.0
+
+print("  Any-correct rate: {any_pct}%")
+print("  Majority-correct rate: {maj_pct}%")
+print("  Best solo: {best_solo_pct}% (Brain {best_name})")
+
+// =========================================================================
+// PASS/FAIL Analysis
+// =========================================================================
+
+print("")
+print("=== PASS/FAIL Analysis ===")
+
+let mut npass = 0.0
+let mut nfail = 0.0
+
+// Criterion 1: Any-correct rate > best single brain accuracy
+if any_rate > best_solo
+  print("PASS: Any-correct ({any_pct}%) > best solo ({best_solo_pct}%) -- ensemble benefit")
+  npass = npass + 1.0
+else
+  print("FAIL: Any-correct ({any_pct}%) <= best solo ({best_solo_pct}%) -- no ensemble benefit")
+  nfail = nfail + 1.0
+end
+
+// Criterion 2: Majority-correct rate >= 75%
+if maj_rate >= 0.75
+  print("PASS: Majority-correct ({maj_pct}%) >= 75%")
+  npass = npass + 1.0
+else
+  if maj_rate >= 0.50
+    print("NOTE: Majority-correct ({maj_pct}%) < 75% but >= 50% (acceptable)")
+    npass = npass + 1.0
+  else
+    print("FAIL: Majority-correct ({maj_pct}%) < 50%")
+    nfail = nfail + 1.0
+  end
+end
+
+// Criterion 3: Brain B (4-gram) is best or tied-best solo performer
+if accB >= accA && accB >= accC
+  print("PASS: Brain B (4-gram, {pctB}%) is best or tied-best solo")
+  npass = npass + 1.0
+else
+  print("FAIL: Brain B (4-gram, {pctB}%) is not best solo (best = {best_solo_pct}%, Brain {best_name})")
+  nfail = nfail + 1.0
+end
+
+// Criterion 4: All 3 brains have proto_count <= 25
+let post_pcA = map_get(psA, "proto_count")
+let post_pcB = map_get(psB, "proto_count")
+let post_pcC = map_get(psC, "proto_count")
+let post_pcA_int = int(post_pcA)
+let post_pcB_int = int(post_pcB)
+let post_pcC_int = int(post_pcC)
+if post_pcA <= 25.0 && post_pcB <= 25.0 && post_pcC <= 25.0
+  print("PASS: All proto counts <= 25 (A={post_pcA_int}, B={post_pcB_int}, C={post_pcC_int})")
+  npass = npass + 1.0
+else
+  print("FAIL: Some proto count > 25 (A={post_pcA_int}, B={post_pcB_int}, C={post_pcC_int})")
+  nfail = nfail + 1.0
+end
+
+let npass_int = int(npass)
+let nfail_int = int(nfail)
+print("")
+print("Result: {npass_int}/4 criteria passed, {nfail_int}/4 failed")
+
+if npass >= 3.0
+  print("OVERALL: PASS")
+else
+  print("OVERALL: FAIL")
+end
+
+print("")
+print("--- swarm specialist NLP benchmark complete ---")

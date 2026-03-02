@@ -1,0 +1,272 @@
+// ====================================================================
+//  GPU VM LIMITS — Two dimensions:
+//    Part 1: Max parallel VMs (width)
+//    Part 2: Max compute per VM (depth) — throughput, register size
+// ====================================================================
+
+print("")
+print("====================================================================")
+print("  GPU VM LIMITS — GTX 1660 SUPER (6GB, 1408 CUDA cores)")
+print("====================================================================")
+
+let kernel = "stdlib/loom/kernels/ops/vm_scale.spv"
+
+// ════════════════════════════════════════════════════════════════════
+//  PART 1: Maximum parallel VMs
+//  Continue from 1024: 2048, 3072, 4096, 5120, 6144
+// ════════════════════════════════════════════════════════════════════
+print("")
+print("  PART 1: Maximum parallel VMs (reg_size=1024, scale×2)")
+print("  ──────────────────────────────────────────────────────")
+
+let reg_size_p1 = 1024.0
+let wg_p1 = floor((reg_size_p1 + 255.0) / 256.0)
+let scale_pc_p1 = [0.0, 2.0, reg_size_p1]
+
+let mut test_data_p1 = []
+let mut t1i = 0.0
+while t1i < reg_size_p1
+  push(test_data_p1, t1i + 1.0)
+  t1i = t1i + 1.0
+end
+
+// 6GB VRAM × 85% safety = 5.1GB ceiling
+// Each VM: 32 regs × 1024 floats × 4 bytes = 128KB
+// 5.1GB / 128KB = ~40,000 theoretical max
+let levels_p1 = [1024.0, 2048.0, 4096.0, 6144.0, 8192.0, 12288.0, 16384.0, 24576.0, 32768.0]
+let mut max_parallel = 0.0
+let mut p1i = 0.0
+
+while p1i < len(levels_p1)
+  let n = levels_p1[p1i]
+  let mem_mb = n * 32.0 * reg_size_p1 * 4.0 / 1048576.0
+  print("    {n:.0} VMs (~{mem_mb:.0}MB)...")
+
+  let t0 = now_ms()
+
+  // Boot all
+  let mut vm_ids = []
+  let mut boot_ok = 1.0
+  let mut bi = 0.0
+  while bi < n
+    let r = try(vm_boot(1.0, reg_size_p1, 1.0))
+    if r.ok > 0.5
+      push(vm_ids, r.value)
+    else
+      print("      BOOT FAILED at #{bi:.0}: {r.error}")
+      boot_ok = 0.0
+      bi = n
+    end
+    bi = bi + 1.0
+  end
+
+  if boot_ok < 0.5
+    // Cleanup
+    let mut si = 0.0
+    while si < len(vm_ids)
+      let _s = vm_shutdown(vm_ids[si])
+      si = si + 1.0
+    end
+    print("      CEILING: {max_parallel:.0} VMs")
+    p1i = len(levels_p1)
+  else
+    let t_boot = now_ms() - t0
+
+    // Write + dispatch + build + execute
+    let mut wi = 0.0
+    while wi < n
+      let _w = vm_write_register(vm_ids[wi], 0.0, 0.0, test_data_p1)
+      wi = wi + 1.0
+    end
+
+    let mut prog_ids = []
+    let mut di = 0.0
+    while di < n
+      let _d = vm_dispatch(vm_ids[di], kernel, scale_pc_p1, wg_p1)
+      let p = vm_build(vm_ids[di])
+      push(prog_ids, p)
+      di = di + 1.0
+    end
+
+    let mut ei = 0.0
+    while ei < n
+      let _e = vm_execute(prog_ids[ei])
+      ei = ei + 1.0
+    end
+    let t_exec = now_ms() - t0
+
+    // Spot-check first and last VM
+    let r_first = vm_read_register(vm_ids[0], 0.0, 0.0, 4.0)
+    let last_idx = n - 1.0
+    let r_last = vm_read_register(vm_ids[last_idx], 0.0, 0.0, 4.0)
+
+    let mut ok_first = 0.0
+    let mut ok_last = 0.0
+    if r_first[0] > 1.99 && r_first[0] < 2.01
+      ok_first = 1.0
+    end
+    if r_last[0] > 1.99 && r_last[0] < 2.01
+      ok_last = 1.0
+    end
+
+    // Shutdown all
+    let mut si = 0.0
+    while si < n
+      let _s = vm_shutdown(vm_ids[si])
+      si = si + 1.0
+    end
+    let t_total = now_ms() - t0
+
+    if ok_first > 0.5 && ok_last > 0.5
+      max_parallel = n
+      let boot_per = t_boot / n
+      print("      PASS  |  {t_total:.0}ms total  |  boot:{t_boot:.0}ms ({boot_per:.1}ms/vm)  |  exec:{t_exec:.0}ms")
+    else
+      print("      VERIFY FAILED  first={r_first[0]}  last={r_last[0]}")
+      print("      CEILING: {max_parallel:.0} VMs")
+      p1i = len(levels_p1)
+    end
+  end
+
+  p1i = p1i + 1.0
+end
+
+print("")
+print("  ► MAX PARALLEL VMs = {max_parallel:.0}")
+
+// ════════════════════════════════════════════════════════════════════
+//  PART 2: Single VM compute load
+//  Test: how many elements can 1 VM process? What throughput?
+// ════════════════════════════════════════════════════════════════════
+print("")
+print("  PART 2: Single VM compute load (1 VM, scale×2, 100 chained dispatches)")
+print("  ──────────────────────────────────────────────────────────────────────")
+print("")
+
+let sizes = [1024.0, 4096.0, 16384.0, 65536.0, 262144.0, 1048576.0]
+let chain_depth = 100.0
+let mut s2i = 0.0
+
+while s2i < len(sizes)
+  let sz = sizes[s2i]
+  let sz_k = sz / 1024.0
+  let wg = floor((sz + 255.0) / 256.0)
+  let pc = [0.0, 2.0, sz]
+
+  // Build test data
+  let mut data = []
+  let mut di = 0.0
+  while di < sz
+    push(data, 1.0)
+    di = di + 1.0
+  end
+
+  let r = try(vm_boot(1.0, sz, 1.0))
+  if r.ok < 0.5
+    print("    {sz_k:.0}K floats — BOOT FAILED: {r.error}")
+    s2i = len(sizes)
+  else
+    let vm = r.value
+    let _w = vm_write_register(vm, 0.0, 0.0, data)
+
+    // Chain 100 dispatches
+    let mut ci = 0.0
+    while ci < chain_depth
+      let _d = vm_dispatch(vm, kernel, pc, wg)
+      ci = ci + 1.0
+    end
+
+    let prog = vm_build(vm)
+
+    let t0 = now_ms()
+    let r2 = try(vm_execute(prog))
+    let t_exec = now_ms() - t0
+
+    if r2.ok > 0.5
+      let result = vm_read_register(vm, 0.0, 0.0, 4.0)
+      let _s = vm_shutdown(vm)
+
+      // Throughput: 100 dispatches × sz elements × 2 ops (read + multiply) / time
+      let total_ops = chain_depth * sz * 2.0
+      let gflops = total_ops / (t_exec * 1000000.0)
+      let mem_kb = 32.0 * sz * 4.0 / 1024.0
+      let val = result[0]
+      print("    {sz_k:.0}K floats  |  100 dispatches  |  exec: {t_exec:.0}ms  |  {gflops:.1} GFLOP/s  |  reg: {mem_kb:.0}KB  |  val={val:.0}")
+    else
+      let _s = vm_shutdown(vm)
+      print("    {sz_k:.0}K floats — EXEC FAILED: {r2.error}")
+      s2i = len(sizes)
+    end
+  end
+
+  s2i = s2i + 1.0
+end
+
+// ════════════════════════════════════════════════════════════════════
+//  PART 3: Chain depth at scale (single VM, 1M floats)
+// ════════════════════════════════════════════════════════════════════
+print("")
+print("  PART 3: Chain depth at 64K floats (1 VM, increasing dispatches)")
+print("  ────────────────────────────────────────────────────────────────")
+print("")
+
+let big_sz = 65536.0
+let big_wg = floor((big_sz + 255.0) / 256.0)
+let big_pc = [0.0, 2.0, big_sz]
+
+let chain_tests = [100.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0]
+let mut c3i = 0.0
+
+while c3i < len(chain_tests)
+  let depth = chain_tests[c3i]
+
+  let mut ones = []
+  let mut oi = 0.0
+  while oi < big_sz
+    push(ones, 1.0)
+    oi = oi + 1.0
+  end
+
+  let r = try(vm_boot(1.0, big_sz, 1.0))
+  if r.ok < 0.5
+    print("    {depth:.0} dispatches — BOOT FAILED")
+    c3i = len(chain_tests)
+  else
+    let vm = r.value
+    let _w = vm_write_register(vm, 0.0, 0.0, ones)
+
+    let mut di = 0.0
+    while di < depth
+      let _d = vm_dispatch(vm, kernel, big_pc, big_wg)
+      di = di + 1.0
+    end
+
+    let prog = vm_build(vm)
+    let t0 = now_ms()
+    let r2 = try(vm_execute(prog))
+    let t_exec = now_ms() - t0
+
+    if r2.ok > 0.5
+      let _s = vm_shutdown(vm)
+      let total_ops = depth * big_sz * 2.0
+      let gflops = total_ops / (t_exec * 1000000.0)
+      print("    {depth:.0} dispatches  |  exec: {t_exec:.0}ms  |  {gflops:.1} GFLOP/s  |  1 submit")
+    else
+      let _s = vm_shutdown(vm)
+      print("    {depth:.0} dispatches — EXEC FAILED: {r2.error}")
+      c3i = len(chain_tests)
+    end
+  end
+
+  c3i = c3i + 1.0
+end
+
+print("")
+print("====================================================================")
+print("  SUMMARY")
+print("====================================================================")
+print("  Max parallel VMs:  {max_parallel:.0}")
+print("  Max chain depth:   tested up to 10,000 dispatches")
+print("  For sieve: {max_parallel:.0} segments × 5000 dispatches = massive parallelism")
+print("====================================================================")
+print("")

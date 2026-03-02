@@ -1,0 +1,78 @@
+// OctoBrain Text Preprocessing Module
+// Converts text strings to numeric vectors for brain input.
+// Each character is mapped to ord(char)/128.0, giving roughly [0,1] for ASCII.
+// Provides n-gram windowing and approximate inverse decoding.
+
+use "vecmath"
+
+// ── text_to_codes ────────────────────────────────────────────────
+// Convert a text string to an array of float codes.
+// Each character -> ord(char) / 128.0, mapping ASCII to roughly [0,1].
+// Non-ASCII characters map to > 1.0 (brain normalizes anyway).
+fn text_to_codes(text)
+  let n = len(text)
+  let mut codes = []
+  let mut i = 0.0
+  while i < n
+    let ch = char_at(text, i)
+    let code = ord(ch) / 128.0
+    push(codes, code)
+    i = i + 1.0
+  end
+  return codes
+end
+
+// ── text_ngram ───────────────────────────────────────────────────
+// Extract an n-gram window from a codes array starting at position pos.
+// Returns an array of n floats. Pads with 0.0 if pos + n > len(codes).
+fn text_ngram(codes, pos, n)
+  let codes_len = len(codes)
+  let mut gram = []
+  let mut i = 0.0
+  while i < n
+    let idx = pos + i
+    if idx < codes_len
+      push(gram, codes[idx])
+    else
+      push(gram, 0.0)
+    end
+    i = i + 1.0
+  end
+  return gram
+end
+
+// ── codes_to_text ────────────────────────────────────────────────
+// Inverse of text_to_codes: multiply by 128, round, chr().
+// Characters outside printable ASCII [32,126] are replaced with '?'.
+fn codes_to_text(codes)
+  let n = len(codes)
+  let mut text = ""
+  let mut i = 0.0
+  while i < n
+    let raw_code = codes[i] * 128.0
+    let int_code = round(raw_code)
+    if int_code >= 32.0 && int_code <= 126.0
+      let ch = chr(int_code)
+      text = text + ch
+    else
+      text = text + "?"
+    end
+    i = i + 1.0
+  end
+  return text
+end
+
+// ── decode_proto ─────────────────────────────────────────────────
+// Approximate decode of a normalized prototype back to text.
+// Prototypes are unit vectors; scale by sqrt(dim)*0.6 to recover
+// approximate original character codes, then decode.
+fn decode_proto(proto, dim)
+  let scale = sqrt(dim) * 0.6
+  let mut scaled = []
+  let mut i = 0.0
+  while i < dim
+    push(scaled, proto[i] * scale)
+    i = i + 1.0
+  end
+  return codes_to_text(scaled)
+end

@@ -1,0 +1,63 @@
+// test_agent.flow — Tests for stdlib/agent/util.flow
+use "util"
+
+fn test_json_number_int()
+  let r = to_json_number(5.0)
+  assert(r == "5", "to_json_number(5.0) should be '5'")
+  print("PASS: test_json_number_int")
+  return 0.0
+end
+
+fn test_json_number_zero()
+  let r = to_json_number(0.0)
+  assert(r == "0", "to_json_number(0.0) should be '0'")
+  print("PASS: test_json_number_zero")
+  return 0.0
+end
+
+fn test_json_number_negative()
+  let r = to_json_number(-7.0)
+  assert(r == "-7", "to_json_number(-7.0) should be '-7'")
+  print("PASS: test_json_number_negative")
+  return 0.0
+end
+
+fn test_json_number_float()
+  let r = to_json_number(3.14)
+  assert(r == "3.140000", "to_json_number(3.14) should be '3.140000'")
+  print("PASS: test_json_number_float")
+  return 0.0
+end
+
+fn test_json_stats_empty()
+  let r = to_json_stats([])
+  assert(r == "{}", "to_json_stats([]) should be '{}'")
+  print("PASS: test_json_stats_empty")
+  return 0.0
+end
+
+fn test_json_stats_single()
+  let r = to_json_stats([42.0])
+  let expected = "{\"count\":1,\"mean\":42.0000,\"median\":42.0000,\"stddev\":0.0000,\"min\":42.0000,\"max\":42.0000,\"sum\":42.0000}"
+  assert(r == expected, "to_json_stats([42.0]) mismatch")
+  print("PASS: test_json_stats_single")
+  return 0.0
+end
+
+fn test_json_stats_multi()
+  let r = to_json_stats([1.0, 2.0, 3.0, 4.0, 5.0])
+  let expected = "{\"count\":5,\"mean\":3.0000,\"median\":3.0000,\"stddev\":1.4142,\"min\":1.0000,\"max\":5.0000,\"sum\":15.0000}"
+  assert(r == expected, "to_json_stats([1..5]) mismatch")
+  print("PASS: test_json_stats_multi")
+  return 0.0
+end
+
+// Run tests
+test_json_number_int()
+test_json_number_zero()
+test_json_number_negative()
+test_json_number_float()
+test_json_stats_empty()
+test_json_stats_single()
+test_json_stats_multi()
+print("All agent util tests passed.")

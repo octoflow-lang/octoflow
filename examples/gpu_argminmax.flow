@@ -7,14 +7,7 @@
 //
 // Run: octoflow run examples/gpu_argminmax.flow --allow-ffi --allow-read
 
-use "../stdlib/loom/ops/runtime"
-
 let N = 65536.0
-
-rt_init()
-
-let pipe_argmin = rt_load_pipeline("tests/gpu_shaders/37_argmin.spv", 3.0, 4.0)
-let pipe_argmax = rt_load_pipeline("tests/gpu_shaders/38_argmax.spv", 3.0, 4.0)
 
 // ── Input: [N, N-1, ..., 2, 1] — min=1.0 at index N-1, max=N at index 0 ──
 let mut input = []
@@ -24,72 +17,94 @@ while i < N
   i = i + 1.0
 end
 
-let buf_in = rt_create_buffer(N * 4.0)
-rt_upload(buf_in, input)
-
 let n_wgs1 = int((N + 255.0) / 256.0)
 let n_wgs2 = 1.0
 
-// Intermediate buffers for pass 1 (256 partial results)
-let buf_min_val1 = rt_create_buffer(n_wgs1 * 4.0)
-let buf_min_idx1 = rt_create_buffer(n_wgs1 * 4.0)
-let buf_max_val1 = rt_create_buffer(n_wgs1 * 4.0)
-let buf_max_idx1 = rt_create_buffer(n_wgs1 * 4.0)
-
-// Final result buffers (1 value each)
-let buf_min_val2 = rt_create_buffer(4.0)
-let buf_min_idx2 = rt_create_buffer(4.0)
-let buf_max_val2 = rt_create_buffer(4.0)
-let buf_max_idx2 = rt_create_buffer(4.0)
-
 // ── Pass 1: Reduce 65536 → 256 partial results ────────────────────
+// Argmin: 3 bindings (input, val_out, idx_out), push constant = N
+let vm_min1 = loom_boot(1.0, 3.0, N)
+let vm_max1 = loom_boot(1.0, 3.0, N)
+loom_prefetch("tests/gpu_shaders/37_argmin.spv")
+loom_prefetch("tests/gpu_shaders/38_argmax.spv")
+
+vm_write_register(vm_min1, 0.0, 0.0, input)
+vm_write_register(vm_max1, 0.0, 0.0, input)
+
+// Zero output registers
+let mut zeros_wgs = []
+let mut i = 0.0
+while i < N
+  push(zeros_wgs, 0.0)
+  i = i + 1.0
+end
+vm_write_register(vm_min1, 0.0, 1.0, zeros_wgs)
+vm_write_register(vm_min1, 0.0, 2.0, zeros_wgs)
+vm_write_register(vm_max1, 0.0, 1.0, zeros_wgs)
+vm_write_register(vm_max1, 0.0, 2.0, zeros_wgs)
+
 let t0 = time()
 
-rt_chain_begin(2.0, 3.0)
-let mut pc1 = [N]
-rt_chain_push_constants(pipe_argmin, pc1)
-let mut bufs_min1 = [buf_in, buf_min_val1, buf_min_idx1]
-rt_chain_dispatch(pipe_argmin, bufs_min1, n_wgs1)
-rt_chain_push_constants(pipe_argmax, pc1)
-let mut bufs_max1 = [buf_in, buf_max_val1, buf_max_idx1]
-rt_chain_dispatch(pipe_argmax, bufs_max1, n_wgs1)
-rt_chain_end()
-rt_chain_submit_wait()
+loom_dispatch(vm_min1, "tests/gpu_shaders/37_argmin.spv", [N], n_wgs1)
+let prog_min1 = loom_build(vm_min1)
+loom_run(prog_min1)
+loom_free(prog_min1)
+
+loom_dispatch(vm_max1, "tests/gpu_shaders/38_argmax.spv", [N], n_wgs1)
+let prog_max1 = loom_build(vm_max1)
+loom_run(prog_max1)
+loom_free(prog_max1)
+
+// Read partial results from pass 1
+let min_val1 = loom_read(vm_min1, 0.0, 1.0, n_wgs1)
+let min_idx1 = loom_read(vm_min1, 0.0, 2.0, n_wgs1)
+let max_val1 = loom_read(vm_max1, 0.0, 1.0, n_wgs1)
+let max_idx1 = loom_read(vm_max1, 0.0, 2.0, n_wgs1)
 
 // ── Pass 2: Reduce 256 → 1 final result ───────────────────────────
-rt_chain_begin(2.0, 3.0)
-let mut pc2 = [n_wgs1]
-rt_chain_push_constants(pipe_argmin, pc2)
-let mut bufs_min2 = [buf_min_val1, buf_min_val2, buf_min_idx2]
-rt_chain_dispatch(pipe_argmin, bufs_min2, n_wgs2)
-rt_chain_push_constants(pipe_argmax, pc2)
-let mut bufs_max2 = [buf_max_val1, buf_max_val2, buf_max_idx2]
-rt_chain_dispatch(pipe_argmax, bufs_max2, n_wgs2)
-rt_chain_end()
-rt_chain_submit_wait()
+let vm_min2 = loom_boot(1.0, 3.0, n_wgs1)
+let vm_max2 = loom_boot(1.0, 3.0, n_wgs1)
+
+vm_write_register(vm_min2, 0.0, 0.0, min_val1)
+vm_write_register(vm_max2, 0.0, 0.0, max_val1)
+
+let mut zeros_small = []
+let mut i = 0.0
+while i < n_wgs1
+  push(zeros_small, 0.0)
+  i = i + 1.0
+end
+vm_write_register(vm_min2, 0.0, 1.0, zeros_small)
+vm_write_register(vm_min2, 0.0, 2.0, zeros_small)
+vm_write_register(vm_max2, 0.0, 1.0, zeros_small)
+vm_write_register(vm_max2, 0.0, 2.0, zeros_small)
+
+loom_dispatch(vm_min2, "tests/gpu_shaders/37_argmin.spv", [n_wgs1], n_wgs2)
+let prog_min2 = loom_build(vm_min2)
+loom_run(prog_min2)
+loom_free(prog_min2)
+
+loom_dispatch(vm_max2, "tests/gpu_shaders/38_argmax.spv", [n_wgs1], n_wgs2)
+let prog_max2 = loom_build(vm_max2)
+loom_run(prog_max2)
+loom_free(prog_max2)
 
 let t1 = time()
 let total_ms = (t1 - t0) * 1000.0
 
 // ── Download results ───────────────────────────────────────────────
-rt_download(buf_min_val2, 1.0)
-let min_val = rt_result[0]
-rt_download(buf_min_idx2, 1.0)
-let min_idx_raw = rt_result[0]
-rt_download(buf_max_val2, 1.0)
-let max_val = rt_result[0]
-rt_download(buf_max_idx2, 1.0)
-let max_idx_raw = rt_result[0]
+let min_val_result = loom_read(vm_min2, 0.0, 1.0, 1.0)
+let min_val = min_val_result[0]
+let min_idx_result = loom_read(vm_min2, 0.0, 2.0, 1.0)
+let min_idx_raw = min_idx_result[0]
 
-// Pass 2 operates on the 256 partial values/indices from pass 1.
-// The argmin pass 2 input is buf_min_val1 (the 256 partial minimums).
-// Its output index is the INDEX within those 256 partials (0-255),
-// not the original global index. We need to look up the original index.
-// Download the partial indices from pass 1 at the position found by pass 2.
-rt_download(buf_min_idx1, n_wgs1)
-let min_idx = rt_result[int(min_idx_raw)]
-rt_download(buf_max_idx1, n_wgs1)
-let max_idx = rt_result[int(max_idx_raw)]
+let max_val_result = loom_read(vm_max2, 0.0, 1.0, 1.0)
+let max_val = max_val_result[0]
+let max_idx_result = loom_read(vm_max2, 0.0, 2.0, 1.0)
+let max_idx_raw = max_idx_result[0]
+
+// Pass 2 index is within the 256 partials. Look up original index.
+let min_idx = min_idx1[int(min_idx_raw)]
+let max_idx = max_idx1[int(max_idx_raw)]
 
 // ── Verify ─────────────────────────────────────────────────────────
 let mut pass = 1.0
@@ -120,8 +135,7 @@ print("")
 print("OctoFlow GPU Argmin/Argmax")
 print("  Elements: {N}")
 print("  Passes: 2 (65536 -> 256 -> 1)")
-print("  Dispatches: 4 (2×argmin + 2×argmax)")
-print("  Submissions: 2")
+print("  Dispatches: 4 (2x argmin + 2x argmax)")
 print("  CPU comparisons: 0")
 print("  Total time: {total_ms} ms")
 print("")
@@ -136,4 +150,7 @@ else
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm_min1)
+loom_shutdown(vm_max1)
+loom_shutdown(vm_min2)
+loom_shutdown(vm_max2)

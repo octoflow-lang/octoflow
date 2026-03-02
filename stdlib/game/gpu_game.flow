@@ -218,6 +218,6 @@ fn gpu_game_render(cam_x, cam_y)
     return 0.0
   end
   loom_run(prog)
-  vm_present(vm, total)
+  loom_present(vm, total)
   return 1.0
 end

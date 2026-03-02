@@ -1,0 +1,347 @@
+// stdlib/game/scene.flow — Scene serialization and management
+//
+// Save and load game scenes (entities + components) to/from map format.
+// Supports position, velocity, health, sprite, and custom components.
+// Designed for level editors, save games, and procedural scene composition.
+//
+// Scene storage: map-based. Each entity stored as keyed entries.
+// Format: "e_N_pos_x", "e_N_pos_y", "e_N_vel_vx", "e_N_hp", "e_N_tag", etc.
+//
+// Functions: scene_create, scene_add_entity, scene_set_pos, scene_set_vel,
+//            scene_set_hp, scene_set_tag, scene_set_sprite,
+//            scene_set_custom, scene_get_custom,
+//            scene_save, scene_load, scene_clear,
+//            scene_entity_count, scene_get_pos, scene_get_tag,
+//            scene_remove_entity, scene_find_by_tag,
+//            scene_merge, scene_clone
+//
+// Usage:
+//   use "scene"
+//   let sc = scene_create()
+//   let e = scene_add_entity(sc)
+//   let _p = scene_set_pos(sc, e, 100.0, 200.0)
+//   let _t = scene_set_tag(sc, e, "player")
+//   let data = scene_save(sc)
+
+// ── Storage ─────────────────────────────────────────────
+let mut _sc_maps = []
+let mut _sc_counts = []
+
+fn scene_create()
+    // Create empty scene. Returns scene ID.
+    let id = len(_sc_counts)
+    let m = map()
+    push(_sc_maps, 0.0)
+    _sc_maps[id] = m
+    push(_sc_counts, 0.0)
+    map_set(m, "count", "0")
+    return id
+end
+
+fn scene_add_entity(sc_id)
+    // Add new entity to scene. Returns entity index.
+    let si = int(sc_id)
+    let m = _sc_maps[si]
+    let idx = _sc_counts[si]
+    _sc_counts[si] = idx + 1.0
+    map_set(m, "count", str(idx + 1.0))
+    // Initialize with default values
+    let prefix = "e_" + str(idx) + "_"
+    map_set(m, prefix + "active", "1")
+    map_set(m, prefix + "tag", "")
+    map_set(m, prefix + "pos_x", "0")
+    map_set(m, prefix + "pos_y", "0")
+    map_set(m, prefix + "has_pos", "0")
+    map_set(m, prefix + "vel_vx", "0")
+    map_set(m, prefix + "vel_vy", "0")
+    map_set(m, prefix + "has_vel", "0")
+    map_set(m, prefix + "hp", "0")
+    map_set(m, prefix + "has_hp", "0")
+    map_set(m, prefix + "sprite_id", "-1")
+    map_set(m, prefix + "has_sprite", "0")
+    return idx
+end
+
+// ── Component setters ───────────────────────────────────
+
+fn scene_set_pos(sc_id, ent_idx, x, y)
+    let m = _sc_maps[int(sc_id)]
+    let prefix = "e_" + str(ent_idx) + "_"
+    map_set(m, prefix + "pos_x", str(x))
+    map_set(m, prefix + "pos_y", str(y))
+    map_set(m, prefix + "has_pos", "1")
+    return 0.0
+end
+
+fn scene_set_vel(sc_id, ent_idx, vx, vy)
+    let m = _sc_maps[int(sc_id)]
+    let prefix = "e_" + str(ent_idx) + "_"
+    map_set(m, prefix + "vel_vx", str(vx))
+    map_set(m, prefix + "vel_vy", str(vy))
+    map_set(m, prefix + "has_vel", "1")
+    return 0.0
+end
+
+fn scene_set_hp(sc_id, ent_idx, hp)
+    let m = _sc_maps[int(sc_id)]
+    let prefix = "e_" + str(ent_idx) + "_"
+    map_set(m, prefix + "hp", str(hp))
+    map_set(m, prefix + "has_hp", "1")
+    return 0.0
+end
+
+fn scene_set_tag(sc_id, ent_idx, tag)
+    let m = _sc_maps[int(sc_id)]
+    let prefix = "e_" + str(ent_idx) + "_"
+    map_set(m, prefix + "tag", tag)
+    return 0.0
+end
+
+fn scene_set_sprite(sc_id, ent_idx, sprite_id)
+    let m = _sc_maps[int(sc_id)]
+    let prefix = "e_" + str(ent_idx) + "_"
+    map_set(m, prefix + "sprite_id", str(sprite_id))
+    map_set(m, prefix + "has_sprite", "1")
+    return 0.0
+end
+
+fn scene_set_custom(sc_id, ent_idx, key, value)
+    // Set custom named property on entity.
+    let m = _sc_maps[int(sc_id)]
+    let full_key = "e_" + str(ent_idx) + "_c_" + key
+    map_set(m, full_key, str(value))
+    return 0.0
+end
+
+// ── Component getters ───────────────────────────────────
+
+fn scene_get_pos(sc_id, ent_idx, result)
+    // Get position into result array [x, y]. Returns 1.0 if entity has position.
+    if len(result) < 2.0
+        return 0.0
+    end
+    let m = _sc_maps[int(sc_id)]
+    let prefix = "e_" + str(ent_idx) + "_"
+    let has = to_num(map_get(m, prefix + "has_pos"))
+    if has != 1.0
+        return 0.0
+    end
+    result[0] = to_num(map_get(m, prefix + "pos_x"))
+    result[1] = to_num(map_get(m, prefix + "pos_y"))
+    return 1.0
+end
+
+fn scene_get_vel(sc_id, ent_idx, result)
+    // Get velocity into result array [vx, vy].
+    if len(result) < 2.0
+        return 0.0
+    end
+    let m = _sc_maps[int(sc_id)]
+    let prefix = "e_" + str(ent_idx) + "_"
+    let has = to_num(map_get(m, prefix + "has_vel"))
+    if has != 1.0
+        return 0.0
+    end
+    result[0] = to_num(map_get(m, prefix + "vel_vx"))
+    result[1] = to_num(map_get(m, prefix + "vel_vy"))
+    return 1.0
+end
+
+fn scene_get_hp(sc_id, ent_idx)
+    // Get health. Returns -1.0 if entity doesn't have health.
+    let m = _sc_maps[int(sc_id)]
+    let prefix = "e_" + str(ent_idx) + "_"
+    let has = to_num(map_get(m, prefix + "has_hp"))
+    if has != 1.0
+        return -1.0
+    end
+    return to_num(map_get(m, prefix + "hp"))
+end
+
+fn scene_get_tag(sc_id, ent_idx)
+    // Get tag string.
+    let m = _sc_maps[int(sc_id)]
+    return map_get(m, "e_" + str(ent_idx) + "_tag")
+end
+
+fn scene_get_sprite(sc_id, ent_idx)
+    // Get sprite ID. Returns -1.0 if no sprite.
+    let m = _sc_maps[int(sc_id)]
+    let prefix = "e_" + str(ent_idx) + "_"
+    let has = to_num(map_get(m, prefix + "has_sprite"))
+    if has != 1.0
+        return -1.0
+    end
+    return to_num(map_get(m, prefix + "sprite_id"))
+end
+
+fn scene_get_custom(sc_id, ent_idx, key)
+    // Get custom property. Returns value as float.
+    let m = _sc_maps[int(sc_id)]
+    let full_key = "e_" + str(ent_idx) + "_c_" + key
+    return to_num(map_get(m, full_key))
+end
+
+fn scene_is_active(sc_id, ent_idx)
+    let m = _sc_maps[int(sc_id)]
+    return to_num(map_get(m, "e_" + str(ent_idx) + "_active"))
+end
+
+// ── Entity management ───────────────────────────────────
+
+fn scene_entity_count(sc_id)
+    // Total entities (including removed).
+    return _sc_counts[int(sc_id)]
+end
+
+fn scene_remove_entity(sc_id, ent_idx)
+    // Mark entity as inactive (soft delete).
+    let m = _sc_maps[int(sc_id)]
+    map_set(m, "e_" + str(ent_idx) + "_active", "0")
+    return 0.0
+end
+
+fn scene_find_by_tag(sc_id, tag)
+    // Find first active entity with matching tag. Returns index or -1.0.
+    let count = _sc_counts[int(sc_id)]
+    let m = _sc_maps[int(sc_id)]
+    let mut i = 0.0
+    while i < count
+        let prefix = "e_" + str(i) + "_"
+        let active = to_num(map_get(m, prefix + "active"))
+        if active == 1.0
+            let etag = map_get(m, prefix + "tag")
+            if etag == tag
+                return i
+            end
+        end
+        i = i + 1.0
+    end
+    return -1.0
+end
+
+fn scene_find_all_by_tag(sc_id, tag, result)
+    // Find all active entities with matching tag. Pushes indices to result.
+    let count = _sc_counts[int(sc_id)]
+    let m = _sc_maps[int(sc_id)]
+    let mut found = 0.0
+    let mut i = 0.0
+    while i < count
+        let prefix = "e_" + str(i) + "_"
+        let active = to_num(map_get(m, prefix + "active"))
+        if active == 1.0
+            let etag = map_get(m, prefix + "tag")
+            if etag == tag
+                push(result, i)
+                found = found + 1.0
+            end
+        end
+        i = i + 1.0
+    end
+    return found
+end
+
+// ── Serialization ───────────────────────────────────────
+
+fn scene_save(sc_id)
+    // Save scene to its internal map. Returns the map reference.
+    // The map IS the serialized format — no conversion needed.
+    return _sc_maps[int(sc_id)]
+end
+
+fn scene_load(saved_map)
+    // Load scene from a saved map. Returns new scene ID.
+    let id = len(_sc_counts)
+    push(_sc_maps, 0.0)
+    _sc_maps[id] = saved_map
+    let count = to_num(map_get(saved_map, "count"))
+    push(_sc_counts, count)
+    return id
+end
+
+fn scene_clear(sc_id)
+    // Remove all entities from scene.
+    let m = _sc_maps[int(sc_id)]
+    _sc_counts[int(sc_id)] = 0.0
+    map_set(m, "count", "0")
+    return 0.0
+end
+
+// ── Scene composition ───────────────────────────────────
+
+fn scene_merge(dst_id, src_id)
+    // Merge all active entities from src into dst. Returns entities added.
+    let src_count = _sc_counts[int(src_id)]
+    let src_m = _sc_maps[int(src_id)]
+    let mut added = 0.0
+    let mut i = 0.0
+    while i < src_count
+        let prefix = "e_" + str(i) + "_"
+        let active = to_num(map_get(src_m, prefix + "active"))
+        if active == 1.0
+            let e = scene_add_entity(dst_id)
+            // Copy position
+            let has_pos = to_num(map_get(src_m, prefix + "has_pos"))
+            if has_pos == 1.0
+                let x = to_num(map_get(src_m, prefix + "pos_x"))
+                let y = to_num(map_get(src_m, prefix + "pos_y"))
+                let _p = scene_set_pos(dst_id, e, x, y)
+            end
+            // Copy velocity
+            let has_vel = to_num(map_get(src_m, prefix + "has_vel"))
+            if has_vel == 1.0
+                let vx = to_num(map_get(src_m, prefix + "vel_vx"))
+                let vy = to_num(map_get(src_m, prefix + "vel_vy"))
+                let _v = scene_set_vel(dst_id, e, vx, vy)
+            end
+            // Copy health
+            let has_hp = to_num(map_get(src_m, prefix + "has_hp"))
+            if has_hp == 1.0
+                let hp = to_num(map_get(src_m, prefix + "hp"))
+                let _h = scene_set_hp(dst_id, e, hp)
+            end
+            // Copy tag
+            let tag = map_get(src_m, prefix + "tag")
+            if str_len(tag) > 0.0
+                let _t = scene_set_tag(dst_id, e, tag)
+            end
+            // Copy sprite
+            let has_spr = to_num(map_get(src_m, prefix + "has_sprite"))
+            if has_spr == 1.0
+                let sid = to_num(map_get(src_m, prefix + "sprite_id"))
+                let _s = scene_set_sprite(dst_id, e, sid)
+            end
+            added = added + 1.0
+        end
+        i = i + 1.0
+    end
+    return added
+end
+
+// ── Prefab pattern ──────────────────────────────────────
+
+fn scene_spawn_at(sc_id, tag, x, y, hp)
+    // Quick spawn: create entity with position, tag, and health.
+    let e = scene_add_entity(sc_id)
+    let _p = scene_set_pos(sc_id, e, x, y)
+    let _t = scene_set_tag(sc_id, e, tag)
+    if hp > 0.0
+        let _h = scene_set_hp(sc_id, e, hp)
+    end
+    return e
+end
+
+fn scene_active_count(sc_id)
+    // Count active (non-removed) entities.
+    let count = _sc_counts[int(sc_id)]
+    let m = _sc_maps[int(sc_id)]
+    let mut active = 0.0
+    let mut i = 0.0
+    while i < count
+        if to_num(map_get(m, "e_" + str(i) + "_active")) == 1.0
+            active = active + 1.0
+        end
+        i = i + 1.0
+    end
+    return active
+end

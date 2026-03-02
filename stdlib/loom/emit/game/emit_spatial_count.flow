@@ -1,0 +1,48 @@
+// emit_spatial_count.flow — Count particles per grid cell (atomic)
+//
+// 1 thread = 1 particle. Atomically increments counts[cell_id].
+//
+// Push constants (1 float):
+//   pc[0] = N (particle count)
+//
+// Buffer layout (binding 0):
+//   Binding 0: cell_ids[N] at offset 0 — READ
+//   Binding 1: counts[GRID³] — READ/WRITE (must be zeroed before dispatch)
+//
+// Dispatch: loom_dispatch(vm, "spatial_count.spv", [N], ceil(N/256))
+
+use "../../../compiler/ir"
+
+fn emit_spatial_count(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+
+  let c0f = ir_const_f(entry, 0.0)
+
+  let pc_n = ir_push_const(entry, 0.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, pc_n)
+
+  let main_m = ir_block("main_merge")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_bounds, work, main_m)
+
+  // Read cell_id for this particle (from binding 0)
+  let cell_f = ir_load_input_at(work, 0.0, gid)
+  let cell_u = ir_ftou(work, cell_f)
+
+  // Atomic increment counts[cell_id] on binding 1
+  let c1u_val = ir_const_u(work, 1)
+  let _old = ir_buf_atomic_iadd(work, 1.0, cell_u, c1u_val)
+
+  ir_term_branch(work, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

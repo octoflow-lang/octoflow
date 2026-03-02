@@ -1,0 +1,138 @@
+// test_resource_budget.flow — Tests for resource budget controls
+//
+// Validates loom_max_vms, loom_park, loom_unpark, loom_auto_spawn,
+// loom_pool_size, loom_vm_count, loom_auto_release.
+//
+// Run: octoflow run stdlib/loom/tests/test_resource_budget.flow --allow-ffi --allow-read --allow-write
+
+print("=== Test: Resource Budget Controls ===")
+print("")
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+fn check(name, got, expected)
+  if abs(got - expected) < 0.5
+    print("  PASS: {name} = {got}")
+    return 1.0
+  else
+    print("  FAIL: {name} = {got} (expected {expected})")
+    return 0.0
+  end
+end
+
+fn tally(result)
+  if result > 0.5
+    pass = pass + 1.0
+  else
+    fail = fail + 1.0
+  end
+  return 0.0
+end
+
+// ── Test 1: VM cap enforcement ──────────────────────────────────────
+print("Test 1: VM cap enforcement")
+
+loom_max_vms(4.0)
+let vm1 = loom_boot(1.0, 1.0, 256.0)
+let vm2 = loom_boot(1.0, 1.0, 256.0)
+let vm3 = loom_boot(1.0, 1.0, 256.0)
+let vm4 = loom_boot(1.0, 1.0, 256.0)
+
+let _t = tally(check("vm_count after 4 boots", loom_vm_count(), 4.0))
+
+// 5th VM should fail — cap is 4
+let vm5 = loom_boot(1.0, 1.0, 256.0)
+let _t = tally(check("5th VM returns -1", vm5, -1.0))
+
+// Shutdown one, try again
+loom_shutdown(vm4)
+let _t = tally(check("vm_count after shutdown", loom_vm_count(), 3.0))
+
+let vm5b = loom_boot(1.0, 1.0, 256.0)
+let _t = tally(check("5th VM succeeds after shutdown", vm5b > 0.0, 1.0))
+
+loom_shutdown(vm1)
+loom_shutdown(vm2)
+loom_shutdown(vm3)
+loom_shutdown(vm5b)
+print("")
+
+// ── Test 2: Park/unpark lifecycle ───────────────────────────────────
+print("Test 2: Park/unpark lifecycle")
+
+loom_max_vms(64.0)
+let vm_p = loom_boot(1.0, 1.0, 256.0)
+
+// Write data before parking
+let pdata = [42.0, 43.0, 44.0]
+vm_write_globals(vm_p, 0.0, pdata)
+
+loom_park(vm_p)
+let _t = tally(check("pool_size after park", loom_pool_size(), 1.0))
+
+loom_unpark(vm_p)
+let _t = tally(check("pool_size after unpark", loom_pool_size(), 0.0))
+
+// Verify data survived park/unpark
+let pread = vm_read_globals(vm_p, 0.0, 3.0)
+let _t = tally(check("data[0] survives", pread[0], 42.0))
+let _t = tally(check("data[1] survives", pread[1], 43.0))
+let _t = tally(check("data[2] survives", pread[2], 44.0))
+
+loom_shutdown(vm_p)
+print("")
+
+// ── Test 3: Auto-spawn reuse ────────────────────────────────────────
+print("Test 3: Auto-spawn reuse from parked pool")
+
+let vm_as1 = loom_boot(1.0, 1.0, 512.0)
+let _t = tally(check("vm_count=1", loom_vm_count(), 1.0))
+
+loom_park(vm_as1)
+let _t = tally(check("pool_size=1 after park", loom_pool_size(), 1.0))
+
+// Auto-spawn should reuse the parked VM
+let vm_as2 = loom_auto_spawn(1.0, 1.0, 256.0)
+let _t = tally(check("pool_size=0 after reuse", loom_pool_size(), 0.0))
+let _t = tally(check("auto_spawn returns valid id", vm_as2 > 0.0, 1.0))
+
+loom_shutdown(vm_as2)
+print("")
+
+// ── Test 4: VM count tracking ───────────────────────────────────────
+print("Test 4: VM count tracking")
+
+let _t = tally(check("start with 0 VMs", loom_vm_count(), 0.0))
+
+let vm_c1 = loom_boot(1.0, 1.0, 256.0)
+let _t = tally(check("1 after boot", loom_vm_count(), 1.0))
+
+let vm_c2 = loom_boot(1.0, 1.0, 256.0)
+let _t = tally(check("2 after 2nd boot", loom_vm_count(), 2.0))
+
+loom_park(vm_c1)
+let _t = tally(check("still 2 after park", loom_vm_count(), 2.0))
+
+loom_shutdown(vm_c2)
+let _t = tally(check("1 after shutdown", loom_vm_count(), 1.0))
+
+// Auto-release parks instead of destroying
+loom_unpark(vm_c1)
+loom_auto_release(vm_c1)
+let _t = tally(check("pool_size=1 after auto_release", loom_pool_size(), 1.0))
+let _t = tally(check("vm_count still 1", loom_vm_count(), 1.0))
+
+// Cleanup: shutdown the parked VM by unparking first
+loom_unpark(vm_c1)
+loom_shutdown(vm_c1)
+print("")
+
+// ── Summary ─────────────────────────────────────────────────────────
+print("Results: {pass} passed, {fail} failed")
+if fail < 0.5
+  print("ALL PASS")
+else
+  print("SOME FAILED")
+end
+print("")

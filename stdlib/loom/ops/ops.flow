@@ -8,52 +8,68 @@
 //   let result = gpu_add(a, b)
 
 // ── Element-wise unary operations ───────────────────────────────────
-fn gpu_abs_run(arr):
+fn gpu_abs_run(arr)
     return gpu_run("stdlib/loom/kernels/math/abs.spv", arr)
+end
 
-fn gpu_sqrt_run(arr):
+fn gpu_sqrt_run(arr)
     return gpu_run("stdlib/loom/kernels/math/sqrt.spv", arr)
+end
 
-fn gpu_exp_run(arr):
+fn gpu_exp_run(arr)
     return gpu_run("stdlib/loom/kernels/math/exp.spv", arr)
+end
 
-fn gpu_log_run(arr):
+fn gpu_log_run(arr)
     return gpu_run("stdlib/loom/kernels/math/log.spv", arr)
+end
 
-fn gpu_negate_run(arr):
+fn gpu_negate_run(arr)
     return gpu_run("stdlib/loom/kernels/math/negate.spv", arr)
+end
 
-fn gpu_floor_run(arr):
+fn gpu_floor_run(arr)
     return gpu_run("stdlib/loom/kernels/math/floor.spv", arr)
+end
 
-fn gpu_ceil_run(arr):
+fn gpu_ceil_run(arr)
     return gpu_run("stdlib/loom/kernels/math/ceil.spv", arr)
+end
 
-fn gpu_round_run(arr):
+fn gpu_round_run(arr)
     return gpu_run("stdlib/loom/kernels/math/round.spv", arr)
+end
 
-fn gpu_sin_run(arr):
+fn gpu_sin_run(arr)
     return gpu_run("stdlib/loom/kernels/math/sin.spv", arr)
+end
 
-fn gpu_cos_run(arr):
+fn gpu_cos_run(arr)
     return gpu_run("stdlib/loom/kernels/math/cos.spv", arr)
+end
 
-fn gpu_double(arr):
+fn gpu_double(arr)
     return gpu_run("stdlib/loom/kernels/math/double.spv", arr)
+end
 
 // ── Element-wise binary operations ──────────────────────────────────
-fn gpu_add_run(a, b):
+fn gpu_add_run(a, b)
     return gpu_run("stdlib/loom/kernels/math/add.spv", a, b)
+end
 
-fn gpu_sub_run(a, b):
+fn gpu_sub_run(a, b)
     return gpu_run("stdlib/loom/kernels/math/sub.spv", a, b)
+end
 
-fn gpu_mul_run(a, b):
+fn gpu_mul_run(a, b)
     return gpu_run("stdlib/loom/kernels/math/mul.spv", a, b)
+end
 
-fn gpu_div_run(a, b):
+fn gpu_div_run(a, b)
     return gpu_run("stdlib/loom/kernels/math/div.spv", a, b)
+end
 
 // ── Conditional select ──────────────────────────────────────────────
-fn gpu_where_run(cond, a, b):
+fn gpu_where_run(cond, a, b)
     return gpu_run("stdlib/loom/kernels/math/where.spv", cond, a, b)
+end

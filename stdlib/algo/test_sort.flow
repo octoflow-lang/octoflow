@@ -1,0 +1,195 @@
+// test_sort.flow — Tests for stdlib/algo/sort.flow
+use "sort"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Bubble Sort ─────────────────────────────────────────────────
+
+fn test_bubble_sort_basic()
+    let mut arr = [5.0, 2.0, 8.0, 1.0, 9.0, 3.0]
+    bubble_sort(arr)
+    check("bubble_sort basic", arr[0] == 1.0 && arr[1] == 2.0 && arr[2] == 3.0 && arr[5] == 9.0)
+    return 0.0
+end
+
+fn test_bubble_sort_already_sorted()
+    let mut arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+    bubble_sort(arr)
+    check("bubble_sort already sorted", arr[0] == 1.0 && arr[4] == 5.0)
+    return 0.0
+end
+
+fn test_bubble_sort_reverse()
+    let mut arr = [5.0, 4.0, 3.0, 2.0, 1.0]
+    bubble_sort(arr)
+    check("bubble_sort reverse", arr[0] == 1.0 && arr[4] == 5.0)
+    return 0.0
+end
+
+fn test_bubble_sort_single()
+    let mut arr = [42.0]
+    bubble_sort(arr)
+    check("bubble_sort single", arr[0] == 42.0)
+    return 0.0
+end
+
+fn test_bubble_sort_empty()
+    let mut arr = []
+    bubble_sort(arr)
+    check("bubble_sort empty", len(arr) == 0.0)
+    return 0.0
+end
+
+fn test_bubble_sort_duplicates()
+    let mut arr = [3.0, 1.0, 3.0, 2.0, 1.0]
+    bubble_sort(arr)
+    check("bubble_sort duplicates", arr[0] == 1.0 && arr[1] == 1.0 && arr[2] == 2.0 && arr[3] == 3.0 && arr[4] == 3.0)
+    return 0.0
+end
+
+// ── Insertion Sort ──────────────────────────────────────────────
+
+fn test_insertion_sort_basic()
+    let mut arr = [7.0, 3.0, 1.0, 9.0, 5.0]
+    insertion_sort(arr)
+    check("insertion_sort basic", arr[0] == 1.0 && arr[4] == 9.0)
+    return 0.0
+end
+
+fn test_insertion_sort_negatives()
+    let mut arr = [3.0, -1.0, 0.0, -5.0, 2.0]
+    insertion_sort(arr)
+    check("insertion_sort negatives", arr[0] == -5.0 && arr[1] == -1.0 && arr[4] == 3.0)
+    return 0.0
+end
+
+// ── Selection Sort ──────────────────────────────────────────────
+
+fn test_selection_sort_basic()
+    let mut arr = [4.0, 2.0, 7.0, 1.0, 6.0]
+    selection_sort(arr)
+    check("selection_sort basic", arr[0] == 1.0 && arr[4] == 7.0)
+    return 0.0
+end
+
+// ── Quicksort ───────────────────────────────────────────────────
+
+fn test_quicksort_basic()
+    let mut arr = [5.0, 2.0, 8.0, 1.0, 9.0, 3.0, 7.0, 4.0, 6.0, 10.0]
+    quicksort(arr, 0.0, len(arr) - 1.0)
+    check("quicksort basic", arr[0] == 1.0 && arr[9] == 10.0 && is_sorted(arr) == 1.0)
+    return 0.0
+end
+
+fn test_quicksort_already_sorted()
+    let mut arr = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+    quicksort(arr, 0.0, len(arr) - 1.0)
+    check("quicksort already sorted", is_sorted(arr) == 1.0)
+    return 0.0
+end
+
+fn test_quicksort_reverse()
+    let mut arr = [10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+    quicksort(arr, 0.0, len(arr) - 1.0)
+    check("quicksort reverse", is_sorted(arr) == 1.0 && arr[0] == 1.0)
+    return 0.0
+end
+
+fn test_quicksort_large()
+    let mut arr = []
+    let mut i = 50.0
+    while i > 0.0
+        push(arr, i)
+        i = i - 1.0
+    end
+    quicksort(arr, 0.0, len(arr) - 1.0)
+    check("quicksort large (50 elements)", is_sorted(arr) == 1.0 && arr[0] == 1.0 && arr[49] == 50.0)
+    return 0.0
+end
+
+// ── Mergesort ───────────────────────────────────────────────────
+
+fn test_mergesort_basic()
+    let mut arr = [5.0, 2.0, 8.0, 1.0, 9.0, 3.0]
+    mergesort(arr)
+    check("mergesort basic", is_sorted(arr) == 1.0 && arr[0] == 1.0)
+    return 0.0
+end
+
+fn test_mergesort_duplicates()
+    let mut arr = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0, 5.0, 3.0]
+    mergesort(arr)
+    check("mergesort duplicates", is_sorted(arr) == 1.0)
+    return 0.0
+end
+
+fn test_mergesort_single()
+    let mut arr = [7.0]
+    mergesort(arr)
+    check("mergesort single", arr[0] == 7.0)
+    return 0.0
+end
+
+// ── sort() convenience ──────────────────────────────────────────
+
+fn test_sort_convenience()
+    let mut arr = [9.0, 1.0, 5.0, 3.0, 7.0]
+    sort(arr)
+    check("sort() convenience", is_sorted(arr) == 1.0)
+    return 0.0
+end
+
+// ── is_sorted ───────────────────────────────────────────────────
+
+fn test_is_sorted()
+    let mut sorted = [1.0, 2.0, 3.0]
+    let mut unsorted = [3.0, 1.0, 2.0]
+    let mut empty = []
+    let mut single = [5.0]
+    check("is_sorted sorted", is_sorted(sorted) == 1.0)
+    check("is_sorted unsorted", is_sorted(unsorted) == 0.0)
+    check("is_sorted empty", is_sorted(empty) == 1.0)
+    check("is_sorted single", is_sorted(single) == 1.0)
+    return 0.0
+end
+
+// ── sort_descending ─────────────────────────────────────────────
+
+fn test_sort_descending()
+    let mut arr = [1.0, 5.0, 3.0, 2.0, 4.0]
+    sort_descending(arr)
+    check("sort_descending", arr[0] == 5.0 && arr[1] == 4.0 && arr[4] == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_bubble_sort_basic()
+test_bubble_sort_already_sorted()
+test_bubble_sort_reverse()
+test_bubble_sort_single()
+test_bubble_sort_empty()
+test_bubble_sort_duplicates()
+test_insertion_sort_basic()
+test_insertion_sort_negatives()
+test_selection_sort_basic()
+test_quicksort_basic()
+test_quicksort_already_sorted()
+test_quicksort_reverse()
+test_quicksort_large()
+test_mergesort_basic()
+test_mergesort_duplicates()
+test_mergesort_single()
+test_sort_convenience()
+test_is_sorted()
+test_sort_descending()
+print("")
+print("All sort tests passed (19 tests)")

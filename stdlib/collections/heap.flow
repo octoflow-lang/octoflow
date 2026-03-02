@@ -1,7 +1,8 @@
 // stdlib/collections/heap.flow — Binary min-heap (array-backed)
 //
 // Functions: heap_create, heap_push, heap_pop, heap_peek, heap_size,
-//            heap_is_empty, heapify
+//            heap_is_empty, heapify, heapsort, heap_nsmallest, heap_nlargest,
+//            heap_merge, heap_to_sorted_array, heap_replace, heap_contains
 //
 // Index math: parent(i) = floor((i-1)/2), left(i) = 2i+1, right(i) = 2i+2
 
@@ -117,4 +118,181 @@ fn heapify(arr)
     start = start - 1.0
   end
   return arr
+end
+
+fn heapsort(arr)
+    // Sort array in ascending order using heapsort. In-place.
+    let n = len(arr)
+    if n < 2.0
+        return 0.0
+    end
+    // Build max-heap (reverse of min-heap for ascending sort)
+    let mut start = floor(n / 2.0) - 1.0
+    while start >= 0.0
+        let mut i = start
+        let mut done = 0.0
+        while done == 0.0
+            let left = 2.0 * i + 1.0
+            let right = 2.0 * i + 2.0
+            let mut largest = i
+            if left < n && arr[left] > arr[largest]
+                largest = left
+            end
+            if right < n && arr[right] > arr[largest]
+                largest = right
+            end
+            if largest != i
+                let tmp = arr[i]
+                arr[i] = arr[largest]
+                arr[largest] = tmp
+                i = largest
+            else
+                done = 1.0
+            end
+        end
+        start = start - 1.0
+    end
+    // Extract elements one by one
+    let mut end_idx = n - 1.0
+    while end_idx > 0.0
+        let tmp = arr[0]
+        arr[0] = arr[end_idx]
+        arr[end_idx] = tmp
+        // Sift down in reduced heap
+        let mut i = 0.0
+        let mut done = 0.0
+        while done == 0.0
+            let left = 2.0 * i + 1.0
+            let right = 2.0 * i + 2.0
+            let mut largest = i
+            if left < end_idx && arr[left] > arr[largest]
+                largest = left
+            end
+            if right < end_idx && arr[right] > arr[largest]
+                largest = right
+            end
+            if largest != i
+                let t2 = arr[i]
+                arr[i] = arr[largest]
+                arr[largest] = t2
+                i = largest
+            else
+                done = 1.0
+            end
+        end
+        end_idx = end_idx - 1.0
+    end
+    return 0.0
+end
+
+fn heap_nsmallest(arr, k)
+    // Return the k smallest elements from arr (not necessarily sorted).
+    let mut h = heap_create()
+    let n = len(arr)
+    let mut i = 0.0
+    while i < n
+        heap_push(h, arr[i])
+        i = i + 1.0
+    end
+    let mut result = []
+    let mut count = 0.0
+    while count < k && heap_is_empty(h) == 0.0
+        push(result, heap_pop(h))
+        count = count + 1.0
+    end
+    return result
+end
+
+fn heap_nlargest(arr, k)
+    // Return the k largest elements from arr (sorted descending).
+    // Build max-heap by negating values
+    let mut h = heap_create()
+    let n = len(arr)
+    let mut i = 0.0
+    while i < n
+        heap_push(h, 0.0 - arr[i])
+        i = i + 1.0
+    end
+    let mut result = []
+    let mut count = 0.0
+    while count < k && heap_is_empty(h) == 0.0
+        push(result, 0.0 - heap_pop(h))
+        count = count + 1.0
+    end
+    return result
+end
+
+fn heap_merge(h1, h2)
+    // Merge two heaps into a new heap.
+    let mut merged = heap_create()
+    let n1 = len(h1)
+    let n2 = len(h2)
+    let mut i = 0.0
+    while i < n1
+        heap_push(merged, h1[i])
+        i = i + 1.0
+    end
+    i = 0.0
+    while i < n2
+        heap_push(merged, h2[i])
+        i = i + 1.0
+    end
+    return merged
+end
+
+fn heap_to_sorted_array(heap)
+    // Extract all elements in sorted order. Destroys the heap.
+    let mut result = []
+    while heap_is_empty(heap) == 0.0
+        push(result, heap_pop(heap))
+    end
+    return result
+end
+
+fn heap_replace(heap, val)
+    // Pop the smallest, push val, return the popped value.
+    // More efficient than separate pop + push.
+    if len(heap) == 0.0
+        heap_push(heap, val)
+        return val
+    end
+    let old = heap[0]
+    heap[0] = val
+    // Sift down
+    let mut size = len(heap)
+    let mut i = 0.0
+    let mut done = 0.0
+    while done == 0.0
+        let left = 2.0 * i + 1.0
+        let right = 2.0 * i + 2.0
+        let mut smallest = i
+        if left < size && heap[left] < heap[smallest]
+            smallest = left
+        end
+        if right < size && heap[right] < heap[smallest]
+            smallest = right
+        end
+        if smallest != i
+            let tmp = heap[i]
+            heap[i] = heap[smallest]
+            heap[smallest] = tmp
+            i = smallest
+        else
+            done = 1.0
+        end
+    end
+    return old
+end
+
+fn heap_contains(heap, val)
+    // Check if value exists in heap. O(n).
+    let n = len(heap)
+    let mut i = 0.0
+    while i < n
+        if heap[i] == val
+            return 1.0
+        end
+        i = i + 1.0
+    end
+    return 0.0
 end

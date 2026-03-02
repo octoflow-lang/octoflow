@@ -1,0 +1,216 @@
+// test_stats.flow — Tests for stdlib/math/stats.flow
+use "stats"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.1
+        return 1.0
+    end
+    return 0.0
+end
+
+fn approx_fine(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Variance / Std Dev ──────────────────────────────────────────
+
+fn test_variance()
+    let mut data = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
+    check("variance", approx(variance(data), 4.0) == 1.0)
+    check("std_dev", approx(std_dev(data), 2.0) == 1.0)
+    return 0.0
+end
+
+fn test_sample_variance()
+    let mut data = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
+    check("sample var", approx(sample_variance(data), 4.571) == 1.0)
+    return 0.0
+end
+
+// ── Mode ──────────────────────────────────────────────────────
+
+fn test_mode()
+    let mut data = [1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0]
+    check("mode", mode(data) == 3.0)
+    return 0.0
+end
+
+// ── Means ─────────────────────────────────────────────────────
+
+fn test_geometric_mean()
+    let mut data = [2.0, 8.0]
+    check("geo mean", approx_fine(geometric_mean(data), 4.0) == 1.0)
+    return 0.0
+end
+
+fn test_harmonic_mean()
+    let mut data = [1.0, 4.0, 4.0]
+    check("harm mean", approx_fine(harmonic_mean(data), 2.0) == 1.0)
+    return 0.0
+end
+
+fn test_weighted_mean()
+    let mut values = [70.0, 80.0, 90.0]
+    let mut weights = [1.0, 2.0, 3.0]
+    check("weighted mean", approx_fine(weighted_mean(values, weights), 83.33) == 1.0)
+    return 0.0
+end
+
+// ── Z-Score ───────────────────────────────────────────────────
+
+fn test_z_score()
+    check("z_score", approx_fine(z_score(10.0, 8.0, 2.0), 1.0) == 1.0)
+    check("z_score neg", approx_fine(z_score(6.0, 8.0, 2.0), -1.0) == 1.0)
+    return 0.0
+end
+
+fn test_z_scores()
+    let mut data = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let zs = z_scores(data)
+    check("z_scores len", len(zs) == 5.0)
+    // Mean=3, SD~1.414, z(1)~-1.414, z(3)~0, z(5)~1.414
+    check("z_scores mid", approx_fine(zs[2], 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Percentile / Quartiles ──────────────────────────────────────
+
+fn test_percentile()
+    let mut data = [15.0, 20.0, 35.0, 40.0, 50.0]
+    check("p50", approx(percentile(data, 50.0), 35.0) == 1.0)
+    check("p0", approx(percentile(data, 0.0), 15.0) == 1.0)
+    check("p100", approx(percentile(data, 100.0), 50.0) == 1.0)
+    return 0.0
+end
+
+fn test_quartiles()
+    let mut data = [7.0, 15.0, 36.0, 39.0, 40.0, 41.0]
+    let q = quartiles(data)
+    check("quartiles len", len(q) == 3.0)
+    // Q2 (median) for 6 items: average of 3rd and 4th = (36+39)/2 = 37.5
+    check("q2", approx(q[1], 37.5) == 1.0)
+    return 0.0
+end
+
+fn test_iqr()
+    let mut data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    let r = iqr(data)
+    check("iqr", r > 0.0)
+    return 0.0
+end
+
+// ── Correlation ─────────────────────────────────────────────────
+
+fn test_covariance()
+    let mut x = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let mut y = [2.0, 4.0, 5.0, 4.0, 5.0]
+    let cov = covariance(x, y)
+    check("covariance", cov > 0.0)
+    return 0.0
+end
+
+fn test_correlation()
+    let mut x = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let mut y = [2.0, 4.0, 6.0, 8.0, 10.0]
+    check("correlation perfect", approx_fine(correlation(x, y), 1.0) == 1.0)
+
+    let mut z = [10.0, 8.0, 6.0, 4.0, 2.0]
+    check("correlation neg", approx_fine(correlation(x, z), -1.0) == 1.0)
+    return 0.0
+end
+
+// ── Normalization ───────────────────────────────────────────────
+
+fn test_normalize()
+    let mut data = [10.0, 20.0, 30.0, 40.0, 50.0]
+    let normed = normalize_array(data)
+    check("norm min", normed[0] == 0.0)
+    check("norm max", normed[4] == 1.0)
+    check("norm mid", approx_fine(normed[2], 0.5) == 1.0)
+    return 0.0
+end
+
+// ── Moving Average ──────────────────────────────────────────────
+
+fn test_moving_average()
+    let mut data = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let ma = moving_average(data, 3.0)
+    check("ma len", len(ma) == 5.0)
+    // ma[2] = (1+2+3)/3 = 2.0
+    check("ma val", approx_fine(ma[2], 2.0) == 1.0)
+    // ma[4] = (3+4+5)/3 = 4.0
+    check("ma last", approx_fine(ma[4], 4.0) == 1.0)
+    return 0.0
+end
+
+fn test_ema()
+    let mut data = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let ema = exponential_moving_average(data, 0.5)
+    check("ema len", len(ema) == 5.0)
+    check("ema first", ema[0] == 1.0)
+    // ema[1] = 0.5*2 + 0.5*1 = 1.5
+    check("ema second", approx_fine(ema[1], 1.5) == 1.0)
+    return 0.0
+end
+
+// ── Histogram ───────────────────────────────────────────────────
+
+fn test_histogram()
+    let mut data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+    let h = histogram(data, 5.0)
+    check("hist bins", len(h) == 5.0)
+    // Total should be 10
+    let mut total = 0.0
+    let mut i = 0.0
+    while i < 5.0
+        total = total + h[i]
+        i = i + 1.0
+    end
+    check("hist total", total == 10.0)
+    return 0.0
+end
+
+// ── Shape ───────────────────────────────────────────────────────
+
+fn test_skewness()
+    // Symmetric data should have ~0 skewness
+    let mut sym = [1.0, 2.0, 3.0, 4.0, 5.0]
+    check("skew sym", approx(skewness(sym), 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_variance()
+test_sample_variance()
+test_mode()
+test_geometric_mean()
+test_harmonic_mean()
+test_weighted_mean()
+test_z_score()
+test_z_scores()
+test_percentile()
+test_quartiles()
+test_iqr()
+test_covariance()
+test_correlation()
+test_normalize()
+test_moving_average()
+test_ema()
+test_histogram()
+test_skewness()
+print("")
+print("All statistics tests passed (18 tests)")

@@ -1,0 +1,46 @@
+// fitness.flow — ASE Fitness Evaluation Framework
+//
+// Functions:
+//   ase_evaluate_correctness(actual, expected) → fraction correct [0..1]
+//   ase_evaluate_speed(vm, spv_path, push_constants, workgroups) → ms elapsed
+//   ase_fitness_score(correctness, speed_ms, max_speed_ms) → combined score [0..1]
+
+fn ase_evaluate_correctness(actual, expected)
+  if len(expected) < 1.0
+    return 0.0
+  end
+  let mut correct = 0.0
+  let mut i = 0.0
+  while i < len(expected)
+    if i < len(actual)
+      if abs(actual[i] - expected[i]) < 0.001
+        correct = correct + 1.0
+      end
+    end
+    i = i + 1.0
+  end
+  return correct / len(expected)
+end
+
+fn ase_evaluate_speed(vm, spv_path, push_constants, workgroups)
+  let t0 = now_ms()
+  loom_dispatch(vm, spv_path, push_constants, workgroups)
+  let prog = loom_build(vm)
+  loom_run(prog)
+  loom_free(prog)
+  let t1 = now_ms()
+  return t1 - t0
+end
+
+fn ase_fitness_score(correctness, speed_ms, max_speed_ms)
+  // Wrong answers always lose, regardless of speed
+  if correctness < 1.0
+    return correctness * 0.5
+  end
+  // Correct: score 0.5 + speed bonus (faster = higher, up to 0.5)
+  let mut speed_score = 1.0 - (speed_ms / max_speed_ms)
+  if speed_score < 0.0
+    speed_score = 0.0
+  end
+  return 0.5 + speed_score * 0.5
+end

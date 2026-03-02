@@ -1,0 +1,179 @@
+// test_anim_ui.flow — Tests for stdlib/gui/anim_ui.flow
+use "anim_ui"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Basic animation ─────────────────────────────────────
+
+fn test_basic()
+    let a = ua_create(0.0, 100.0, 1.0, UA_EASE_LINEAR)
+    // At t=0, value should be 0
+    let v0 = ua_value(a)
+    check("basic start", approx(v0, 0.0) == 1.0)
+    // Advance halfway
+    let v1 = ua_update(a, 0.5)
+    check("basic mid", approx(v1, 50.0) == 1.0)
+    // Advance to end
+    let v2 = ua_update(a, 0.5)
+    check("basic end", approx(v2, 100.0) == 1.0)
+    check("basic done", ua_done(a) == 1.0)
+    return 0.0
+end
+
+// ── Easing types ────────────────────────────────────────
+
+fn test_easing()
+    // Quad in should be slower at start
+    let a = ua_create(0.0, 1.0, 1.0, UA_EASE_IN_QUAD)
+    let v = ua_update(a, 0.5)
+    check("ease in quad < 0.5", v < 0.5)
+    // Quad out should be faster at start
+    let b = ua_create(0.0, 1.0, 1.0, UA_EASE_OUT_QUAD)
+    let v2 = ua_update(b, 0.5)
+    check("ease out quad > 0.5", v2 > 0.5)
+    // Cubic
+    let c = ua_create(0.0, 1.0, 1.0, UA_EASE_IN_CUBIC)
+    let v3 = ua_update(c, 0.5)
+    check("ease in cubic < quad", v3 < v)
+    return 0.0
+end
+
+// ── Delay ───────────────────────────────────────────────
+
+fn test_delay()
+    let a = ua_create(0.0, 100.0, 1.0, UA_EASE_LINEAR)
+    let _d = ua_delay(a, 0.5)
+    // During delay, should stay at start
+    let v0 = ua_update(a, 0.3)
+    check("delay hold", approx(v0, 0.0) == 1.0)
+    check("delay not done", ua_done(a) == 0.0)
+    // After delay
+    let v1 = ua_update(a, 0.3)
+    check("delay release", approx(v1, 0.0) == 1.0)
+    let v2 = ua_update(a, 0.5)
+    check("delay mid", v2 > 0.0)
+    return 0.0
+end
+
+// ── Looping ─────────────────────────────────────────────
+
+fn test_loop()
+    let a = ua_create(0.0, 100.0, 1.0, UA_EASE_LINEAR)
+    let _l = ua_loop(a, 1.0)
+    // Advance past end — should wrap
+    let _v = ua_update(a, 1.5)
+    check("loop not done", ua_done(a) == 0.0)
+    let p = ua_progress(a)
+    check("loop wrapped", p < 1.0)
+    return 0.0
+end
+
+// ── Reset ───────────────────────────────────────────────
+
+fn test_reset()
+    let a = ua_create(0.0, 100.0, 1.0, UA_EASE_LINEAR)
+    let _v1 = ua_update(a, 0.5)
+    let _r = ua_reset(a)
+    let v2 = ua_value(a)
+    check("reset to start", approx(v2, 0.0) == 1.0)
+    check("reset progress", approx(ua_progress(a), 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Color animation ─────────────────────────────────────
+
+fn test_color()
+    let c = ua_create_color(255.0, 0.0, 0.0, 0.0, 0.0, 255.0, 1.0, UA_EASE_LINEAR)
+    let r = ua_color_r(c, 0.5)
+    let g = ua_color_g(c, 0.5)
+    let b = ua_color_b(c, 0.5)
+    check("color r mid", approx(r, 127.5) == 1.0)
+    check("color g mid", approx(g, 0.0) == 1.0)
+    check("color b mid", approx(b, 127.5) == 1.0)
+    return 0.0
+end
+
+// ── Sequence ────────────────────────────────────────────
+
+fn test_sequence()
+    let a1 = ua_create(0.0, 50.0, 0.5, UA_EASE_LINEAR)
+    let a2 = ua_create(50.0, 100.0, 0.5, UA_EASE_LINEAR)
+    let seq = ua_seq_create()
+    let _s1 = ua_seq_add(seq, a1)
+    let _s2 = ua_seq_add(seq, a2)
+    // First animation
+    let v1 = ua_seq_update(seq, 0.25)
+    check("seq first", approx(v1, 25.0) == 1.0)
+    // Complete first
+    let v2 = ua_seq_update(seq, 0.25)
+    check("seq first end", approx(v2, 50.0) == 1.0)
+    // Should advance to second
+    let v3 = ua_seq_update(seq, 0.25)
+    check("seq second", v3 >= 50.0)
+    return 0.0
+end
+
+// ── Group ───────────────────────────────────────────────
+
+fn test_group()
+    let a1 = ua_create(0.0, 100.0, 1.0, UA_EASE_LINEAR)
+    let a2 = ua_create(0.0, 200.0, 0.5, UA_EASE_LINEAR)
+    let grp = ua_grp_create()
+    let _g1 = ua_grp_add(grp, a1)
+    let _g2 = ua_grp_add(grp, a2)
+    let done = ua_grp_update(grp, 0.5)
+    check("grp partial", done >= 1.0)
+    check("grp not all done", ua_grp_done(grp) == 0.0)
+    let done2 = ua_grp_update(grp, 0.5)
+    check("grp all done", ua_grp_done(grp) == 1.0)
+    return 0.0
+end
+
+// ── Presets ─────────────────────────────────────────────
+
+fn test_presets()
+    let slide = ua_slide(0.0, 0.0, 100.0, 50.0, 1.0, UA_EASE_OUT_CUBIC)
+    let x = ua_update(slide, 1.0)
+    let y = ua_update(slide + 1.0, 1.0)
+    check("slide x end", approx(x, 100.0) == 1.0)
+    check("slide y end", approx(y, 50.0) == 1.0)
+    let fade = ua_fade(0.0, 1.0, 0.5, UA_EASE_LINEAR)
+    let fv = ua_update(fade, 0.25)
+    check("fade mid", approx(fv, 0.5) == 1.0)
+    let pulse = ua_pulse(50.0, 10.0, 1.0)
+    let pv = ua_update(pulse, 0.5)
+    check("pulse at mid", approx(pv, 60.0) == 1.0)
+    let spring = ua_spring(0.0, 100.0, 1.0)
+    let sv = ua_update(spring, 1.0)
+    check("spring overshoots", sv > 95.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────
+
+test_basic()
+test_easing()
+test_delay()
+test_loop()
+test_reset()
+test_color()
+test_sequence()
+test_group()
+test_presets()
+print("")
+print("All anim_ui tests passed (9 tests)")

@@ -13,8 +13,6 @@
 //
 // Run: octoflow run examples/gpu_ecs.flow --allow-ffi --allow-read
 
-use "../stdlib/loom/ops/runtime"
-
 let N = 4096.0
 let PAD = 4096.0
 let STEPS = 100.0
@@ -23,14 +21,7 @@ let GRAVITY = -9.81
 let FLOOR = 0.0
 let RESTIT = 0.7
 
-rt_init()
-
-let pipe_move = rt_load_pipeline("tests/gpu_shaders/29_ecs_move.spv", 5.0, 4.0)
-let pipe_grav = rt_load_pipeline("tests/gpu_shaders/30_ecs_gravity.spv", 3.0, 8.0)
-let pipe_bounce = rt_load_pipeline("tests/gpu_shaders/31_ecs_bounce.spv", 4.0, 8.0)
-
 // ── Initialize entities ──────────────────────────────────────────────
-// All entities start at random heights with random horizontal velocities
 let mut pos_x = []
 let mut pos_y = []
 let mut vel_x = []
@@ -40,7 +31,6 @@ let mut grounded_arr = []
 
 let mut i = 0.0
 while i < N
-  // Deterministic pseudo-random position and velocity
   let hx = i * 13.0 + 7.0
   let hx2 = hx - floor(hx / 97.0) * 97.0
   let px = (hx2 / 97.0 - 0.5) * 100.0
@@ -62,20 +52,33 @@ while i < N
   i = i + 1.0
 end
 
-// Upload SoA component arrays
-let buf_px = rt_create_buffer(PAD * 4.0)
-let buf_py = rt_create_buffer(PAD * 4.0)
-let buf_vx = rt_create_buffer(PAD * 4.0)
-let buf_vy = rt_create_buffer(PAD * 4.0)
-let buf_alive = rt_create_buffer(PAD * 4.0)
-let buf_ground = rt_create_buffer(PAD * 4.0)
+// ── Boot 3 VMs (one per shader binding layout) ───────────────────────
+// Gravity: 3 bindings (vel_y, alive, grounded)
+let vm_g = loom_boot(1.0, 3.0, N)
+// Move: 5 bindings (pos_x, pos_y, vel_x, vel_y, alive)
+let vm_m = loom_boot(1.0, 5.0, N)
+// Bounce: 4 bindings (pos_y, vel_y, alive, grounded)
+let vm_b = loom_boot(1.0, 4.0, N)
 
-rt_upload(buf_px, pos_x)
-rt_upload(buf_py, pos_y)
-rt_upload(buf_vx, vel_x)
-rt_upload(buf_vy, vel_y)
-rt_upload(buf_alive, alive_arr)
-rt_upload(buf_ground, grounded_arr)
+loom_prefetch("tests/gpu_shaders/30_ecs_gravity.spv")
+loom_prefetch("tests/gpu_shaders/29_ecs_move.spv")
+loom_prefetch("tests/gpu_shaders/31_ecs_bounce.spv")
+
+// Initial register uploads
+vm_write_register(vm_g, 0.0, 0.0, vel_y)
+vm_write_register(vm_g, 0.0, 1.0, alive_arr)
+vm_write_register(vm_g, 0.0, 2.0, grounded_arr)
+
+vm_write_register(vm_m, 0.0, 0.0, pos_x)
+vm_write_register(vm_m, 0.0, 1.0, pos_y)
+vm_write_register(vm_m, 0.0, 2.0, vel_x)
+vm_write_register(vm_m, 0.0, 3.0, vel_y)
+vm_write_register(vm_m, 0.0, 4.0, alive_arr)
+
+vm_write_register(vm_b, 0.0, 0.0, pos_y)
+vm_write_register(vm_b, 0.0, 1.0, vel_y)
+vm_write_register(vm_b, 0.0, 2.0, alive_arr)
+vm_write_register(vm_b, 0.0, 3.0, grounded_arr)
 
 // ── Simulate ─────────────────────────────────────────────────────────
 let WGS = N / 256.0
@@ -83,32 +86,41 @@ let t0 = time()
 
 let mut step = 0.0
 while step < STEPS
-  // System 1: Gravity
-  rt_chain_begin(1.0, 3.0)
-  let mut pc_g = [GRAVITY, DT]
-  rt_chain_push_constants(pipe_grav, pc_g)
-  let mut bufs_g = [buf_vy, buf_alive, buf_ground]
-  rt_chain_dispatch(pipe_grav, bufs_g, WGS)
-  rt_chain_end()
-  rt_chain_submit_wait()
+  // System 1: Gravity — modifies vel_y in vm_g register 0
+  loom_dispatch(vm_g, "tests/gpu_shaders/30_ecs_gravity.spv", [GRAVITY, DT], WGS)
+  let gp = loom_build(vm_g)
+  loom_run(gp)
+  loom_free(gp)
 
-  // System 2: Move
-  rt_chain_begin(1.0, 5.0)
-  let mut pc_m = [DT]
-  rt_chain_push_constants(pipe_move, pc_m)
-  let mut bufs_m = [buf_px, buf_py, buf_vx, buf_vy, buf_alive]
-  rt_chain_dispatch(pipe_move, bufs_m, WGS)
-  rt_chain_end()
-  rt_chain_submit_wait()
+  // Transfer updated vel_y to move VM (binding 3)
+  let vy_g = loom_read(vm_g, 0.0, 0.0, N)
+  vm_write_register(vm_m, 0.0, 3.0, vy_g)
 
-  // System 3: Bounce
-  rt_chain_begin(1.0, 4.0)
-  let mut pc_b = [FLOOR, RESTIT]
-  rt_chain_push_constants(pipe_bounce, pc_b)
-  let mut bufs_b = [buf_py, buf_vy, buf_alive, buf_ground]
-  rt_chain_dispatch(pipe_bounce, bufs_b, WGS)
-  rt_chain_end()
-  rt_chain_submit_wait()
+  // System 2: Move — modifies pos_x, pos_y in vm_m registers 0, 1
+  loom_dispatch(vm_m, "tests/gpu_shaders/29_ecs_move.spv", [DT], WGS)
+  let mp = loom_build(vm_m)
+  loom_run(mp)
+  loom_free(mp)
+
+  // Transfer updated pos_y to bounce VM (binding 0)
+  let py_m = loom_read(vm_m, 0.0, 1.0, N)
+  vm_write_register(vm_b, 0.0, 0.0, py_m)
+  // Transfer vel_y to bounce VM (binding 1)
+  vm_write_register(vm_b, 0.0, 1.0, vy_g)
+
+  // System 3: Bounce — modifies pos_y, vel_y, grounded in vm_b registers 0, 1, 3
+  loom_dispatch(vm_b, "tests/gpu_shaders/31_ecs_bounce.spv", [FLOOR, RESTIT], WGS)
+  let bp = loom_build(vm_b)
+  loom_run(bp)
+  loom_free(bp)
+
+  // Transfer updated state back for next frame
+  let vy_b = loom_read(vm_b, 0.0, 1.0, N)
+  vm_write_register(vm_g, 0.0, 0.0, vy_b)
+  let gr_b = loom_read(vm_b, 0.0, 3.0, N)
+  vm_write_register(vm_g, 0.0, 2.0, gr_b)
+  let py_b = loom_read(vm_b, 0.0, 0.0, N)
+  vm_write_register(vm_m, 0.0, 1.0, py_b)
 
   step = step + 1.0
 end
@@ -117,14 +129,14 @@ let t1 = time()
 let total_ms = (t1 - t0) * 1000.0
 
 // ── Download and analyze ─────────────────────────────────────────────
-rt_download(buf_py, N)
+let final_py = loom_read(vm_b, 0.0, 0.0, N)
 let mut above_floor = 0.0
 let mut on_floor = 0.0
 let mut min_y = 999.0
 let mut max_y = -999.0
 let mut i = 0.0
 while i < N
-  let y = rt_result[int(i)]
+  let y = final_py[int(i)]
   if y > 0.01
     above_floor = above_floor + 1.0
   else
@@ -139,11 +151,11 @@ while i < N
   i = i + 1.0
 end
 
-rt_download(buf_ground, N)
+let final_gr = loom_read(vm_b, 0.0, 3.0, N)
 let mut grounded_count = 0.0
 let mut i = 0.0
 while i < N
-  if rt_result[int(i)] == 1.0
+  if final_gr[int(i)] == 1.0
     grounded_count = grounded_count + 1.0
   end
   i = i + 1.0
@@ -152,7 +164,6 @@ end
 let total_dispatches = STEPS * 3.0
 let entity_updates = N * STEPS * 3.0
 
-// Check no entity fell through the floor
 let mut pass = 1.0
 if min_y < -0.01
   pass = 0.0
@@ -167,7 +178,6 @@ print("  Systems: 3 (gravity, move, bounce)")
 print("  Timesteps: {STEPS}")
 print("  dt: {DT}")
 print("  Dispatches: {total_dispatches} (3 systems x {STEPS} steps)")
-print("  Submissions: {total_dispatches}")
 print("  Entity updates: {entity_updates}")
 print("  CPU entity iterations: 0")
 print("  Total time: {total_ms} ms")
@@ -185,4 +195,6 @@ else
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm_g)
+loom_shutdown(vm_m)
+loom_shutdown(vm_b)

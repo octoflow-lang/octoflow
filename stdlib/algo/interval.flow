@@ -1,0 +1,247 @@
+// stdlib/algo/interval.flow — Interval operations and scheduling
+//
+// Intervals stored as pairs [start, end] in flat arrays.
+// A list of intervals: [s0, e0, s1, e1, s2, e2, ...]
+//
+// Functions: interval_create, interval_overlaps, interval_contains_point,
+//            interval_contains, interval_length, interval_intersection,
+//            interval_union, interval_gap, interval_sort, interval_merge_all,
+//            interval_schedule, interval_coverage
+//
+// Usage:
+//   use "interval"
+//   let a = interval_create(1.0, 5.0)   // [1, 5]
+//   let b = interval_create(3.0, 8.0)   // [3, 8]
+//   interval_overlaps(a, b)             // 1.0
+//   let mut ints = [1.0, 3.0, 2.0, 6.0, 8.0, 10.0]
+//   let merged = interval_merge_all(ints)  // [1.0, 6.0, 8.0, 10.0]
+
+fn interval_create(start, end_val)
+    let mut iv = [start, end_val]
+    return iv
+end
+
+fn interval_start(iv)
+    return iv[0]
+end
+
+fn interval_end(iv)
+    return iv[1]
+end
+
+fn interval_length(iv)
+    let l = iv[1] - iv[0]
+    if l < 0.0
+        return 0.0
+    end
+    return l
+end
+
+fn interval_overlaps(a, b)
+    // Check if two intervals [s1,e1] and [s2,e2] overlap.
+    if a[0] >= b[1] || b[0] >= a[1]
+        return 0.0
+    end
+    return 1.0
+end
+
+fn interval_contains_point(iv, x)
+    if x >= iv[0] && x <= iv[1]
+        return 1.0
+    end
+    return 0.0
+end
+
+fn interval_contains(outer, inner)
+    // Check if outer fully contains inner.
+    if inner[0] >= outer[0] && inner[1] <= outer[1]
+        return 1.0
+    end
+    return 0.0
+end
+
+fn interval_intersection(a, b)
+    // Return intersection of two intervals, or [-1, -1] if no overlap.
+    let s = a[0]
+    let mut ms = s
+    if b[0] > ms
+        ms = b[0]
+    end
+    let e = a[1]
+    let mut me = e
+    if b[1] < me
+        me = b[1]
+    end
+    if ms >= me
+        let mut none = [-1.0, -1.0]
+        return none
+    end
+    let mut result = [ms, me]
+    return result
+end
+
+fn interval_union(a, b)
+    // Union of two overlapping intervals. Returns [-1, -1] if disjoint.
+    if a[0] > b[1] || b[0] > a[1]
+        let mut none = [-1.0, -1.0]
+        return none
+    end
+    let mut s = a[0]
+    if b[0] < s
+        s = b[0]
+    end
+    let mut e = a[1]
+    if b[1] > e
+        e = b[1]
+    end
+    let mut result = [s, e]
+    return result
+end
+
+fn interval_gap(a, b)
+    // Gap between two disjoint intervals. Returns 0.0 if overlapping.
+    if a[1] <= b[0]
+        return b[0] - a[1]
+    end
+    if b[1] <= a[0]
+        return a[0] - b[1]
+    end
+    return 0.0
+end
+
+fn interval_sort(intervals)
+    // Sort flat interval array [s0,e0, s1,e1, ...] by start time.
+    // Returns new sorted array. Uses insertion sort on pairs.
+    let n = len(intervals) / 2.0
+    // Copy to working array
+    let mut arr = []
+    let mut i = 0.0
+    while i < len(intervals)
+        push(arr, intervals[i])
+        i = i + 1.0
+    end
+
+    // Insertion sort on pairs
+    let mut j = 1.0
+    while j < n
+        let ks = arr[j * 2.0]
+        let ke = arr[j * 2.0 + 1.0]
+        let mut k = j - 1.0
+        while k >= 0.0 && arr[k * 2.0] > ks
+            arr[(k + 1.0) * 2.0] = arr[k * 2.0]
+            arr[(k + 1.0) * 2.0 + 1.0] = arr[k * 2.0 + 1.0]
+            k = k - 1.0
+        end
+        arr[(k + 1.0) * 2.0] = ks
+        arr[(k + 1.0) * 2.0 + 1.0] = ke
+        j = j + 1.0
+    end
+    return arr
+end
+
+fn interval_merge_all(intervals)
+    // Merge all overlapping intervals. Returns sorted, merged flat array.
+    let n = len(intervals) / 2.0
+    if n <= 0.0
+        let mut empty = []
+        return empty
+    end
+    if n == 1.0
+        let mut result = [intervals[0], intervals[1]]
+        return result
+    end
+
+    let sorted = interval_sort(intervals)
+
+    let mut result = []
+    let mut cs = sorted[0]
+    let mut ce = sorted[1]
+
+    let mut i = 1.0
+    while i < n
+        let ns = sorted[i * 2.0]
+        let ne = sorted[i * 2.0 + 1.0]
+        if ns <= ce
+            // Overlapping — extend
+            if ne > ce
+                ce = ne
+            end
+        else
+            // Gap — emit current, start new
+            push(result, cs)
+            push(result, ce)
+            cs = ns
+            ce = ne
+        end
+        i = i + 1.0
+    end
+    push(result, cs)
+    push(result, ce)
+    return result
+end
+
+fn interval_schedule(intervals)
+    // Greedy activity selection: maximum non-overlapping intervals.
+    // Input: flat array [s0,e0, s1,e1, ...].
+    // Returns flat array of selected intervals sorted by end time.
+    let n = len(intervals) / 2.0
+    if n <= 0.0
+        let mut empty = []
+        return empty
+    end
+
+    // Sort by end time (insertion sort on pairs by second element)
+    let mut arr = []
+    let mut i = 0.0
+    while i < len(intervals)
+        push(arr, intervals[i])
+        i = i + 1.0
+    end
+
+    let mut j = 1.0
+    while j < n
+        let ks = arr[j * 2.0]
+        let ke = arr[j * 2.0 + 1.0]
+        let mut k = j - 1.0
+        while k >= 0.0 && arr[k * 2.0 + 1.0] > ke
+            arr[(k + 1.0) * 2.0] = arr[k * 2.0]
+            arr[(k + 1.0) * 2.0 + 1.0] = arr[k * 2.0 + 1.0]
+            k = k - 1.0
+        end
+        arr[(k + 1.0) * 2.0] = ks
+        arr[(k + 1.0) * 2.0 + 1.0] = ke
+        j = j + 1.0
+    end
+
+    // Greedy selection
+    let mut result = []
+    push(result, arr[0])
+    push(result, arr[1])
+    let mut last_end = arr[1]
+
+    i = 1.0
+    while i < n
+        let s = arr[i * 2.0]
+        let e = arr[i * 2.0 + 1.0]
+        if s >= last_end
+            push(result, s)
+            push(result, e)
+            last_end = e
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn interval_coverage(intervals)
+    // Total length covered by a set of intervals (handling overlaps).
+    let merged = interval_merge_all(intervals)
+    let n = len(merged) / 2.0
+    let mut total = 0.0
+    let mut i = 0.0
+    while i < n
+        total = total + merged[i * 2.0 + 1.0] - merged[i * 2.0]
+        i = i + 1.0
+    end
+    return total
+end

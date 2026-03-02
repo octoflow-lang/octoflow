@@ -1,0 +1,177 @@
+// test_pcm.flow — Tests for stdlib/media/pcm.flow
+use "pcm"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Create ───────────────────────────────────────────
+
+fn test_create()
+    let buf = pcm_create(44100.0, 1.0)
+    check("create len", pcm_length(buf) == 44100.0)
+    check("create rate", pcm_rate(buf) == 44100.0)
+    check("create ch", pcm_channels(buf) == 1.0)
+    check("create dur", approx(pcm_duration(buf), 1.0) == 1.0)
+    // Stereo
+    let s = pcm_create_stereo(48000.0, 0.5)
+    check("stereo ch", pcm_channels(s) == 2.0)
+    check("stereo len", pcm_length(s) == 24000.0)
+    return 0.0
+end
+
+// ── Sample access ────────────────────────────────────
+
+fn test_access()
+    let buf = pcm_create(100.0, 0.1)
+    let _s1 = pcm_set(buf, 0.0, 0.5)
+    let _s2 = pcm_set(buf, 5.0, -0.75)
+    check("get 0", approx(pcm_get(buf, 0.0), 0.5) == 1.0)
+    check("get 5", approx(pcm_get(buf, 5.0), -0.75) == 1.0)
+    check("get oob", pcm_get(buf, -1.0) == 0.0)
+    check("get oob2", pcm_get(buf, 999.0) == 0.0)
+    // Clamping
+    let _s3 = pcm_set(buf, 1.0, 5.0)
+    check("clamp hi", pcm_get(buf, 1.0) == 1.0)
+    let _s4 = pcm_set(buf, 2.0, -5.0)
+    check("clamp lo", pcm_get(buf, 2.0) == -1.0)
+    return 0.0
+end
+
+// ── Stereo channels ──────────────────────────────────
+
+fn test_stereo()
+    let buf = pcm_create_stereo(100.0, 0.1)
+    let _sl = pcm_set_ch(buf, 0.0, 0.0, 0.8)
+    let _sr = pcm_set_ch(buf, 0.0, 1.0, -0.3)
+    check("stereo L", approx(pcm_get_ch(buf, 0.0, 0.0), 0.8) == 1.0)
+    check("stereo R", approx(pcm_get_ch(buf, 0.0, 1.0), -0.3) == 1.0)
+    return 0.0
+end
+
+// ── Gain ─────────────────────────────────────────────
+
+fn test_gain()
+    let mut data = [0.5, -0.5, 0.25]
+    let buf = pcm_from_array(data, 3.0, 100.0, 1.0)
+    let _g = pcm_gain(buf, 2.0)
+    check("gain 0", approx(pcm_get(buf, 0.0), 1.0) == 1.0)
+    check("gain 1", approx(pcm_get(buf, 1.0), -1.0) == 1.0)
+    check("gain 2", approx(pcm_get(buf, 2.0), 0.5) == 1.0)
+    return 0.0
+end
+
+// ── Normalize ────────────────────────────────────────
+
+fn test_normalize()
+    let mut data = [0.25, -0.5, 0.1]
+    let buf = pcm_from_array(data, 3.0, 100.0, 1.0)
+    let _n = pcm_normalize(buf)
+    check("norm peak", approx(pcm_peak(buf), 1.0) == 1.0)
+    check("norm 1", approx(pcm_get(buf, 1.0), -1.0) == 1.0)
+    return 0.0
+end
+
+// ── Fade ─────────────────────────────────────────────
+
+fn test_fade()
+    let mut data = [1.0, 1.0, 1.0, 1.0, 1.0]
+    let buf = pcm_from_array(data, 5.0, 5.0, 1.0)
+    let _fi = pcm_fade_in(buf, 1.0)
+    check("fade_in start", pcm_get(buf, 0.0) == 0.0)
+    check("fade_in end", approx(pcm_get(buf, 4.0), 0.8) == 1.0)
+    return 0.0
+end
+
+// ── Reverse ──────────────────────────────────────────
+
+fn test_reverse()
+    let mut data = [1.0, 2.0, 3.0, 4.0]
+    let buf = pcm_from_array(data, 4.0, 100.0, 1.0)
+    let _r = pcm_reverse(buf)
+    check("reverse 0", pcm_get(buf, 0.0) == 1.0)
+    check("reverse 3", pcm_get(buf, 3.0) == 1.0)
+    return 0.0
+end
+
+// ── Peak/RMS ─────────────────────────────────────────
+
+fn test_metrics()
+    let mut data = [0.5, -0.8, 0.3]
+    let buf = pcm_from_array(data, 3.0, 100.0, 1.0)
+    check("peak", approx(pcm_peak(buf), 0.8) == 1.0)
+    let rms = pcm_rms(buf)
+    check("rms positive", rms > 0.0)
+    check("rms <= peak", rms <= 0.8)
+    return 0.0
+end
+
+// ── Mix to mono ──────────────────────────────────────
+
+fn test_mono_mix()
+    let buf = pcm_create_stereo(100.0, 0.04)
+    let _sl = pcm_set_ch(buf, 0.0, 0.0, 0.8)
+    let _sr = pcm_set_ch(buf, 0.0, 1.0, 0.4)
+    let mono = pcm_mix_to_mono(buf)
+    check("mono ch", pcm_channels(mono) == 1.0)
+    check("mono avg", approx(pcm_get(mono, 0.0), 0.6) == 1.0)
+    return 0.0
+end
+
+// ── Slice + Concat ───────────────────────────────────
+
+fn test_slice_concat()
+    let mut data = [0.1, 0.2, 0.3, 0.4, 0.5]
+    let buf = pcm_from_array(data, 5.0, 100.0, 1.0)
+    let s = pcm_slice(buf, 1.0, 4.0)
+    check("slice len", pcm_length(s) == 3.0)
+    check("slice 0", approx(pcm_get(s, 0.0), 0.2) == 1.0)
+    check("slice 2", approx(pcm_get(s, 2.0), 0.4) == 1.0)
+    // Concat
+    let mut data2 = [0.9, 0.8]
+    let buf2 = pcm_from_array(data2, 2.0, 100.0, 1.0)
+    let cat = pcm_concat(s, buf2)
+    check("concat len", pcm_length(cat) == 5.0)
+    check("concat end", approx(pcm_get(cat, 4.0), 0.8) == 1.0)
+    return 0.0
+end
+
+// ── Resample ─────────────────────────────────────────
+
+fn test_resample()
+    let mut data = [0.0, 0.5, 1.0, 0.5]
+    let buf = pcm_from_array(data, 4.0, 100.0, 1.0)
+    let r = pcm_resample_nearest(buf, 200.0)
+    check("resample len", pcm_length(r) == 8.0)
+    check("resample rate", pcm_rate(r) == 200.0)
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────
+
+test_create()
+test_access()
+test_stereo()
+test_gain()
+test_normalize()
+test_fade()
+test_reverse()
+test_metrics()
+test_mono_mix()
+test_slice_concat()
+test_resample()
+print("")
+print("All pcm tests passed (11 tests)")

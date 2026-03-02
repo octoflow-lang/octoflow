@@ -1,0 +1,607 @@
+// viz_render.flow — Rendering Bridge: Data → Canvas Draw Commands
+//
+// Maps data + viz type + config → canvas drawing calls.
+// Reuses chart.flow, plot.flow, and canvas.flow.
+//
+// Config layout (flat array):
+//   [0] x_min    [1] x_max    [2] y_min    [3] y_max
+//   [4] palette_id  [5] grid_w  [6] grid_h
+//   [7] n_bins   [8] padding   [9] show_grid
+//
+// Usage:
+//   use "viz/viz_render"
+//   viz_render(canvas_id, data, VIZ_LINE, config)
+
+use "../gui/chart"
+use "../gui/canvas"
+use "viz_data"
+use "viz_palette"
+
+// Config index constants
+let CFG_X_MIN     = 0.0
+let CFG_X_MAX     = 1.0
+let CFG_Y_MIN     = 2.0
+let CFG_Y_MAX     = 3.0
+let CFG_PALETTE   = 4.0
+let CFG_GRID_W    = 5.0
+let CFG_GRID_H    = 6.0
+let CFG_N_BINS    = 7.0
+let CFG_PADDING   = 8.0
+let CFG_SHOW_GRID = 9.0
+let CFG_SIZE      = 10.0
+
+fn _vr_cfg(config, idx)
+  let i = int(idx)
+  if i >= 0.0 && i < len(config)
+    return config[i]
+  end
+  return 0.0
+end
+
+fn _vr_abs(x)
+  if x < 0.0
+    return 0.0 - x
+  end
+  return x
+end
+
+fn _vr_min(a, b)
+  if a < b
+    return a
+  end
+  return b
+end
+
+fn _vr_max(a, b)
+  if a > b
+    return a
+  end
+  return b
+end
+
+// ── Line Chart ─────────────────────────────────────────────────────
+
+fn viz_render_line(cvs, data, config, cw, ch)
+  let n = len(data)
+  if n < 2.0
+    return 0.0
+  end
+  // Guard: canvas must have positive dimensions
+  if cw <= 0.0 || ch <= 0.0
+    return 0.0
+  end
+
+  let pad = _vr_cfg(config, CFG_PADDING)
+  let ox = pad
+  let oy = pad
+  let pw = cw - pad * 2.0
+  let ph = ch - pad * 2.0
+  if pw <= 0.0 || ph <= 0.0
+    return 0.0
+  end
+
+  // Use chart_line which returns command array
+  let cmds = chart_line(data, ox, oy, pw, ph)
+  let n_cmds = chart_cmd_count(cmds)
+
+  // Draw commands onto canvas
+  let mut i = 0.0
+  while i < n_cmds
+    let ctype = chart_cmd_type(cmds, i)
+    if ctype == 1.0
+      // Line command
+      let x1 = chart_cmd_x(cmds, i)
+      let y1 = chart_cmd_y(cmds, i)
+      let x2 = chart_cmd_w(cmds, i)
+      let y2 = chart_cmd_h(cmds, i)
+      let cr = chart_cmd_r(cmds, i)
+      let cg = chart_cmd_g(cmds, i)
+      let cb = chart_cmd_b(cmds, i)
+      let _d = gui_canvas_line(cvs, x1, y1, x2, y2, cr, cg, cb)
+    end
+    i = i + 1.0
+  end
+
+  // Draw axis lines
+  let _ax = gui_canvas_line(cvs, ox, oy + ph, ox + pw, oy + ph, 100.0, 100.0, 100.0)
+  let _ay = gui_canvas_line(cvs, ox, oy, ox, oy + ph, 100.0, 100.0, 100.0)
+
+  return 1.0
+end
+
+// ── Bar Chart ──────────────────────────────────────────────────────
+
+fn viz_render_bar(cvs, data, config, cw, ch)
+  let n = len(data)
+  if n == 0.0
+    return 0.0
+  end
+  if cw <= 0.0 || ch <= 0.0
+    return 0.0
+  end
+
+  let pad = _vr_cfg(config, CFG_PADDING)
+  let ox = pad
+  let oy = pad
+  let pw = cw - pad * 2.0
+  let ph = ch - pad * 2.0
+
+  let cmds = chart_bar(data, ox, oy, pw, ph)
+  let n_cmds = chart_cmd_count(cmds)
+
+  let mut i = 0.0
+  while i < n_cmds
+    let ctype = chart_cmd_type(cmds, i)
+    if ctype == 0.0
+      // Rect command
+      let rx = chart_cmd_x(cmds, i)
+      let ry = chart_cmd_y(cmds, i)
+      let rw = chart_cmd_w(cmds, i)
+      let rh = chart_cmd_h(cmds, i)
+      let cr = chart_cmd_r(cmds, i)
+      let cg = chart_cmd_g(cmds, i)
+      let cb = chart_cmd_b(cmds, i)
+      let _d = gui_canvas_fill(cvs, rx, ry, rw, rh, cr, cg, cb)
+    end
+    i = i + 1.0
+  end
+
+  return 1.0
+end
+
+// ── Scatter Plot ───────────────────────────────────────────────────
+
+fn viz_render_scatter(cvs, data, config, cw, ch)
+  // Data is flat: [x0, y0, x1, y1, ...]
+  let n = len(data)
+  if n < 2.0
+    return 0.0
+  end
+  if cw <= 0.0 || ch <= 0.0
+    return 0.0
+  end
+
+  let pad = _vr_cfg(config, CFG_PADDING)
+  let x_min = _vr_cfg(config, CFG_X_MIN)
+  let x_max = _vr_cfg(config, CFG_X_MAX)
+  let y_min = _vr_cfg(config, CFG_Y_MIN)
+  let y_max = _vr_cfg(config, CFG_Y_MAX)
+
+  let pw = cw - pad * 2.0
+  let ph = ch - pad * 2.0
+  let x_range = x_max - x_min
+  let y_range = y_max - y_min
+
+  if x_range <= 0.0 || y_range <= 0.0
+    return 0.0
+  end
+
+  let n_pts = floor(n / 2.0)
+  let radius = _vr_max(2.0, _vr_min(6.0, 200.0 / n_pts))
+
+  // Palette for coloring
+  let pal = viz_palette(int(_vr_cfg(config, CFG_PALETTE)), _vr_min(n_pts, 64.0))
+  let n_pal = floor(len(pal) / 3.0)
+
+  let mut i = 0.0
+  while i < n_pts
+    let px = data[int(i * 2.0)]
+    let py = data[int(i * 2.0 + 1.0)]
+    let sx = pad + (px - x_min) / x_range * pw
+    let sy = pad + ph - (py - y_min) / y_range * ph
+
+    // Color from palette (guard: fallback if palette is empty)
+    let mut cr = 100.0
+    let mut cg = 200.0
+    let mut cb = 255.0
+    if n_pal > 0.0
+      let ci = int(i) % int(n_pal)
+      let pi = int(ci * 3.0)
+      if pi + 2 < len(pal)
+        cr = pal[pi]
+        cg = pal[pi + 1]
+        cb = pal[pi + 2]
+      end
+    end
+
+    let _d = gui_canvas_fill_circle(cvs, sx, sy, radius, cr, cg, cb)
+    i = i + 1.0
+  end
+
+  // Axes
+  let _ax = gui_canvas_line(cvs, pad, pad + ph, pad + pw, pad + ph, 100.0, 100.0, 100.0)
+  let _ay = gui_canvas_line(cvs, pad, pad, pad, pad + ph, 100.0, 100.0, 100.0)
+
+  return 1.0
+end
+
+// ── Heatmap ────────────────────────────────────────────────────────
+
+fn viz_render_heatmap(cvs, data, config, cw, ch)
+  let n = len(data)
+  if n == 0.0
+    return 0.0
+  end
+
+  let gw = _vr_cfg(config, CFG_GRID_W)
+  let gh = _vr_cfg(config, CFG_GRID_H)
+  if gw <= 0.0 || gh <= 0.0
+    return 0.0
+  end
+
+  let pad = _vr_cfg(config, CFG_PADDING)
+  let pw = cw - pad * 2.0
+  let ph = ch - pad * 2.0
+  // Guard: drawable area must be positive
+  if pw <= 0.0 || ph <= 0.0
+    return 0.0
+  end
+
+  let cell_w = pw / gw
+  let cell_h = ph / gh
+  // Guard: cell size must be at least 1 pixel
+  if cell_w < 1.0 || cell_h < 1.0
+    return 0.0
+  end
+
+  // Find data range
+  let mut d_min = data[0]
+  let mut d_max = data[0]
+  let mut i = 1.0
+  while i < n
+    let v = data[int(i)]
+    if v < d_min
+      d_min = v
+    end
+    if v > d_max
+      d_max = v
+    end
+    i = i + 1.0
+  end
+
+  // Generate palette (64 steps)
+  let pal_id = _vr_cfg(config, CFG_PALETTE)
+  let pal = viz_palette(pal_id, 64.0)
+
+  // Draw cells
+  let mut row = 0.0
+  while row < gh
+    let mut col = 0.0
+    while col < gw
+      let idx = int(row * gw + col)
+      if idx < n
+        let val = data[idx]
+        let c = viz_palette_map(val, d_min, d_max, pal)
+        let cx = pad + col * cell_w
+        let cy = pad + row * cell_h
+        let _d = gui_canvas_fill(cvs, cx, cy, cell_w + 1.0, cell_h + 1.0, c[0], c[1], c[2])
+      end
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+
+  return 1.0
+end
+
+// ── Histogram ──────────────────────────────────────────────────────
+
+fn viz_render_histogram(cvs, data, config, cw, ch)
+  let n = len(data)
+  if n == 0.0
+    return 0.0
+  end
+  if cw <= 0.0 || ch <= 0.0
+    return 0.0
+  end
+
+  let pad = _vr_cfg(config, CFG_PADDING)
+  let n_bins = _vr_cfg(config, CFG_N_BINS)
+  let mut bins = n_bins
+  if bins <= 0.0
+    bins = 10.0
+  end
+
+  let cmds = chart_histogram(data, bins, pad, pad, cw - pad * 2.0, ch - pad * 2.0)
+  let n_cmds = chart_cmd_count(cmds)
+
+  let mut i = 0.0
+  while i < n_cmds
+    let ctype = chart_cmd_type(cmds, i)
+    if ctype == 0.0
+      let rx = chart_cmd_x(cmds, i)
+      let ry = chart_cmd_y(cmds, i)
+      let rw = chart_cmd_w(cmds, i)
+      let rh = chart_cmd_h(cmds, i)
+      let cr = chart_cmd_r(cmds, i)
+      let cg = chart_cmd_g(cmds, i)
+      let cb = chart_cmd_b(cmds, i)
+      let _d = gui_canvas_fill(cvs, rx, ry, rw, rh, cr, cg, cb)
+    end
+    i = i + 1.0
+  end
+
+  return 1.0
+end
+
+// ── Pie Chart ──────────────────────────────────────────────────────
+
+fn viz_render_pie(cvs, data, config, cw, ch)
+  let n = len(data)
+  if n == 0.0
+    return 0.0
+  end
+  if cw <= 0.0 || ch <= 0.0
+    return 0.0
+  end
+
+  let pad = _vr_cfg(config, CFG_PADDING)
+  let cx = cw / 2.0
+  let cy = ch / 2.0
+  let radius = _vr_min(cw, ch) / 2.0 - pad
+
+  let cmds = chart_pie(data, cx, cy, radius)
+  let n_cmds = chart_cmd_count(cmds)
+
+  let mut i = 0.0
+  while i < n_cmds
+    let ctype = chart_cmd_type(cmds, i)
+    // Pie generates circle/fill commands
+    if ctype == 0.0
+      let rx = chart_cmd_x(cmds, i)
+      let ry = chart_cmd_y(cmds, i)
+      let rw = chart_cmd_w(cmds, i)
+      let rh = chart_cmd_h(cmds, i)
+      let cr = chart_cmd_r(cmds, i)
+      let cg = chart_cmd_g(cmds, i)
+      let cb = chart_cmd_b(cmds, i)
+      let _d = gui_canvas_fill(cvs, rx, ry, rw, rh, cr, cg, cb)
+    elif ctype == 1.0
+      let x1 = chart_cmd_x(cmds, i)
+      let y1 = chart_cmd_y(cmds, i)
+      let x2 = chart_cmd_w(cmds, i)
+      let y2 = chart_cmd_h(cmds, i)
+      let cr = chart_cmd_r(cmds, i)
+      let cg = chart_cmd_g(cmds, i)
+      let cb = chart_cmd_b(cmds, i)
+      let _d = gui_canvas_line(cvs, x1, y1, x2, y2, cr, cg, cb)
+    elif ctype == 2.0
+      let ccx = chart_cmd_x(cmds, i)
+      let ccy = chart_cmd_y(cmds, i)
+      let cr2 = chart_cmd_w(cmds, i)
+      let cr = chart_cmd_r(cmds, i)
+      let cg = chart_cmd_g(cmds, i)
+      let cb = chart_cmd_b(cmds, i)
+      let _d = gui_canvas_fill_circle(cvs, ccx, ccy, cr2, cr, cg, cb)
+    end
+    i = i + 1.0
+  end
+
+  return 1.0
+end
+
+// ── Sparkline ──────────────────────────────────────────────────────
+
+fn viz_render_sparkline(cvs, data, config, cw, ch)
+  let n = len(data)
+  if n < 2.0
+    return 0.0
+  end
+  if cw <= 0.0 || ch <= 0.0
+    return 0.0
+  end
+
+  let pad = _vr_cfg(config, CFG_PADDING)
+  let cmds = chart_sparkline(data, pad, pad, cw - pad * 2.0, ch - pad * 2.0)
+  let n_cmds = chart_cmd_count(cmds)
+
+  let mut i = 0.0
+  while i < n_cmds
+    let ctype = chart_cmd_type(cmds, i)
+    if ctype == 1.0
+      let x1 = chart_cmd_x(cmds, i)
+      let y1 = chart_cmd_y(cmds, i)
+      let x2 = chart_cmd_w(cmds, i)
+      let y2 = chart_cmd_h(cmds, i)
+      let cr = chart_cmd_r(cmds, i)
+      let cg = chart_cmd_g(cmds, i)
+      let cb = chart_cmd_b(cmds, i)
+      let _d = gui_canvas_line(cvs, x1, y1, x2, y2, cr, cg, cb)
+    end
+    i = i + 1.0
+  end
+
+  return 1.0
+end
+
+// ── Particles (2D position data) ───────────────────────────────────
+
+fn viz_render_particles(cvs, data, config, cw, ch)
+  // Data: [x0, y0, x1, y1, ...] in world coords
+  let n = len(data)
+  if n < 2.0
+    return 0.0
+  end
+  if cw <= 0.0 || ch <= 0.0
+    return 0.0
+  end
+
+  let pad = _vr_cfg(config, CFG_PADDING)
+  let x_min = _vr_cfg(config, CFG_X_MIN)
+  let x_max = _vr_cfg(config, CFG_X_MAX)
+  let y_min = _vr_cfg(config, CFG_Y_MIN)
+  let y_max = _vr_cfg(config, CFG_Y_MAX)
+
+  let pw = cw - pad * 2.0
+  let ph = ch - pad * 2.0
+  let x_range = x_max - x_min
+  let y_range = y_max - y_min
+  if x_range <= 0.0 || y_range <= 0.0
+    return 0.0
+  end
+
+  // Background
+  let _bg = gui_canvas_fill(cvs, 0.0, 0.0, cw, ch, 10.0, 10.0, 20.0)
+
+  let n_pts = floor(n / 2.0)
+  let mut i = 0.0
+  while i < n_pts
+    let px = data[int(i * 2.0)]
+    let py = data[int(i * 2.0 + 1.0)]
+    let sx = pad + (px - x_min) / x_range * pw
+    let sy = pad + ph - (py - y_min) / y_range * ph
+    let _d = gui_canvas_fill_circle(cvs, sx, sy, 3.0, 100.0, 200.0, 255.0)
+    i = i + 1.0
+  end
+
+  return 1.0
+end
+
+// ── Grid (binary/integer data) ─────────────────────────────────────
+
+fn viz_render_grid(cvs, data, config, cw, ch)
+  let n = len(data)
+  if n == 0.0
+    return 0.0
+  end
+
+  let gw = _vr_cfg(config, CFG_GRID_W)
+  let gh = _vr_cfg(config, CFG_GRID_H)
+  if gw <= 0.0 || gh <= 0.0
+    return 0.0
+  end
+
+  let pad = _vr_cfg(config, CFG_PADDING)
+  let pw = cw - pad * 2.0
+  let ph = ch - pad * 2.0
+  // Guard: drawable area must be positive
+  if pw <= 0.0 || ph <= 0.0
+    return 0.0
+  end
+  let cell_w = pw / gw
+  let cell_h = ph / gh
+  // Guard: cell size must be at least 1 pixel
+  if cell_w < 1.0 || cell_h < 1.0
+    return 0.0
+  end
+
+  let mut row = 0.0
+  while row < gh
+    let mut col = 0.0
+    while col < gw
+      let idx = int(row * gw + col)
+      let cx = pad + col * cell_w
+      let cy = pad + row * cell_h
+      if idx < n
+        let val = data[idx]
+        if val == 0.0
+          let _d = gui_canvas_fill(cvs, cx, cy, cell_w - 1.0, cell_h - 1.0, 30.0, 30.0, 40.0)
+        elif val == 1.0
+          let _d = gui_canvas_fill(cvs, cx, cy, cell_w - 1.0, cell_h - 1.0, 80.0, 200.0, 120.0)
+        else
+          // Scale by value for non-binary integer data
+          let bright = _vr_min(255.0, val * 25.0)
+          let _d = gui_canvas_fill(cvs, cx, cy, cell_w - 1.0, cell_h - 1.0, bright, bright * 0.8, 60.0)
+        end
+      else
+        let _d = gui_canvas_fill(cvs, cx, cy, cell_w - 1.0, cell_h - 1.0, 20.0, 20.0, 25.0)
+      end
+      // Grid border
+      let _b = gui_canvas_rect(cvs, cx, cy, cell_w - 1.0, cell_h - 1.0, 50.0, 50.0, 60.0)
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+
+  return 1.0
+end
+
+// ── Genome (sequence visualization) ────────────────────────────────
+
+fn viz_render_genome(cvs, data, config, cw, ch)
+  let n = len(data)
+  if n == 0.0
+    return 0.0
+  end
+  if cw <= 0.0 || ch <= 0.0
+    return 0.0
+  end
+
+  let pad = _vr_cfg(config, CFG_PADDING)
+  let pw = cw - pad * 2.0
+  let ph = ch - pad * 2.0
+  if pw <= 0.0 || ph <= 0.0
+    return 0.0
+  end
+
+  let cell_w = pw / n
+  let cell_h = ph
+
+  // Use palette to color each gene
+  let pal_id = _vr_cfg(config, CFG_PALETTE)
+  let pal = viz_palette(pal_id, 64.0)
+
+  let mut d_min = data[0]
+  let mut d_max = data[0]
+  let mut i = 1.0
+  while i < n
+    if data[int(i)] < d_min
+      d_min = data[int(i)]
+    end
+    if data[int(i)] > d_max
+      d_max = data[int(i)]
+    end
+    i = i + 1.0
+  end
+
+  i = 0.0
+  while i < n
+    let val = data[int(i)]
+    let c = viz_palette_map(val, d_min, d_max, pal)
+    let cx = pad + i * cell_w
+    let _d = gui_canvas_fill(cvs, cx, pad, cell_w, cell_h, c[0], c[1], c[2])
+    i = i + 1.0
+  end
+
+  return 1.0
+end
+
+// ── Main Dispatch ──────────────────────────────────────────────────
+
+fn viz_render(cvs, data, viz_type, config, cw, ch)
+  // Clear canvas
+  let _c = gui_canvas_clear(cvs)
+
+  if viz_type == VIZ_LINE
+    return viz_render_line(cvs, data, config, cw, ch)
+  end
+  if viz_type == VIZ_SCATTER
+    return viz_render_scatter(cvs, data, config, cw, ch)
+  end
+  if viz_type == VIZ_BAR
+    return viz_render_bar(cvs, data, config, cw, ch)
+  end
+  if viz_type == VIZ_HEATMAP
+    return viz_render_heatmap(cvs, data, config, cw, ch)
+  end
+  if viz_type == VIZ_HISTOGRAM
+    return viz_render_histogram(cvs, data, config, cw, ch)
+  end
+  if viz_type == VIZ_PIE
+    return viz_render_pie(cvs, data, config, cw, ch)
+  end
+  if viz_type == VIZ_SPARKLINE
+    return viz_render_sparkline(cvs, data, config, cw, ch)
+  end
+  if viz_type == VIZ_PARTICLES
+    return viz_render_particles(cvs, data, config, cw, ch)
+  end
+  if viz_type == VIZ_GRID
+    return viz_render_grid(cvs, data, config, cw, ch)
+  end
+  if viz_type == VIZ_GENOME
+    return viz_render_genome(cvs, data, config, cw, ch)
+  end
+
+  return 0.0
+end

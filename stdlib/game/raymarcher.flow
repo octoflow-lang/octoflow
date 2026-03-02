@@ -368,7 +368,7 @@ fn sdf_render(scene, canvas_id)
   let prog = loom_build(vm)
   if prog >= 0.0
     loom_run(prog)
-    vm_present(vm, total)
+    loom_present(vm, total)
   end
 
   return 0.0

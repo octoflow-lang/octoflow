@@ -1,0 +1,164 @@
+// test_wav_encode.flow — Tests for stdlib/media/wav_encode.flow
+use "wav_encode"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── 16-bit mono ────────────────────────────────────────
+
+fn test_16bit_mono()
+    let mut samples = [0.0, 0.5, 1.0, -1.0]
+    let mut bytes = []
+    let n = wav_encode_16(bytes, samples, 4.0, 44100.0, 1.0)
+    // Header = 44, data = 4 samples * 2 bytes = 8
+    check("16m size", n == 52.0)
+    check("16m len", len(bytes) == 52.0)
+    // Check RIFF header
+    check("16m R", bytes[0] == 82.0)   // 'R'
+    check("16m I", bytes[1] == 73.0)   // 'I'
+    check("16m F1", bytes[2] == 70.0)  // 'F'
+    check("16m F2", bytes[3] == 70.0)  // 'F'
+    // WAVE
+    check("16m W", bytes[8] == 87.0)
+    check("16m A", bytes[9] == 65.0)
+    // fmt chunk
+    check("16m fmt", bytes[12] == 102.0)  // 'f'
+    // PCM format = 1
+    check("16m pcm", bytes[20] == 1.0)
+    // Channels = 1
+    check("16m ch", bytes[22] == 1.0)
+    return 0.0
+end
+
+// ── 16-bit stereo ──────────────────────────────────────
+
+fn test_16bit_stereo()
+    let mut samples = [0.5, -0.5, 0.3, -0.3]  // L0, R0, L1, R1
+    let mut bytes = []
+    let n = wav_encode_16(bytes, samples, 2.0, 44100.0, 2.0)
+    // Header = 44, data = 2 samples * 2 channels * 2 bytes = 8
+    check("16s size", n == 52.0)
+    // Channels = 2
+    check("16s ch", bytes[22] == 2.0)
+    // Block align = 4
+    check("16s align", bytes[32] == 4.0)
+    return 0.0
+end
+
+// ── 8-bit mono ─────────────────────────────────────────
+
+fn test_8bit_mono()
+    let mut samples = [0.0, 1.0, -1.0]
+    let mut bytes = []
+    let n = wav_encode_8(bytes, samples, 3.0, 22050.0, 1.0)
+    // Header = 44, data = 3 bytes
+    check("8m size", n == 47.0)
+    check("8m len", len(bytes) == 47.0)
+    // bits_per_sample = 8
+    check("8m bps", bytes[34] == 8.0)
+    // Silence (0.0) → 128
+    check("8m silence", bytes[44] == 128.0)
+    // Max (1.0) → 255 (or close)
+    check("8m max", bytes[45] >= 254.0)
+    // Min (-1.0) → 0
+    check("8m min", bytes[46] == 0.0)
+    return 0.0
+end
+
+// ── Roundtrip 16-bit ───────────────────────────────────
+
+fn test_roundtrip()
+    // Encode then verify sample byte pattern
+    let mut samples = [0.0]
+    let mut bytes = []
+    let _n = wav_encode_16(bytes, samples, 1.0, 44100.0, 1.0)
+    // 0.0 → signed 0 → bytes [0, 0]
+    check("rt zero lo", bytes[44] == 0.0)
+    check("rt zero hi", bytes[45] == 0.0)
+    // Encode 0.5: floor(0.5 * 32767) = 16383 → lo=255, hi=63
+    let mut s2 = [0.5]
+    let mut b2 = []
+    let _n2 = wav_encode_16(b2, s2, 1.0, 44100.0, 1.0)
+    let val = b2[44] + b2[45] * 256.0
+    check("rt half", approx(val, 16383.0) == 1.0)
+    return 0.0
+end
+
+// ── Clamping ───────────────────────────────────────────
+
+fn test_clamp()
+    let mut samples = [5.0, -5.0]
+    let mut bytes = []
+    let _n = wav_encode_16(bytes, samples, 2.0, 44100.0, 1.0)
+    // Should clamp to ±1.0 → ±32767
+    // +1.0 → 32767 → lo=255, hi=127
+    check("clamp hi", bytes[45] == 127.0)
+    // -1.0 → -32767 → 65536-32767=32769 → lo=1, hi=128
+    let neg_val = bytes[46] + bytes[47] * 256.0
+    check("clamp lo", neg_val > 32000.0)
+    return 0.0
+end
+
+// ── Edge cases ─────────────────────────────────────────
+
+fn test_edges()
+    let mut bytes = []
+    // Zero samples
+    let n1 = wav_encode_16(bytes, bytes, 0.0, 44100.0, 1.0)
+    check("edge zero n", n1 == 0.0)
+    // Zero rate
+    let n2 = wav_encode_16(bytes, bytes, 10.0, 0.0, 1.0)
+    check("edge zero rate", n2 == 0.0)
+    // Invalid bps defaults to 16
+    let mut s = [0.5]
+    let mut b = []
+    let _n3 = wav_encode(b, s, 1.0, 44100.0, 1.0, 24.0)
+    check("edge bps", bytes[34] != 24.0)
+    // Channels clamped
+    let mut b2 = []
+    let _n4 = wav_encode(b2, s, 1.0, 44100.0, 5.0, 16.0)
+    check("edge ch", b2[22] == 2.0)
+    return 0.0
+end
+
+// ── Samples shorter than n_samples ─────────────────────
+
+fn test_short_input()
+    let mut samples = [0.5]
+    let mut bytes = []
+    let _n = wav_encode_16(bytes, samples, 4.0, 44100.0, 1.0)
+    // Should pad with zeros
+    check("short len", len(bytes) == 52.0)
+    // First sample = 0.5, rest = 0.0
+    let v1 = bytes[44] + bytes[45] * 256.0
+    check("short first", v1 > 0.0)
+    let v2 = bytes[48] + bytes[49] * 256.0
+    check("short pad", v2 == 0.0)
+    return 0.0
+end
+
+// ── Run all ────────────────────────────────────────────
+
+test_16bit_mono()
+test_16bit_stereo()
+test_8bit_mono()
+test_roundtrip()
+test_clamp()
+test_edges()
+test_short_input()
+print("")
+print("All wav_encode tests passed (7 tests)")

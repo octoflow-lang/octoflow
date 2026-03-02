@@ -1,0 +1,195 @@
+// stdlib/loom/octopress_stream.flow — OctoPress Streaming Decompression
+//
+// Block-by-block streaming from .ocp files to memory or GPU.
+// Uses shipped builtins: octopress_stream_open/next/info/reset/close.
+//
+// Pattern: Open → iterate blocks → close. No full-file decode needed.
+// For 70B model layers: stream 800MB tensor in 4MB blocks, decompress
+// to GPU memory one block at a time. Peak VRAM = 1 block + activations.
+//
+// Usage:
+//   use "octopress_stream"
+//   let h = ocp_stream_open("weights.ocp")
+//   let all = ocp_stream_read_all(h)
+//   ocp_stream_close(h)
+
+// ── Open / Close ─────────────────────────────────────────────────
+
+fn ocp_stream_open(path)
+    // Open .ocp file for block-by-block streaming.
+    // Returns handle (positive float) or -1.0 on failure.
+    let h = octopress_stream_open(path)
+    if h < 0.5
+        print("OctoPress Stream: Failed to open {path}")
+        return 0.0 - 1.0
+    end
+    return h
+end
+
+fn ocp_stream_close(handle)
+    // Close stream and free resources.
+    octopress_stream_close(handle)
+    return 0.0
+end
+
+// ── Metadata ─────────────────────────────────────────────────────
+
+fn ocp_stream_info(handle)
+    // Returns map with: "method" (0=raw, 1=delta, 2=fractal),
+    //   "count" (total float count), "cursor" (current position).
+    return octopress_stream_info(handle)
+end
+
+fn ocp_stream_count(handle)
+    // Total number of floats in the stream.
+    let info = octopress_stream_info(handle)
+    return map_get(info, "count")
+end
+
+fn ocp_stream_method(handle)
+    // Compression method: 0=raw, 1=delta, 2=fractal.
+    let info = octopress_stream_info(handle)
+    return map_get(info, "method")
+end
+
+fn ocp_stream_cursor(handle)
+    // Current read position in the stream.
+    let info = octopress_stream_info(handle)
+    return map_get(info, "cursor")
+end
+
+// ── Block Iteration ──────────────────────────────────────────────
+
+fn ocp_stream_next_block(handle, out_block)
+    // Read next decompressed block into out_block array.
+    // Returns number of floats read, or 0.0 when stream is exhausted.
+    let block = octopress_stream_next(handle)
+    // stream_next returns 0.0 (scalar) when no more blocks
+    if block == 0.0
+        return 0.0
+    end
+    let n = len(block)
+    if n < 0.5
+        return 0.0
+    end
+    extend(out_block, block)
+    return n
+end
+
+// ── Read All ─────────────────────────────────────────────────────
+
+fn ocp_stream_read_all(handle)
+    // Read entire stream into a flat array.
+    // Resets stream first to ensure full read from start.
+    octopress_stream_reset(handle)
+    let mut result = []
+    let mut done = 0.0
+    while done < 0.5
+        let block = octopress_stream_next(handle)
+        if block == 0.0
+            done = 1.0
+        else
+            if len(block) > 0.0
+                extend(result, block)
+            else
+                done = 1.0
+            end
+        end
+    end
+    return result
+end
+
+// ── Reset + Replay ───────────────────────────────────────────────
+
+fn ocp_stream_reset(handle)
+    // Reset stream cursor to beginning. Next call to next_block
+    // returns the first block again.
+    octopress_stream_reset(handle)
+    return 0.0
+end
+
+// ── GPU Upload — Stream Blocks Directly to Loom VM ───────────────
+
+fn ocp_stream_to_gpu(handle, vm, reg_idx)
+    // Stream-decompress .ocp file and upload to a Loom VM register.
+    // Decompresses block-by-block (constant per-block memory), then
+    // uploads the full result via loom_write.
+    //
+    // vm: Loom VM handle (from loom_boot)
+    // reg_idx: register binding to write to
+    //
+    // Returns: total floats uploaded
+    let data = ocp_stream_read_all(handle)
+    let n = len(data)
+    if n > 0.0
+        loom_write(vm, reg_idx, data)
+    end
+    return n
+end
+
+fn ocp_stream_to_array(handle, out_array, max_floats)
+    // Stream blocks into out_array up to max_floats limit.
+    // Useful for partial reads (e.g., first N elements of a large tensor).
+    // Returns: number of floats read
+    octopress_stream_reset(handle)
+    let mut total = 0.0
+    let mut done = 0.0
+    while done < 0.5
+        if total >= max_floats
+            done = 1.0
+        else
+            let block = octopress_stream_next(handle)
+            if block == 0.0
+                done = 1.0
+            else
+                let n = len(block)
+                if n > 0.0
+                    let remaining = max_floats - total
+                    if n <= remaining
+                        extend(out_array, block)
+                        total = total + n
+                    else
+                        // Partial block — copy only what we need
+                        let mut bi = 0.0
+                        while bi < remaining
+                            push(out_array, block[bi])
+                            bi = bi + 1.0
+                        end
+                        total = total + remaining
+                        done = 1.0
+                    end
+                else
+                    done = 1.0
+                end
+            end
+        end
+    end
+    return total
+end
+
+// ── Convenience: Open + Read + Close ─────────────────────────────
+
+fn ocp_load_streaming(path)
+    // One-shot: open → read all → close.
+    // Equivalent to octopress_load + octopress_decode but streaming.
+    // For large files, uses constant memory per block.
+    let h = ocp_stream_open(path)
+    if h < 0.0
+        return []
+    end
+    let result = ocp_stream_read_all(h)
+    ocp_stream_close(h)
+    return result
+end
+
+fn ocp_stream_block_count(handle)
+    // Estimate block count from total floats / standard block size.
+    // OctoPress default block_size = 256 floats.
+    let info = octopress_stream_info(handle)
+    let count = map_get(info, "count")
+    let blocks = ceil(count / 256.0)
+    if blocks < 1.0
+        return 1.0
+    end
+    return blocks
+end

@@ -1,0 +1,210 @@
+// test_bst.flow — Tests for stdlib/collections/bst.flow
+use "bst"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic operations ────────────────────────────────────────
+
+fn test_create()
+    let mut t = bst_create()
+    check("create empty", bst_is_empty(t) == 1.0)
+    check("create size", bst_size(t) == 0.0)
+    return 0.0
+end
+
+fn test_insert_search()
+    let mut t = bst_create()
+    bst_insert(t, 5.0)
+    bst_insert(t, 3.0)
+    bst_insert(t, 7.0)
+    bst_insert(t, 1.0)
+    bst_insert(t, 9.0)
+    check("size 5", bst_size(t) == 5.0)
+    check("contains 5", bst_contains(t, 5.0) == 1.0)
+    check("contains 3", bst_contains(t, 3.0) == 1.0)
+    check("contains 9", bst_contains(t, 9.0) == 1.0)
+    check("not contains 4", bst_contains(t, 4.0) == 0.0)
+    return 0.0
+end
+
+fn test_duplicate()
+    let mut t = bst_create()
+    bst_insert(t, 5.0)
+    bst_insert(t, 5.0)
+    check("no duplicate", bst_size(t) == 1.0)
+    return 0.0
+end
+
+// ── Min / Max ───────────────────────────────────────────────
+
+fn test_min_max()
+    let mut t = bst_create()
+    bst_insert(t, 5.0)
+    bst_insert(t, 2.0)
+    bst_insert(t, 8.0)
+    bst_insert(t, 1.0)
+    bst_insert(t, 9.0)
+    check("min", bst_min(t) == 1.0)
+    check("max", bst_max(t) == 9.0)
+    return 0.0
+end
+
+fn test_min_max_empty()
+    let mut t = bst_create()
+    check("min empty", bst_min(t) == -1.0)
+    check("max empty", bst_max(t) == -1.0)
+    return 0.0
+end
+
+// ── Traversals ──────────────────────────────────────────────
+
+fn test_inorder()
+    let mut t = bst_create()
+    bst_insert(t, 5.0)
+    bst_insert(t, 3.0)
+    bst_insert(t, 7.0)
+    bst_insert(t, 1.0)
+    bst_insert(t, 4.0)
+    let arr = bst_inorder(t)
+    check("inorder len", len(arr) == 5.0)
+    check("inorder[0]", arr[0] == 1.0)
+    check("inorder[1]", arr[1] == 3.0)
+    check("inorder[2]", arr[2] == 4.0)
+    check("inorder[3]", arr[3] == 5.0)
+    check("inorder[4]", arr[4] == 7.0)
+    return 0.0
+end
+
+fn test_preorder()
+    let mut t = bst_create()
+    bst_insert(t, 5.0)
+    bst_insert(t, 3.0)
+    bst_insert(t, 7.0)
+    let arr = bst_preorder(t)
+    check("preorder len", len(arr) == 3.0)
+    check("preorder root", arr[0] == 5.0)
+    return 0.0
+end
+
+fn test_postorder()
+    let mut t = bst_create()
+    bst_insert(t, 5.0)
+    bst_insert(t, 3.0)
+    bst_insert(t, 7.0)
+    let arr = bst_postorder(t)
+    check("postorder len", len(arr) == 3.0)
+    // Post-order: left, right, root → 3, 7, 5
+    check("postorder[0]", arr[0] == 3.0)
+    check("postorder[1]", arr[1] == 7.0)
+    check("postorder[2]", arr[2] == 5.0)
+    return 0.0
+end
+
+// ── Remove ──────────────────────────────────────────────────
+
+fn test_remove_leaf()
+    let mut t = bst_create()
+    bst_insert(t, 5.0)
+    bst_insert(t, 3.0)
+    bst_insert(t, 7.0)
+    bst_remove(t, 3.0)
+    check("remove leaf size", bst_size(t) == 2.0)
+    check("remove leaf gone", bst_contains(t, 3.0) == 0.0)
+    check("remove leaf others", bst_contains(t, 5.0) == 1.0)
+    return 0.0
+end
+
+fn test_remove_one_child()
+    let mut t = bst_create()
+    bst_insert(t, 5.0)
+    bst_insert(t, 3.0)
+    bst_insert(t, 7.0)
+    bst_insert(t, 6.0)
+    // 7 has left child 6
+    bst_remove(t, 7.0)
+    check("remove 1child size", bst_size(t) == 3.0)
+    check("remove 1child 6 exists", bst_contains(t, 6.0) == 1.0)
+    return 0.0
+end
+
+fn test_remove_two_children()
+    let mut t = bst_create()
+    bst_insert(t, 5.0)
+    bst_insert(t, 3.0)
+    bst_insert(t, 7.0)
+    bst_insert(t, 6.0)
+    bst_insert(t, 8.0)
+    // 7 has two children: 6 and 8
+    bst_remove(t, 7.0)
+    check("remove 2child size", bst_size(t) == 4.0)
+    // Both children should still be reachable
+    check("remove 2child 6", bst_contains(t, 6.0) == 1.0)
+    check("remove 2child 8", bst_contains(t, 8.0) == 1.0)
+    // Inorder should still be sorted
+    let arr = bst_inorder(t)
+    check("remove 2child sorted", arr[0] == 3.0 && arr[1] == 5.0 && arr[2] == 6.0 && arr[3] == 8.0)
+    return 0.0
+end
+
+fn test_remove_root()
+    let mut t = bst_create()
+    bst_insert(t, 5.0)
+    bst_insert(t, 3.0)
+    bst_insert(t, 7.0)
+    bst_remove(t, 5.0)
+    check("remove root size", bst_size(t) == 2.0)
+    check("remove root gone", bst_contains(t, 5.0) == 0.0)
+    return 0.0
+end
+
+// ── Height ──────────────────────────────────────────────────
+
+fn test_height()
+    let mut t = bst_create()
+    check("height empty", bst_height(t) == 0.0)
+    bst_insert(t, 5.0)
+    check("height 1", bst_height(t) == 1.0)
+    bst_insert(t, 3.0)
+    bst_insert(t, 7.0)
+    check("height 2", bst_height(t) == 2.0)
+    return 0.0
+end
+
+// ── Clear ───────────────────────────────────────────────────
+
+fn test_clear()
+    let mut t = bst_create()
+    bst_insert(t, 1.0)
+    bst_insert(t, 2.0)
+    bst_insert(t, 3.0)
+    bst_clear(t)
+    check("clear empty", bst_is_empty(t) == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_create()
+test_insert_search()
+test_duplicate()
+test_min_max()
+test_min_max_empty()
+test_inorder()
+test_preorder()
+test_postorder()
+test_remove_leaf()
+test_remove_one_child()
+test_remove_two_children()
+test_remove_root()
+test_height()
+test_clear()
+print("")
+print("All BST tests passed (14 tests)")

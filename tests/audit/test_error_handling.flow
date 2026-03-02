@@ -1,0 +1,219 @@
+// test_error_handling.flow — Error handling audit (Phase B4)
+// Run: octoflow run tests/audit/test_error_handling.flow
+//
+// Tests runtime error handling: try/catch, edge cases, graceful failures.
+// NOTE: Can only test errors that are RECOVERABLE (try pattern).
+// Compile-time errors are tested separately by Rust tests (preflight).
+
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+fn check_near(counters, label, got, expected, tol)
+  let d = abs(got - expected)
+  if d < tol
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+print("=== ERROR HANDLING AUDIT ===")
+print(" ")
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 1. try() Pattern — Catchable Errors ---")
+
+// Division by zero
+let div_r = try(1.0 / 0.0)
+// GPU f32 division by zero gives Inf, not an error
+let div_val = div_r.value
+let _c = check(counters, "div/0 ok", div_r.ok, 1.0)
+
+// Float conversion
+let fl_ok = try(float("42"))
+let _c = check(counters, "float ok", fl_ok.ok, 1.0)
+let _c = check(counters, "float val", fl_ok.value, 42.0)
+
+let fl_bad = try(float("abc"))
+let _c = check(counters, "float fail", fl_bad.ok, 0.0)
+
+// sqrt of negative
+let sq_neg = try(sqrt(-1.0))
+let _c = check(counters, "sqrt(-1) ok", sq_neg.ok, 1.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 2. Division Edge Cases ---")
+
+// Division by zero produces Inf in f32
+let inf = 1.0 / 0.0
+let _c = check(counters, "1/0 finite", if inf > 1000000.0 then 1.0 else 0.0, 1.0)
+
+// 0/0 produces NaN
+let nan = 0.0 / 0.0
+// NaN != NaN
+let _c = check(counters, "NaN != NaN", if nan == nan then 0.0 else 1.0, 1.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 3. Array Boundary Behavior ---")
+
+let mut arr3 = [10.0, 20.0, 30.0]
+
+// Valid indices
+let _c = check(counters, "arr[0]", arr3[0], 10.0)
+let _c = check(counters, "arr[2]", arr3[2], 30.0)
+
+// Empty array ops
+let mut empty = []
+let _c = check(counters, "empty len", len(empty), 0.0)
+push(empty, 99.0)
+let _c = check(counters, "push empty", empty[0], 99.0)
+
+// Pop from 1-element
+let popped = pop(empty)
+let _c = check(counters, "pop val", popped, 99.0)
+let _c = check(counters, "pop empty len", len(empty), 0.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 4. String Edge Cases ---")
+
+let _c = check(counters, "empty-ish len", len(" "), 1.0)
+let _c = check(counters, "char_at 0", char_at("x", 0.0), "x")
+let _c = check(counters, "contains self", if contains("abc", "abc") then 1.0 else 0.0, 1.0)
+let _c = check(counters, "starts self", if starts_with("abc", "abc") then 1.0 else 0.0, 1.0)
+let _c = check(counters, "ends self", if ends_with("abc", "abc") then 1.0 else 0.0, 1.0)
+
+// Single char string
+let _c = check(counters, "len 1", len("x"), 1.0)
+let _c = check(counters, "ord chr", chr(ord("Z")), "Z")
+
+// Large string concat
+let mut big = "a"
+let mut i = 0.0
+while i < 12.0
+  big = big + big
+  i = i + 1.0
+end
+let _c = check(counters, "big str len", len(big), 4096.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 5. Map Edge Cases ---")
+
+let mut me = map()
+let _c = check(counters, "empty map has", if map_has(me, "x") then 1.0 else 0.0, 0.0)
+
+map_set(me, "key", "value")
+let _c = check(counters, "map 1 key", map_get(me, "key"), "value")
+
+// Overwrite same key many times
+map_set(me, "key", "v2")
+map_set(me, "key", "v3")
+let _c = check(counters, "map overwrite", map_get(me, "key"), "v3")
+
+// Numeric key
+map_set(me, "123", 456.0)
+let _c = check(counters, "num key", map_get(me, "123"), 456.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 6. Function Edge Cases ---")
+
+// Recursive depth test (shallow)
+fn depth_test(n)
+  if n <= 0.0
+    return 0.0
+  end
+  let d = depth_test(n - 1.0)
+  return d + 1.0
+end
+
+let _c = check(counters, "depth 10", depth_test(10.0), 10.0)
+let _c = check(counters, "depth 20", depth_test(20.0), 20.0)
+
+// Function returning string
+fn greet(name)
+  return "hello " + name
+end
+let _c = check(counters, "fn str ret", greet("world"), "hello world")
+
+// Function with no args
+fn get_42()
+  return 42.0
+end
+let _c = check(counters, "fn no args", get_42(), 42.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 7. Numeric Edge Cases ---")
+
+let _c = check(counters, "abs 0", abs(0.0), 0.0)
+let _c = check(counters, "floor 0", floor(0.0), 0.0)
+let _c = check(counters, "ceil 0", ceil(0.0), 0.0)
+let _c = check(counters, "round 0", round(0.0), 0.0)
+let _c = check(counters, "sqrt 0", sqrt(0.0), 0.0)
+let _c = check(counters, "pow 0 1", pow(0.0, 1.0), 0.0)
+let _c = check(counters, "pow 1 0", pow(1.0, 0.0), 1.0)
+let _c = check_near(counters, "log(e)", log(2.718281828), 1.0, 0.001)
+
+// Large values
+let big_n = 1000000.0
+let _c = check(counters, "large arith", big_n * 1000.0, 1000000000.0)
+
+// Very small positive
+let small = 0.001 * 0.001
+let _c = check_near(counters, "tiny", small, 0.000001, 0.0000001)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 8. GPU Error Resilience ---")
+
+// Single element GPU ops
+let mut g1 = [42.0]
+let ga = gpu_abs(g1)
+let _c = check(counters, "gpu_abs 1", ga[0], 42.0)
+
+let gs = gpu_sum(g1)
+let _c = check(counters, "gpu_sum 1", gs, 42.0)
+
+let gm = gpu_mean(g1)
+let _c = check(counters, "gpu_mean 1", gm, 42.0)
+
+// Two-element GPU ops
+let mut g2 = [1.0, 2.0]
+let gmin = gpu_min(g2)
+let _c = check(counters, "gpu_min 2", gmin, 1.0)
+
+let gmax = gpu_max(g2)
+let _c = check(counters, "gpu_max 2", gmax, 2.0)
+
+// GPU with zeros
+let mut gz = [0.0, 0.0]
+let gzs = gpu_sum(gz)
+let _c = check(counters, "gpu_sum zeros", gzs, 0.0)
+
+// GPU with negatives
+let mut gn = [-5.0, -3.0, -1.0]
+let gns = gpu_sum(gn)
+let _c = check_near(counters, "gpu_sum neg", gns, -9.0, 0.1)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SUMMARY
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print(" ")
+print("=== ERROR HANDLING AUDIT SUMMARY ===")
+print("  pass: {pass}/{total}")
+print("  fail: {fail}")
+if fail == 0.0
+  print("  ALL PASS")
+else
+  print("  FAILURES DETECTED")
+end

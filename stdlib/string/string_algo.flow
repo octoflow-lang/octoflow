@@ -1,0 +1,528 @@
+// stdlib/string/string_algo.flow — String algorithms and transformations
+//
+// Edit distance, similarity, fuzzy matching, case conversions,
+// and common string algorithm utilities.
+//
+// Functions: levenshtein, hamming_distance, str_similarity,
+//            str_to_snake, str_to_camel, str_to_pascal, str_to_kebab,
+//            str_capitalize_words, str_is_palindrome,
+//            str_common_prefix, str_common_suffix,
+//            str_repeat, str_contains_any, str_replace_all,
+//            str_starts_with, str_ends_with, str_lcs_length
+//
+// Usage:
+//   use "string_algo"
+//   let d = levenshtein("kitten", "sitting")   // 3.0
+//   let s = str_to_snake("helloWorld")          // "hello_world"
+//   let p = str_is_palindrome("racecar")        // 1.0
+
+// ── Edit Distance ─────────────────────────────────────────────
+
+fn levenshtein(a, b)
+    // Levenshtein edit distance between two strings.
+    // Uses flat array as 2D matrix: dp[i * (nb+1) + j].
+    let na = len(a)
+    let nb = len(b)
+
+    if na == 0.0
+        return nb
+    end
+    if nb == 0.0
+        return na
+    end
+
+    // dp array: (na+1) * (nb+1)
+    let cols = nb + 1.0
+    let total = (na + 1.0) * cols
+    let mut dp = []
+    let mut k = 0.0
+    while k < total
+        push(dp, 0.0)
+        k = k + 1.0
+    end
+
+    // Initialize first row and column
+    let mut i = 0.0
+    while i <= na
+        dp[i * cols] = i
+        i = i + 1.0
+    end
+    let mut j = 0.0
+    while j <= nb
+        dp[j] = j
+        j = j + 1.0
+    end
+
+    // Fill matrix
+    i = 1.0
+    while i <= na
+        j = 1.0
+        while j <= nb
+            if char_at(a, i - 1.0) != char_at(b, j - 1.0)
+                let del = dp[(i - 1.0) * cols + j] + 1.0
+                let ins = dp[i * cols + (j - 1.0)] + 1.0
+                let sub = dp[(i - 1.0) * cols + (j - 1.0)] + 1.0
+
+                let mut mn = del
+                if ins < mn
+                    mn = ins
+                end
+                if sub < mn
+                    mn = sub
+                end
+                dp[i * cols + j] = mn
+            else
+                dp[i * cols + j] = dp[(i - 1.0) * cols + (j - 1.0)]
+            end
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+
+    return dp[na * cols + nb]
+end
+
+fn hamming_distance(a, b)
+    // Hamming distance — number of positions where chars differ.
+    // Strings must be same length. Returns -1.0 if lengths differ.
+    let na = len(a)
+    let nb = len(b)
+    if na != nb
+        return -1.0
+    end
+    let mut dist = 0.0
+    let mut i = 0.0
+    while i < na
+        if char_at(a, i) != char_at(b, i)
+            dist = dist + 1.0
+        end
+        i = i + 1.0
+    end
+    return dist
+end
+
+fn str_similarity(a, b)
+    // Normalized similarity: 1.0 - (levenshtein / max_length).
+    // Returns value in [0.0, 1.0] where 1.0 = identical.
+    let na = len(a)
+    let nb = len(b)
+    if na == 0.0 && nb == 0.0
+        return 1.0
+    end
+    let mut mx = na
+    if nb > mx
+        mx = nb
+    end
+    let d = levenshtein(a, b)
+    return 1.0 - d / mx
+end
+
+fn str_lcs_length(a, b)
+    // Longest common subsequence length.
+    // Uses flat array as 2D matrix.
+    let na = len(a)
+    let nb = len(b)
+    if na == 0.0 || nb == 0.0
+        return 0.0
+    end
+
+    let cols = nb + 1.0
+    let total = (na + 1.0) * cols
+    let mut dp = []
+    let mut k = 0.0
+    while k < total
+        push(dp, 0.0)
+        k = k + 1.0
+    end
+
+    let mut i = 1.0
+    while i <= na
+        let mut j = 1.0
+        while j <= nb
+            if char_at(a, i - 1.0) == char_at(b, j - 1.0)
+                dp[i * cols + j] = dp[(i - 1.0) * cols + (j - 1.0)] + 1.0
+            else
+                let up = dp[(i - 1.0) * cols + j]
+                let left = dp[i * cols + (j - 1.0)]
+                if up > left
+                    dp[i * cols + j] = up
+                else
+                    dp[i * cols + j] = left
+                end
+            end
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+
+    return dp[na * cols + nb]
+end
+
+// ── Case Conversion ───────────────────────────────────────────
+
+fn _is_upper(c)
+    let code = ord(c)
+    if code >= 65.0 && code <= 90.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn _is_lower(c)
+    let code = ord(c)
+    if code >= 97.0 && code <= 122.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn _is_alpha(c)
+    if _is_upper(c) == 1.0 || _is_lower(c) == 1.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn str_to_snake(s)
+    // Convert camelCase/PascalCase to snake_case.
+    // "helloWorld" → "hello_world", "HTMLParser" → "html_parser"
+    let n = len(s)
+    if n == 0.0
+        return ""
+    end
+
+    let mut result = ""
+    let mut i = 0.0
+    while i < n
+        let c = char_at(s, i)
+        if _is_upper(c) == 1.0
+            if i > 0.0
+                // Add underscore before uppercase unless previous was uppercase
+                let prev = char_at(s, i - 1.0)
+                if _is_upper(prev) == 0.0
+                    result = result + "_"
+                elif i + 1.0 < n
+                    let next = char_at(s, i + 1.0)
+                    if _is_lower(next) == 1.0
+                        result = result + "_"
+                    end
+                end
+            end
+            result = result + to_lower(c)
+        elif c == "-" || c == " "
+            result = result + "_"
+        else
+            result = result + c
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn str_to_camel(s)
+    // Convert snake_case/kebab-case to camelCase.
+    // "hello_world" → "helloWorld"
+    let n = len(s)
+    if n == 0.0
+        return ""
+    end
+
+    let mut result = ""
+    let mut cap_next = 0.0
+    let mut first = 1.0
+    let mut i = 0.0
+    while i < n
+        let c = char_at(s, i)
+        if c == "_" || c == "-" || c == " "
+            cap_next = 1.0
+        elif cap_next == 1.0 && first == 0.0
+            result = result + to_upper(c)
+            cap_next = 0.0
+        else
+            if first == 1.0
+                result = result + to_lower(c)
+                first = 0.0
+            else
+                result = result + c
+            end
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn str_to_pascal(s)
+    // Convert snake_case/kebab-case to PascalCase.
+    // "hello_world" → "HelloWorld"
+    let n = len(s)
+    if n == 0.0
+        return ""
+    end
+
+    let mut result = ""
+    let mut cap_next = 1.0
+    let mut i = 0.0
+    while i < n
+        let c = char_at(s, i)
+        if c == "_" || c == "-" || c == " "
+            cap_next = 1.0
+        elif cap_next == 1.0
+            result = result + to_upper(c)
+            cap_next = 0.0
+        else
+            result = result + c
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn str_to_kebab(s)
+    // Convert camelCase/PascalCase/snake_case to kebab-case.
+    // "helloWorld" → "hello-world"
+    let snake = str_to_snake(s)
+    let n = len(snake)
+    let mut result = ""
+    let mut i = 0.0
+    while i < n
+        let c = char_at(snake, i)
+        if c == "_"
+            result = result + "-"
+        else
+            result = result + c
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn str_capitalize_words(s)
+    // Capitalize the first letter of each word.
+    // "hello world" → "Hello World"
+    let n = len(s)
+    if n == 0.0
+        return ""
+    end
+
+    let mut result = ""
+    let mut cap_next = 1.0
+    let mut i = 0.0
+    while i < n
+        let c = char_at(s, i)
+        if c == " " || c == "\t" || c == "\n"
+            result = result + c
+            cap_next = 1.0
+        elif cap_next == 1.0
+            result = result + to_upper(c)
+            cap_next = 0.0
+        else
+            result = result + c
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── String Tests ──────────────────────────────────────────────
+
+fn str_is_palindrome(s)
+    // Check if string is a palindrome. Returns 1.0 or 0.0.
+    let n = len(s)
+    if n <= 1.0
+        return 1.0
+    end
+    let mut i = 0.0
+    let mut j = n - 1.0
+    while i < j
+        if char_at(s, i) != char_at(s, j)
+            return 0.0
+        end
+        i = i + 1.0
+        j = j - 1.0
+    end
+    return 1.0
+end
+
+fn str_starts_with(s, prefix)
+    // Check if string starts with prefix.
+    let ns = len(s)
+    let np = len(prefix)
+    if np > ns
+        return 0.0
+    end
+    if np == 0.0
+        return 1.0
+    end
+    let mut i = 0.0
+    while i < np
+        if char_at(s, i) != char_at(prefix, i)
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn str_ends_with(s, suffix)
+    // Check if string ends with suffix.
+    let ns = len(s)
+    let np = len(suffix)
+    if np > ns
+        return 0.0
+    end
+    if np == 0.0
+        return 1.0
+    end
+    let offset = ns - np
+    let mut i = 0.0
+    while i < np
+        if char_at(s, offset + i) != char_at(suffix, i)
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+// ── Common Prefix / Suffix ────────────────────────────────────
+
+fn str_common_prefix(a, b)
+    // Find longest common prefix of two strings.
+    let na = len(a)
+    let nb = len(b)
+    let mut mn = na
+    if nb < mn
+        mn = nb
+    end
+    let mut i = 0.0
+    while i < mn
+        if char_at(a, i) != char_at(b, i)
+            return substr(a, 0.0, i)
+        end
+        i = i + 1.0
+    end
+    return substr(a, 0.0, mn)
+end
+
+fn str_common_suffix(a, b)
+    // Find longest common suffix of two strings.
+    let na = len(a)
+    let nb = len(b)
+    let mut mn = na
+    if nb < mn
+        mn = nb
+    end
+    let mut i = 0.0
+    while i < mn
+        if char_at(a, na - 1.0 - i) != char_at(b, nb - 1.0 - i)
+            return substr(a, na - i, na)
+        end
+        i = i + 1.0
+    end
+    return substr(a, na - mn, na)
+end
+
+// ── Utilities ─────────────────────────────────────────────────
+
+fn str_repeat(s, n)
+    // Repeat a string n times.
+    let mut result = ""
+    let mut i = 0.0
+    while i < n
+        result = result + s
+        i = i + 1.0
+    end
+    return result
+end
+
+fn str_contains_any(s, chars)
+    // Check if string contains any character from chars string.
+    let ns = len(s)
+    let nc = len(chars)
+    let mut i = 0.0
+    while i < ns
+        let c = char_at(s, i)
+        let mut j = 0.0
+        while j < nc
+            if c == char_at(chars, j)
+                return 1.0
+            end
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn str_replace_all(s, old, new_str)
+    // Replace all occurrences of old with new_str.
+    let ns = len(s)
+    let no = len(old)
+    if no == 0.0
+        return s
+    end
+
+    let mut result = ""
+    let mut i = 0.0
+    while i < ns
+        // Check for match at position i
+        if i + no <= ns
+            let chunk = substr(s, i, i + no)
+            if chunk == old
+                result = result + new_str
+                i = i + no
+            else
+                result = result + char_at(s, i)
+                i = i + 1.0
+            end
+        else
+            result = result + char_at(s, i)
+            i = i + 1.0
+        end
+    end
+    return result
+end
+
+fn str_count_occurrences(s, sub)
+    // Count non-overlapping occurrences of sub in s.
+    let ns = len(s)
+    let nsub = len(sub)
+    if nsub == 0.0 || nsub > ns
+        return 0.0
+    end
+
+    let mut count = 0.0
+    let mut i = 0.0
+    while i <= ns - nsub
+        let chunk = substr(s, i, i + nsub)
+        if chunk == sub
+            count = count + 1.0
+            i = i + nsub
+        else
+            i = i + 1.0
+        end
+    end
+    return count
+end
+
+fn str_index_of(s, sub)
+    // Find first index of sub in s. Returns -1.0 if not found.
+    let ns = len(s)
+    let nsub = len(sub)
+    if nsub == 0.0
+        return 0.0
+    end
+    if nsub > ns
+        return -1.0
+    end
+
+    let mut i = 0.0
+    while i <= ns - nsub
+        let chunk = substr(s, i, i + nsub)
+        if chunk == sub
+            return i
+        end
+        i = i + 1.0
+    end
+    return -1.0
+end

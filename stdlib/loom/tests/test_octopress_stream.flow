@@ -1,0 +1,219 @@
+// stdlib/loom/tests/test_octopress_stream.flow — OctoPress Streaming Tests
+//
+// Tests block-by-block streaming decompression via octopress_stream_* builtins
+// and the higher-level ocp_stream_* wrappers.
+//
+// Run: octoflow run stdlib/loom/tests/test_octopress_stream.flow --allow-read --allow-write
+
+use "../../loom/octopress_stream"
+
+print("=== Test: OctoPress Streaming ===")
+print("")
+
+let mut _cnt = [0.0, 0.0]
+
+fn check(name, cond)
+    if cond > 0.5
+        print("  PASS: {name}")
+        _cnt[0] = _cnt[0] + 1.0
+    else
+        print("  FAIL: {name}")
+        _cnt[1] = _cnt[1] + 1.0
+    end
+    return 0.0
+end
+
+// ── Setup: Create test .ocp files ───────────────────────────────
+
+// Small test array — raw encoding
+let mut data_small = [10.0, 20.0, 30.0, 40.0, 50.0]
+let comp_raw = octopress_encode(data_small, 0.0)
+octopress_save(comp_raw, "_test_ocp_stream_raw.ocp")
+
+// Larger test array — delta encoding
+let mut data_large = []
+let mut gi = 0.0
+while gi < 100.0
+    push(data_large, gi * 1.5 + 3.0)
+    gi = gi + 1.0
+end
+let comp_delta = octopress_encode(data_large, 1.0)
+octopress_save(comp_delta, "_test_ocp_stream_delta.ocp")
+
+// ── Test 1: Open and Close ──────────────────────────────────────
+
+print("Open / Close")
+
+let h1 = ocp_stream_open("_test_ocp_stream_raw.ocp")
+let _t = check("open returns positive handle", h1 > 0.0)
+ocp_stream_close(h1)
+
+// Open non-existent file
+let h_bad = ocp_stream_open("_nonexistent_file_xyz.ocp")
+let _t = check("open non-existent returns -1", h_bad < 0.0)
+
+print("")
+
+// ── Test 2: Stream Info ─────────────────────────────────────────
+
+print("Stream Info")
+
+let h2 = ocp_stream_open("_test_ocp_stream_raw.ocp")
+let count2 = ocp_stream_count(h2)
+let _t = check("count matches data length (5)", abs(count2 - 5.0) < 0.5)
+
+let method2 = ocp_stream_method(h2)
+let _t = check("method is raw (0)", abs(method2) < 0.5)
+
+let cursor2 = ocp_stream_cursor(h2)
+let _t = check("cursor starts at 0", abs(cursor2) < 0.5)
+
+ocp_stream_close(h2)
+
+// Delta encoded file
+let h2d = ocp_stream_open("_test_ocp_stream_delta.ocp")
+let count2d = ocp_stream_count(h2d)
+let _t = check("delta count matches (100)", abs(count2d - 100.0) < 0.5)
+
+let method2d = ocp_stream_method(h2d)
+let _t = check("delta method is 1", abs(method2d - 1.0) < 0.5)
+
+ocp_stream_close(h2d)
+
+print("")
+
+// ── Test 3: Read All ────────────────────────────────────────────
+
+print("Read All")
+
+let h3 = ocp_stream_open("_test_ocp_stream_raw.ocp")
+let all3 = ocp_stream_read_all(h3)
+let _t = check("read_all length correct (5)", abs(len(all3) - 5.0) < 0.5)
+let _t = check("read_all first value (10)", abs(all3[0] - 10.0) < 0.01)
+let _t = check("read_all last value (50)", abs(all3[4] - 50.0) < 0.01)
+ocp_stream_close(h3)
+
+// Delta encoded
+let h3d = ocp_stream_open("_test_ocp_stream_delta.ocp")
+let all3d = ocp_stream_read_all(h3d)
+let _t = check("delta read_all length (100)", abs(len(all3d) - 100.0) < 0.5)
+let _t = check("delta first value", abs(all3d[0] - 3.0) < 0.01)
+let _t = check("delta value at 10", abs(all3d[10] - 18.0) < 0.01)
+ocp_stream_close(h3d)
+
+print("")
+
+// ── Test 4: Block-by-Block Iteration ────────────────────────────
+
+print("Block Iteration")
+
+let h4 = ocp_stream_open("_test_ocp_stream_raw.ocp")
+let mut block4 = []
+let n4 = ocp_stream_next_block(h4, block4)
+let _t = check("first block has data", n4 > 0.0)
+let _t = check("block starts with 10", abs(block4[0] - 10.0) < 0.01)
+
+// Read remaining blocks until done
+let mut total4 = n4
+let mut more4 = 1.0
+while more4 > 0.5
+    let mut next_block = []
+    let nb = ocp_stream_next_block(h4, next_block)
+    if nb < 0.5
+        more4 = 0.0
+    else
+        total4 = total4 + nb
+    end
+end
+let _t = check("total floats from blocks = 5", abs(total4 - 5.0) < 0.5)
+ocp_stream_close(h4)
+
+print("")
+
+// ── Test 5: Reset and Replay ────────────────────────────────────
+
+print("Reset / Replay")
+
+let h5 = ocp_stream_open("_test_ocp_stream_raw.ocp")
+let first5 = ocp_stream_read_all(h5)
+
+ocp_stream_reset(h5)
+let second5 = ocp_stream_read_all(h5)
+
+let _t = check("replay same length", abs(len(first5) - len(second5)) < 0.5)
+let _t = check("replay first value matches", abs(first5[0] - second5[0]) < 0.01)
+let _t = check("replay last value matches", abs(first5[4] - second5[4]) < 0.01)
+ocp_stream_close(h5)
+
+print("")
+
+// ── Test 6: Partial Read (to_array with limit) ──────────────────
+
+print("Partial Read")
+
+let h6 = ocp_stream_open("_test_ocp_stream_delta.ocp")
+let mut partial6 = []
+let np6 = ocp_stream_to_array(h6, partial6, 10.0)
+let _t = check("partial read count = 10", abs(np6 - 10.0) < 0.5)
+let _t = check("partial array length = 10", abs(len(partial6) - 10.0) < 0.5)
+let _t = check("partial first value", abs(partial6[0] - 3.0) < 0.01)
+ocp_stream_close(h6)
+
+print("")
+
+// ── Test 7: Convenience load_streaming ──────────────────────────
+
+print("Convenience API")
+
+let loaded7 = ocp_load_streaming("_test_ocp_stream_raw.ocp")
+let _t = check("load_streaming length (5)", abs(len(loaded7) - 5.0) < 0.5)
+let _t = check("load_streaming first (10)", abs(loaded7[0] - 10.0) < 0.01)
+let _t = check("load_streaming last (50)", abs(loaded7[4] - 50.0) < 0.01)
+
+print("")
+
+// ── Test 8: Roundtrip — encode → save → stream → verify ────────
+
+print("Roundtrip Verification")
+
+let mut orig8 = [1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
+let comp8 = octopress_encode(orig8, 1.0)
+octopress_save(comp8, "_test_ocp_stream_rt.ocp")
+
+let streamed8 = ocp_load_streaming("_test_ocp_stream_rt.ocp")
+let _t = check("roundtrip length matches", abs(len(streamed8) - len(orig8)) < 0.5)
+
+let mut match8 = 1.0
+let mut mi = 0.0
+while mi < len(orig8)
+    if abs(streamed8[mi] - orig8[mi]) > 0.01
+        match8 = 0.0
+    end
+    mi = mi + 1.0
+end
+let _t = check("roundtrip values match", match8 > 0.5)
+
+print("")
+
+// ── Test 9: Block count estimate ────────────────────────────────
+
+print("Block Count")
+
+let h9 = ocp_stream_open("_test_ocp_stream_delta.ocp")
+let bc9 = ocp_stream_block_count(h9)
+let _t = check("block count >= 1", bc9 >= 1.0)
+ocp_stream_close(h9)
+
+print("")
+
+// ── Summary ─────────────────────────────────────────────────────
+
+let p = _cnt[0]
+let f = _cnt[1]
+print("Results: {p} passed, {f} failed")
+if f < 0.5
+    print("ALL OCTOPRESS STREAMING TESTS PASSED")
+else
+    print("SOME TESTS FAILED")
+end
+print("")

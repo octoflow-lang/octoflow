@@ -82,11 +82,11 @@ fn gui_update()
       if my_raw < 0.0
         my_raw = 0.0
       end
-      if mx_raw > ww
-        mx_raw = ww
+      if mx_raw > _gs[1]
+        mx_raw = _gs[1]
       end
-      if my_raw > wh
-        my_raw = wh
+      if my_raw > _gs[2]
+        my_raw = _gs[2]
       end
       _gs[3] = mx_raw
       _gs[4] = my_raw
@@ -631,9 +631,9 @@ fn _gui_render()
         let mut bdg = _tc[22]
         let mut bdb = _tc[23]
         if is_focused == 1.0
-          bdr = _tc[12]
-          bdg = _tc[13]
-          bdb = _tc[14]
+          bdr = _tc[33]
+          bdg = _tc[34]
+          bdb = _tc[35]
         end
         let _b2 = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, bdr, bdg, bdb, ww, wh)
         let tlen = len(text)
@@ -651,9 +651,9 @@ fn _gui_render()
         let mut cbdg = _tc[22]
         let mut cbdb = _tc[23]
         if is_focused == 1.0
-          cbdr = _tc[12]
-          cbdg = _tc[13]
-          cbdb = _tc[14]
+          cbdr = _tc[33]
+          cbdg = _tc[34]
+          cbdb = _tc[35]
         end
         let _bb = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, box_x, box_y, box_sz, box_sz, cbdr, cbdg, cbdb, ww, wh)
         if _gui_checked[ii] == 1.0
@@ -696,13 +696,13 @@ fn _gui_render()
         let mut ibdg = _tc[22]
         let mut ibdb = _tc[23]
         if _gui_input_focused[ii] == 1.0
-          ibdr = _tc[12]
-          ibdg = _tc[13]
-          ibdb = _tc[14]
+          ibdr = _tc[33]
+          ibdg = _tc[34]
+          ibdb = _tc[35]
         elif is_focused == 1.0
-          ibdr = _tc[12]
-          ibdg = _tc[13]
-          ibdb = _tc[14]
+          ibdr = _tc[33]
+          ibdg = _tc[34]
+          ibdb = _tc[35]
         end
         let _bi = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, ibdr, ibdg, ibdb, ww, wh)
         let input_t = _gui_input_text[ii]
@@ -840,9 +840,9 @@ fn _gui_render()
         let mut ddbdg = _tc[22]
         let mut ddbdb = _tc[23]
         if is_focused == 1.0
-          ddbdr = _tc[12]
-          ddbdg = _tc[13]
-          ddbdb = _tc[14]
+          ddbdr = _tc[33]
+          ddbdg = _tc[34]
+          ddbdb = _tc[35]
         end
         let _ddbd = _gui_draw_border(_gui_px_r, _gui_px_g, _gui_px_b, wx, wy, ww2, wh2, ddbdr, ddbdg, ddbdb, ww, wh)
         // Selected text

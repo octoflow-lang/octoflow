@@ -1,0 +1,319 @@
+// stdlib/collections/event.flow — Event emitter / observer pattern
+//
+// Lightweight pub-sub system using map-based storage.
+// Listeners are identified by string IDs. Events are string names.
+//
+// Internal structure (map):
+//   __events: comma-separated list of registered event names
+//   e_{event}: comma-separated list of listener IDs for that event
+//   l_{id}:   listener label / tag (for debugging)
+//   __counter: auto-incrementing listener ID
+//   __log: comma-separated log of last N emitted events (circular)
+//   __log_size: number of events in log
+//   __log_max: max log entries (default 32)
+//
+// Functions: emitter_create, emitter_on, emitter_off, emitter_emit,
+//            emitter_once_mark, emitter_has_listener, emitter_listeners,
+//            emitter_events, emitter_clear, emitter_clear_event,
+//            emitter_log, emitter_log_count
+//
+// Usage:
+//   use "event"
+//   let mut em = emitter_create()
+//   let id1 = emitter_on(em, "click", "button_handler")
+//   let id2 = emitter_on(em, "click", "log_handler")
+//   emitter_emit(em, "click")    // logs "click" event
+//   emitter_off(em, "click", id1)
+
+fn emitter_create()
+    let mut em = map()
+    map_set(em, "__events", "")
+    map_set(em, "__counter", "0")
+    map_set(em, "__log", "")
+    map_set(em, "__log_size", "0")
+    map_set(em, "__log_max", "32")
+    return em
+end
+
+fn _emitter_next_id(em)
+    let c = float(map_get(em, "__counter")) + 1.0
+    map_set(em, "__counter", str(c))
+    return str(c)
+end
+
+fn emitter_on(em, event, label)
+    // Register a listener for event. Returns listener ID.
+    let ekey = "e_" + event
+
+    // Add event to events list if new
+    if !map_has(em, ekey)
+        let events = map_get(em, "__events")
+        if len(events) > 0.0
+            map_set(em, "__events", events + "," + event)
+        else
+            map_set(em, "__events", event)
+        end
+        map_set(em, ekey, "")
+    end
+
+    // Generate listener ID and store
+    let id = _emitter_next_id(em)
+    map_set(em, "l_" + id, label)
+
+    // Add ID to event's listener list
+    let listeners = map_get(em, ekey)
+    if len(listeners) > 0.0
+        map_set(em, ekey, listeners + "," + id)
+    else
+        map_set(em, ekey, id)
+    end
+
+    return id
+end
+
+fn emitter_off(em, event, id)
+    // Remove a listener by ID from an event.
+    let ekey = "e_" + event
+    if !map_has(em, ekey)
+        return 0.0
+    end
+
+    let listeners = map_get(em, ekey)
+    let parts = split(listeners, ",")
+    let n = len(parts)
+    let mut new_list = ""
+    let mut i = 0.0
+    while i < n
+        if parts[i] != id
+            if len(new_list) > 0.0
+                new_list = new_list + "," + parts[i]
+            else
+                new_list = parts[i]
+            end
+        end
+        i = i + 1.0
+    end
+    map_set(em, ekey, new_list)
+
+    // Clean up label
+    if map_has(em, "l_" + id)
+        map_remove(em, "l_" + id)
+    end
+
+    // Remove once marker if present
+    if map_has(em, "o_" + id)
+        map_remove(em, "o_" + id)
+    end
+
+    return 0.0
+end
+
+fn emitter_once_mark(em, id)
+    // Mark a listener to be auto-removed after first emit.
+    map_set(em, "o_" + id, "1")
+    return 0.0
+end
+
+fn emitter_emit(em, event)
+    // Emit an event — logs it and returns number of listeners notified.
+    let ekey = "e_" + event
+    let mut count = 0.0
+
+    // Log the event
+    let log = map_get(em, "__log")
+    let log_size = float(map_get(em, "__log_size"))
+    let log_max = float(map_get(em, "__log_max"))
+
+    if log_size < log_max
+        if len(log) > 0.0
+            map_set(em, "__log", log + "," + event)
+        else
+            map_set(em, "__log", event)
+        end
+        map_set(em, "__log_size", str(log_size + 1.0))
+    else
+        // Circular: drop oldest, append newest
+        let parts = split(log, ",")
+        let n = len(parts)
+        let mut new_log = ""
+        let mut i = 1.0
+        while i < n
+            if len(new_log) > 0.0
+                new_log = new_log + "," + parts[i]
+            else
+                new_log = parts[i]
+            end
+            i = i + 1.0
+        end
+        if len(new_log) > 0.0
+            new_log = new_log + "," + event
+        else
+            new_log = event
+        end
+        map_set(em, "__log", new_log)
+    end
+
+    if !map_has(em, ekey)
+        return 0.0
+    end
+
+    let listeners = map_get(em, ekey)
+    if len(listeners) == 0.0
+        return 0.0
+    end
+
+    let parts = split(listeners, ",")
+    let n = len(parts)
+
+    // Collect once-listeners to remove after iteration
+    let mut once_ids = ""
+    let mut i = 0.0
+    while i < n
+        let id = parts[i]
+        if len(id) > 0.0
+            count = count + 1.0
+            // Check if once-listener
+            if map_has(em, "o_" + id)
+                if len(once_ids) > 0.0
+                    once_ids = once_ids + "," + id
+                else
+                    once_ids = id
+                end
+            end
+        end
+        i = i + 1.0
+    end
+
+    // Remove once-listeners
+    if len(once_ids) > 0.0
+        let rm = split(once_ids, ",")
+        let rn = len(rm)
+        let mut j = 0.0
+        while j < rn
+            emitter_off(em, event, rm[j])
+            j = j + 1.0
+        end
+    end
+
+    return count
+end
+
+fn emitter_has_listener(em, event)
+    // Check if event has any listeners. Returns 1.0 or 0.0.
+    let ekey = "e_" + event
+    if !map_has(em, ekey)
+        return 0.0
+    end
+    let listeners = map_get(em, ekey)
+    if len(listeners) == 0.0
+        return 0.0
+    end
+    return 1.0
+end
+
+fn emitter_listener_count(em, event)
+    // Count listeners for an event.
+    let ekey = "e_" + event
+    if !map_has(em, ekey)
+        return 0.0
+    end
+    let listeners = map_get(em, ekey)
+    if len(listeners) == 0.0
+        return 0.0
+    end
+    let parts = split(listeners, ",")
+    return len(parts)
+end
+
+fn emitter_listeners(em, event)
+    // Get listener IDs for an event as array.
+    let ekey = "e_" + event
+    if !map_has(em, ekey)
+        let mut empty = []
+        return empty
+    end
+    let listeners = map_get(em, ekey)
+    if len(listeners) == 0.0
+        let mut empty = []
+        return empty
+    end
+    return split(listeners, ",")
+end
+
+fn emitter_events(em)
+    // Get all registered event names as array.
+    let events = map_get(em, "__events")
+    if len(events) == 0.0
+        let mut empty = []
+        return empty
+    end
+    return split(events, ",")
+end
+
+fn emitter_clear_event(em, event)
+    // Remove all listeners for a specific event.
+    let ekey = "e_" + event
+    if map_has(em, ekey)
+        // Clean up listener labels
+        let listeners = map_get(em, ekey)
+        if len(listeners) > 0.0
+            let parts = split(listeners, ",")
+            let n = len(parts)
+            let mut i = 0.0
+            while i < n
+                if map_has(em, "l_" + parts[i])
+                    map_remove(em, "l_" + parts[i])
+                end
+                if map_has(em, "o_" + parts[i])
+                    map_remove(em, "o_" + parts[i])
+                end
+                i = i + 1.0
+            end
+        end
+        map_set(em, ekey, "")
+    end
+    return 0.0
+end
+
+fn emitter_clear(em)
+    // Remove all events and listeners.
+    let events = map_get(em, "__events")
+    if len(events) > 0.0
+        let parts = split(events, ",")
+        let n = len(parts)
+        let mut i = 0.0
+        while i < n
+            emitter_clear_event(em, parts[i])
+            map_remove(em, "e_" + parts[i])
+            i = i + 1.0
+        end
+    end
+    map_set(em, "__events", "")
+    map_set(em, "__log", "")
+    map_set(em, "__log_size", "0")
+    return 0.0
+end
+
+fn emitter_log(em)
+    // Get the event log as array.
+    let log = map_get(em, "__log")
+    if len(log) == 0.0
+        let mut empty = []
+        return empty
+    end
+    return split(log, ",")
+end
+
+fn emitter_log_count(em)
+    // Number of events in the log.
+    return float(map_get(em, "__log_size"))
+end
+
+fn emitter_listener_label(em, id)
+    // Get the label of a listener by ID.
+    let lkey = "l_" + id
+    if map_has(em, lkey)
+        return map_get(em, lkey)
+    end
+    return ""
+end

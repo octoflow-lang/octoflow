@@ -1,0 +1,277 @@
+// stdlib/math/probability.flow — Probability distributions
+//
+// PDF, CDF, and PMF for common distributions.
+// Uses numerical approximations where closed-form solutions don't exist.
+//
+// Functions: normal_pdf, normal_cdf, binomial_pmf, binomial_cdf,
+//            poisson_pmf, poisson_cdf, exponential_pdf, exponential_cdf,
+//            uniform_pdf, uniform_cdf, geometric_pmf, geometric_cdf,
+//            bernoulli_pmf, expected_value, variance_discrete,
+//            entropy_discrete, _factorial_small
+//
+// Usage:
+//   use "probability"
+//   normal_pdf(0.0, 0.0, 1.0)       // ~0.3989 (standard normal at x=0)
+//   normal_cdf(0.0, 0.0, 1.0)       // 0.5
+//   binomial_pmf(3.0, 10.0, 0.5)    // P(X=3) for Binomial(10, 0.5)
+
+fn _factorial_small(n)
+    // Factorial for small n (used in PMFs).
+    if n <= 1.0
+        return 1.0
+    end
+    let mut result = 1.0
+    let mut i = 2.0
+    while i <= n
+        result = result * i
+        i = i + 1.0
+    end
+    return result
+end
+
+fn _binomial_coeff(n, k)
+    // Binomial coefficient C(n, k) using iterative method.
+    if k < 0.0 || k > n
+        return 0.0
+    end
+    let mut kk = k
+    if kk > n - kk
+        kk = n - kk
+    end
+    let mut result = 1.0
+    let mut i = 0.0
+    while i < kk
+        result = result * (n - i) / (i + 1.0)
+        i = i + 1.0
+    end
+    return floor(result + 0.5)
+end
+
+fn normal_pdf(x, mu, sigma)
+    // Probability density function of the normal distribution.
+    if sigma <= 0.0
+        return 0.0
+    end
+    let PI = 3.14159265358979
+    let z = (x - mu) / sigma
+    return (1.0 / (sigma * sqrt(2.0 * PI))) * exp(0.0 - z * z / 2.0)
+end
+
+fn normal_cdf(x, mu, sigma)
+    // Cumulative distribution function of the normal distribution.
+    // Uses Abramowitz and Stegun approximation (formula 7.1.26).
+    if sigma <= 0.0
+        if x >= mu
+            return 1.0
+        end
+        return 0.0
+    end
+    let z = (x - mu) / sigma
+    let mut az = z
+    if az < 0.0
+        az = 0.0 - az
+    end
+    // Approximation constants
+    let p = 0.3275911
+    let a1 = 0.254829592
+    let a2 = -0.284496736
+    let a3 = 1.421413741
+    let a4 = -1.453152027
+    let a5 = 1.061405429
+    let x_erf = az / sqrt(2.0)
+    let t = 1.0 / (1.0 + p * x_erf)
+    let t2 = t * t
+    let t3 = t2 * t
+    let t4 = t3 * t
+    let t5 = t4 * t
+    let erf_approx = 1.0 - (a1 * t + a2 * t2 + a3 * t3 + a4 * t4 + a5 * t5) * exp(0.0 - x_erf * x_erf)
+    if z >= 0.0
+        return 0.5 * (1.0 + erf_approx)
+    end
+    return 0.5 * (1.0 - erf_approx)
+end
+
+fn binomial_pmf(k, n, p)
+    // P(X = k) for Binomial(n, p).
+    if k < 0.0 || k > n
+        return 0.0
+    end
+    let kk = floor(k)
+    let nn = floor(n)
+    let coeff = _binomial_coeff(nn, kk)
+    let mut p_k = 1.0
+    let mut i = 0.0
+    while i < kk
+        p_k = p_k * p
+        i = i + 1.0
+    end
+    let mut q_nk = 1.0
+    i = 0.0
+    while i < nn - kk
+        q_nk = q_nk * (1.0 - p)
+        i = i + 1.0
+    end
+    return coeff * p_k * q_nk
+end
+
+fn binomial_cdf(k, n, p)
+    // P(X <= k) for Binomial(n, p).
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i <= floor(k)
+        sum = sum + binomial_pmf(i, n, p)
+        i = i + 1.0
+    end
+    return sum
+end
+
+fn poisson_pmf(k, lambda)
+    // P(X = k) for Poisson(lambda).
+    let kk = floor(k)
+    if kk < 0.0
+        return 0.0
+    end
+    let mut lam_k = 1.0
+    let mut i = 0.0
+    while i < kk
+        lam_k = lam_k * lambda
+        i = i + 1.0
+    end
+    let fact_k = _factorial_small(kk)
+    return exp(0.0 - lambda) * lam_k / fact_k
+end
+
+fn poisson_cdf(k, lambda)
+    // P(X <= k) for Poisson(lambda).
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i <= floor(k)
+        sum = sum + poisson_pmf(i, lambda)
+        i = i + 1.0
+    end
+    return sum
+end
+
+fn exponential_pdf(x, lambda)
+    // PDF of Exponential(lambda).
+    if x < 0.0 || lambda <= 0.0
+        return 0.0
+    end
+    return lambda * exp(0.0 - lambda * x)
+end
+
+fn exponential_cdf(x, lambda)
+    // CDF of Exponential(lambda).
+    if x < 0.0
+        return 0.0
+    end
+    if lambda <= 0.0
+        return 0.0
+    end
+    return 1.0 - exp(0.0 - lambda * x)
+end
+
+fn uniform_pdf(x, a, b)
+    // PDF of Uniform(a, b).
+    if b <= a
+        return 0.0
+    end
+    if x < a || x > b
+        return 0.0
+    end
+    return 1.0 / (b - a)
+end
+
+fn uniform_cdf(x, a, b)
+    // CDF of Uniform(a, b).
+    if b <= a
+        return 0.0
+    end
+    if x < a
+        return 0.0
+    end
+    if x > b
+        return 1.0
+    end
+    return (x - a) / (b - a)
+end
+
+fn geometric_pmf(k, p)
+    // P(X = k) for Geometric(p). k = number of trials until first success.
+    let kk = floor(k)
+    if kk < 1.0 || p <= 0.0 || p > 1.0
+        return 0.0
+    end
+    let mut q_k = 1.0
+    let mut i = 0.0
+    while i < kk - 1.0
+        q_k = q_k * (1.0 - p)
+        i = i + 1.0
+    end
+    return q_k * p
+end
+
+fn geometric_cdf(k, p)
+    // P(X <= k) for Geometric(p).
+    let kk = floor(k)
+    if kk < 1.0
+        return 0.0
+    end
+    let mut q_k = 1.0
+    let mut i = 0.0
+    while i < kk
+        q_k = q_k * (1.0 - p)
+        i = i + 1.0
+    end
+    return 1.0 - q_k
+end
+
+fn bernoulli_pmf(k, p)
+    // P(X = k) for Bernoulli(p). k is 0 or 1.
+    if floor(k) == 1.0
+        return p
+    end
+    if floor(k) == 0.0
+        return 1.0 - p
+    end
+    return 0.0
+end
+
+fn expected_value(values, probs)
+    // E[X] = sum(x_i * p_i) for a discrete distribution.
+    let n = len(values)
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i < n
+        sum = sum + values[i] * probs[i]
+        i = i + 1.0
+    end
+    return sum
+end
+
+fn variance_discrete(values, probs)
+    // Var(X) = E[X^2] - E[X]^2 for a discrete distribution.
+    let mu = expected_value(values, probs)
+    let n = len(values)
+    let mut ex2 = 0.0
+    let mut i = 0.0
+    while i < n
+        ex2 = ex2 + values[i] * values[i] * probs[i]
+        i = i + 1.0
+    end
+    return ex2 - mu * mu
+end
+
+fn entropy_discrete(probs)
+    // Shannon entropy H = -sum(p_i * log(p_i)) in nats.
+    let n = len(probs)
+    let mut h = 0.0
+    let mut i = 0.0
+    while i < n
+        if probs[i] > 0.0
+            h = h - probs[i] * log(probs[i])
+        end
+        i = i + 1.0
+    end
+    return h
+end

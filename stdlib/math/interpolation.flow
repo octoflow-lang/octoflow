@@ -1,0 +1,127 @@
+// stdlib/math/interpolation.flow — Interpolation and easing functions
+//
+// Linear, cubic, Bezier, Catmull-Rom, and common easing utilities.
+// All functions work on scalar values (f64).
+//
+// Functions: lerp, inverse_lerp, remap, clamp01, step, smoothstep,
+//            smootherstep, bezier_quadratic, bezier_cubic,
+//            catmull_rom, cubic_interp, cosine_interp,
+//            nearest_interp, bilinear_interp
+//
+// Usage:
+//   use "interpolation"
+//   let x = lerp(0.0, 100.0, 0.5)           // 50.0
+//   let t = inverse_lerp(0.0, 100.0, 25.0)   // 0.25
+//   let y = smoothstep(0.0, 1.0, 0.5)        // 0.5 (smooth)
+//   let p = bezier_cubic(0.0, 0.5, 0.5, 1.0, 0.5) // cubic Bezier at t=0.5
+
+fn clamp01(t)
+    // Clamp value to [0, 1].
+    if t < 0.0
+        return 0.0
+    end
+    if t > 1.0
+        return 1.0
+    end
+    return t
+end
+
+fn lerp(a, b, t)
+    // Linear interpolation: a + (b - a) * t.
+    return a + (b - a) * t
+end
+
+fn inverse_lerp(a, b, x)
+    // Inverse of lerp: what t produces x?
+    // Returns 0.0 if a == b to avoid division by zero.
+    if a == b
+        return 0.0
+    end
+    return (x - a) / (b - a)
+end
+
+fn remap(in_min, in_max, out_min, out_max, value)
+    // Map value from [in_min, in_max] to [out_min, out_max].
+    let t = inverse_lerp(in_min, in_max, value)
+    return lerp(out_min, out_max, t)
+end
+
+fn step(edge, x)
+    // Step function: 0.0 if x < edge, 1.0 otherwise.
+    if x < edge
+        return 0.0
+    end
+    return 1.0
+end
+
+fn smoothstep(edge0, edge1, x)
+    // Hermite smoothstep: smooth transition from 0 to 1.
+    // Classic 3t^2 - 2t^3 polynomial.
+    let mut t = (x - edge0) / (edge1 - edge0)
+    t = clamp01(t)
+    return t * t * (3.0 - 2.0 * t)
+end
+
+fn smootherstep(edge0, edge1, x)
+    // Perlin's improved smootherstep: 6t^5 - 15t^4 + 10t^3.
+    // Smoother with zero first AND second derivatives at edges.
+    let mut t = (x - edge0) / (edge1 - edge0)
+    t = clamp01(t)
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+end
+
+fn cosine_interp(a, b, t)
+    // Cosine interpolation — smoother than linear.
+    let ct = (1.0 - cos(t * 3.14159265358979)) * 0.5
+    return a + (b - a) * ct
+end
+
+fn bezier_quadratic(p0, p1, p2, t)
+    // Quadratic Bezier curve: B(t) = (1-t)^2*p0 + 2(1-t)t*p1 + t^2*p2.
+    let mt = 1.0 - t
+    return mt * mt * p0 + 2.0 * mt * t * p1 + t * t * p2
+end
+
+fn bezier_cubic(p0, p1, p2, p3, t)
+    // Cubic Bezier curve: B(t) = (1-t)^3*p0 + 3(1-t)^2*t*p1 + 3(1-t)*t^2*p2 + t^3*p3.
+    let mt = 1.0 - t
+    let mt2 = mt * mt
+    let t2 = t * t
+    return mt2 * mt * p0 + 3.0 * mt2 * t * p1 + 3.0 * mt * t2 * p2 + t2 * t * p3
+end
+
+fn catmull_rom(p0, p1, p2, p3, t)
+    // Catmull-Rom spline interpolation between p1 and p2.
+    // p0 and p3 are control points. t in [0, 1].
+    let t2 = t * t
+    let t3 = t2 * t
+    return 0.5 * (
+        (2.0 * p1) +
+        (-p0 + p2) * t +
+        (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
+        (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+    )
+end
+
+fn cubic_interp(y0, y1, y2, y3, t)
+    // Cubic interpolation between y1 and y2.
+    // y0 and y3 provide context. Equivalent to Catmull-Rom.
+    return catmull_rom(y0, y1, y2, y3, t)
+end
+
+fn nearest_interp(a, b, t)
+    // Nearest-neighbor interpolation.
+    if t < 0.5
+        return a
+    end
+    return b
+end
+
+fn bilinear_interp(q00, q10, q01, q11, tx, ty)
+    // Bilinear interpolation on a 2D grid.
+    // q00=bottom-left, q10=bottom-right, q01=top-left, q11=top-right.
+    // tx, ty in [0, 1].
+    let top = lerp(q01, q11, tx)
+    let bottom = lerp(q00, q10, tx)
+    return lerp(bottom, top, ty)
+end

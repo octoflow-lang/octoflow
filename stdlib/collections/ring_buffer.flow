@@ -1,0 +1,168 @@
+// stdlib/collections/ring_buffer.flow — Fixed-size circular buffer
+//
+// Overwrites oldest element when full. Good for streaming data,
+// event logs, rolling windows, etc.
+//
+// Layout: rb[0] = head, rb[1] = size, rb[2] = capacity, rb[3..] = data
+//
+// Functions: ring_create, ring_push, ring_pop, ring_peek, ring_peek_back,
+//            ring_get, ring_size, ring_capacity, ring_is_full, ring_is_empty,
+//            ring_to_array, ring_clear
+//
+// Usage:
+//   use "ring_buffer"
+//   let mut rb = ring_create(3.0)
+//   ring_push(rb, 1.0)
+//   ring_push(rb, 2.0)
+//   ring_push(rb, 3.0)
+//   ring_push(rb, 4.0)    // overwrites 1.0
+//   ring_peek(rb)          // 2.0 (oldest)
+//   ring_peek_back(rb)     // 4.0 (newest)
+
+fn ring_create(capacity)
+    // Create ring buffer with given capacity.
+    let mut rb = []
+    push(rb, 0.0)        // head index (into data section)
+    push(rb, 0.0)        // size (current count)
+    push(rb, capacity)   // capacity
+    // Pre-fill data slots
+    let mut i = 0.0
+    while i < capacity
+        push(rb, 0.0)
+        i = i + 1.0
+    end
+    return rb
+end
+
+fn ring_push(rb, value)
+    // Add value. Overwrites oldest if full.
+    let head = rb[0]
+    let size = rb[1]
+    let cap = rb[2]
+    let base = 3.0
+
+    if size < cap
+        // Not full: write at (head + size) % cap
+        let idx = head + size
+        let mut write_idx = idx
+        if write_idx >= cap
+            write_idx = write_idx - cap
+        end
+        rb[base + write_idx] = value
+        rb[1] = size + 1.0
+    else
+        // Full: overwrite at head, advance head
+        rb[base + head] = value
+        let mut new_head = head + 1.0
+        if new_head >= cap
+            new_head = 0.0
+        end
+        rb[0] = new_head
+    end
+    return 0.0
+end
+
+fn ring_pop(rb)
+    // Remove and return oldest element. Returns -1.0 if empty.
+    let size = rb[1]
+    if size == 0.0
+        return -1.0
+    end
+    let head = rb[0]
+    let cap = rb[2]
+    let base = 3.0
+    let value = rb[base + head]
+
+    let mut new_head = head + 1.0
+    if new_head >= cap
+        new_head = 0.0
+    end
+    rb[0] = new_head
+    rb[1] = size - 1.0
+    return value
+end
+
+fn ring_peek(rb)
+    // Return oldest element without removing. Returns -1.0 if empty.
+    if rb[1] == 0.0
+        return -1.0
+    end
+    return rb[3.0 + rb[0]]
+end
+
+fn ring_peek_back(rb)
+    // Return newest element without removing. Returns -1.0 if empty.
+    let size = rb[1]
+    if size == 0.0
+        return -1.0
+    end
+    let head = rb[0]
+    let cap = rb[2]
+    let mut idx = head + size - 1.0
+    if idx >= cap
+        idx = idx - cap
+    end
+    return rb[3.0 + idx]
+end
+
+fn ring_get(rb, index)
+    // Get element at logical index (0 = oldest). Returns -1.0 if out of range.
+    let size = rb[1]
+    if index < 0.0 || index >= size
+        return -1.0
+    end
+    let head = rb[0]
+    let cap = rb[2]
+    let mut actual = head + index
+    if actual >= cap
+        actual = actual - cap
+    end
+    return rb[3.0 + actual]
+end
+
+fn ring_size(rb)
+    return rb[1]
+end
+
+fn ring_capacity(rb)
+    return rb[2]
+end
+
+fn ring_is_full(rb)
+    if rb[1] == rb[2]
+        return 1.0
+    end
+    return 0.0
+end
+
+fn ring_is_empty(rb)
+    if rb[1] == 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn ring_to_array(rb)
+    // Return elements oldest-to-newest as a new array.
+    let size = rb[1]
+    let head = rb[0]
+    let cap = rb[2]
+    let base = 3.0
+    let mut result = []
+    let mut i = 0.0
+    while i < size
+        let mut idx = head + i
+        if idx >= cap
+            idx = idx - cap
+        end
+        push(result, rb[base + idx])
+        i = i + 1.0
+    end
+    return result
+end
+
+fn ring_clear(rb)
+    rb[0] = 0.0
+    rb[1] = 0.0
+    return 0.0
+end

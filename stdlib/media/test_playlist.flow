@@ -1,0 +1,294 @@
+// test_playlist.flow — Tests for stdlib/media/playlist.flow
+use "playlist"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn test_create()
+    let p = pl_create()
+    check("create id", p >= 0.0)
+    check("create count", pl_count(p) == 0.0)
+    check("create index", pl_index(p) == 0.0)
+    check("create repeat", pl_get_repeat(p) == PL_REPEAT_NONE)
+    check("create shuffle", pl_get_shuffle(p) == 0.0)
+    check("create current", pl_current_item(p) == -1.0)
+    return 0.0
+end
+
+fn test_destroy()
+    let p = pl_create()
+    let r = pl_destroy(p)
+    check("destroy ok", r == 0.0)
+    let r2 = pl_destroy(-1.0)
+    check("destroy bad", r2 == -1.0)
+    return 0.0
+end
+
+// ── Add / Remove ─────────────────────────────────────────
+
+fn test_add()
+    let p = pl_create()
+    let i0 = pl_add(p, 100.0)
+    check("add 0", i0 == 0.0)
+    let i1 = pl_add(p, 200.0)
+    check("add 1", i1 == 1.0)
+    let i2 = pl_add(p, 300.0)
+    check("add 2", i2 == 2.0)
+    check("count 3", pl_count(p) == 3.0)
+    check("item 0", pl_item_at(p, 0.0) == 100.0)
+    check("item 1", pl_item_at(p, 1.0) == 200.0)
+    check("item 2", pl_item_at(p, 2.0) == 300.0)
+    return 0.0
+end
+
+fn test_remove()
+    let p = pl_create()
+    pl_add(p, 100.0)
+    pl_add(p, 200.0)
+    pl_add(p, 300.0)
+
+    // Remove middle
+    let r = pl_remove(p, 1.0)
+    check("remove ok", r == 0.0)
+    check("removed item", pl_item_at(p, 1.0) == -1.0)
+
+    // Remove invalid
+    let r2 = pl_remove(p, 99.0)
+    check("remove bad", r2 == -1.0)
+
+    return 0.0
+end
+
+fn test_clear()
+    let p = pl_create()
+    pl_add(p, 100.0)
+    pl_add(p, 200.0)
+    pl_clear(p)
+    check("clear count", pl_count(p) == 0.0)
+    check("clear current", pl_current_item(p) == -1.0)
+    return 0.0
+end
+
+// ── Navigation ───────────────────────────────────────────
+
+fn test_next_prev()
+    let p = pl_create()
+    pl_add(p, 10.0)
+    pl_add(p, 20.0)
+    pl_add(p, 30.0)
+
+    check("start idx", pl_index(p) == 0.0)
+    check("start item", pl_current_item(p) == 10.0)
+
+    pl_next(p)
+    check("next 1", pl_index(p) == 1.0)
+    check("next item", pl_current_item(p) == 20.0)
+
+    pl_next(p)
+    check("next 2", pl_index(p) == 2.0)
+
+    // Next at end (no repeat) → -1
+    let r = pl_next(p)
+    check("next end", r == -1.0)
+
+    // Prev
+    pl_prev(p)
+    check("prev 1", pl_index(p) == 1.0)
+
+    pl_prev(p)
+    check("prev 0", pl_index(p) == 0.0)
+
+    // Prev at start → -1
+    let r2 = pl_prev(p)
+    check("prev start", r2 == -1.0)
+
+    return 0.0
+end
+
+fn test_goto()
+    let p = pl_create()
+    pl_add(p, 10.0)
+    pl_add(p, 20.0)
+    pl_add(p, 30.0)
+
+    pl_goto(p, 2.0)
+    check("goto 2", pl_index(p) == 2.0)
+
+    // Bad goto
+    let r = pl_goto(p, 99.0)
+    check("goto bad", r == -1.0)
+
+    // Goto negative
+    let r2 = pl_goto(p, -1.0)
+    check("goto neg", r2 == -1.0)
+
+    return 0.0
+end
+
+// ── Repeat modes ─────────────────────────────────────────
+
+fn test_repeat_all()
+    let p = pl_create()
+    pl_add(p, 10.0)
+    pl_add(p, 20.0)
+    pl_add(p, 30.0)
+    pl_set_repeat(p, PL_REPEAT_ALL)
+
+    pl_goto(p, 2.0)
+    let r = pl_next(p)
+    check("repeat all wrap", r >= 0.0)
+    check("repeat all idx", pl_index(p) == 0.0)
+
+    // Prev wrap
+    let r2 = pl_prev(p)
+    check("repeat all prev", r2 >= 0.0)
+
+    return 0.0
+end
+
+fn test_repeat_one()
+    let p = pl_create()
+    pl_add(p, 10.0)
+    pl_add(p, 20.0)
+    pl_set_repeat(p, PL_REPEAT_ONE)
+
+    pl_goto(p, 0.0)
+    pl_next(p)
+    check("repeat one next", pl_index(p) == 0.0)
+
+    pl_prev(p)
+    check("repeat one prev", pl_index(p) == 0.0)
+
+    return 0.0
+end
+
+fn test_cycle_repeat()
+    let p = pl_create()
+    check("cycle start", pl_get_repeat(p) == PL_REPEAT_NONE)
+
+    pl_cycle_repeat(p)
+    check("cycle 1", pl_get_repeat(p) == PL_REPEAT_ALL)
+
+    pl_cycle_repeat(p)
+    check("cycle 2", pl_get_repeat(p) == PL_REPEAT_ONE)
+
+    pl_cycle_repeat(p)
+    check("cycle 3", pl_get_repeat(p) == PL_REPEAT_NONE)
+
+    return 0.0
+end
+
+// ── Shuffle ──────────────────────────────────────────────
+
+fn test_shuffle()
+    let p = pl_create()
+    pl_add(p, 10.0)
+    pl_add(p, 20.0)
+    pl_add(p, 30.0)
+    pl_add(p, 40.0)
+    pl_add(p, 50.0)
+
+    pl_set_shuffle(p, 1.0)
+    check("shuffle on", pl_get_shuffle(p) == 1.0)
+
+    pl_set_shuffle(p, 0.0)
+    check("shuffle off", pl_get_shuffle(p) == 0.0)
+
+    return 0.0
+end
+
+// ── Has next/prev ────────────────────────────────────────
+
+fn test_has_nav()
+    let p = pl_create()
+    pl_add(p, 10.0)
+    pl_add(p, 20.0)
+
+    check("has next 0", pl_has_next(p) == 1.0)
+    pl_goto(p, 1.0)
+    check("no next end", pl_has_next(p) == 0.0)
+    check("has prev 1", pl_has_prev(p) == 1.0)
+    pl_goto(p, 0.0)
+    check("no prev start", pl_has_prev(p) == 0.0)
+
+    // With repeat → always has
+    pl_set_repeat(p, PL_REPEAT_ALL)
+    check("repeat has next", pl_has_next(p) == 1.0)
+    check("repeat has prev", pl_has_prev(p) == 1.0)
+
+    return 0.0
+end
+
+// ── Swap ─────────────────────────────────────────────────
+
+fn test_swap()
+    let p = pl_create()
+    pl_add(p, 10.0)
+    pl_add(p, 20.0)
+    pl_add(p, 30.0)
+
+    pl_swap(p, 0.0, 2.0)
+    check("swap 0", pl_item_at(p, 0.0) == 30.0)
+    check("swap 2", pl_item_at(p, 2.0) == 10.0)
+
+    // Bad swap
+    let r = pl_swap(p, 0.0, 99.0)
+    check("swap bad", r == -1.0)
+
+    return 0.0
+end
+
+// ── Edge cases ───────────────────────────────────────────
+
+fn test_edges()
+    // Invalid IDs
+    check("bad add", pl_add(-1.0, 1.0) == -1.0)
+    check("bad remove", pl_remove(-1.0, 0.0) == -1.0)
+    check("bad next", pl_next(-1.0) == -1.0)
+    check("bad prev", pl_prev(-1.0) == -1.0)
+    check("bad count", pl_count(-1.0) == 0.0)
+    check("bad item", pl_item_at(-1.0, 0.0) == -1.0)
+    check("bad repeat", pl_set_repeat(-1.0, 0.0) == -1.0)
+    check("bad shuffle", pl_set_shuffle(-1.0, 1.0) == -1.0)
+
+    // Empty playlist
+    let p = pl_create()
+    check("empty next", pl_next(p) == -1.0)
+    check("empty prev", pl_prev(p) == -1.0)
+    check("empty current", pl_current_item(p) == -1.0)
+    check("empty has next", pl_has_next(p) == 0.0)
+
+    // Invalid repeat mode
+    let r = pl_set_repeat(p, 99.0)
+    check("bad repeat val", r == -1.0)
+
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────────
+
+test_create()
+test_destroy()
+test_add()
+test_remove()
+test_clear()
+test_next_prev()
+test_goto()
+test_repeat_all()
+test_repeat_one()
+test_cycle_repeat()
+test_shuffle()
+test_has_nav()
+test_swap()
+test_edges()
+print("")
+print("All playlist tests passed (14 tests)")

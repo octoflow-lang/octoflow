@@ -1,0 +1,594 @@
+// stdlib/media/audio_fx.flow — Audio effects processors
+//
+// Biquad filters (low-pass, high-pass, band-pass, notch, peaking, shelf),
+// delay line, reverb (Schroeder), chorus, distortion, compressor.
+//
+// All effects operate on sample arrays (float [-1,1]).
+// Stateful effects use parallel-array storage with IDs.
+//
+// Functions: fx_biquad_lpf, fx_biquad_hpf, fx_biquad_bpf, fx_biquad_notch,
+//            fx_apply_biquad, fx_delay_create, fx_delay_process,
+//            fx_reverb_create, fx_reverb_process,
+//            fx_chorus, fx_distortion, fx_compressor, fx_bitcrush,
+//            fx_tremolo, fx_mix
+//
+// Usage:
+//   use "audio_fx"
+//   let mut samples = [...]
+//   fx_distortion(samples, 100.0, 4.0)  // overdrive
+
+let FX_PI = 3.14159265358979
+let FX_TWO_PI = 6.28318530717959
+
+// ── Biquad filter coefficients ─────────────────────────
+// Storage: flat array [b0, b1, b2, a1, a2, x1, x2, y1, y2] per filter
+
+let mut _bq_coeffs = []
+
+fn _bq_alloc()
+    let id = len(_bq_coeffs) / 9.0
+    let mut i = 0.0
+    while i < 9.0
+        push(_bq_coeffs, 0.0)
+        i = i + 1.0
+    end
+    return id
+end
+
+fn fx_biquad_lpf(freq, q, sample_rate)
+    // Create low-pass biquad filter. Returns filter ID.
+    if sample_rate <= 0.0 || freq <= 0.0 || q <= 0.0
+        return -1.0
+    end
+    let id = _bq_alloc()
+    let base = int(id * 9.0)
+    let w0 = FX_TWO_PI * freq / sample_rate
+    let alpha = sin(w0) / (2.0 * q)
+    let cos_w0 = cos(w0)
+    let a0 = 1.0 + alpha
+    _bq_coeffs[base + 0] = ((1.0 - cos_w0) / 2.0) / a0
+    _bq_coeffs[base + 1] = (1.0 - cos_w0) / a0
+    _bq_coeffs[base + 2] = ((1.0 - cos_w0) / 2.0) / a0
+    _bq_coeffs[base + 3] = (0.0 - 2.0 * cos_w0) / a0
+    _bq_coeffs[base + 4] = (1.0 - alpha) / a0
+    return id
+end
+
+fn fx_biquad_hpf(freq, q, sample_rate)
+    // Create high-pass biquad filter. Returns filter ID.
+    if sample_rate <= 0.0 || freq <= 0.0 || q <= 0.0
+        return -1.0
+    end
+    let id = _bq_alloc()
+    let base = int(id * 9.0)
+    let w0 = FX_TWO_PI * freq / sample_rate
+    let alpha = sin(w0) / (2.0 * q)
+    let cos_w0 = cos(w0)
+    let a0 = 1.0 + alpha
+    _bq_coeffs[base + 0] = ((1.0 + cos_w0) / 2.0) / a0
+    _bq_coeffs[base + 1] = (0.0 - (1.0 + cos_w0)) / a0
+    _bq_coeffs[base + 2] = ((1.0 + cos_w0) / 2.0) / a0
+    _bq_coeffs[base + 3] = (0.0 - 2.0 * cos_w0) / a0
+    _bq_coeffs[base + 4] = (1.0 - alpha) / a0
+    return id
+end
+
+fn fx_biquad_bpf(freq, q, sample_rate)
+    // Create band-pass biquad filter. Returns filter ID.
+    if sample_rate <= 0.0 || freq <= 0.0 || q <= 0.0
+        return -1.0
+    end
+    let id = _bq_alloc()
+    let base = int(id * 9.0)
+    let w0 = FX_TWO_PI * freq / sample_rate
+    let alpha = sin(w0) / (2.0 * q)
+    let cos_w0 = cos(w0)
+    let a0 = 1.0 + alpha
+    _bq_coeffs[base + 0] = alpha / a0
+    _bq_coeffs[base + 1] = 0.0
+    _bq_coeffs[base + 2] = (0.0 - alpha) / a0
+    _bq_coeffs[base + 3] = (0.0 - 2.0 * cos_w0) / a0
+    _bq_coeffs[base + 4] = (1.0 - alpha) / a0
+    return id
+end
+
+fn fx_biquad_notch(freq, q, sample_rate)
+    // Create notch (band-reject) biquad filter. Returns filter ID.
+    if sample_rate <= 0.0 || freq <= 0.0 || q <= 0.0
+        return -1.0
+    end
+    let id = _bq_alloc()
+    let base = int(id * 9.0)
+    let w0 = FX_TWO_PI * freq / sample_rate
+    let alpha = sin(w0) / (2.0 * q)
+    let cos_w0 = cos(w0)
+    let a0 = 1.0 + alpha
+    _bq_coeffs[base + 0] = 1.0 / a0
+    _bq_coeffs[base + 1] = (0.0 - 2.0 * cos_w0) / a0
+    _bq_coeffs[base + 2] = 1.0 / a0
+    _bq_coeffs[base + 3] = (0.0 - 2.0 * cos_w0) / a0
+    _bq_coeffs[base + 4] = (1.0 - alpha) / a0
+    return id
+end
+
+fn fx_apply_biquad(filter_id, samples, n_samples)
+    // Apply biquad filter to samples in-place. Returns 0.
+    if filter_id < 0.0 || n_samples <= 0.0
+        return 0.0
+    end
+    let base = int(filter_id * 9.0)
+    if base + 8 >= len(_bq_coeffs)
+        return 0.0
+    end
+    let b0 = _bq_coeffs[base + 0]
+    let b1 = _bq_coeffs[base + 1]
+    let b2 = _bq_coeffs[base + 2]
+    let a1 = _bq_coeffs[base + 3]
+    let a2 = _bq_coeffs[base + 4]
+    let mut x1 = _bq_coeffs[base + 5]
+    let mut x2 = _bq_coeffs[base + 6]
+    let mut y1 = _bq_coeffs[base + 7]
+    let mut y2 = _bq_coeffs[base + 8]
+    let mut i = 0.0
+    while i < n_samples
+        let x0 = samples[int(i)]
+        let y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+        x2 = x1
+        x1 = x0
+        y2 = y1
+        y1 = y0
+        samples[int(i)] = y0
+        i = i + 1.0
+    end
+    // Save state for continuity
+    _bq_coeffs[base + 5] = x1
+    _bq_coeffs[base + 6] = x2
+    _bq_coeffs[base + 7] = y1
+    _bq_coeffs[base + 8] = y2
+    return 0.0
+end
+
+fn fx_reset_biquad(filter_id)
+    // Reset filter state to zero (clear history).
+    if filter_id < 0.0
+        return 0.0
+    end
+    let base = int(filter_id * 9.0)
+    if base + 8 >= len(_bq_coeffs)
+        return 0.0
+    end
+    _bq_coeffs[base + 5] = 0.0
+    _bq_coeffs[base + 6] = 0.0
+    _bq_coeffs[base + 7] = 0.0
+    _bq_coeffs[base + 8] = 0.0
+    return 0.0
+end
+
+// ── Delay line ─────────────────────────────────────────
+
+let mut _dl_buf = []
+let mut _dl_start = []
+let mut _dl_size = []
+let mut _dl_pos = []
+let mut _dl_feedback = []
+let mut _dl_mix = []
+
+fn fx_delay_create(delay_samples, feedback, mix)
+    // Create delay line. Returns delay ID.
+    // delay_samples: samples of delay (rate * seconds)
+    // feedback: echo decay [0, 1)
+    // mix: dry/wet balance [0=dry, 1=wet]
+    let mut ds = floor(delay_samples)
+    if ds < 1.0
+        ds = 1.0
+    end
+    if ds > 441000.0
+        ds = 441000.0
+    end
+    let id = len(_dl_start)
+    let start = len(_dl_buf)
+    push(_dl_start, start)
+    push(_dl_size, ds)
+    push(_dl_pos, 0.0)
+    let mut fb = feedback
+    if fb < 0.0
+        fb = 0.0
+    end
+    if fb >= 1.0
+        fb = 0.99
+    end
+    push(_dl_feedback, fb)
+    let mut m = mix
+    if m < 0.0
+        m = 0.0
+    end
+    if m > 1.0
+        m = 1.0
+    end
+    push(_dl_mix, m)
+    // Zero-fill buffer
+    let mut i = 0.0
+    while i < ds
+        push(_dl_buf, 0.0)
+        i = i + 1.0
+    end
+    return id
+end
+
+fn fx_delay_process(delay_id, samples, n_samples)
+    // Apply delay effect in-place.
+    if delay_id < 0.0 || n_samples <= 0.0
+        return 0.0
+    end
+    let di = int(delay_id)
+    if di >= len(_dl_start)
+        return 0.0
+    end
+    let start = int(_dl_start[di])
+    let size = _dl_size[di]
+    let fb = _dl_feedback[di]
+    let mix = _dl_mix[di]
+    let mut pos = _dl_pos[di]
+    let mut i = 0.0
+    while i < n_samples
+        let buf_idx = int(start + pos)
+        let delayed = _dl_buf[buf_idx]
+        let dry = samples[int(i)]
+        // Write input + feedback into delay buffer
+        _dl_buf[buf_idx] = dry + delayed * fb
+        // Output: mix dry and wet
+        samples[int(i)] = dry * (1.0 - mix) + delayed * mix
+        pos = pos + 1.0
+        if pos >= size
+            pos = 0.0
+        end
+        i = i + 1.0
+    end
+    _dl_pos[di] = pos
+    return 0.0
+end
+
+// ── Reverb (Schroeder) ────────────────────────────────
+// 4 parallel comb filters + 2 series allpass filters
+
+let mut _rv_comb_buf = []
+let mut _rv_comb_start = []
+let mut _rv_comb_size = []
+let mut _rv_comb_pos = []
+let mut _rv_comb_fb = []
+let mut _rv_ap_buf = []
+let mut _rv_ap_start = []
+let mut _rv_ap_size = []
+let mut _rv_ap_pos = []
+let mut _rv_mix = []
+
+fn _rv_alloc_buf(storage, starts, sizes, buf_size)
+    let start = len(storage)
+    push(starts, start)
+    push(sizes, buf_size)
+    let mut i = 0.0
+    while i < buf_size
+        push(storage, 0.0)
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn fx_reverb_create(room_size, damping, mix, sample_rate)
+    // Create Schroeder reverb. Returns reverb ID.
+    // room_size: 0.0-1.0 (small to large)
+    // damping: 0.0-1.0
+    // mix: dry/wet 0.0-1.0
+    let id = len(_rv_mix)
+    let mut m = mix
+    if m < 0.0
+        m = 0.0
+    end
+    if m > 1.0
+        m = 1.0
+    end
+    push(_rv_mix, m)
+    // Comb filter delays (in samples, scaled by room_size)
+    let mut rs = room_size
+    if rs < 0.1
+        rs = 0.1
+    end
+    if rs > 1.0
+        rs = 1.0
+    end
+    let base_rate = sample_rate / 44100.0
+    if base_rate <= 0.0
+        return -1.0
+    end
+    let c1 = floor(1116.0 * base_rate * rs)
+    let c2 = floor(1188.0 * base_rate * rs)
+    let c3 = floor(1277.0 * base_rate * rs)
+    let c4 = floor(1356.0 * base_rate * rs)
+    // Comb filter feedback (damping adjusts)
+    let fb = 0.84 - damping * 0.2
+    let mut ci = 0.0
+    while ci < 4.0
+        push(_rv_comb_pos, 0.0)
+        push(_rv_comb_fb, fb)
+        ci = ci + 1.0
+    end
+    let _r1 = _rv_alloc_buf(_rv_comb_buf, _rv_comb_start, _rv_comb_size, c1)
+    let _r2 = _rv_alloc_buf(_rv_comb_buf, _rv_comb_start, _rv_comb_size, c2)
+    let _r3 = _rv_alloc_buf(_rv_comb_buf, _rv_comb_start, _rv_comb_size, c3)
+    let _r4 = _rv_alloc_buf(_rv_comb_buf, _rv_comb_start, _rv_comb_size, c4)
+    // Allpass filter delays
+    let a1 = floor(556.0 * base_rate)
+    let a2 = floor(441.0 * base_rate)
+    push(_rv_ap_pos, 0.0)
+    push(_rv_ap_pos, 0.0)
+    let _ra1 = _rv_alloc_buf(_rv_ap_buf, _rv_ap_start, _rv_ap_size, a1)
+    let _ra2 = _rv_alloc_buf(_rv_ap_buf, _rv_ap_start, _rv_ap_size, a2)
+    return id
+end
+
+fn fx_reverb_process(reverb_id, samples, n_samples)
+    // Apply reverb in-place.
+    if reverb_id < 0.0 || n_samples <= 0.0
+        return 0.0
+    end
+    let ri = int(reverb_id)
+    if ri >= len(_rv_mix)
+        return 0.0
+    end
+    let mix = _rv_mix[ri]
+    let comb_base = ri * 4
+    let ap_base = ri * 2
+    let mut i = 0.0
+    while i < n_samples
+        let input = samples[int(i)]
+        // Sum 4 parallel comb filters
+        let mut comb_sum = 0.0
+        let mut c = 0.0
+        while c < 4.0
+            let ci = int(comb_base + c)
+            let cs = int(_rv_comb_start[ci])
+            let csize = _rv_comb_size[ci]
+            let mut cpos = _rv_comb_pos[ci]
+            let buf_idx = int(cs + cpos)
+            let delayed = _rv_comb_buf[buf_idx]
+            _rv_comb_buf[buf_idx] = input + delayed * _rv_comb_fb[ci]
+            comb_sum = comb_sum + delayed
+            cpos = cpos + 1.0
+            if cpos >= csize
+                cpos = 0.0
+            end
+            _rv_comb_pos[ci] = cpos
+            c = c + 1.0
+        end
+        comb_sum = comb_sum * 0.25
+        // 2 series allpass filters
+        let mut ap_in = comb_sum
+        let mut a = 0.0
+        while a < 2.0
+            let ai = int(ap_base + a)
+            let as_start = int(_rv_ap_start[ai])
+            let asize = _rv_ap_size[ai]
+            let mut apos = _rv_ap_pos[ai]
+            let ap_idx = int(as_start + apos)
+            let delayed = _rv_ap_buf[ap_idx]
+            let ap_fb = 0.5
+            _rv_ap_buf[ap_idx] = ap_in + delayed * ap_fb
+            ap_in = delayed - ap_in * ap_fb
+            apos = apos + 1.0
+            if apos >= asize
+                apos = 0.0
+            end
+            _rv_ap_pos[ai] = apos
+            a = a + 1.0
+        end
+        samples[int(i)] = input * (1.0 - mix) + ap_in * mix
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Simple effects (stateless) ─────────────────────────
+
+fn fx_distortion(samples, n_samples, drive)
+    // Soft-clip distortion. drive >= 1.0 (higher = more distortion).
+    if n_samples <= 0.0
+        return 0.0
+    end
+    let mut d = drive
+    if d < 1.0
+        d = 1.0
+    end
+    let mut i = 0.0
+    while i < n_samples
+        let x = samples[int(i)] * d
+        // Soft clip: tanh approximation (x / (1 + |x|))
+        let ax = abs(x)
+        if ax < 0.001
+            samples[int(i)] = x
+        else
+            samples[int(i)] = x / (1.0 + ax)
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn fx_bitcrush(samples, n_samples, bit_depth)
+    // Reduce bit depth for lo-fi effect. bit_depth: 1-16.
+    if n_samples <= 0.0
+        return 0.0
+    end
+    let mut bd = bit_depth
+    if bd < 1.0
+        bd = 1.0
+    end
+    if bd > 16.0
+        bd = 16.0
+    end
+    let mut levels = 1.0
+    let mut b = 0.0
+    while b < bd
+        levels = levels * 2.0
+        b = b + 1.0
+    end
+    let half = levels / 2.0
+    let mut i = 0.0
+    while i < n_samples
+        let v = samples[int(i)]
+        let quantized = floor((v + 1.0) * half) / half - 1.0
+        samples[int(i)] = quantized
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn fx_tremolo(samples, n_samples, rate, depth, sample_rate)
+    // Amplitude modulation tremolo.
+    // rate: LFO frequency in Hz
+    // depth: modulation depth [0, 1]
+    if n_samples <= 0.0 || sample_rate <= 0.0
+        return 0.0
+    end
+    let mut dp = depth
+    if dp < 0.0
+        dp = 0.0
+    end
+    if dp > 1.0
+        dp = 1.0
+    end
+    let phase_inc = FX_TWO_PI * rate / sample_rate
+    let mut i = 0.0
+    while i < n_samples
+        let mod_val = 1.0 - dp * 0.5 * (1.0 - cos(phase_inc * i))
+        samples[int(i)] = samples[int(i)] * mod_val
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn fx_chorus(samples, n_samples, rate, depth_ms, mix, sample_rate)
+    // Simple chorus effect using modulated delay.
+    // rate: LFO Hz, depth_ms: max delay variation in ms, mix: 0-1
+    if n_samples <= 0.0 || sample_rate <= 0.0
+        return 0.0
+    end
+    let mut m = mix
+    if m < 0.0
+        m = 0.0
+    end
+    if m > 1.0
+        m = 1.0
+    end
+    let max_delay = floor(depth_ms * sample_rate / 1000.0)
+    if max_delay < 1.0
+        return 0.0
+    end
+    // Build a copy of the input for reading
+    let mut buf = []
+    let mut i = 0.0
+    while i < n_samples
+        push(buf, samples[int(i)])
+        i = i + 1.0
+    end
+    let phase_inc = FX_TWO_PI * rate / sample_rate
+    i = 0.0
+    while i < n_samples
+        let delay = max_delay * 0.5 * (1.0 + sin(phase_inc * i))
+        let mut read_pos = i - delay
+        if read_pos < 0.0
+            read_pos = 0.0
+        end
+        let idx = int(floor(read_pos))
+        if idx >= int(n_samples)
+            samples[int(i)] = buf[int(i)]
+        else
+            let wet = buf[idx]
+            samples[int(i)] = buf[int(i)] * (1.0 - m) + wet * m
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn fx_compressor(samples, n_samples, threshold, ratio, attack_ms, release_ms, sample_rate)
+    // Dynamic range compressor.
+    // threshold: dB level where compression starts (negative, e.g. -20)
+    // ratio: compression ratio (e.g. 4.0 = 4:1)
+    // attack_ms, release_ms: envelope follower timing
+    if n_samples <= 0.0 || sample_rate <= 0.0
+        return 0.0
+    end
+    let mut r = ratio
+    if r < 1.0
+        r = 1.0
+    end
+    // Convert threshold from dB to linear (approximate)
+    // 10^(dB/20) ≈ exp(dB * 0.11513)
+    let mut thr_lin = 1.0
+    let mut db = threshold
+    if db < -60.0
+        db = -60.0
+    end
+    if db > 0.0
+        db = 0.0
+    end
+    // Simple power-of-10 approximation
+    let mut exp_val = db * 0.11513
+    // e^x approximation: 1 + x + x²/2 + x³/6 for small x
+    // For larger values, use iterative squaring
+    thr_lin = 1.0 + exp_val + exp_val * exp_val * 0.5 + exp_val * exp_val * exp_val / 6.0
+    if thr_lin < 0.001
+        thr_lin = 0.001
+    end
+    if thr_lin > 1.0
+        thr_lin = 1.0
+    end
+    let att_coeff = 1.0 - (1.0 / (attack_ms * sample_rate / 1000.0 + 1.0))
+    let rel_coeff = 1.0 - (1.0 / (release_ms * sample_rate / 1000.0 + 1.0))
+    let mut env = 0.0
+    let mut i = 0.0
+    while i < n_samples
+        let input_abs = abs(samples[int(i)])
+        // Envelope follower
+        if input_abs > env
+            env = att_coeff * env + (1.0 - att_coeff) * input_abs
+        else
+            env = rel_coeff * env + (1.0 - rel_coeff) * input_abs
+        end
+        // Gain computation
+        let mut gain = 1.0
+        if env > thr_lin
+            gain = thr_lin + (env - thr_lin) / r
+            if env > 0.001
+                gain = gain / env
+            end
+        end
+        samples[int(i)] = samples[int(i)] * gain
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn fx_mix(dst, src, n_samples, src_gain)
+    // Mix src into dst (additive). Clamps to [-1,1].
+    if n_samples <= 0.0
+        return 0.0
+    end
+    let dst_len = len(dst)
+    let src_len = len(src)
+    let mut i = 0.0
+    while i < n_samples
+        if i >= dst_len || i >= src_len
+            return i
+        end
+        let mut v = dst[int(i)] + src[int(i)] * src_gain
+        if v > 1.0
+            v = 1.0
+        elif v < -1.0
+            v = -1.0
+        end
+        dst[int(i)] = v
+        i = i + 1.0
+    end
+    return n_samples
+end

@@ -1,0 +1,185 @@
+// test_deque.flow — Tests for stdlib/collections/deque.flow
+use "deque"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Creation ──────────────────────────────────────────────────
+
+fn test_deque_create()
+    let mut dq = deque_create()
+    check("create empty", deque_is_empty(dq) == 1.0)
+    check("create size 0", deque_size(dq) == 0.0)
+    return 0.0
+end
+
+// ── Push / Pop Back ───────────────────────────────────────────
+
+fn test_push_pop_back()
+    let mut dq = deque_create()
+    dq = deque_push_back(dq, 10.0)
+    dq = deque_push_back(dq, 20.0)
+    dq = deque_push_back(dq, 30.0)
+    check("push back size", deque_size(dq) == 3.0)
+    check("pop back 1", deque_pop_back(dq) == 30.0)
+    check("pop back 2", deque_pop_back(dq) == 20.0)
+    check("pop back 3", deque_pop_back(dq) == 10.0)
+    check("empty after pop", deque_is_empty(dq) == 1.0)
+    return 0.0
+end
+
+// ── Push / Pop Front ──────────────────────────────────────────
+
+fn test_push_pop_front()
+    let mut dq = deque_create()
+    dq = deque_push_front(dq, 10.0)
+    dq = deque_push_front(dq, 20.0)
+    dq = deque_push_front(dq, 30.0)
+    check("push front size", deque_size(dq) == 3.0)
+    check("pop front 1", deque_pop_front(dq) == 30.0)
+    check("pop front 2", deque_pop_front(dq) == 20.0)
+    check("pop front 3", deque_pop_front(dq) == 10.0)
+    return 0.0
+end
+
+// ── Mixed Push/Pop ────────────────────────────────────────────
+
+fn test_mixed()
+    let mut dq = deque_create()
+    dq = deque_push_back(dq, 1.0)
+    dq = deque_push_back(dq, 2.0)
+    dq = deque_push_front(dq, 0.0)
+    // Order: [0, 1, 2]
+    check("mixed front", deque_peek_front(dq) == 0.0)
+    check("mixed back", deque_peek_back(dq) == 2.0)
+    check("mixed size", deque_size(dq) == 3.0)
+
+    let f = deque_pop_front(dq)
+    check("mixed pop front", f == 0.0)
+    let b = deque_pop_back(dq)
+    check("mixed pop back", b == 2.0)
+    check("mixed remaining", deque_peek_front(dq) == 1.0)
+    return 0.0
+end
+
+// ── Peek ──────────────────────────────────────────────────────
+
+fn test_peek()
+    let mut dq = deque_create()
+    check("peek empty front", deque_peek_front(dq) == -1.0)
+    check("peek empty back", deque_peek_back(dq) == -1.0)
+    dq = deque_push_back(dq, 42.0)
+    check("peek front", deque_peek_front(dq) == 42.0)
+    check("peek back", deque_peek_back(dq) == 42.0)
+    return 0.0
+end
+
+// ── Get by Index ──────────────────────────────────────────────
+
+fn test_get()
+    let mut dq = deque_create()
+    dq = deque_push_back(dq, 10.0)
+    dq = deque_push_back(dq, 20.0)
+    dq = deque_push_back(dq, 30.0)
+    check("get 0", deque_get(dq, 0.0) == 10.0)
+    check("get 1", deque_get(dq, 1.0) == 20.0)
+    check("get 2", deque_get(dq, 2.0) == 30.0)
+    check("get oob", deque_get(dq, 5.0) == -1.0)
+    return 0.0
+end
+
+// ── To Array ──────────────────────────────────────────────────
+
+fn test_to_array()
+    let mut dq = deque_create()
+    dq = deque_push_back(dq, 1.0)
+    dq = deque_push_back(dq, 2.0)
+    dq = deque_push_front(dq, 0.0)
+    let arr = deque_to_array(dq)
+    check("to_array len", len(arr) == 3.0)
+    check("to_array order", arr[0] == 0.0 && arr[1] == 1.0 && arr[2] == 2.0)
+    return 0.0
+end
+
+// ── Contains ──────────────────────────────────────────────────
+
+fn test_contains()
+    let mut dq = deque_create()
+    dq = deque_push_back(dq, 5.0)
+    dq = deque_push_back(dq, 10.0)
+    check("contains yes", deque_contains(dq, 5.0) == 1.0)
+    check("contains no", deque_contains(dq, 99.0) == 0.0)
+    return 0.0
+end
+
+// ── Clear ─────────────────────────────────────────────────────
+
+fn test_clear()
+    let mut dq = deque_create()
+    dq = deque_push_back(dq, 1.0)
+    dq = deque_push_back(dq, 2.0)
+    deque_clear(dq)
+    check("clear empty", deque_is_empty(dq) == 1.0)
+    check("clear size", deque_size(dq) == 0.0)
+    return 0.0
+end
+
+// ── Empty Pop ─────────────────────────────────────────────────
+
+fn test_empty_pop()
+    let mut dq = deque_create()
+    check("empty pop front", deque_pop_front(dq) == -1.0)
+    check("empty pop back", deque_pop_back(dq) == -1.0)
+    return 0.0
+end
+
+// ── Wrap-around ───────────────────────────────────────────────
+
+fn test_wraparound()
+    // Push and pop to force circular wrap
+    let mut dq = deque_create()
+    // Push 10 to back, pop 10 from front (moves head forward)
+    let mut i = 0.0
+    while i < 10.0
+        dq = deque_push_back(dq, i)
+        i = i + 1.0
+    end
+    i = 0.0
+    while i < 10.0
+        deque_pop_front(dq)
+        i = i + 1.0
+    end
+    // Now push 5 more — these should wrap around
+    i = 0.0
+    while i < 5.0
+        dq = deque_push_back(dq, 100.0 + i)
+        i = i + 1.0
+    end
+    check("wrap size", deque_size(dq) == 5.0)
+    check("wrap front", deque_peek_front(dq) == 100.0)
+    check("wrap back", deque_peek_back(dq) == 104.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_deque_create()
+test_push_pop_back()
+test_push_pop_front()
+test_mixed()
+test_peek()
+test_get()
+test_to_array()
+test_contains()
+test_clear()
+test_empty_pop()
+test_wraparound()
+print("")
+print("All deque tests passed (11 tests)")

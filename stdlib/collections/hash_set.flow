@@ -1,0 +1,263 @@
+// stdlib/collections/hash_set.flow — Set data structure (map-backed)
+//
+// Unordered collection of unique values stored as map keys.
+// Values are stored as strings internally (using str() conversion).
+//
+// Functions: set_create, set_add, set_has, set_remove, set_size,
+//            set_is_empty, set_clear, set_to_array,
+//            set_union, set_intersection, set_difference,
+//            set_symmetric_difference, set_is_subset, set_is_superset,
+//            set_equals, set_from_array
+//
+// Usage:
+//   use "hash_set"
+//   let mut s = set_create()
+//   set_add(s, 1.0)
+//   set_add(s, 2.0)
+//   set_add(s, 3.0)
+//   set_has(s, 2.0)     // 1.0
+//   set_size(s)          // 3.0
+
+fn set_create()
+    let mut s = map()
+    map_set(s, "__size", "0")
+    map_set(s, "__keys", "")
+    return s
+end
+
+fn set_add(s, value)
+    let key = "v_" + str(value)
+    if map_has(s, key) == 0.0
+        map_set(s, key, "1")
+        let size = float(map_get(s, "__size")) + 1.0
+        map_set(s, "__size", str(size))
+        // Update key list
+        let keys = map_get(s, "__keys")
+        if len(keys) > 0.0
+            map_set(s, "__keys", keys + "," + str(value))
+        else
+            map_set(s, "__keys", str(value))
+        end
+    end
+    return 0.0
+end
+
+fn set_has(s, value)
+    let key = "v_" + str(value)
+    return map_has(s, key)
+end
+
+fn set_remove(s, value)
+    let key = "v_" + str(value)
+    if map_has(s, key)
+        map_remove(s, key)
+        let size = float(map_get(s, "__size")) - 1.0
+        map_set(s, "__size", str(size))
+        // Rebuild key list
+        let old_keys = map_get(s, "__keys")
+        let parts = split(old_keys, ",")
+        let n = len(parts)
+        let mut new_keys = ""
+        let target = str(value)
+        let mut i = 0.0
+        while i < n
+            if parts[i] != target
+                if len(new_keys) > 0.0
+                    new_keys = new_keys + "," + parts[i]
+                else
+                    new_keys = parts[i]
+                end
+            end
+            i = i + 1.0
+        end
+        map_set(s, "__keys", new_keys)
+        return 1.0
+    end
+    return 0.0
+end
+
+fn set_size(s)
+    return float(map_get(s, "__size"))
+end
+
+fn set_is_empty(s)
+    if float(map_get(s, "__size")) == 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn set_clear(s)
+    let keys_str = map_get(s, "__keys")
+    if len(keys_str) > 0.0
+        let parts = split(keys_str, ",")
+        let n = len(parts)
+        let mut i = 0.0
+        while i < n
+            map_remove(s, "v_" + parts[i])
+            i = i + 1.0
+        end
+    end
+    map_set(s, "__size", "0")
+    map_set(s, "__keys", "")
+    return 0.0
+end
+
+fn set_to_array(s)
+    // Return all values as a float array.
+    let keys_str = map_get(s, "__keys")
+    if len(keys_str) == 0.0
+        let mut empty = []
+        return empty
+    end
+    let parts = split(keys_str, ",")
+    let n = len(parts)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        push(result, float(parts[i]))
+        i = i + 1.0
+    end
+    return result
+end
+
+fn set_from_array(arr)
+    // Create a set from an array of values.
+    let mut s = set_create()
+    let n = len(arr)
+    let mut i = 0.0
+    while i < n
+        set_add(s, arr[i])
+        i = i + 1.0
+    end
+    return s
+end
+
+fn set_union(a, b)
+    // Return new set containing all elements from both a and b.
+    let mut result = set_create()
+    // Add all from a
+    let a_keys = map_get(a, "__keys")
+    if len(a_keys) > 0.0
+        let a_parts = split(a_keys, ",")
+        let na = len(a_parts)
+        let mut i = 0.0
+        while i < na
+            set_add(result, float(a_parts[i]))
+            i = i + 1.0
+        end
+    end
+    // Add all from b
+    let b_keys = map_get(b, "__keys")
+    if len(b_keys) > 0.0
+        let b_parts = split(b_keys, ",")
+        let nb = len(b_parts)
+        let mut i = 0.0
+        while i < nb
+            set_add(result, float(b_parts[i]))
+            i = i + 1.0
+        end
+    end
+    return result
+end
+
+fn set_intersection(a, b)
+    // Return new set containing elements in both a and b.
+    let mut result = set_create()
+    let a_keys = map_get(a, "__keys")
+    if len(a_keys) > 0.0
+        let a_parts = split(a_keys, ",")
+        let na = len(a_parts)
+        let mut i = 0.0
+        while i < na
+            let val = float(a_parts[i])
+            if set_has(b, val) == 1.0
+                set_add(result, val)
+            end
+            i = i + 1.0
+        end
+    end
+    return result
+end
+
+fn set_difference(a, b)
+    // Return new set containing elements in a but not in b.
+    let mut result = set_create()
+    let a_keys = map_get(a, "__keys")
+    if len(a_keys) > 0.0
+        let a_parts = split(a_keys, ",")
+        let na = len(a_parts)
+        let mut i = 0.0
+        while i < na
+            let val = float(a_parts[i])
+            if set_has(b, val) == 0.0
+                set_add(result, val)
+            end
+            i = i + 1.0
+        end
+    end
+    return result
+end
+
+fn set_symmetric_difference(a, b)
+    // Return new set of elements in a or b but not both.
+    let mut result = set_create()
+    let a_keys = map_get(a, "__keys")
+    if len(a_keys) > 0.0
+        let a_parts = split(a_keys, ",")
+        let na = len(a_parts)
+        let mut i = 0.0
+        while i < na
+            let val = float(a_parts[i])
+            if set_has(b, val) == 0.0
+                set_add(result, val)
+            end
+            i = i + 1.0
+        end
+    end
+    let b_keys = map_get(b, "__keys")
+    if len(b_keys) > 0.0
+        let b_parts = split(b_keys, ",")
+        let nb = len(b_parts)
+        let mut i = 0.0
+        while i < nb
+            let val = float(b_parts[i])
+            if set_has(a, val) == 0.0
+                set_add(result, val)
+            end
+            i = i + 1.0
+        end
+    end
+    return result
+end
+
+fn set_is_subset(a, b)
+    // Check if a is a subset of b (all elements of a are in b).
+    let a_keys = map_get(a, "__keys")
+    if len(a_keys) == 0.0
+        return 1.0
+    end
+    let a_parts = split(a_keys, ",")
+    let na = len(a_parts)
+    let mut i = 0.0
+    while i < na
+        if set_has(b, float(a_parts[i])) == 0.0
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn set_is_superset(a, b)
+    // Check if a is a superset of b.
+    return set_is_subset(b, a)
+end
+
+fn set_equals(a, b)
+    // Check if two sets contain exactly the same elements.
+    if set_size(a) != set_size(b)
+        return 0.0
+    end
+    return set_is_subset(a, b)
+end

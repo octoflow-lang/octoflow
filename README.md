@@ -72,11 +72,11 @@ let result = loom_read_register(vm, 0.0, 0.0, 8.0)
 - **Homeostasis**: GPU self-regulates via maxnorm + regulator kernels
 - **102 compute kernels**: Scale, affine, matvec, reduce, WHERE, delta encode/decode, dictionary lookup
 
-**LoomDB** — GPU-resident computed-data log. Captures pipeline results without I/O. Similarity search (cosine, dot, euclidean) runs entirely in VRAM. Async persistence to OctoDB — your main compute pipeline never touches disk.
+**Loom State** — GPU-resident state log for undo/redo and snapshots. Vector similarity search (cosine, dot, euclidean) runs entirely in VRAM. Async persistence to OctoDB — your main compute pipeline never touches disk.
 
-**OctoDB** — Embedded database with CRUD, multi-condition queries, indexing, `.odb` persistence. Serves as LoomDB's cold storage tier.
+**OctoDB** — Embedded database with CRUD, multi-condition queries, indexing, `.odb` persistence. Serves as Loom State's cold storage tier.
 
-> [Loom Engine Guide](docs/loom-engine.md) — chain dispatch, LoomDB, OctoDB, API reference
+> [Loom Engine Guide](docs/loom-engine.md) — chain dispatch, Loom State, OctoDB, API reference
 
 ## Language
 
@@ -118,7 +118,7 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 | **compiler** | lexer, eval, parser, preflight, codegen, ir | Compiler modules (written in .flow) |
 | **crypto** | hash, encoding, random | SHA-256, base64, CSPRNG |
 | **data** | csv, io, pipeline, transform, validate | ETL and data processing |
-| **db** | core, engine, vector, persist | OctoDB (CRUD, indexing, .odb) + LoomDB (GPU-resident, vector search) |
+| **db** | core, engine, vector, persist | OctoDB (CRUD, indexing, .odb) + Loom State (GPU-resident, vector search) |
 | **devops** | config, fs, log, process, template | System automation |
 | **formats** | gguf, json | GGUF tensor files, JSON |
 | **gpu** | VM, emitters, runtime, kernels | 102 GPU compute kernels |

@@ -1,0 +1,254 @@
+// test_timeline.flow — Tests for stdlib/media/timeline.flow
+use "timeline"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Create timeline ────────────────────────────────────
+
+fn test_create()
+    let tl = tl_create(30.0)
+    check("create id", tl >= 0.0)
+    check("create fps", tl_fps(tl) == 30.0)
+    check("create tracks", tl_track_count(tl) == 0.0)
+    check("create dur", tl_duration(tl) == 0.0)
+    // Default fps
+    let tl2 = tl_create(0.0)
+    check("default fps", tl_fps(tl2) == 30.0)
+    return 0.0
+end
+
+// ── Add tracks ─────────────────────────────────────────
+
+fn test_tracks()
+    let tl = tl_create(24.0)
+    let t1 = tl_add_track(tl, TL_VIDEO)
+    check("track 0", t1 == 0.0)
+    let t2 = tl_add_track(tl, TL_AUDIO)
+    check("track 1", t2 == 1.0)
+    check("track count", tl_track_count(tl) == 2.0)
+    // Invalid timeline
+    let bad = tl_add_track(-1.0, TL_VIDEO)
+    check("bad tl", bad == -1.0)
+    return 0.0
+end
+
+// ── Add clips ──────────────────────────────────────────
+
+fn test_clips()
+    let tl = tl_create(30.0)
+    let tk = tl_add_track(tl, TL_VIDEO)
+    let c1 = tl_add_clip(tl, tk, 0.0, 5.0, 100.0)
+    check("clip id", c1 >= 0.0)
+    check("clip start", tl_clip_start(c1) == 0.0)
+    check("clip dur", tl_clip_duration(c1) == 5.0)
+    check("clip src", tl_clip_source(c1) == 100.0)
+    check("clip count", tl_clip_count(tl, tk) == 1.0)
+    let c2 = tl_add_clip(tl, tk, 5.0, 3.0, 101.0)
+    check("clip2", c2 >= 0.0)
+    // Timeline duration = 5 + 3 = 8
+    check("tl dur", tl_duration(tl) == 8.0)
+    // Invalid track
+    let bad = tl_add_clip(tl, 99.0, 0.0, 5.0, 1.0)
+    check("bad track", bad == -1.0)
+    // Zero duration
+    let bad2 = tl_add_clip(tl, tk, 0.0, 0.0, 1.0)
+    check("zero dur", bad2 == -1.0)
+    return 0.0
+end
+
+// ── Clip editing ───────────────────────────────────────
+
+fn test_clip_edit()
+    let tl = tl_create(30.0)
+    let tk = tl_add_track(tl, TL_VIDEO)
+    let c = tl_add_clip(tl, tk, 2.0, 4.0, 200.0)
+    let _m = tl_move_clip(c, 5.0)
+    check("move", tl_clip_start(c) == 5.0)
+    let _t = tl_trim_clip(c, 2.0)
+    check("trim", tl_clip_duration(c) == 2.0)
+    let _s = tl_set_clip_speed(c, 2.0)
+    check("speed", 1.0 == 1.0)
+    let _o = tl_set_source_offset(c, 1.5)
+    check("offset", 1.0 == 1.0)
+    // Remove
+    let _r = tl_remove_clip(c)
+    check("remove", tl_clip_duration(c) == 0.0)
+    return 0.0
+end
+
+// ── Query clip at time ─────────────────────────────────
+
+fn test_query()
+    let tl = tl_create(30.0)
+    let tk = tl_add_track(tl, TL_VIDEO)
+    let c1 = tl_add_clip(tl, tk, 0.0, 3.0, 10.0)
+    let c2 = tl_add_clip(tl, tk, 5.0, 2.0, 20.0)
+    // At t=1 → clip 1
+    let q1 = tl_get_clip_at(tl, tk, 1.0)
+    check("query t1", q1 == c1)
+    // At t=5.5 → clip 2
+    let q2 = tl_get_clip_at(tl, tk, 5.5)
+    check("query t5.5", q2 == c2)
+    // At t=4 → gap, no clip
+    let q3 = tl_get_clip_at(tl, tk, 4.0)
+    check("query gap", q3 == -1.0)
+    return 0.0
+end
+
+// ── Time/frame conversion ──────────────────────────────
+
+fn test_time_frame()
+    let tl = tl_create(30.0)
+    check("t2f 0", tl_time_to_frame(tl, 0.0) == 0.0)
+    check("t2f 1", tl_time_to_frame(tl, 1.0) == 30.0)
+    check("f2t 30", approx(tl_frame_to_time(tl, 30.0), 1.0) == 1.0)
+    check("f2t 0", tl_frame_to_time(tl, 0.0) == 0.0)
+    return 0.0
+end
+
+// ── Transitions ────────────────────────────────────────
+
+fn test_transitions()
+    let tl = tl_create(30.0)
+    let tk = tl_add_track(tl, TL_VIDEO)
+    let c1 = tl_add_clip(tl, tk, 0.0, 5.0, 10.0)
+    let c2 = tl_add_clip(tl, tk, 5.0, 5.0, 20.0)
+    let _t = tl_set_transition(c2, TL_FADE, 1.0)
+    check("trans set", 1.0 == 1.0)
+    // Compute fade transition at 50%
+    let mut blend = []
+    let n = tl_compute_transition(TL_FADE, 0.5, 4.0, 4.0, blend)
+    check("fade count", n == 16.0)
+    check("fade val", approx(blend[0], 0.5) == 1.0)
+    // Wipe horizontal at 50%
+    let mut wipe = []
+    let _w = tl_compute_transition(TL_WIPE_H, 0.5, 4.0, 4.0, wipe)
+    check("wipe left", wipe[0] == 1.0)   // x=0 < threshold(2)
+    check("wipe right", wipe[3] == 0.0)  // x=3 >= threshold(2)
+    // Cut at 0.3
+    let mut cut = []
+    let _c = tl_compute_transition(TL_CUT, 0.3, 2.0, 2.0, cut)
+    check("cut before", cut[0] == 0.0)
+    return 0.0
+end
+
+// ── Keyframes ──────────────────────────────────────────
+
+fn test_keyframes()
+    let tl = tl_create(30.0)
+    let tk = tl_add_track(tl, TL_VIDEO)
+    let c = tl_add_clip(tl, tk, 0.0, 10.0, 50.0)
+    // Property 1 (e.g., opacity): 0→1 over 2 seconds
+    let _k1 = tl_add_keyframe(c, 0.0, 1.0, 0.0, TL_LERP)
+    let _k2 = tl_add_keyframe(c, 2.0, 1.0, 1.0, TL_LERP)
+    let v1 = tl_get_keyframe_value(c, 1.0, 0.0)
+    check("kf start", approx(v1, 0.0) == 1.0)
+    let v2 = tl_get_keyframe_value(c, 1.0, 1.0)
+    check("kf mid", approx(v2, 0.5) == 1.0)
+    let v3 = tl_get_keyframe_value(c, 1.0, 2.0)
+    check("kf end", approx(v3, 1.0) == 1.0)
+    // After last keyframe → hold value
+    let v4 = tl_get_keyframe_value(c, 1.0, 5.0)
+    check("kf hold", approx(v4, 1.0) == 1.0)
+    // Step interpolation
+    let _k3 = tl_add_keyframe(c, 0.0, 2.0, 0.0, TL_STEP)
+    let _k4 = tl_add_keyframe(c, 2.0, 2.0, 100.0, TL_STEP)
+    let vs = tl_get_keyframe_value(c, 2.0, 1.0)
+    check("kf step", approx(vs, 0.0) == 1.0)  // Step holds previous
+    return 0.0
+end
+
+// ── Frame blending ─────────────────────────────────────
+
+fn test_blend()
+    let mut ar = [255.0, 0.0]
+    let mut ag = [0.0, 0.0]
+    let mut ab = [0.0, 0.0]
+    let mut br = [0.0, 0.0]
+    let mut bg = [255.0, 0.0]
+    let mut bb = [0.0, 0.0]
+    let mut blend = [0.5, 0.0]
+    let mut dr = []  let mut dg = []  let mut db = []
+    let n = tl_render_frame_blend(ar, ag, ab, br, bg, bb, blend, dr, dg, db, 2.0)
+    check("blend n", n == 2.0)
+    // Pixel 0: 50% blend → R=127.5, G=127.5
+    check("blend r0", approx(dr[0], 127.5) == 1.0)
+    check("blend g0", approx(dg[0], 127.5) == 1.0)
+    // Pixel 1: 0% blend → show A entirely
+    check("blend r1", dr[1] == 0.0)
+    return 0.0
+end
+
+// ── Edge cases ─────────────────────────────────────────
+
+fn test_edges()
+    // Negative start time clamped to 0
+    let tl = tl_create(30.0)
+    let tk = tl_add_track(tl, TL_VIDEO)
+    let c = tl_add_clip(tl, tk, -5.0, 3.0, 1.0)
+    check("neg start", tl_clip_start(c) == 0.0)
+    // Move to negative clamped
+    let _m = tl_move_clip(c, -10.0)
+    check("neg move", tl_clip_start(c) == 0.0)
+    // Trim to tiny clamped
+    let _t = tl_trim_clip(c, 0.0)
+    check("tiny trim", tl_clip_duration(c) == 0.01)
+    // Speed clamp
+    let _s = tl_set_clip_speed(c, 0.0)
+    check("speed clamp", 1.0 == 1.0)
+    // Bad clip IDs
+    check("bad clip start", tl_clip_start(-1.0) == 0.0)
+    check("bad clip dur", tl_clip_duration(999.0) == 0.0)
+    // Transition with zero dimensions
+    let mut res = []
+    let n = tl_compute_transition(TL_FADE, 0.5, 0.0, 0.0, res)
+    check("trans zero", n == 0.0)
+    return 0.0
+end
+
+// ── Track properties ───────────────────────────────────
+
+fn test_track_props()
+    let tl = tl_create(30.0)
+    let tk = tl_add_track(tl, TL_VIDEO)
+    let _v = tl_set_track_volume(tl, tk, 0.5)
+    let _o = tl_set_track_opacity(tl, tk, 0.7)
+    check("track vol", 1.0 == 1.0)
+    check("track opa", 1.0 == 1.0)
+    let _m = tl_mute_track(tl, tk)
+    check("mute", 1.0 == 1.0)
+    let _u = tl_unmute_track(tl, tk)
+    check("unmute", 1.0 == 1.0)
+    return 0.0
+end
+
+// ── Run all ────────────────────────────────────────────
+
+test_create()
+test_tracks()
+test_clips()
+test_clip_edit()
+test_query()
+test_time_frame()
+test_transitions()
+test_keyframes()
+test_blend()
+test_edges()
+test_track_props()
+print("")
+print("All timeline tests passed (11 tests)")

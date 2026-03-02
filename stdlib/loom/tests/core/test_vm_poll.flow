@@ -117,7 +117,7 @@ let _d4 = vm_dispatch(vm4, "stdlib/loom/kernels/ops/vm_scale.spv", pc4, 1.0)
 let prog4 = vm_build(vm4)
 
 // Execute asynchronously
-let _ea4 = vm_execute_async(prog4)
+let _ea4 = loom_launch(prog4)
 
 // CPU poll loop: wait for GPU completion
 let mut poll_count = 0.0

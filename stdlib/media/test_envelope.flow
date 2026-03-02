@@ -1,0 +1,227 @@
+// test_envelope.flow — Tests for stdlib/media/envelope.flow
+use "envelope"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Create + defaults ──────────────────────────────────
+
+fn test_create()
+    let e = env_create(0.1, 0.2, 0.7, 0.3)
+    check("create id", e >= 0.0)
+    check("create idle", env_phase(e) == ENV_IDLE)
+    check("create done", env_done(e) == 1.0)
+    check("create val", env_value(e) == 0.0)
+    return 0.0
+end
+
+// ── Trigger + attack ───────────────────────────────────
+
+fn test_attack()
+    let e = env_create(0.1, 0.2, 0.7, 0.3)
+    let _t = env_trigger(e)
+    check("attack phase", env_phase(e) == ENV_ATTACK)
+    // Halfway through attack
+    let v1 = env_update(e, 0.05)
+    check("attack mid", approx(v1, 0.5) == 1.0)
+    // Complete attack
+    let v2 = env_update(e, 0.05)
+    check("attack peak", approx(v2, 1.0) == 1.0)
+    check("attack->decay", env_phase(e) == ENV_DECAY)
+    return 0.0
+end
+
+// ── Decay phase ────────────────────────────────────────
+
+fn test_decay()
+    let e = env_create(0.01, 0.1, 0.5, 0.3)
+    let _t = env_trigger(e)
+    // Pass through attack quickly
+    let _a = env_update(e, 0.01)
+    check("decay start", env_phase(e) == ENV_DECAY)
+    // Halfway through decay: 1.0 - (1.0-0.5)*(0.05/0.1) = 0.75
+    let v1 = env_update(e, 0.05)
+    check("decay mid", approx(v1, 0.75) == 1.0)
+    // Complete decay
+    let v2 = env_update(e, 0.05)
+    check("decay end", approx(v2, 0.5) == 1.0)
+    check("decay->sustain", env_phase(e) == ENV_SUSTAIN)
+    return 0.0
+end
+
+// ── Sustain phase ──────────────────────────────────────
+
+fn test_sustain()
+    let e = env_create(0.001, 0.001, 0.6, 0.3)
+    let _t = env_trigger(e)
+    let _a = env_update(e, 0.001)
+    let _d = env_update(e, 0.001)
+    check("sustain phase", env_phase(e) == ENV_SUSTAIN)
+    // Sustain holds steady
+    let v1 = env_update(e, 0.5)
+    check("sustain val", approx(v1, 0.6) == 1.0)
+    let v2 = env_update(e, 1.0)
+    check("sustain hold", approx(v2, 0.6) == 1.0)
+    return 0.0
+end
+
+// ── Release phase ──────────────────────────────────────
+
+fn test_release()
+    let e = env_create(0.001, 0.001, 0.8, 0.2)
+    let _t = env_trigger(e)
+    let _a = env_update(e, 0.001)
+    let _d = env_update(e, 0.001)
+    // Now in sustain at 0.8
+    let _s = env_update(e, 0.01)
+    let _r = env_release_note(e)
+    check("release phase", env_phase(e) == ENV_RELEASE)
+    // Halfway through release: 0.8 * (1 - 0.1/0.2) = 0.4
+    let v1 = env_update(e, 0.1)
+    check("release mid", approx(v1, 0.4) == 1.0)
+    // Complete release
+    let v2 = env_update(e, 0.1)
+    check("release end", approx(v2, 0.0) == 1.0)
+    check("release->done", env_phase(e) == ENV_DONE)
+    return 0.0
+end
+
+// ── Stateless value_at ─────────────────────────────────
+
+fn test_value_at()
+    let e = env_create(0.1, 0.1, 0.5, 0.2)
+    // During attack (t=0.05, note=1.0)
+    let v1 = env_value_at(e, 0.05, 1.0)
+    check("at attack", approx(v1, 0.5) == 1.0)
+    // During decay (t=0.15)
+    let v2 = env_value_at(e, 0.15, 1.0)
+    check("at decay", v2 > 0.4 && v2 < 1.0)
+    // During sustain (t=0.5)
+    let v3 = env_value_at(e, 0.5, 1.0)
+    check("at sustain", approx(v3, 0.5) == 1.0)
+    // During release (t=1.1, note_duration=1.0)
+    let v4 = env_value_at(e, 1.1, 1.0)
+    check("at release", v4 < 0.5 && v4 >= 0.0)
+    // After release (t=1.5)
+    let v5 = env_value_at(e, 1.5, 1.0)
+    check("at done", v5 == 0.0)
+    return 0.0
+end
+
+// ── Apply to buffer ────────────────────────────────────
+
+fn test_apply()
+    let e = env_create(0.5, 0.001, 1.0, 0.001)
+    let mut samples = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    let _a = env_apply(e, samples, 10.0, 1.0, 10.0)
+    // First sample (t=0): attack at 0 → 0
+    check("apply start", approx(samples[0], 0.0) == 1.0)
+    // Mid sample (t=0.5): attack halfway → 1.0
+    check("apply mid", samples[5] > 0.0)
+    // All shaped (not all 1.0)
+    let mut all_one = 1.0
+    let mut i = 0.0
+    while i < 10.0
+        if abs(samples[int(i)] - 1.0) > 0.01
+            all_one = 0.0
+        end
+        i = i + 1.0
+    end
+    check("apply shaped", all_one == 0.0)
+    return 0.0
+end
+
+// ── Reset ──────────────────────────────────────────────
+
+fn test_reset()
+    let e = env_create(0.01, 0.01, 0.5, 0.1)
+    let _t = env_trigger(e)
+    let _u = env_update(e, 0.05)
+    let _r = env_reset(e)
+    check("reset phase", env_phase(e) == ENV_IDLE)
+    check("reset val", env_value(e) == 0.0)
+    check("reset done", env_done(e) == 1.0)
+    return 0.0
+end
+
+// ── Presets ────────────────────────────────────────────
+
+fn test_presets()
+    let p1 = env_piano()
+    let p2 = env_pad()
+    let p3 = env_pluck()
+    let p4 = env_organ()
+    let p5 = env_percussion()
+    check("piano id", p1 >= 0.0)
+    check("pad id", p2 >= 0.0)
+    check("pluck id", p3 >= 0.0)
+    check("organ id", p4 >= 0.0)
+    check("percussion id", p5 >= 0.0)
+    // All start idle
+    check("piano idle", env_done(p1) == 1.0)
+    check("pad idle", env_done(p2) == 1.0)
+    return 0.0
+end
+
+// ── Minimum clamp ──────────────────────────────────────
+
+fn test_clamp()
+    // Very small values should be clamped to 0.001
+    let e = env_create(0.0, 0.0, -0.5, 0.0)
+    let _t = env_trigger(e)
+    // Attack = 0.001, should pass through quickly
+    let v = env_update(e, 0.002)
+    check("clamp attack", env_phase(e) != ENV_ATTACK)
+    // Sustain clamped to 0.0
+    let _d = env_update(e, 0.002)
+    let _s = env_update(e, 0.01)
+    check("clamp sustain", env_value(e) >= 0.0)
+    return 0.0
+end
+
+// ── Edge cases ─────────────────────────────────────────
+
+fn test_edges()
+    let e = env_create(0.1, 0.1, 0.5, 0.1)
+    // Release without trigger = no effect
+    let _r = env_release_note(e)
+    check("release idle", env_phase(e) == ENV_IDLE)
+    // Negative time in value_at
+    let v = env_value_at(e, -1.0, 1.0)
+    check("negative time", v == 0.0)
+    // Zero sample_rate in apply
+    let mut s = [1.0, 1.0]
+    let _a = env_apply(e, s, 2.0, 1.0, 0.0)
+    check("zero rate", s[0] == 1.0)
+    return 0.0
+end
+
+// ── Run all ────────────────────────────────────────────
+
+test_create()
+test_attack()
+test_decay()
+test_sustain()
+test_release()
+test_value_at()
+test_apply()
+test_reset()
+test_presets()
+test_clamp()
+test_edges()
+print("")
+print("All envelope tests passed (11 tests)")

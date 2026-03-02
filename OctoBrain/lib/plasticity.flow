@@ -1,0 +1,151 @@
+// OctoBrain Plasticity Module
+// Continuous adaptation: pattern drift, edge decay, homeostasis.
+//
+// drift_proto: moves a prototype toward a new observation (in-place)
+// decay_all_edges: wrapper for edges_decay (in-place)
+// homeostasis_check: identifies overloaded/redundant prototypes (pure)
+//
+// Depends on vecmath.flow for vector operations and edges.flow for decay.
+
+use "vecmath"
+use "edges"
+use "gpu_match"
+
+// ── drift_proto ────────────────────────────────────────────────────
+// In-place mutation on proto_embeddings. Drifts prototype proto_id
+// toward the observed embedding with importance-damped learning rate.
+//   effective_lr = lr / (1.0 + importance)
+// Steps:
+//   1. Normalize observed vector
+//   2. Extract current proto embedding
+//   3. Compute delta = effective_lr * (normed_obs - proto_emb) per element
+//   4. Add delta to proto_emb, re-normalize
+//   5. Write back into proto_embeddings at correct offset
+// Returns 0.0.
+fn drift_proto(proto_embeddings, embed_dim, proto_id, observed, lr, importance)
+  let effective_lr = lr / (1.0 + importance)
+
+  // Step 1: Normalize the observed vector
+  let normed_obs = normalize(observed, embed_dim)
+
+  // Step 2: Extract current proto embedding
+  let proto_emb = vec_extract(proto_embeddings, proto_id, embed_dim)
+
+  // Step 3-4: Compute delta, apply, and build drifted vector
+  let mut drifted = []
+  let mut di = 0.0
+  while di < embed_dim
+    let delta = effective_lr * (normed_obs[di] - proto_emb[di])
+    push(drifted, proto_emb[di] + delta)
+    di = di + 1.0
+  end
+
+  // Re-normalize the drifted vector
+  let drifted_normed = normalize(drifted, embed_dim)
+
+  // Step 5: Write back into proto_embeddings at correct offset
+  let base = proto_id * embed_dim
+  let mut wi = 0.0
+  while wi < embed_dim
+    proto_embeddings[base + wi] = drifted_normed[wi]
+    wi = wi + 1.0
+  end
+
+  return 0.0
+end
+
+// ── decay_all_edges ────────────────────────────────────────────────
+// Wrapper around edges_decay. Multiplies all edge permanences by factor.
+// In-place mutation on e_permanences. Returns 0.0.
+fn decay_all_edges(edge_state, e_permanences, factor)
+  let dummy = edges_decay(edge_state, e_permanences, factor)
+  return 0.0
+end
+
+// ── homeostasis_check ──────────────────────────────────────────────
+// Analysis function. Identifies prototypes that need splitting
+// (overloaded: > 20% of total matches) or merging (redundant: cosine
+// similarity > 0.95).
+//
+// result: mutable map (caller creates with map()) — modified in-place
+//   Sets keys: split_count, merge_count
+// splits: mutable array — filled with proto IDs to split
+// merges: mutable array — filled with proto ID pairs [i, j, i, j, ...]
+// Returns 0.0 (all output via in-place mutation).
+fn homeostasis_check(proto_state, proto_embeddings, match_counts, embed_dim, result, splits, merges)
+  let proto_count = map_get(proto_state, "proto_count")
+
+  // Guard: if no protos, return empty result
+  if proto_count < 1.0
+    map_set(result, "split_count", 0.0)
+    map_set(result, "merge_count", 0.0)
+    return 0.0
+  end
+
+  // Step 1: Compute total match count
+  let mut total_matches = 0.0
+  let mut mi = 0.0
+  while mi < proto_count
+    total_matches = total_matches + match_counts[mi]
+    mi = mi + 1.0
+  end
+
+  // Step 2: Find protos with > 20% of total matches (split candidates)
+  let mut split_count = 0.0
+  if total_matches > 0.0
+    let threshold = total_matches * 0.2
+    let mut si = 0.0
+    while si < proto_count
+      if match_counts[si] > threshold
+        push(splits, si)
+        split_count = split_count + 1.0
+      end
+      si = si + 1.0
+    end
+  end
+
+  // Step 3: Find proto pairs with cosine similarity > 0.95 (merge candidates)
+  let mut merge_count = 0.0
+
+  if GPU_READY[0] > 0.5 && proto_count > GPU_THRESHOLD
+    // GPU path: compute full P×P similarity matrix in 2 dispatches
+    // (transpose + matmul), then CPU-scan upper triangle for merges.
+    let sim_matrix = gpu_batch_score_all(proto_embeddings, proto_embeddings, embed_dim, proto_count, proto_count)
+    let mut pi = 0.0
+    while pi < proto_count
+      let mut pj = pi + 1.0
+      while pj < proto_count
+        if sim_matrix[pi * proto_count + pj] > 0.95
+          push(merges, pi)
+          push(merges, pj)
+          merge_count = merge_count + 1.0
+        end
+        pj = pj + 1.0
+      end
+      pi = pi + 1.0
+    end
+  else
+    // CPU fallback: pairwise cosine similarity
+    let mut pi = 0.0
+    while pi < proto_count
+      let vec_i = vec_extract(proto_embeddings, pi, embed_dim)
+      let mut pj = pi + 1.0
+      while pj < proto_count
+        let vec_j = vec_extract(proto_embeddings, pj, embed_dim)
+        let sim = cosine_sim(vec_i, vec_j, embed_dim)
+        if sim > 0.95
+          push(merges, pi)
+          push(merges, pj)
+          merge_count = merge_count + 1.0
+        end
+        pj = pj + 1.0
+      end
+      pi = pi + 1.0
+    end
+  end
+
+  map_set(result, "split_count", split_count)
+  map_set(result, "merge_count", merge_count)
+
+  return 0.0
+end

@@ -1,21 +1,19 @@
 // gpu_sliding_window.flow — GPU Sliding Window (65536 elements, W=64)
 //
-// "65536 elements. 64-element moving average. 1 dispatch. 0 CPU iterations."
+// "65536 elements. 64-element moving average. 2 dispatches. 0 CPU iterations."
 //
-// Computes both sliding sum and moving average in a single dispatch chain.
-// Each thread sums its own window — simple O(N×W) but fully parallel.
+// Computes both sliding sum and moving average in separate dispatches.
+// Each thread sums its own window — simple O(N*W) but fully parallel.
 //
 // Run: octoflow run examples/gpu_sliding_window.flow --allow-ffi --allow-read
-
-use "../stdlib/loom/ops/runtime"
 
 let N = 65536.0
 let W = 64.0
 
-rt_init()
-
-let pipe_sum = rt_load_pipeline("tests/gpu_shaders/39_sliding_sum.spv", 2.0, 8.0)
-let pipe_avg = rt_load_pipeline("tests/gpu_shaders/40_sliding_avg.spv", 2.0, 8.0)
+let vm_sum = loom_boot(1.0, 2.0, N)
+let vm_avg = loom_boot(1.0, 2.0, N)
+loom_prefetch("tests/gpu_shaders/39_sliding_sum.spv")
+loom_prefetch("tests/gpu_shaders/40_sliding_avg.spv")
 
 // ── Input: [1, 1, 1, ..., 1] — sliding sum = min(W, i+1), avg = 1.0 ──
 let mut input = []
@@ -24,40 +22,45 @@ while i < N
   push(input, 1.0)
   i = i + 1.0
 end
+vm_write_register(vm_sum, 0.0, 0.0, input)
+vm_write_register(vm_avg, 0.0, 0.0, input)
 
-let buf_in = rt_create_buffer(N * 4.0)
-let buf_sum = rt_create_buffer(N * 4.0)
-let buf_avg = rt_create_buffer(N * 4.0)
-rt_upload(buf_in, input)
+// Zero output registers
+let mut zeros = []
+let mut i = 0.0
+while i < N
+  push(zeros, 0.0)
+  i = i + 1.0
+end
+vm_write_register(vm_sum, 0.0, 1.0, zeros)
+vm_write_register(vm_avg, 0.0, 1.0, zeros)
 
 let n_wgs = int((N + 255.0) / 256.0)
 let t0 = time()
 
-// 2 dispatches in 1 chain: sliding sum + moving average
-rt_chain_begin(2.0, 2.0)
-let mut pc = [N, W]
-rt_chain_push_constants(pipe_sum, pc)
-let mut bufs1 = [buf_in, buf_sum]
-rt_chain_dispatch(pipe_sum, bufs1, n_wgs)
-rt_chain_push_constants(pipe_avg, pc)
-let mut bufs2 = [buf_in, buf_avg]
-rt_chain_dispatch(pipe_avg, bufs2, n_wgs)
-rt_chain_end()
-rt_chain_submit_wait()
+// Dispatch sliding sum
+loom_dispatch(vm_sum, "tests/gpu_shaders/39_sliding_sum.spv", [N, W], n_wgs)
+let prog1 = loom_build(vm_sum)
+loom_run(prog1)
+loom_free(prog1)
+
+// Dispatch moving average
+loom_dispatch(vm_avg, "tests/gpu_shaders/40_sliding_avg.spv", [N, W], n_wgs)
+let prog2 = loom_build(vm_avg)
+loom_run(prog2)
+loom_free(prog2)
 
 let t1 = time()
 let total_ms = (t1 - t0) * 1000.0
 
 // ── Verify sliding sum ─────────────────────────────────────────────
-rt_download(buf_sum, N)
+let sum_result = loom_read(vm_sum, 0.0, 1.0, N)
 
 let mut sum_pass = 1.0
-// For all-ones input: sum[i] = min(i+1, W)
-// i=0: sum=1, i=63: sum=64, i=64: sum=64, i=65535: sum=64
-let s0 = rt_result[0]
-let s63 = rt_result[63]
-let s64 = rt_result[64]
-let slast = rt_result[int(N - 1.0)]
+let s0 = sum_result[0]
+let s63 = sum_result[63]
+let s64 = sum_result[64]
+let slast = sum_result[int(N - 1.0)]
 
 if s0 != 1.0
   print("FAIL: sum[0] = {s0}, expected 1")
@@ -77,13 +80,12 @@ if slast != 64.0
 end
 
 // ── Verify moving average ──────────────────────────────────────────
-rt_download(buf_avg, N)
+let avg_result = loom_read(vm_avg, 0.0, 1.0, N)
 
 let mut avg_pass = 1.0
-// For all-ones input: avg[i] = 1.0 for all i
-let a0 = rt_result[0]
-let a100 = rt_result[100]
-let alast = rt_result[int(N - 1.0)]
+let a0 = avg_result[0]
+let a100 = avg_result[100]
+let alast = avg_result[int(N - 1.0)]
 
 if a0 != 1.0
   print("FAIL: avg[0] = {a0}, expected 1")
@@ -101,7 +103,7 @@ end
 // Spot check every 1000
 let mut i = 0.0
 while i < N
-  let got = rt_result[int(i)]
+  let got = avg_result[int(i)]
   if got != 1.0
     avg_pass = 0.0
   end
@@ -115,7 +117,6 @@ print("  Elements: {N}")
 print("  Window size: {W}")
 print("  Workgroups: {n_wgs}")
 print("  Dispatches: 2 (sliding_sum + moving_avg)")
-print("  Submissions: 1")
 print("  CPU iterations: 0")
 print("  Total time: {total_ms} ms")
 print("")
@@ -141,4 +142,5 @@ else
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm_sum)
+loom_shutdown(vm_avg)

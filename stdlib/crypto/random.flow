@@ -1,7 +1,15 @@
 // stdlib/crypto/random.flow — Random generation utilities
 //
 // Functions: random_float, random_int, random_hex, uuid_v4, random_token,
-//            random_choice, random_shuffle
+//            random_choice, random_shuffle, random_sample, random_bool,
+//            dice_roll, coin_flip, weighted_choice, random_normal
+//
+// Usage:
+//   use "random"
+//   let x = random_float(0.0, 100.0)   // uniform [0, 100)
+//   let d = dice_roll(6.0)              // 1..6
+//   let arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+//   random_shuffle(arr)                  // in-place Fisher-Yates
 
 fn random_float(lo, hi)
   return lo + random() * (hi - lo)
@@ -65,4 +73,100 @@ fn random_shuffle(arr)
     i = i - 1.0
   end
   return arr
+end
+
+fn random_sample(arr, k)
+    // Sample k elements without replacement. Returns new array.
+    // Uses partial Fisher-Yates on a copy.
+    let n = len(arr)
+    let mut copy = []
+    let mut i = 0.0
+    while i < n
+        push(copy, arr[i])
+        i = i + 1.0
+    end
+
+    let mut count = k
+    if count > n
+        count = n
+    end
+
+    i = 0.0
+    while i < count
+        let j = floor(random() * (n - i)) + i
+        let tmp = copy[i]
+        copy[i] = copy[j]
+        copy[j] = tmp
+        i = i + 1.0
+    end
+
+    let mut result = []
+    i = 0.0
+    while i < count
+        push(result, copy[i])
+        i = i + 1.0
+    end
+    return result
+end
+
+fn random_bool()
+    // Return 1.0 or 0.0 with equal probability.
+    if random() < 0.5
+        return 1.0
+    end
+    return 0.0
+end
+
+fn dice_roll(sides)
+    // Roll a die with given number of sides. Returns 1..sides.
+    return floor(random() * sides) + 1.0
+end
+
+fn coin_flip()
+    // Return "heads" or "tails".
+    if random() < 0.5
+        return "heads"
+    end
+    return "tails"
+end
+
+fn weighted_choice(values, weights)
+    // Choose from values array using weights array.
+    // Weights don't need to sum to 1.
+    let n = len(values)
+    if n == 0.0
+        return 0.0
+    end
+
+    let mut total = 0.0
+    let mut i = 0.0
+    while i < n
+        total = total + weights[i]
+        i = i + 1.0
+    end
+
+    let mut r = random() * total
+    i = 0.0
+    while i < n
+        r = r - weights[i]
+        if r <= 0.0
+            return values[i]
+        end
+        i = i + 1.0
+    end
+    return values[n - 1.0]
+end
+
+fn random_normal(mean, std)
+    // Approximate normal distribution using Box-Muller transform.
+    // Uses two uniform randoms to produce one normal variate.
+    let u1 = random()
+    let u2 = random()
+    // Clamp u1 away from 0 to avoid log(0)
+    let mut safe_u1 = u1
+    if safe_u1 < 0.0001
+        safe_u1 = 0.0001
+    end
+    let z = sqrt(-2.0 * log(safe_u1)) * cos(2.0 * 3.14159265358979 * u2)
+    return mean + std * z
 end

@@ -1,0 +1,131 @@
+// test_tokenizer.flow — Tests for stdlib/string/tokenizer.flow
+use "tokenizer"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic tokenization ────────────────────────────────────
+
+fn test_simple()
+    let input = "x = 42"
+    let tokens = tok_tokenize(input)
+    check("simple count", tok_count(tokens) == 3.0)
+    check("simple t0 type", tok_type(tokens, 0.0) == 2.0)  // IDENT
+    check("simple t0 val", tok_value(input, tokens, 0.0) == "x")
+    check("simple t1 type", tok_type(tokens, 1.0) == 4.0)  // OPERATOR
+    check("simple t1 val", tok_value(input, tokens, 1.0) == "=")
+    check("simple t2 type", tok_type(tokens, 2.0) == 1.0)  // NUMBER
+    check("simple t2 val", tok_value(input, tokens, 2.0) == "42")
+    return 0.0
+end
+
+// ── Expression tokenization ───────────────────────────────
+
+fn test_expression()
+    let input = "result = (a + b) * 3.14"
+    let tokens = tok_tokenize(input)
+    check("expr count", tok_count(tokens) == 8.0)
+    check("expr paren open", tok_type(tokens, 2.0) == 5.0)  // PAREN
+    check("expr num float", tok_value(input, tokens, 7.0) == "3.14")
+    return 0.0
+end
+
+// ── Numbers ───────────────────────────────────────────────
+
+fn test_numbers()
+    let input = "100 3.14 0.5 42"
+    let tokens = tok_tokenize(input)
+    check("nums count", tok_count(tokens) == 4.0)
+    check("num int", tok_value(input, tokens, 0.0) == "100")
+    check("num float", tok_value(input, tokens, 1.0) == "3.14")
+    check("num decimal", tok_value(input, tokens, 2.0) == "0.5")
+    return 0.0
+end
+
+// ── Identifiers ───────────────────────────────────────────
+
+fn test_identifiers()
+    let input = "hello world_var foo123 _private"
+    let tokens = tok_tokenize(input)
+    check("ident count", tok_count(tokens) == 4.0)
+    check("ident 0", tok_value(input, tokens, 0.0) == "hello")
+    check("ident 1", tok_value(input, tokens, 1.0) == "world_var")
+    check("ident 2", tok_value(input, tokens, 2.0) == "foo123")
+    check("ident 3", tok_value(input, tokens, 3.0) == "_private")
+    return 0.0
+end
+
+// ── Two-char operators ────────────────────────────────────
+
+fn test_operators()
+    let input = "a == b && c != d"
+    let tokens = tok_tokenize(input)
+    check("ops count", tok_count(tokens) == 7.0)
+    check("op ==", tok_value(input, tokens, 1.0) == "==")
+    check("op &&", tok_value(input, tokens, 3.0) == "&&")
+    check("op !=", tok_value(input, tokens, 5.0) == "!=")
+    return 0.0
+end
+
+// ── Strings ───────────────────────────────────────────────
+
+fn test_strings()
+    let input = "name = \"hello\""
+    let tokens = tok_tokenize(input)
+    check("str count", tok_count(tokens) == 3.0)
+    check("str type", tok_type(tokens, 2.0) == 3.0)  // STRING
+    return 0.0
+end
+
+// ── Filter ────────────────────────────────────────────────
+
+fn test_filter()
+    let input = "a + b * c"
+    let tokens = tok_tokenize(input)
+    let idents = tok_filter_type(input, tokens, 2.0)  // IDENT
+    check("filter idents", len(idents) == 3.0)
+    let ops = tok_filter_type(input, tokens, 4.0)  // OPERATOR
+    check("filter ops", len(ops) == 2.0)
+    return 0.0
+end
+
+// ── Find ──────────────────────────────────────────────────
+
+fn test_find()
+    let input = "let x = 5"
+    let tokens = tok_tokenize(input)
+    let first_num = tok_find_type(tokens, 1.0)  // NUMBER
+    check("find num idx", first_num == 3.0)
+    let first_str = tok_find_type(tokens, 3.0)  // STRING (none)
+    check("find no str", first_str == -1.0)
+    return 0.0
+end
+
+// ── Empty input ───────────────────────────────────────────
+
+fn test_empty()
+    let tokens = tok_tokenize("")
+    check("empty count", tok_count(tokens) == 0.0)
+    return 0.0
+end
+
+// ── Run all ───────────────────────────────────────────────
+
+test_simple()
+test_expression()
+test_numbers()
+test_identifiers()
+test_operators()
+test_strings()
+test_filter()
+test_find()
+test_empty()
+print("")
+print("All tokenizer tests passed (9 tests)")

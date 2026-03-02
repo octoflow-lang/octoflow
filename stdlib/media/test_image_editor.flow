@@ -1,0 +1,338 @@
+// test_image_editor.flow — Tests for stdlib/media/image_editor.flow
+use "image_editor"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 2.0
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn test_create()
+    let ed = ie_create(100.0, 80.0)
+    check("create id", ed >= 0.0)
+    check("create w", ie_width(ed) == 100.0)
+    check("create h", ie_height(ed) == 80.0)
+    check("create layers", ie_layer_count(ed) == 1.0)
+    check("create active", ie_active_layer(ed) == 0.0)
+    check("create tool", ie_get_tool(ed) == IE_TOOL_BRUSH)
+    check("create brush", ie_get_brush_size(ed) == 3.0)
+    check("create zoom", ie_get_zoom(ed) == 1.0)
+    check("create no sel", ie_has_selection(ed) == 0.0)
+    return 0.0
+end
+
+fn test_destroy()
+    let ed = ie_create(10.0, 10.0)
+    check("destroy ok", ie_destroy(ed) == 0.0)
+    check("destroy bad", ie_destroy(-1.0) == -1.0)
+    return 0.0
+end
+
+// ── Layers ───────────────────────────────────────────────
+
+fn test_layers()
+    let ed = ie_create(10.0, 10.0)
+    check("layer 1", ie_layer_count(ed) == 1.0)
+
+    ie_add_layer(ed)
+    check("layer 2", ie_layer_count(ed) == 2.0)
+
+    ie_set_active_layer(ed, 1.0)
+    check("active 1", ie_active_layer(ed) == 1.0)
+
+    // Bad layer
+    let r = ie_set_active_layer(ed, 99.0)
+    check("bad layer", r == -1.0)
+
+    return 0.0
+end
+
+fn test_layer_props()
+    let ed = ie_create(10.0, 10.0)
+
+    ie_set_layer_opacity(ed, 0.0, 0.5)
+    check("layer opa", approx(ie_get_layer_opacity(ed, 0.0), 0.5) == 1.0)
+
+    ie_set_layer_visible(ed, 0.0, 0.0)
+    check("layer hide", ie_is_layer_visible(ed, 0.0) == 0.0)
+    ie_set_layer_visible(ed, 0.0, 1.0)
+    check("layer show", ie_is_layer_visible(ed, 0.0) == 1.0)
+
+    ie_set_layer_locked(ed, 0.0, 1.0)
+    check("layer lock", ie_is_layer_locked(ed, 0.0) == 1.0)
+    ie_set_layer_locked(ed, 0.0, 0.0)
+    check("layer unlock", ie_is_layer_locked(ed, 0.0) == 0.0)
+
+    ie_set_layer_blend(ed, 0.0, IE_BLEND_MULTIPLY)
+    check("layer blend", 1.0 == 1.0)
+
+    // Bad blend mode
+    let r = ie_set_layer_blend(ed, 0.0, 99.0)
+    check("bad blend", r == -1.0)
+
+    return 0.0
+end
+
+// ── Pixel access ─────────────────────────────────────────
+
+fn test_pixels()
+    let ed = ie_create(10.0, 10.0)
+
+    // Default is white
+    let mut px = [0.0, 0.0, 0.0]
+    ie_get_pixel(ed, 0.0, 0.0, px)
+    check("default r", px[0] == 255.0)
+    check("default g", px[1] == 255.0)
+    check("default b", px[2] == 255.0)
+
+    // Set pixel
+    ie_set_pixel(ed, 5.0, 5.0, 128.0, 64.0, 32.0)
+    ie_get_pixel(ed, 5.0, 5.0, px)
+    check("set r", px[0] == 128.0)
+    check("set g", px[1] == 64.0)
+    check("set b", px[2] == 32.0)
+
+    // Out of bounds
+    check("oob get", ie_get_pixel(ed, -1.0, 0.0, px) == -1.0)
+    check("oob set", ie_set_pixel(ed, 100.0, 0.0, 0.0, 0.0, 0.0) == -1.0)
+
+    // Locked layer
+    ie_set_layer_locked(ed, 0.0, 1.0)
+    check("locked set", ie_set_pixel(ed, 0.0, 0.0, 0.0, 0.0, 0.0) == -1.0)
+    ie_set_layer_locked(ed, 0.0, 0.0)
+
+    // Clamp values
+    ie_set_pixel(ed, 0.0, 0.0, -10.0, 300.0, 128.0)
+    ie_get_pixel(ed, 0.0, 0.0, px)
+    check("clamp r", px[0] == 0.0)
+    check("clamp g", px[1] == 255.0)
+
+    return 0.0
+end
+
+// ── Tool settings ────────────────────────────────────────
+
+fn test_tools()
+    let ed = ie_create(10.0, 10.0)
+
+    ie_set_tool(ed, IE_TOOL_ERASER)
+    check("tool eraser", ie_get_tool(ed) == IE_TOOL_ERASER)
+
+    ie_set_tool(ed, IE_TOOL_FILL)
+    check("tool fill", ie_get_tool(ed) == IE_TOOL_FILL)
+
+    let r = ie_set_tool(ed, 99.0)
+    check("tool bad", r == -1.0)
+
+    ie_set_brush_size(ed, 10.0)
+    check("brush size", ie_get_brush_size(ed) == 10.0)
+
+    ie_set_brush_size(ed, 0.0)
+    check("brush min", ie_get_brush_size(ed) == 1.0)
+
+    ie_set_brush_size(ed, 999.0)
+    check("brush max", ie_get_brush_size(ed) == 100.0)
+
+    ie_set_color(ed, 255.0, 128.0, 0.0)
+    check("color r", ie_get_color_r(ed) == 255.0)
+    check("color g", ie_get_color_g(ed) == 128.0)
+    check("color b", ie_get_color_b(ed) == 0.0)
+
+    ie_set_opacity(ed, 0.5)
+    check("opacity", approx(ie_get_opacity(ed), 0.5) == 1.0)
+
+    return 0.0
+end
+
+// ── Brush stroke ─────────────────────────────────────────
+
+fn test_brush()
+    let ed = ie_create(20.0, 20.0)
+    ie_set_tool(ed, IE_TOOL_BRUSH)
+    ie_set_color(ed, 255.0, 0.0, 0.0)
+    ie_set_brush_size(ed, 3.0)
+    ie_set_opacity(ed, 1.0)
+
+    let painted = ie_brush_at(ed, 10.0, 10.0)
+    check("brush count", painted > 0.0)
+
+    // Check center pixel is red
+    let mut px = [0.0, 0.0, 0.0]
+    ie_get_pixel(ed, 10.0, 10.0, px)
+    check("brush red", px[0] == 255.0)
+    check("brush no green", px[1] == 0.0)
+
+    return 0.0
+end
+
+fn test_eraser()
+    let ed = ie_create(20.0, 20.0)
+    // Fill with red first
+    ie_fill_all(ed, 255.0, 0.0, 0.0)
+    // Erase center
+    ie_set_tool(ed, IE_TOOL_ERASER)
+    ie_set_brush_size(ed, 3.0)
+    ie_set_opacity(ed, 1.0)
+    ie_brush_at(ed, 10.0, 10.0)
+
+    let mut px = [0.0, 0.0, 0.0]
+    ie_get_pixel(ed, 10.0, 10.0, px)
+    check("eraser white", px[0] == 255.0 && px[1] == 255.0 && px[2] == 255.0)
+
+    return 0.0
+end
+
+// ── Fill ─────────────────────────────────────────────────
+
+fn test_fill()
+    let ed = ie_create(10.0, 10.0)
+    let filled = ie_fill_rect(ed, 2.0, 2.0, 5.0, 5.0, 0.0, 255.0, 0.0)
+    check("fill count", filled == 25.0)
+
+    let mut px = [0.0, 0.0, 0.0]
+    ie_get_pixel(ed, 4.0, 4.0, px)
+    check("fill green", px[1] == 255.0)
+
+    // Fill all
+    let all = ie_fill_all(ed, 0.0, 0.0, 128.0)
+    check("fill all", all == 100.0)
+
+    return 0.0
+end
+
+// ── Eyedropper ───────────────────────────────────────────
+
+fn test_eyedrop()
+    let ed = ie_create(10.0, 10.0)
+    ie_set_pixel(ed, 5.0, 5.0, 100.0, 200.0, 50.0)
+
+    ie_eyedrop(ed, 5.0, 5.0)
+    check("eye r", ie_get_color_r(ed) == 100.0)
+    check("eye g", ie_get_color_g(ed) == 200.0)
+    check("eye b", ie_get_color_b(ed) == 50.0)
+
+    return 0.0
+end
+
+// ── Selection ────────────────────────────────────────────
+
+fn test_selection()
+    let ed = ie_create(100.0, 80.0)
+
+    ie_select_rect(ed, 10.0, 20.0, 50.0, 30.0)
+    check("sel has", ie_has_selection(ed) == 1.0)
+    check("sel x", ie_selection_x(ed) == 10.0)
+    check("sel y", ie_selection_y(ed) == 20.0)
+    check("sel w", ie_selection_w(ed) == 50.0)
+    check("sel h", ie_selection_h(ed) == 30.0)
+
+    // Select all
+    ie_select_all(ed)
+    check("sel all w", ie_selection_w(ed) == 100.0)
+
+    // Deselect
+    ie_deselect(ed)
+    check("desel", ie_has_selection(ed) == 0.0)
+
+    // Clamp to bounds
+    ie_select_rect(ed, -10.0, -10.0, 200.0, 200.0)
+    check("sel clamp x", ie_selection_x(ed) == 0.0)
+    check("sel clamp w", ie_selection_w(ed) == 100.0)
+
+    return 0.0
+end
+
+// ── Zoom ─────────────────────────────────────────────────
+
+fn test_zoom()
+    let ed = ie_create(100.0, 80.0)
+
+    ie_set_zoom(ed, 4.0)
+    check("zoom set", ie_get_zoom(ed) == 4.0)
+
+    ie_set_zoom(ed, 0.01)
+    check("zoom lo", ie_get_zoom(ed) == 0.1)
+
+    ie_set_zoom(ed, 999.0)
+    check("zoom hi", ie_get_zoom(ed) == 32.0)
+
+    return 0.0
+end
+
+// ── Flatten ──────────────────────────────────────────────
+
+fn test_flatten()
+    let ed = ie_create(4.0, 4.0)
+    ie_fill_all(ed, 255.0, 0.0, 0.0)  // Red background
+
+    let mut or = []
+    let mut og = []
+    let mut ob = []
+    let n = ie_flatten(ed, or, og, ob)
+    check("flat n", n == 16.0)
+    check("flat r", approx(or[0], 255.0) == 1.0)
+
+    return 0.0
+end
+
+// ── Edge cases ───────────────────────────────────────────
+
+fn test_edges()
+    check("bad create", ie_destroy(-1.0) == -1.0)
+    check("bad tool", ie_set_tool(-1.0, 0.0) == -1.0)
+    check("bad brush", ie_brush_at(-1.0, 0.0, 0.0) == -1.0)
+    check("bad fill", ie_fill_rect(-1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0) == -1.0)
+    check("bad eye", ie_eyedrop(-1.0, 0.0, 0.0) == -1.0)
+    check("bad sel", ie_select_rect(-1.0, 0.0, 0.0, 1.0, 1.0) == -1.0)
+    check("bad zoom", ie_set_zoom(-1.0, 1.0) == -1.0)
+    check("bad flat", ie_flatten(-1.0, [], [], []) == -1.0)
+
+    // Zero dimensions clamped
+    let ed = ie_create(0.0, 0.0)
+    check("zero w", ie_width(ed) == 1.0)
+    check("zero h", ie_height(ed) == 1.0)
+
+    // Short result array for get_pixel
+    let mut short = [0.0]
+    check("short px", ie_get_pixel(ed, 0.0, 0.0, short) == -1.0)
+
+    // Brush on locked layer
+    let ed2 = ie_create(10.0, 10.0)
+    ie_set_layer_locked(ed2, 0.0, 1.0)
+    check("locked brush", ie_brush_at(ed2, 5.0, 5.0) == -1.0)
+    check("locked fill", ie_fill_rect(ed2, 0.0, 0.0, 5.0, 5.0, 0.0, 0.0, 0.0) == -1.0)
+
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────────
+
+test_create()
+test_destroy()
+test_layers()
+test_layer_props()
+test_pixels()
+test_tools()
+test_brush()
+test_eraser()
+test_fill()
+test_eyedrop()
+test_selection()
+test_zoom()
+test_flatten()
+test_edges()
+print("")
+print("All image_editor tests passed (14 tests)")

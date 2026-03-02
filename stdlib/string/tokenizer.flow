@@ -1,0 +1,232 @@
+// stdlib/string/tokenizer.flow — Simple expression tokenizer
+//
+// Tokenizes strings into typed tokens for parsing simple expressions,
+// DSLs, or configuration formats. Token types are stored as numbers.
+//
+// Token types:
+//   1.0 = NUMBER    (integer or float literal)
+//   2.0 = IDENT     (identifier/keyword)
+//   3.0 = STRING    (quoted string)
+//   4.0 = OPERATOR  (single-char operator: + - * / = < > ! & | ^ % ~ . ,)
+//   5.0 = PAREN     (parentheses/brackets: ( ) [ ] { })
+//   6.0 = NEWLINE   (end of line)
+//   0.0 = EOF       (end of input)
+//
+// Output format: flat array of [type, start_pos, end_pos, ...]
+// Use tok_value() to extract the string value of a token.
+//
+// Functions: tok_tokenize, tok_count, tok_type, tok_start, tok_end,
+//            tok_value, tok_is_digit, tok_is_alpha, tok_is_whitespace,
+//            tok_is_ident_char, tok_find_type, tok_filter_type
+//
+// Usage:
+//   use "tokenizer"
+//   let tokens = tok_tokenize("x = 42 + y")
+//   // tokens: [2,0,1, 4,2,3, 1,4,6, 4,7,8, 2,9,10]
+//   // tok_count(tokens) == 5
+//   // tok_value("x = 42 + y", tokens, 0.0) == "x"
+//   // tok_value("x = 42 + y", tokens, 2.0) == "42"
+
+fn tok_is_digit(c)
+    let code = ord(c)
+    if code >= 48.0 && code <= 57.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn tok_is_alpha(c)
+    let code = ord(c)
+    if code >= 65.0 && code <= 90.0
+        return 1.0
+    end
+    if code >= 97.0 && code <= 122.0
+        return 1.0
+    end
+    if c == "_"
+        return 1.0
+    end
+    return 0.0
+end
+
+fn tok_is_whitespace(c)
+    if c == " " || ord(c) == 9.0 || ord(c) == 13.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn tok_is_ident_char(c)
+    if tok_is_alpha(c) == 1.0 || tok_is_digit(c) == 1.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn tok_is_operator(c)
+    if c == "+" || c == "-" || c == "*" || c == "/" || c == "="
+        return 1.0
+    end
+    if c == "<" || c == ">" || c == "!" || c == "&" || c == "|"
+        return 1.0
+    end
+    if c == "^" || c == "%" || c == "~" || c == "." || c == ","
+        return 1.0
+    end
+    if c == ":" || c == ";"
+        return 1.0
+    end
+    return 0.0
+end
+
+fn tok_is_paren(c)
+    if c == "(" || c == ")" || c == "[" || c == "]" || c == "{" || c == "}"
+        return 1.0
+    end
+    return 0.0
+end
+
+fn tok_tokenize(input)
+    // Tokenize input string into flat token array [type, start, end, ...].
+    let n = len(input)
+    let mut tokens = []
+    let mut pos = 0.0
+
+    while pos < n
+        let c = char_at(input, pos)
+
+        // Skip whitespace (not newlines)
+        if tok_is_whitespace(c) == 1.0
+            pos = pos + 1.0
+        elif c == "\n" || ord(c) == 10.0
+            push(tokens, 6.0)   // NEWLINE
+            push(tokens, pos)
+            push(tokens, pos + 1.0)
+            pos = pos + 1.0
+        elif tok_is_digit(c) == 1.0
+            // Number: integer or float
+            let start = pos
+            while pos < n && tok_is_digit(char_at(input, pos)) == 1.0
+                pos = pos + 1.0
+            end
+            // Check for decimal point
+            if pos < n && char_at(input, pos) == "."
+                pos = pos + 1.0
+                while pos < n && tok_is_digit(char_at(input, pos)) == 1.0
+                    pos = pos + 1.0
+                end
+            end
+            push(tokens, 1.0)   // NUMBER
+            push(tokens, start)
+            push(tokens, pos)
+        elif tok_is_alpha(c) == 1.0
+            // Identifier or keyword
+            let start = pos
+            while pos < n && tok_is_ident_char(char_at(input, pos)) == 1.0
+                pos = pos + 1.0
+            end
+            push(tokens, 2.0)   // IDENT
+            push(tokens, start)
+            push(tokens, pos)
+        elif c == "\"" || c == "'"
+            // String literal
+            let quote = c
+            let start = pos
+            pos = pos + 1.0
+            while pos < n && char_at(input, pos) != quote
+                if char_at(input, pos) == "\\"
+                    pos = pos + 1.0  // skip escaped char
+                end
+                pos = pos + 1.0
+            end
+            if pos < n
+                pos = pos + 1.0  // skip closing quote
+            end
+            push(tokens, 3.0)   // STRING
+            push(tokens, start)
+            push(tokens, pos)
+        elif tok_is_paren(c) == 1.0
+            push(tokens, 5.0)   // PAREN
+            push(tokens, pos)
+            push(tokens, pos + 1.0)
+            pos = pos + 1.0
+        elif tok_is_operator(c) == 1.0
+            // Check for two-char operators: ==, !=, <=, >=, &&, ||
+            let start = pos
+            pos = pos + 1.0
+            if pos < n
+                let c2 = char_at(input, pos)
+                if (c == "=" && c2 == "=") || (c == "!" && c2 == "=") || (c == "<" && c2 == "=") || (c == ">" && c2 == "=") || (c == "&" && c2 == "&") || (c == "|" && c2 == "|")
+                    pos = pos + 1.0
+                end
+            end
+            push(tokens, 4.0)   // OPERATOR
+            push(tokens, start)
+            push(tokens, pos)
+        elif c == "#"
+            // Comment: skip to end of line
+            while pos < n && char_at(input, pos) != "\n"
+                pos = pos + 1.0
+            end
+        else
+            // Unknown character — skip
+            pos = pos + 1.0
+        end
+    end
+
+    return tokens
+end
+
+fn tok_count(tokens)
+    // Number of tokens in the flat array.
+    return len(tokens) / 3.0
+end
+
+fn tok_type(tokens, idx)
+    // Get token type at index.
+    return tokens[idx * 3.0]
+end
+
+fn tok_start(tokens, idx)
+    // Get start position of token at index.
+    return tokens[idx * 3.0 + 1.0]
+end
+
+fn tok_end(tokens, idx)
+    // Get end position of token at index.
+    return tokens[idx * 3.0 + 2.0]
+end
+
+fn tok_value(input, tokens, idx)
+    // Extract the string value of token at index from the original input.
+    let s = tok_start(tokens, idx)
+    let e = tok_end(tokens, idx)
+    return substr(input, s, e)
+end
+
+fn tok_find_type(tokens, token_type)
+    // Find the first token of given type. Returns index or -1.0.
+    let n = tok_count(tokens)
+    let mut i = 0.0
+    while i < n
+        if tok_type(tokens, i) == token_type
+            return i
+        end
+        i = i + 1.0
+    end
+    return -1.0
+end
+
+fn tok_filter_type(input, tokens, token_type)
+    // Return all token values of given type as a flat string array.
+    let n = tok_count(tokens)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        if tok_type(tokens, i) == token_type
+            push(result, tok_value(input, tokens, i))
+        end
+        i = i + 1.0
+    end
+    return result
+end

@@ -1,0 +1,7 @@
+# Hacker News Headlines — OctoView Action Script
+# Navigates to HN and extracts top story links
+
+navigate https://news.ycombinator.com
+sleep 500
+extract a[href*=item]
+print Done — headlines extracted

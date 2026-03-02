@@ -1,0 +1,190 @@
+// test_viz_data.flow — Unit tests for viz_data + viz_palette
+//
+// Tests fingerprinting, scoring, auto-selection, and palette generation.
+
+use "../viz_data"
+use "../viz_palette"
+
+// Use array for counters — mutable scalars don't propagate across fn boundaries
+let mut counters = [0.0, 0.0]
+// counters[0] = pass count, counters[1] = fail count
+
+fn check(name, cond)
+  if cond == 1.0
+    print("  PASS: {name}")
+    counters[0] = counters[0] + 1.0
+  else
+    print("  FAIL: {name}")
+    counters[1] = counters[1] + 1.0
+  end
+  return 0.0
+end
+
+fn approx(a, b, tol)
+  let mut d = a - b
+  if d < 0.0
+    d = 0.0 - d
+  end
+  if d <= tol
+    return 1.0
+  end
+  return 0.0
+end
+
+// ── Fingerprint Tests ──────────────────────────────────────────────
+
+print("=== Fingerprint Tests ===")
+
+// T1: Monotonic integer sequence
+let d1 = [1.0, 2.0, 3.0, 4.0, 5.0]
+let fp1 = viz_fingerprint(d1)
+check("fp [1..5] length = 5", fp1[0] == 5.0)
+check("fp [1..5] min = 1", fp1[1] == 1.0)
+check("fp [1..5] max = 5", fp1[2] == 5.0)
+check("fp [1..5] mean = 3", fp1[3] == 3.0)
+check("fp [1..5] monotonic = 1", fp1[10] == 1.0)
+check("fp [1..5] is_integer = 1", fp1[12] == 1.0)
+check("fp [1..5] is_binary = 0", fp1[13] == 0.0)
+
+// T2: Bounded [0,1] data
+let d2 = [0.1, 0.5, 0.9]
+let fp2 = viz_fingerprint(d2)
+check("fp [0.1,0.5,0.9] bounded_01 = 1", fp2[14] == 1.0)
+check("fp [0.1,0.5,0.9] is_integer = 0", fp2[12] == 0.0)
+
+// T3: Binary data
+let d3 = [0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
+let fp3 = viz_fingerprint(d3)
+check("fp binary is_binary = 1", fp3[13] == 1.0)
+check("fp binary bounded_01 = 1", fp3[14] == 1.0)
+check("fp binary is_integer = 1", fp3[12] == 1.0)
+
+// T4: Empty data
+let d4 = []
+let fp4 = viz_fingerprint(d4)
+check("fp empty length = 0", fp4[0] == 0.0)
+
+// T5: Unique ratio
+let d5 = [1.0, 1.0, 1.0, 2.0, 2.0]
+let fp5 = viz_fingerprint(d5)
+check("fp duplicates unique_ratio = 0.4", approx(fp5[15], 0.4, 0.01) == 1.0)
+
+// T6: Sparsity
+let d6 = [0.0, 0.0, 0.0, 1.0, 2.0]
+let fp6 = viz_fingerprint(d6)
+check("fp sparsity = 0.6", approx(fp6[6], 0.6, 0.01) == 1.0)
+
+// ── Scoring Tests ──────────────────────────────────────────────────
+
+print("")
+print("=== Scoring Tests ===")
+
+// T7: Small integer data should favor bar
+let d7 = [3.0, 7.0, 1.0, 5.0, 9.0]
+let fp7 = viz_fingerprint(d7)
+let sc7 = viz_score(fp7)
+check("small int: bar score > scatter score", sc7[2] > sc7[1])
+
+// T8: Perfect square bounded data should favor heatmap
+let d8_size = 100.0
+let mut d8 = []
+let mut i8 = 0.0
+while i8 < d8_size
+  push(d8, i8 / d8_size)
+  i8 = i8 + 1.0
+end
+let fp8 = viz_fingerprint(d8)
+let sc8 = viz_score(fp8)
+check("100 bounded: heatmap score > 50", sc8[3] > 50.0)
+
+// T9: Large N should favor sparkline
+let mut d9 = []
+let mut i9 = 0.0
+while i9 < 300.0
+  push(d9, i9 * 0.1)
+  i9 = i9 + 1.0
+end
+let fp9 = viz_fingerprint(d9)
+let sc9 = viz_score(fp9)
+check("300 points: sparkline score > 50", sc9[6] > 50.0)
+
+// T10: Binary data should favor grid
+let d10 = [0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0]
+let fp10 = viz_fingerprint(d10)
+let sc10 = viz_score(fp10)
+check("binary: grid score >= 50", sc10[8] >= 50.0)
+
+// ── viz_best Tests ─────────────────────────────────────────────────
+
+print("")
+print("=== Auto-Selection Tests ===")
+
+// T11: Small data → bar
+let d11 = [3.0, 7.0, 1.0, 5.0]
+let best1 = viz_best(d11)
+check("viz_best [3,7,1,5] = bar(3)", best1 == VIZ_BAR)
+
+// T12: viz_best returns valid type
+let d12 = [0.5, 0.3, 0.8, 0.1, 0.9, 0.4, 0.7, 0.2]
+let best2 = viz_best(d12)
+check("viz_best 8 bounded: valid type 1-10", best2 >= 1.0 && best2 <= 10.0)
+
+// T13: viz_type_name
+check("type_name LINE", viz_type_name(VIZ_LINE) == "line")
+check("type_name HEATMAP", viz_type_name(VIZ_HEATMAP) == "heatmap")
+check("type_name unknown", viz_type_name(99.0) == "unknown")
+
+// ── Palette Tests ──────────────────────────────────────────────────
+
+print("")
+print("=== Palette Tests ===")
+
+// T14: Viridis 5 steps = 15 values
+let pal1 = viz_palette(PAL_VIRIDIS, 5.0)
+check("viridis 5 steps = 15 values", len(pal1) == 15.0)
+
+// T15: First color should be dark purple (viridis)
+check("viridis first R ~68", approx(pal1[0], 68.0, 1.0) == 1.0)
+check("viridis first G ~1", approx(pal1[1], 1.0, 1.0) == 1.0)
+check("viridis first B ~84", approx(pal1[2], 84.0, 1.0) == 1.0)
+
+// T16: Last color should be yellow (viridis)
+check("viridis last R ~253", approx(pal1[12], 253.0, 1.0) == 1.0)
+
+// T17: Palette map at 0.0 → first color
+let c0 = viz_palette_map(0.0, 0.0, 1.0, pal1)
+check("map 0.0 → first color R", approx(c0[0], 68.0, 2.0) == 1.0)
+
+// T18: Palette map at 1.0 → last color
+let c1 = viz_palette_map(1.0, 0.0, 1.0, pal1)
+check("map 1.0 → last color R ~253", approx(c1[0], 253.0, 2.0) == 1.0)
+
+// T19: Palette auto — negative data → coolwarm
+let fp_neg = [10.0, -5.0, 5.0, 0.0, 3.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0]
+check("auto palette negative → coolwarm", viz_palette_auto(fp_neg) == PAL_COOLWARM)
+
+// T20: Palette auto — bounded → viridis
+let fp_bounded = [10.0, 0.0, 1.0, 0.5, 0.3, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 1.0, 1.0]
+check("auto palette bounded → viridis", viz_palette_auto(fp_bounded) == PAL_VIRIDIS)
+
+// T21: Single step palette
+let pal_1 = viz_palette(PAL_PLASMA, 1.0)
+check("1-step palette = 3 values", len(pal_1) == 3.0)
+
+// T22: Zero step palette
+let pal_0 = viz_palette(PAL_INFERNO, 0.0)
+check("0-step palette = empty", len(pal_0) == 0.0)
+
+// T23: Palette name
+check("palette name viridis", viz_palette_name(PAL_VIRIDIS) == "viridis")
+check("palette name coolwarm", viz_palette_name(PAL_COOLWARM) == "coolwarm")
+
+// T24: Grayscale palette
+let pal_g = viz_palette(PAL_GRAYSCALE, 3.0)
+check("grayscale 3 steps = 9 values", len(pal_g) == 9.0)
+check("grayscale first = black", pal_g[0] == 0.0 && pal_g[1] == 0.0 && pal_g[2] == 0.0)
+
+let pass_count = counters[0]
+let fail_count = counters[1]
+print("")
+print("=== Results: {pass_count} passed, {fail_count} failed ===")

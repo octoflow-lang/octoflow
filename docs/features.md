@@ -73,29 +73,12 @@ Last updated: February 28, 2026
 
 | Feature | Status | Notes |
 |---|---|---|
-| stdlib/gui toolkit | **Stable** | **Windows only**, 20+ widget types, 3 layout systems, 3-tier GPU rendering |
-| Canvas drawing | **Stable** | Lines, rects, circles, gradients, rounded rects, anti-aliased lines |
-| Charting (plot.flow) | **Stable** | Line, scatter, bar, pie, area, heatmap; autoscale, axis labels, grid |
+| stdlib/gui toolkit | **Stable** | **Windows only**, 16 widget types, 3 layout systems (vstack/hstack/grid), software-rendered |
+| Canvas drawing | **Stable** | Lines, rects, circles, filled circles, pixels |
+| Charting (plot.flow) | **Stable** | Line, scatter, bar, heatmap, candlestick; autoscale, grid, crosshair |
 | Buffer visualization | **Stable** | Image, heatmap, waveform, histogram display on canvas |
-| Themes | **Stable** | 7 themes (Modern, dark, light, ocean, midnight, forest, high contrast), 48 color slots |
-| OctoUI framework | **Stable** | Declarative UI with reactive state, 25+ widgets, SDF fonts, 3 themes |
-| GPU rendering (SPIR-V) | **Stable** | 7 self-hosted SPIR-V shaders for rounded rects, gradients, blending |
+| Themes | **Stable** | Dark, light, ocean presets; custom via `_tc[]` array |
 | Cross-platform GUI | Not shipped | macOS/Linux return errors |
-
-## Game Engine
-
-| Feature | Status | Notes |
-|---|---|---|
-| Game loop + timing | **Stable** | `game_init()`, delta time, FPS counter |
-| Sprite system | **Stable** | Parallel-array sprites, velocity, layers, visibility |
-| Collision detection | **Stable** | AABB, circle, point-in-rect, screen bounds, bounce |
-| Input helpers | **Stable** | Keyboard state, mouse position/click, arrow keys |
-| Tilemap | **Stable** | Grid tiles, 8-color palette, camera offset, solid checks |
-| Camera | **Stable** | Follow target, smooth lerp, world-to-screen conversion |
-| Particle system | **Stable** | Emit, gravity, lifetime fade, swap-remove cleanup |
-| 2D Physics | **Stable** | Gravity, Euler integration, elastic collision, wall bounce |
-| Entity-Component-System | **Stable** | SoA parallel arrays, position/velocity/HP components |
-| Ray tracing (terminal) | **Stable** | Self-hosted SPIR-V ray tracer, halfblock/sixel/kitty output |
 
 ## Data
 

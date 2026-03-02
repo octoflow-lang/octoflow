@@ -1,0 +1,161 @@
+// tests/test_tree.flow — Widget Tree Tests
+//
+// Tests tree creation, parent/child relationships, property setters.
+// Run: octoflow run octoui/tests/test_tree.flow
+
+use "../engine/tree"
+use "../themes/dark"
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// Test 1: Initial tree is empty
+let count0 = ui_tree_count()
+if count0 == 0.0
+  print("PASS: empty tree has 0 widgets")
+  pass = pass + 1.0
+else
+  print("FAIL: expected 0, got {count0}")
+  fail = fail + 1.0
+end
+
+// Test 2: Add a box widget
+let box1 = ui_tree_add(UI_BOX, -1.0, 100.0, 50.0, " ")
+if box1 == 0.0
+  print("PASS: first widget has ID 0")
+  pass = pass + 1.0
+else
+  print("FAIL: expected ID 0, got {box1}")
+  fail = fail + 1.0
+end
+
+// Test 3: Count after add
+let count1 = ui_tree_count()
+if count1 == 1.0
+  print("PASS: tree has 1 widget after add")
+  pass = pass + 1.0
+else
+  print("FAIL: expected 1, got {count1}")
+  fail = fail + 1.0
+end
+
+// Test 4: Widget type is correct
+if _ui_types[0] == UI_BOX
+  print("PASS: widget type is UI_BOX")
+  pass = pass + 1.0
+else
+  print("FAIL: wrong widget type")
+  fail = fail + 1.0
+end
+
+// Test 5: Dimensions stored correctly
+if _ui_w[0] == 100.0
+  if _ui_h[0] == 50.0
+    print("PASS: dimensions 100x50")
+    pass = pass + 1.0
+  else
+    print("FAIL: wrong height")
+    fail = fail + 1.0
+  end
+else
+  print("FAIL: wrong width")
+  fail = fail + 1.0
+end
+
+// Test 6: Parent is -1 (root)
+if _ui_parent[0] == -1.0
+  print("PASS: parent is -1 (root)")
+  pass = pass + 1.0
+else
+  print("FAIL: wrong parent")
+  fail = fail + 1.0
+end
+
+// Test 7: Add child widget
+let col1 = ui_tree_add(UI_COLUMN, -1.0, 200.0, 300.0, " ")
+let child1 = ui_tree_add(UI_TEXT, col1, 80.0, 16.0, "HELLO")
+if _ui_parent[child1] == col1
+  print("PASS: child parent is column")
+  pass = pass + 1.0
+else
+  print("FAIL: child parent wrong")
+  fail = fail + 1.0
+end
+
+// Test 8: Set color
+let _sc = ui_tree_set_color(box1, 255.0, 128.0, 64.0)
+if _ui_colors_r[box1] == 255.0
+  if _ui_colors_g[box1] == 128.0
+    if _ui_colors_b[box1] == 64.0
+      print("PASS: color set correctly")
+      pass = pass + 1.0
+    else
+      print("FAIL: wrong blue")
+      fail = fail + 1.0
+    end
+  else
+    print("FAIL: wrong green")
+    fail = fail + 1.0
+  end
+else
+  print("FAIL: wrong red")
+  fail = fail + 1.0
+end
+
+// Test 9: Set position
+let _sp = ui_tree_set_pos(box1, 10.0, 20.0)
+if _ui_x[box1] == 10.0
+  if _ui_y[box1] == 20.0
+    print("PASS: position set correctly")
+    pass = pass + 1.0
+  else
+    print("FAIL: wrong y")
+    fail = fail + 1.0
+  end
+else
+  print("FAIL: wrong x")
+  fail = fail + 1.0
+end
+
+// Test 10: Set text
+let _st = ui_tree_set_text(child1, "WORLD")
+if _ui_texts[child1] == "WORLD"
+  print("PASS: text updated")
+  pass = pass + 1.0
+else
+  print("FAIL: text not updated")
+  fail = fail + 1.0
+end
+
+// Test 11: Container detection
+let is_col = ui_tree_is_container(col1)
+let is_box = ui_tree_is_container(box1)
+if is_col == 1.0
+  if is_box == 0.0
+    print("PASS: container detection correct")
+    pass = pass + 1.0
+  else
+    print("FAIL: box detected as container")
+    fail = fail + 1.0
+  end
+else
+  print("FAIL: column not detected as container")
+  fail = fail + 1.0
+end
+
+// Test 12: Visibility default
+if _ui_visible[box1] == 1.0
+  print("PASS: default visibility is 1")
+  pass = pass + 1.0
+else
+  print("FAIL: wrong default visibility")
+  fail = fail + 1.0
+end
+
+// Summary
+let total = pass + fail
+print(" ")
+print("test_tree: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

@@ -1,0 +1,343 @@
+// stdlib/math/vec2.flow — 2D vector and geometry operations
+//
+// Vectors stored as [x, y] arrays. Functions return new arrays.
+// All angles in radians unless noted.
+//
+// Functions: vec2, vec2_add, vec2_sub, vec2_scale, vec2_dot, vec2_cross,
+//            vec2_length, vec2_normalize, vec2_distance, vec2_angle,
+//            vec2_rotate, vec2_lerp, vec2_reflect, vec2_perpendicular,
+//            vec2_project, vec2_reject,
+//            line_intersect, point_in_triangle, polygon_area,
+//            circle_contains, rect_contains, closest_point_on_line
+//
+// Usage:
+//   use "vec2"
+//   let mut a = vec2(3.0, 4.0)
+//   let mut b = vec2(1.0, 0.0)
+//   let d = vec2_dot(a, b)     // 3.0
+//   let dist = vec2_length(a)  // 5.0
+
+// ── Construction ────────────────────────────────────────────────
+
+fn vec2(x, y)
+    let mut v = [x, y]
+    return v
+end
+
+fn vec2_zero()
+    let mut v = [0.0, 0.0]
+    return v
+end
+
+fn vec2_one()
+    let mut v = [1.0, 1.0]
+    return v
+end
+
+fn vec2_from_angle(angle)
+    // Unit vector from angle (radians). 0 = right, PI/2 = up.
+    let mut v = [cos(angle), sin(angle)]
+    return v
+end
+
+// ── Arithmetic ──────────────────────────────────────────────────
+
+fn vec2_add(a, b)
+    let mut v = [a[0] + b[0], a[1] + b[1]]
+    return v
+end
+
+fn vec2_sub(a, b)
+    let mut v = [a[0] - b[0], a[1] - b[1]]
+    return v
+end
+
+fn vec2_scale(a, s)
+    let mut v = [a[0] * s, a[1] * s]
+    return v
+end
+
+fn vec2_negate(a)
+    let mut v = [0.0 - a[0], 0.0 - a[1]]
+    return v
+end
+
+fn vec2_mul(a, b)
+    // Component-wise multiplication.
+    let mut v = [a[0] * b[0], a[1] * b[1]]
+    return v
+end
+
+// ── Products ────────────────────────────────────────────────────
+
+fn vec2_dot(a, b)
+    // Dot product: a·b = ax*bx + ay*by
+    return a[0] * b[0] + a[1] * b[1]
+end
+
+fn vec2_cross(a, b)
+    // 2D cross product (scalar): ax*by - ay*bx
+    // Positive = b is counterclockwise from a.
+    return a[0] * b[1] - a[1] * b[0]
+end
+
+// ── Length / Distance ───────────────────────────────────────────
+
+fn vec2_length(a)
+    return sqrt(a[0] * a[0] + a[1] * a[1])
+end
+
+fn vec2_length_sq(a)
+    // Squared length (avoids sqrt).
+    return a[0] * a[0] + a[1] * a[1]
+end
+
+fn vec2_distance(a, b)
+    let dx = b[0] - a[0]
+    let dy = b[1] - a[1]
+    return sqrt(dx * dx + dy * dy)
+end
+
+fn vec2_distance_sq(a, b)
+    let dx = b[0] - a[0]
+    let dy = b[1] - a[1]
+    return dx * dx + dy * dy
+end
+
+fn vec2_manhattan(a, b)
+    // Manhattan (L1) distance.
+    let mut dx = b[0] - a[0]
+    let mut dy = b[1] - a[1]
+    if dx < 0.0
+        dx = 0.0 - dx
+    end
+    if dy < 0.0
+        dy = 0.0 - dy
+    end
+    return dx + dy
+end
+
+// ── Normalization ───────────────────────────────────────────────
+
+fn vec2_normalize(a)
+    // Returns unit vector. Returns zero vector if length is 0.
+    let len_val = vec2_length(a)
+    if len_val < 0.0001
+        return vec2_zero()
+    end
+    let mut v = [a[0] / len_val, a[1] / len_val]
+    return v
+end
+
+fn vec2_set_length(a, new_len)
+    // Return vector with same direction but given length.
+    let n = vec2_normalize(a)
+    return vec2_scale(n, new_len)
+end
+
+fn vec2_clamp_length(a, max_len)
+    // Clamp vector length to max_len.
+    let len_sq = vec2_length_sq(a)
+    if len_sq > max_len * max_len
+        return vec2_set_length(a, max_len)
+    end
+    let mut v = [a[0], a[1]]
+    return v
+end
+
+// ── Angle ───────────────────────────────────────────────────────
+
+fn vec2_angle(a)
+    // Angle of vector from positive x-axis (radians, [-PI, PI]).
+    return atan2(a[1], a[0])
+end
+
+fn vec2_angle_between(a, b)
+    // Angle between two vectors (radians, [0, PI]).
+    let d = vec2_dot(a, b)
+    let la = vec2_length(a)
+    let lb = vec2_length(b)
+    if la < 0.0001 || lb < 0.0001
+        return 0.0
+    end
+    let mut cos_val = d / (la * lb)
+    // Clamp to [-1, 1] for numerical safety
+    if cos_val > 1.0
+        cos_val = 1.0
+    end
+    if cos_val < -1.0
+        cos_val = -1.0
+    end
+    return acos(cos_val)
+end
+
+// ── Rotation ────────────────────────────────────────────────────
+
+fn vec2_rotate(a, angle)
+    // Rotate vector by angle (radians) counterclockwise.
+    let c = cos(angle)
+    let s = sin(angle)
+    let mut v = [a[0] * c - a[1] * s, a[0] * s + a[1] * c]
+    return v
+end
+
+fn vec2_rotate_around(point, center, angle)
+    // Rotate point around center by angle.
+    let dx = point[0] - center[0]
+    let dy = point[1] - center[1]
+    let c = cos(angle)
+    let s = sin(angle)
+    let mut v = [center[0] + dx * c - dy * s, center[1] + dx * s + dy * c]
+    return v
+end
+
+// ── Interpolation ───────────────────────────────────────────────
+
+fn vec2_lerp(a, b, t)
+    // Linear interpolation: a + (b - a) * t
+    let mut v = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+    return v
+end
+
+fn vec2_midpoint(a, b)
+    let mut v = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
+    return v
+end
+
+// ── Projection / Reflection ─────────────────────────────────────
+
+fn vec2_project(a, b)
+    // Project a onto b: (a·b / b·b) * b
+    let bb = vec2_dot(b, b)
+    if bb < 0.0001
+        return vec2_zero()
+    end
+    let scale = vec2_dot(a, b) / bb
+    return vec2_scale(b, scale)
+end
+
+fn vec2_reject(a, b)
+    // Component of a perpendicular to b: a - project(a, b)
+    let proj = vec2_project(a, b)
+    return vec2_sub(a, proj)
+end
+
+fn vec2_reflect(a, normal)
+    // Reflect a across normal: a - 2(a·n)n
+    let d = vec2_dot(a, normal)
+    let mut v = [a[0] - 2.0 * d * normal[0], a[1] - 2.0 * d * normal[1]]
+    return v
+end
+
+fn vec2_perpendicular(a)
+    // 90° counterclockwise rotation: (-y, x)
+    let mut v = [0.0 - a[1], a[0]]
+    return v
+end
+
+// ── Geometry ────────────────────────────────────────────────────
+
+fn line_intersect(p1, p2, p3, p4)
+    // Find intersection of line segments p1-p2 and p3-p4.
+    // Returns [x, y] of intersection, or [-1, -1] if no intersection.
+    // p1..p4 are [x, y] arrays.
+    let d1x = p2[0] - p1[0]
+    let d1y = p2[1] - p1[1]
+    let d2x = p4[0] - p3[0]
+    let d2y = p4[1] - p3[1]
+
+    let denom = d1x * d2y - d1y * d2x
+    if abs(denom) < 0.0001
+        // Parallel or coincident
+        let mut no = [-1.0, -1.0]
+        return no
+    end
+
+    let t = ((p3[0] - p1[0]) * d2y - (p3[1] - p1[1]) * d2x) / denom
+    let u = ((p3[0] - p1[0]) * d1y - (p3[1] - p1[1]) * d1x) / denom
+
+    if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0
+        let mut pt = [p1[0] + t * d1x, p1[1] + t * d1y]
+        return pt
+    end
+
+    let mut no = [-1.0, -1.0]
+    return no
+end
+
+fn point_in_triangle(p, a, b, c)
+    // Check if point p is inside triangle abc using cross products.
+    // All arguments are [x, y] arrays. Returns 1.0 or 0.0.
+    let d1 = (p[0] - b[0]) * (a[1] - b[1]) - (a[0] - b[0]) * (p[1] - b[1])
+    let d2 = (p[0] - c[0]) * (b[1] - c[1]) - (b[0] - c[0]) * (p[1] - c[1])
+    let d3 = (p[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (p[1] - a[1])
+
+    let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0)
+    let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0)
+
+    if has_neg && has_pos
+        return 0.0
+    end
+    return 1.0
+end
+
+fn polygon_area(vertices, n)
+    // Signed area of polygon using Shoelace formula.
+    // vertices: flat array [x0,y0, x1,y1, ...], n = number of vertices.
+    // Returns positive for CCW, negative for CW.
+    let mut area = 0.0
+    let mut i = 0.0
+    while i < n
+        let j = i + 1.0
+        let mut jn = j
+        if jn >= n
+            jn = 0.0
+        end
+        let x1 = vertices[i * 2.0]
+        let y1 = vertices[i * 2.0 + 1.0]
+        let x2 = vertices[jn * 2.0]
+        let y2 = vertices[jn * 2.0 + 1.0]
+        area = area + x1 * y2 - x2 * y1
+        i = i + 1.0
+    end
+    return area / 2.0
+end
+
+fn circle_contains(cx, cy, radius, px, py)
+    // Check if point (px,py) is inside circle at (cx,cy) with radius.
+    let dx = px - cx
+    let dy = py - cy
+    if dx * dx + dy * dy <= radius * radius
+        return 1.0
+    end
+    return 0.0
+end
+
+fn rect_contains(rx, ry, rw, rh, px, py)
+    // Check if point (px,py) is inside rectangle (rx,ry,rw,rh).
+    if px >= rx && px <= rx + rw && py >= ry && py <= ry + rh
+        return 1.0
+    end
+    return 0.0
+end
+
+fn closest_point_on_line(p, a, b)
+    // Find closest point on line segment a-b to point p.
+    // All arguments are [x, y] arrays.
+    let ab = vec2_sub(b, a)
+    let ap = vec2_sub(p, a)
+    let ab_sq = vec2_dot(ab, ab)
+    if ab_sq < 0.0001
+        let mut v = [a[0], a[1]]
+        return v
+    end
+    let mut t = vec2_dot(ap, ab) / ab_sq
+    if t < 0.0
+        t = 0.0
+    end
+    if t > 1.0
+        t = 1.0
+    end
+    let mut v = [a[0] + t * ab[0], a[1] + t * ab[1]]
+    return v
+end

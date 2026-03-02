@@ -1,6 +1,6 @@
 // gpu_lz4.flow — GPU LZ4 Parallel Block Decompression
 //
-// "1024 compressed blocks. 1 dispatch. 1 submit. 0 CPU decompression loops."
+// "1024 compressed blocks. 1 dispatch. 0 CPU decompression loops."
 //
 // Each GPU thread independently decompresses one LZ4 block.
 // Embarrassingly parallel: blocks are independent.
@@ -10,17 +10,11 @@
 //
 // Run: octoflow run examples/gpu_lz4.flow --allow-ffi --allow-read
 
-use "../stdlib/loom/ops/runtime"
-
 let N_BLOCKS = 1024.0
 let OUT_BLOCK = 256.0
 
-rt_init()
-
-let pipe_lz4 = rt_load_pipeline("tests/gpu_shaders/28_lz4_decompress.spv", 2.0, 8.0)
-
 // ── Build compressed blocks ──────────────────────────────────────────
-// Each block compresses [1,2,3,4,5,6,7,8] × 32 = 256 bytes
+// Each block compresses [1,2,3,4,5,6,7,8] x 32 = 256 bytes
 //
 // LZ4 encoding:
 //   Token: 0x8F (lit_len=8, match_len nibble=15 → extended)
@@ -32,7 +26,7 @@ let pipe_lz4 = rt_load_pipeline("tests/gpu_shaders/28_lz4_decompress.spv", 2.0, 
 // Compressed block: [0x8F, 1,2,3,4,5,6,7,8, 8,0, 229] = 12 bytes
 let COMP_SIZE = 12.0
 
-// Build input: [offsets (N+1)] + [compressed data (N × COMP_SIZE)]
+// Build input: [offsets (N+1)] + [compressed data (N x COMP_SIZE)]
 let mut input = []
 
 // Block offsets
@@ -45,9 +39,7 @@ end
 // Compressed data: same block repeated 1024 times
 let mut i = 0.0
 while i < N_BLOCKS
-  // Token: 0x8F = 143
   push(input, 143.0)
-  // Literals
   push(input, 1.0)
   push(input, 2.0)
   push(input, 3.0)
@@ -56,10 +48,8 @@ while i < N_BLOCKS
   push(input, 6.0)
   push(input, 7.0)
   push(input, 8.0)
-  // Match offset: 8 (little-endian)
   push(input, 8.0)
   push(input, 0.0)
-  // Extra match length: 229
   push(input, 229.0)
   i = i + 1.0
 end
@@ -69,9 +59,10 @@ let total_decompressed = N_BLOCKS * OUT_BLOCK
 
 // ── Upload ───────────────────────────────────────────────────────────
 let input_size = N_BLOCKS + 1.0 + total_compressed
-let buf_in = rt_create_buffer(input_size * 4.0)
-let buf_out = rt_create_buffer(total_decompressed * 4.0)
-rt_upload(buf_in, input)
+let vm = loom_boot(1.0, 2.0, total_decompressed)
+loom_prefetch("tests/gpu_shaders/28_lz4_decompress.spv")
+
+vm_write_register(vm, 0.0, 0.0, input)
 
 // Zero output
 let mut zeros = []
@@ -80,35 +71,31 @@ while i < total_decompressed
   push(zeros, 0.0)
   i = i + 1.0
 end
-rt_upload(buf_out, zeros)
+vm_write_register(vm, 0.0, 1.0, zeros)
 
 // ── Dispatch ─────────────────────────────────────────────────────────
 let WGS = N_BLOCKS / 256.0
 
 let t0 = time()
-rt_chain_begin(1.0, 2.0)
-let mut pc = [N_BLOCKS, OUT_BLOCK]
-rt_chain_push_constants(pipe_lz4, pc)
-let mut bufs = [buf_in, buf_out]
-rt_chain_dispatch(pipe_lz4, bufs, WGS)
-rt_chain_end()
+loom_dispatch(vm, "tests/gpu_shaders/28_lz4_decompress.spv", [N_BLOCKS, OUT_BLOCK], WGS)
+let prog = loom_build(vm)
 let t1 = time()
 let record_ms = (t1 - t0) * 1000.0
 
 let t2 = time()
-rt_chain_submit_wait()
+loom_run(prog)
 let t3 = time()
 let gpu_ms = (t3 - t2) * 1000.0
+loom_free(prog)
 
 // ── Download and verify ──────────────────────────────────────────────
-// Check first block and last block
-rt_download(buf_out, total_decompressed)
+let result = loom_read(vm, 0.0, 1.0, total_decompressed)
 
 // Verify first block (bytes 0-255)
 let mut pass_first = 1.0
 let mut i = 0.0
 while i < OUT_BLOCK
-  let got = rt_result[int(i)]
+  let got = result[int(i)]
   let exp = 1.0 + (i - floor(i / 8.0) * 8.0)
   if got != exp
     pass_first = 0.0
@@ -116,12 +103,12 @@ while i < OUT_BLOCK
   i = i + 1.0
 end
 
-// Verify last block (bytes (N-1)*256 to N*256-1)
+// Verify last block
 let mut pass_last = 1.0
 let last_base = (N_BLOCKS - 1.0) * OUT_BLOCK
 let mut i = 0.0
 while i < OUT_BLOCK
-  let got = rt_result[int(last_base + i)]
+  let got = result[int(last_base + i)]
   let exp = 1.0 + (i - floor(i / 8.0) * 8.0)
   if got != exp
     pass_last = 0.0
@@ -129,12 +116,12 @@ while i < OUT_BLOCK
   i = i + 1.0
 end
 
-// Spot-check random blocks
+// Spot-check middle block
 let mut pass_mid = 1.0
 let mid_base = 512.0 * OUT_BLOCK
 let mut i = 0.0
 while i < 8.0
-  let got = rt_result[int(mid_base + i)]
+  let got = result[int(mid_base + i)]
   let exp = i + 1.0
   if got != exp
     pass_mid = 0.0
@@ -156,7 +143,6 @@ print("  Decompressed: {decomp_kb} KB ({total_decompressed} bytes)")
 print("  Compression ratio: {ratio}:1")
 print("  Workgroups: {WGS}")
 print("  Dispatches: 1")
-print("  Submissions: 1")
 print("  CPU decompress loops: 0")
 print("  Record time: {record_ms} ms")
 print("  GPU time:    {gpu_ms} ms")
@@ -180,4 +166,4 @@ else
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm)

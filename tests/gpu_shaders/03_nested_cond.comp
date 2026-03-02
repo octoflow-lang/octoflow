@@ -1,0 +1,20 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set=0, binding=0) buffer Input  { float data[]; } inp;
+layout(set=0, binding=1) buffer Output { float data[]; } out_;
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    float val = inp.data[gid];
+    float result;
+    if (val < 3.0) {
+        result = val + 1000.0;
+    } else if (val < 7.0) {
+        if (val < 5.0)
+            result = val * 2.0;
+        else
+            result = val * 3.0;
+    } else {
+        result = val - 1.0;
+    }
+    out_.data[gid] = result;
+}

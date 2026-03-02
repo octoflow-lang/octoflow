@@ -1,0 +1,459 @@
+// OctoBrain Anomaly / Novelty Detection Benchmark
+// Tests whether the brain can detect unexpected events using surprise scoring.
+//
+// Three sub-tests:
+//   A. Injected anomalies in sine wave (600 obs, window=4)
+//      - Train on 150 clean windows, inject anomalies at positions 200,300,400,500
+//      - PASS if separation ratio (anomaly_surprise / normal_surprise) >= 2.0
+//   B. Pattern break detection (400 obs)
+//      - ABAB pattern, inject C at positions 200-209
+//      - PASS if max surprise during injection > 0.8
+//   C. Gradual drift detection (300 obs, window=4)
+//      - Sine with increasing frequency, train on first 100 windows
+//      - PASS if late_surprise > early_surprise
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\bench_anomaly.flow" --max-iters 20000000
+
+use "../lib/octobrain"
+use "../lib/sequence"
+
+print("=== OctoBrain Anomaly Detection Benchmark ===")
+print("")
+
+// =====================================================================
+// Sub-test A: Injected Anomalies in Sine Wave (600 obs, window=4)
+// Signal: sin(t * 0.5), 600 data points -> ~596 windows of size 4
+// Train: first 150 windows (clean) -> build first-order Markov table
+// Test: remaining windows, inject random anomalies at positions 200,300,400,500
+// Measure: mean surprise at anomaly vs normal positions
+// =====================================================================
+print("--- Sub-test A: Injected Anomalies in Sine Wave ---")
+
+// Step 1: Create brain + external arrays for Test A
+let mut brainA = octobrain_new(2.0)
+let mut p_stateA = proto_new()
+let mut p_embsA = []
+let mut p_mcA = []
+let mut e_stateA = embed_new()
+let mut W_embedA = []
+let mut obs_bufferA = []
+let mut edge_stateA = edges_new()
+let mut enA = []
+let mut eaA = []
+let mut eoA = []
+let mut epA = []
+let mut ewA = []
+let mut eactA = []
+let mut windowA = []
+let mut W_scoreA = []
+
+// Step 2: Generate sine wave signal (600 data points)
+let num_points_a = 600.0
+let win_size_a = 4.0
+let num_windows_a = num_points_a - win_size_a
+let mut signal_a = []
+let mut ti_a = 0.0
+while ti_a < num_points_a
+  let t_a = ti_a * 0.1
+  let val_a = sin(t_a * 0.5)
+  push(signal_a, val_a)
+  ti_a = ti_a + 1.0
+end
+let nw_a = int(num_windows_a)
+print("Generated {num_points_a:.0} sine samples -> {nw_a} windows of size {win_size_a:.0}")
+
+// Step 3: Training phase - feed first 150 windows, record proto sequence
+let train_count_a = 150.0
+let mut train_protos_a = []
+let mut wa = 0.0
+while wa < train_count_a
+  let mut data_a = []
+  push(data_a, signal_a[wa])
+  push(data_a, signal_a[wa + 1.0])
+  push(data_a, signal_a[wa + 2.0])
+  push(data_a, signal_a[wa + 3.0])
+  let _obs_a = octobrain_observe(brainA, p_stateA, p_embsA, p_mcA, e_stateA, W_embedA, obs_bufferA, edge_stateA, enA, eaA, eoA, epA, ewA, eactA, windowA, W_scoreA, data_a)
+  let pid_a = map_get(p_stateA, "last_match_id")
+  push(train_protos_a, pid_a)
+  wa = wa + 1.0
+end
+
+let stats_a = octobrain_stats(brainA, p_stateA, edge_stateA)
+let pc_a = map_get(stats_a, "proto_count")
+let tc_a_int = int(train_count_a)
+print("Training: {tc_a_int} windows, proto_count={pc_a}")
+
+// Step 4: Build first-order Markov table from training proto sequence
+let table_a = markov1_build(train_protos_a, train_count_a, pc_a)
+print("Built first-order Markov table ({pc_a} x {pc_a})")
+
+// Step 5: Test phase - feed remaining windows with injected anomalies
+// Anomaly positions: window indices 200, 300, 400, 500
+// At anomaly positions, replace the window values with random noise
+let test_start_a = train_count_a
+let test_end_a = num_windows_a
+let mut anomaly_surprise_sum = 0.0
+let mut anomaly_count = 0.0
+let mut normal_surprise_sum = 0.0
+let mut normal_count = 0.0
+let mut prev_proto_a = train_protos_a[train_count_a - 1.0]
+
+let mut wt_a = test_start_a
+while wt_a < test_end_a
+  // Determine if this is an anomaly position
+  let mut is_anomaly = 0.0
+  if wt_a == 200.0
+    is_anomaly = 1.0
+  end
+  if wt_a == 300.0
+    is_anomaly = 1.0
+  end
+  if wt_a == 400.0
+    is_anomaly = 1.0
+  end
+  if wt_a == 500.0
+    is_anomaly = 1.0
+  end
+
+  // Build window data - inject random noise at anomaly positions
+  let mut data_ta = []
+  if is_anomaly > 0.5
+    // Anomaly: random values in [-1, 1]
+    push(data_ta, random() * 2.0 - 1.0)
+    push(data_ta, random() * 2.0 - 1.0)
+    push(data_ta, random() * 2.0 - 1.0)
+    push(data_ta, random() * 2.0 - 1.0)
+  else
+    // Normal: use actual sine wave window
+    push(data_ta, signal_a[wt_a])
+    push(data_ta, signal_a[wt_a + 1.0])
+    push(data_ta, signal_a[wt_a + 2.0])
+    push(data_ta, signal_a[wt_a + 3.0])
+  end
+
+  // Observe the window
+  let _obs_ta = octobrain_observe(brainA, p_stateA, p_embsA, p_mcA, e_stateA, W_embedA, obs_bufferA, edge_stateA, enA, eaA, eoA, epA, ewA, eactA, windowA, W_scoreA, data_ta)
+  let actual_proto_a = map_get(p_stateA, "last_match_id")
+
+  // Compute surprise: P(actual | previous context)
+  // If proto IDs are beyond training range, treat as fully surprising
+  let mut surprise_a = 1.0
+  if prev_proto_a < pc_a && actual_proto_a < pc_a
+    let mut ctx_a = []
+    push(ctx_a, prev_proto_a)
+    surprise_a = compute_surprise(table_a, 1.0, ctx_a, actual_proto_a, pc_a)
+  end
+
+  // Accumulate surprise scores
+  if is_anomaly > 0.5
+    anomaly_surprise_sum = anomaly_surprise_sum + surprise_a
+    anomaly_count = anomaly_count + 1.0
+  else
+    normal_surprise_sum = normal_surprise_sum + surprise_a
+    normal_count = normal_count + 1.0
+  end
+
+  prev_proto_a = actual_proto_a
+  wt_a = wt_a + 1.0
+end
+
+// Step 6: Compute separation ratio
+let mean_anomaly_surprise = anomaly_surprise_sum / anomaly_count
+let mean_normal_surprise = normal_surprise_sum / normal_count
+let mut separation_ratio = 0.0
+if mean_normal_surprise > 0.0001
+  separation_ratio = mean_anomaly_surprise / mean_normal_surprise
+else
+  // Normal surprise near zero means anomalies are perfectly separated
+  separation_ratio = 100.0
+end
+
+let ac_int = int(anomaly_count)
+let nc_int = int(normal_count)
+print("Anomaly positions: {ac_int}, Normal positions: {nc_int}")
+print("Mean anomaly surprise: {mean_anomaly_surprise:.4}")
+print("Mean normal surprise:  {mean_normal_surprise:.4}")
+print("Separation ratio:      {separation_ratio:.4}")
+
+if separation_ratio >= 2.0
+  print("PASS test_A: separation_ratio={separation_ratio:.4} (>= 2.0)")
+else
+  print("FAIL test_A: separation_ratio={separation_ratio:.4} (expected >= 2.0)")
+end
+print("")
+
+// =====================================================================
+// Sub-test B: Pattern Break Detection (400 obs)
+// First 200: ABAB pattern (A=[1,0,0], B=[0,1,0])
+// Positions 200-209: inject C=[0,0,1] (never seen before)
+// Positions 210-399: resume ABAB
+// Single brain, online learning
+// PASS if max surprise during injection (200-209) > 0.8
+// =====================================================================
+print("--- Sub-test B: Pattern Break Detection ---")
+
+// Step 1: Create brain + external arrays for Test B
+let mut brainB = octobrain_new(2.0)
+let mut p_stateB = proto_new()
+let mut p_embsB = []
+let mut p_mcB = []
+let mut e_stateB = embed_new()
+let mut W_embedB = []
+let mut obs_bufferB = []
+let mut edge_stateB = edges_new()
+let mut enB = []
+let mut eaB = []
+let mut eoB = []
+let mut epB = []
+let mut ewB = []
+let mut eactB = []
+let mut windowB = []
+let mut W_scoreB = []
+
+// Step 2: Training phase - feed first 200 ABAB observations, record proto sequence
+let train_count_b = 200.0
+let mut train_protos_b = []
+let mut sb = 0.0
+while sb < train_count_b
+  let half_b = sb / 2.0
+  let is_even_b = floor(half_b) * 2.0
+  let mut data_b = []
+  if is_even_b == sb
+    // A pattern
+    push(data_b, 1.0)
+    push(data_b, 0.0)
+    push(data_b, 0.0)
+  else
+    // B pattern
+    push(data_b, 0.0)
+    push(data_b, 1.0)
+    push(data_b, 0.0)
+  end
+  let _obs_b = octobrain_observe(brainB, p_stateB, p_embsB, p_mcB, e_stateB, W_embedB, obs_bufferB, edge_stateB, enB, eaB, eoB, epB, ewB, eactB, windowB, W_scoreB, data_b)
+  let pid_b = map_get(p_stateB, "last_match_id")
+  push(train_protos_b, pid_b)
+  sb = sb + 1.0
+end
+
+let stats_b = octobrain_stats(brainB, p_stateB, edge_stateB)
+let pc_b = map_get(stats_b, "proto_count")
+let tc_b_int = int(train_count_b)
+print("Training: {tc_b_int} ABAB observations, proto_count={pc_b}")
+
+// Step 3: Build first-order Markov table from training sequence
+let table_b = markov1_build(train_protos_b, train_count_b, pc_b)
+print("Built first-order Markov table ({pc_b} x {pc_b})")
+
+// Step 4: Test phase - positions 200-399
+// 200-209: inject C=[0,0,1], 210-399: resume ABAB
+// Track surprise at each step, find max surprise during injection
+let mut max_inject_surprise = 0.0
+let mut prev_proto_b = train_protos_b[train_count_b - 1.0]
+// Use the proto_count from training for surprise calculation
+let pc_b_for_surprise = pc_b
+
+let mut sb2 = 200.0
+while sb2 < 400.0
+  let mut data_b2 = []
+  if sb2 >= 200.0 && sb2 < 210.0
+    // Injection: C pattern (never seen)
+    push(data_b2, 0.0)
+    push(data_b2, 0.0)
+    push(data_b2, 1.0)
+  else
+    // Resume ABAB
+    let half_b2 = sb2 / 2.0
+    let is_even_b2 = floor(half_b2) * 2.0
+    if is_even_b2 == sb2
+      push(data_b2, 1.0)
+      push(data_b2, 0.0)
+      push(data_b2, 0.0)
+    else
+      push(data_b2, 0.0)
+      push(data_b2, 1.0)
+      push(data_b2, 0.0)
+    end
+  end
+
+  let _obs_b2 = octobrain_observe(brainB, p_stateB, p_embsB, p_mcB, e_stateB, W_embedB, obs_bufferB, edge_stateB, enB, eaB, eoB, epB, ewB, eactB, windowB, W_scoreB, data_b2)
+  let actual_proto_b = map_get(p_stateB, "last_match_id")
+
+  // Compute surprise using the training Markov table
+  // If proto IDs are beyond training range, treat as fully surprising
+  let mut surprise_b = 1.0
+  if prev_proto_b < pc_b_for_surprise && actual_proto_b < pc_b_for_surprise
+    let mut ctx_b = []
+    push(ctx_b, prev_proto_b)
+    surprise_b = compute_surprise(table_b, 1.0, ctx_b, actual_proto_b, pc_b_for_surprise)
+  end
+
+  // Track max surprise during injection window (200-209)
+  if sb2 >= 200.0 && sb2 < 210.0
+    if surprise_b > max_inject_surprise
+      max_inject_surprise = surprise_b
+    end
+    let sb2_int = int(sb2)
+    let pid_b2 = int(actual_proto_b)
+    print("  Injection pos {sb2_int}: proto={pid_b2}, surprise={surprise_b:.4}")
+  end
+
+  prev_proto_b = actual_proto_b
+  sb2 = sb2 + 1.0
+end
+
+print("Max surprise during injection (200-209): {max_inject_surprise:.4}")
+
+if max_inject_surprise > 0.8
+  print("PASS test_B: max_injection_surprise={max_inject_surprise:.4} (> 0.8)")
+else
+  print("FAIL test_B: max_injection_surprise={max_inject_surprise:.4} (expected > 0.8)")
+end
+print("")
+
+// =====================================================================
+// Sub-test C: Gradual Drift Detection (300 obs, window=4)
+// Signal: sin(freq * t * 0.1) where freq = 0.5 + step/1000.0
+// Train on first 100 windows (freq ~ 0.5)
+// Monitor surprise from position 100 to 300
+// Compare mean surprise: early (100-149) vs late (250-299)
+// PASS if late_surprise > early_surprise
+// =====================================================================
+print("--- Sub-test C: Gradual Drift Detection ---")
+
+// Step 1: Create brain + external arrays for Test C
+let mut brainC = octobrain_new(2.0)
+let mut p_stateC = proto_new()
+let mut p_embsC = []
+let mut p_mcC = []
+let mut e_stateC = embed_new()
+let mut W_embedC = []
+let mut obs_bufferC = []
+let mut edge_stateC = edges_new()
+let mut enC = []
+let mut eaC = []
+let mut eoC = []
+let mut epC = []
+let mut ewC = []
+let mut eactC = []
+let mut windowC = []
+let mut W_scoreC = []
+
+// Step 2: Generate drifting sine signal (300 + window_size data points)
+// We need 300 windows, each of size 4, so we need 303 data points
+// Drift rate: freq doubles from 0.5 to ~3.5 across 300 positions
+// This ensures late windows are dramatically different from training
+let num_points_c = 304.0
+let win_size_c = 4.0
+let num_windows_c = 300.0
+let mut signal_c = []
+let mut ti_c = 0.0
+while ti_c < num_points_c
+  let freq_c = 0.5 + ti_c / 100.0
+  let val_c = sin(freq_c * ti_c * 0.1)
+  push(signal_c, val_c)
+  ti_c = ti_c + 1.0
+end
+print("Generated {num_points_c:.0} drifting-freq sine samples -> {num_windows_c:.0} windows")
+
+// Step 3: Training phase - feed first 100 windows, record proto sequence
+let train_count_c = 100.0
+let mut train_protos_c = []
+let mut wc = 0.0
+while wc < train_count_c
+  let mut data_c = []
+  push(data_c, signal_c[wc])
+  push(data_c, signal_c[wc + 1.0])
+  push(data_c, signal_c[wc + 2.0])
+  push(data_c, signal_c[wc + 3.0])
+  let _obs_c = octobrain_observe(brainC, p_stateC, p_embsC, p_mcC, e_stateC, W_embedC, obs_bufferC, edge_stateC, enC, eaC, eoC, epC, ewC, eactC, windowC, W_scoreC, data_c)
+  let pid_c = map_get(p_stateC, "last_match_id")
+  push(train_protos_c, pid_c)
+  wc = wc + 1.0
+end
+
+let stats_c = octobrain_stats(brainC, p_stateC, edge_stateC)
+let pc_c = map_get(stats_c, "proto_count")
+let tc_c_int = int(train_count_c)
+print("Training: {tc_c_int} windows, proto_count={pc_c}")
+
+// Step 4: Build first-order Markov table from training sequence
+let table_c = markov1_build(train_protos_c, train_count_c, pc_c)
+print("Built first-order Markov table ({pc_c} x {pc_c})")
+
+// Step 5: Monitor phase - positions 100 to 299
+// Track surprise, compute early (100-149) vs late (250-299) means
+let mut early_surprise_sum = 0.0
+let mut early_count_c = 0.0
+let mut late_surprise_sum = 0.0
+let mut late_count_c = 0.0
+let mut prev_proto_c = train_protos_c[train_count_c - 1.0]
+
+let mut wt_c = train_count_c
+while wt_c < num_windows_c
+  let mut data_tc = []
+  push(data_tc, signal_c[wt_c])
+  push(data_tc, signal_c[wt_c + 1.0])
+  push(data_tc, signal_c[wt_c + 2.0])
+  push(data_tc, signal_c[wt_c + 3.0])
+
+  let _obs_tc = octobrain_observe(brainC, p_stateC, p_embsC, p_mcC, e_stateC, W_embedC, obs_bufferC, edge_stateC, enC, eaC, eoC, epC, ewC, eactC, windowC, W_scoreC, data_tc)
+  let actual_proto_c = map_get(p_stateC, "last_match_id")
+
+  // Compute surprise using the training Markov table
+  // If proto IDs are beyond training range, treat as fully surprising
+  let mut surprise_c = 1.0
+  if prev_proto_c < pc_c && actual_proto_c < pc_c
+    let mut ctx_c = []
+    push(ctx_c, prev_proto_c)
+    surprise_c = compute_surprise(table_c, 1.0, ctx_c, actual_proto_c, pc_c)
+  end
+
+  // Accumulate early (100-149) and late (250-299) surprise
+  if wt_c >= 100.0 && wt_c < 150.0
+    early_surprise_sum = early_surprise_sum + surprise_c
+    early_count_c = early_count_c + 1.0
+  end
+  if wt_c >= 250.0 && wt_c < 300.0
+    late_surprise_sum = late_surprise_sum + surprise_c
+    late_count_c = late_count_c + 1.0
+  end
+
+  prev_proto_c = actual_proto_c
+  wt_c = wt_c + 1.0
+end
+
+let mean_early_surprise = early_surprise_sum / early_count_c
+let mean_late_surprise = late_surprise_sum / late_count_c
+let ec_int = int(early_count_c)
+let lc_int = int(late_count_c)
+print("Early (100-149): {ec_int} windows, mean surprise={mean_early_surprise:.4}")
+print("Late  (250-299): {lc_int} windows, mean surprise={mean_late_surprise:.4}")
+
+if mean_late_surprise > mean_early_surprise
+  print("PASS test_C: late_surprise={mean_late_surprise:.4} > early_surprise={mean_early_surprise:.4}")
+else
+  print("FAIL test_C: late_surprise={mean_late_surprise:.4} <= early_surprise={mean_early_surprise:.4}")
+end
+print("")
+
+// =====================================================================
+// Summary
+// =====================================================================
+print("=== Anomaly Detection Benchmark Summary ===")
+print("Test A (sine anomalies): separation_ratio={separation_ratio:.4} (threshold: 2.0)")
+print("Test B (pattern break):  max_injection_surprise={max_inject_surprise:.4} (threshold: 0.8)")
+print("Test C (gradual drift):  early={mean_early_surprise:.4}, late={mean_late_surprise:.4}")
+
+let mut pass_total = 0.0
+if separation_ratio >= 2.0
+  pass_total = pass_total + 1.0
+end
+if max_inject_surprise > 0.8
+  pass_total = pass_total + 1.0
+end
+if mean_late_surprise > mean_early_surprise
+  pass_total = pass_total + 1.0
+end
+print("Result: {pass_total}/3 sub-tests passed")
+print("")
+print("--- anomaly detection benchmark complete ---")

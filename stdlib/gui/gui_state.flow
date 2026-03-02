@@ -1,15 +1,8 @@
-// gui_state.flow — LoomDB-Powered GUI State Management
+// gui_state.flow — GUI State Management (Undo/Redo)
 //
-// Undo/redo via GPU-resident state snapshots. Session persistence
-// via loomdb_flush/restore. Smart state search via cosine similarity.
-//
-// Architecture: Two-Loom I/O isolation
-//   RENDER LOOM (HOT, zero I/O):
-//     gui_state_snapshot() → capture widget state to GPU memory
-//     gui_state_undo/redo() → restore from GPU-resident snapshots
-//   STATE LOOM (COLD, owns I/O):
-//     gui_state_save() → flush to disk on exit
-//     gui_state_load() → restore from disk on startup
+// State snapshots stored as flat vectors. Undo/redo via cursor.
+// Persistence via gpu_save_binary/gpu_load_binary.
+// Smart state search via cosine similarity (dot/norm).
 //
 // Usage:
 //   use "gui"
@@ -30,18 +23,18 @@ let mut _gui_state_vectors = []
 let mut _gui_state_actions = []
 // State scalars as array elements — scalars DON'T propagate across
 // function boundaries, but array elements DO.
-// _gss: [count, cursor, dims, capacity, initialized]
-let mut _gss = [0.0, 0.0, 1600.0, 100.0, 0.0]
+// _gss_state: [count, cursor, dims, capacity, initialized]
+let mut _gss_state = [0.0, 0.0, 1600.0, 100.0, 0.0]
 
 fn gui_state_init()
   // Reset scalar state — don't reassign arrays to [] (array literals
   // can't be used in assignments, only as function arguments).
   // Setting count/cursor to 0 logically clears the history.
-  _gss[0] = 0.0
-  _gss[1] = 0.0
-  _gss[2] = 200.0 * 8.0
-  _gss[3] = 100.0
-  _gss[4] = 1.0
+  _gss_state[0] = 0.0
+  _gss_state[1] = 0.0
+  _gss_state[2] = 200.0 * 8.0
+  _gss_state[3] = 100.0
+  _gss_state[4] = 1.0
   return 1.0
 end
 
@@ -80,27 +73,27 @@ end
 
 fn gui_state_snapshot(action_name)
   // Capture current widget state — zero I/O, GPU-memory only
-  if _gss[4] == 0.0
+  if _gss_state[4] == 0.0
     return 0.0
   end
 
   let vec = _gui_state_build_vec()
-  let dims = _gss[2]
+  let dims = _gss_state[2]
 
   // If cursor is behind count, we're after an undo — discard forward history
-  if _gss[1] < _gss[0]
+  if _gss_state[1] < _gss_state[0]
     // Truncate vectors array to cursor position
-    let keep_len = _gss[1] * dims
+    let keep_len = _gss_state[1] * dims
     let vec_len = len(_gui_state_vectors)
     // Remove entries after cursor by rebuilding (no array truncate builtin)
     // For efficiency, just track cursor — vectors array may have stale data beyond cursor
-    _gss[0] = _gss[1]
+    _gss_state[0] = _gss_state[1]
     // Trim actions array too
     // (actions are tracked by count, so just reducing count is sufficient)
   end
 
   // Check capacity — if at limit, shift oldest snapshots out
-  if _gss[0] >= _gss[3]
+  if _gss_state[0] >= _gss_state[3]
     // Remove oldest snapshot by shifting vectors left by dims
     let shift = dims
     let old_len = len(_gui_state_vectors)
@@ -113,8 +106,8 @@ fn gui_state_snapshot(action_name)
       end
       si = si + 1.0
     end
-    _gss[0] = _gss[0] - 1.0
-    _gss[1] = _gss[1] - 1.0
+    _gss_state[0] = _gss_state[0] - 1.0
+    _gss_state[1] = _gss_state[1] - 1.0
     // Shift action names too
     let act_len = len(_gui_state_actions)
     if act_len > 1.0
@@ -128,7 +121,7 @@ fn gui_state_snapshot(action_name)
   end
 
   // Append new vector to flat state array
-  let offset = _gss[0] * dims
+  let offset = _gss_state[0] * dims
   let cur_vec_len = len(_gui_state_vectors)
 
   let mut vi = 0.0
@@ -144,16 +137,16 @@ fn gui_state_snapshot(action_name)
   end
 
   // Track action name
-  let act_idx = int(_gss[0])
+  let act_idx = int(_gss_state[0])
   if act_idx < len(_gui_state_actions)
     _gui_state_actions[act_idx] = action_name
   else
     push(_gui_state_actions, action_name)
   end
 
-  _gss[0] = _gss[0] + 1.0
-  _gss[1] = _gss[0]
-  return _gss[0]
+  _gss_state[0] = _gss_state[0] + 1.0
+  _gss_state[1] = _gss_state[0]
+  return _gss_state[0]
 end
 
 fn _gui_state_restore_from_vec(vec)
@@ -180,7 +173,7 @@ end
 
 fn _gui_state_extract_vec(vec_idx)
   // Extract a single state vector from the flat array by index
-  let dims = _gss[2]
+  let dims = _gss_state[2]
   let offset = vec_idx * dims
   let vec_len = len(_gui_state_vectors)
   if offset + dims > vec_len
@@ -205,14 +198,14 @@ end
 
 fn gui_state_undo()
   // Move cursor back one step and restore that state
-  if _gss[4] == 0.0
+  if _gss_state[4] == 0.0
     return 0.0
   end
-  if _gss[1] <= 1.0
+  if _gss_state[1] <= 1.0
     return 0.0
   end
-  _gss[1] = _gss[1] - 1.0
-  let target = _gss[1] - 1.0
+  _gss_state[1] = _gss_state[1] - 1.0
+  let target = _gss_state[1] - 1.0
   let vec = _gui_state_extract_vec(target)
   if len(vec) > 0.0
     let _rv = _gui_state_restore_from_vec(vec)
@@ -224,16 +217,16 @@ end
 
 fn gui_state_redo()
   // Move cursor forward one step and restore that state
-  if _gss[4] == 0.0
+  if _gss_state[4] == 0.0
     return 0.0
   end
-  if _gss[1] >= _gss[0]
+  if _gss_state[1] >= _gss_state[0]
     return 0.0
   end
-  let vec = _gui_state_extract_vec(_gss[1])
+  let vec = _gui_state_extract_vec(_gss_state[1])
   if len(vec) > 0.0
     let _rv = _gui_state_restore_from_vec(vec)
-    _gss[1] = _gss[1] + 1.0
+    _gss_state[1] = _gss_state[1] + 1.0
     _gs[9] = 1.0
     return 1.0
   end
@@ -241,21 +234,21 @@ fn gui_state_redo()
 end
 
 fn gui_state_can_undo()
-  if _gss[1] > 1.0
+  if _gss_state[1] > 1.0
     return 1.0
   end
   return 0.0
 end
 
 fn gui_state_can_redo()
-  if _gss[1] < _gss[0]
+  if _gss_state[1] < _gss_state[0]
     return 1.0
   end
   return 0.0
 end
 
 fn gui_state_undo_count()
-  return _gss[0]
+  return _gss_state[0]
 end
 
 // ── 2B: Session Persistence ─────────────────────────────────────────
@@ -263,7 +256,7 @@ end
 
 fn gui_state_save(path)
   // Persist state snapshots to disk
-  if _gss[4] == 0.0
+  if _gss_state[4] == 0.0
     return 0.0
   end
   if len(path) == 0.0
@@ -271,8 +264,8 @@ fn gui_state_save(path)
   end
   // Take a final snapshot
   let _ss = gui_state_snapshot("session_save")
-  let count = _gss[0]
-  let dims = _gss[2]
+  let count = _gss_state[0]
+  let dims = _gss_state[2]
   if count == 0.0
     return 0.0
   end
@@ -290,7 +283,7 @@ fn gui_state_save(path)
   let mut header = "GUI_STATE_V1\n"
   header = header + "dims:" + str(dims) + "\n"
   header = header + "count:" + str(count) + "\n"
-  header = header + "cursor:" + str(_gss[1])
+  header = header + "cursor:" + str(_gss_state[1])
   write_file(path + ".state", header)
   return 1.0
 end
@@ -318,7 +311,7 @@ fn gui_state_load(path)
   let dims = float(dims_parts[1])
   let count = float(count_parts[1])
   let cursor = float(cursor_parts[1])
-  if dims != _gss[2]
+  if dims != _gss_state[2]
     return 0.0
   end
   // Load vectors
@@ -331,8 +324,8 @@ fn gui_state_load(path)
   if len(_gui_state_vectors) < expected
     return 0.0
   end
-  _gss[0] = count
-  _gss[1] = cursor
+  _gss_state[0] = count
+  _gss_state[1] = cursor
   // Restore the last snapshot
   if count > 0.0
     let last_idx = count - 1.0
@@ -350,14 +343,14 @@ end
 
 fn gui_state_find_similar(k)
   // Find k most similar past states to the current state
-  if _gss[4] == 0.0
+  if _gss_state[4] == 0.0
     return 0.0
   end
-  let count = _gss[0]
+  let count = _gss_state[0]
   if count == 0.0
     return 0.0
   end
-  let dims = _gss[2]
+  let dims = _gss_state[2]
   let current_vec = _gui_state_build_vec()
   let cur_norm = norm(current_vec)
   if cur_norm == 0.0
@@ -437,14 +430,14 @@ end
 
 fn gui_state_gpu_search(k)
   // GPU-accelerated similarity search via gpu_matmul
-  if _gss[4] == 0.0
+  if _gss_state[4] == 0.0
     return 0.0
   end
-  let count = _gss[0]
+  let count = _gss_state[0]
   if count == 0.0
     return 0.0
   end
-  let dims = _gss[2]
+  let dims = _gss_state[2]
   let current_vec = _gui_state_build_vec()
   // vectors = count x dims, query = dims x 1 → count x 1 dot products
   let save_len = count * dims

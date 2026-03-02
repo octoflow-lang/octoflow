@@ -2,8 +2,7 @@
 //
 // "If GPU is the computer, query plan becomes dispatch chain."
 //
-// 65,536 employee records processed ENTIRELY on GPU.
-// 6 dispatches, 1 submission, 0 CPU row iterations.
+// 65,536 employee records processed on GPU.
 // Multi-pass parallel reduction (256 workgroups → 1 value).
 //
 // SQL equivalent:
@@ -11,38 +10,26 @@
 //
 // GPU dispatch chain:
 //   [filter: gt_scalar] → [mask: mul_ab] →
-//   [reduce pass 1: 256→256] → [reduce pass 2: 256→1] →
-//   [reduce pass 1: 256→256] → [reduce pass 2: 256→1]
+//   [reduce SUM pass 1+2] → [reduce COUNT pass 1+2]
 //
 // Run: octoflow run examples/gpu_database.flow --allow-ffi --allow-read
 
-use "../stdlib/loom/ops/runtime"
-
 let N = 65536.0
-let BUF_BYTES = N * 4.0
 let WG_SIZE = 256.0
 let NUM_WG = N / WG_SIZE
 let THRESHOLD = 32768.0
 
-// Boot GPU
-rt_init()
+// ── Boot VMs for each shader type ────────────────────────────────────
+let vm_gt = loom_boot(1.0, 2.0, N)
+let vm_mul = loom_boot(1.0, 3.0, N)
+let vm_r1s = loom_boot(1.0, 2.0, N)
+let vm_r2s = loom_boot(1.0, 2.0, NUM_WG)
+let vm_r1c = loom_boot(1.0, 2.0, N)
+let vm_r2c = loom_boot(1.0, 2.0, NUM_WG)
 
-// Load kernels
-let pipe_gt = rt_load_pipeline("tests/gpu_shaders/15_gt_scalar.spv", 2.0, 4.0)
-let pipe_mul = rt_load_pipeline("tests/gpu_shaders/18_mul_ab.spv", 3.0, 0.0)
-let pipe_reduce = rt_load_pipeline("stdlib/loom/kernels/reduce/reduce_sum.spv", 2.0, 0.0)
-
-// Create data buffers
-let buf_salary = rt_create_buffer(BUF_BYTES)
-let buf_mask = rt_create_buffer(BUF_BYTES)
-let buf_masked = rt_create_buffer(BUF_BYTES)
-
-// Reduction buffers: 256 partial sums, then 1 final sum
-let PARTIAL_BYTES = NUM_WG * 4.0
-let buf_partial_sum = rt_create_buffer(PARTIAL_BYTES)
-let buf_partial_count = rt_create_buffer(PARTIAL_BYTES)
-let buf_result_sum = rt_create_buffer(1024.0)
-let buf_result_count = rt_create_buffer(1024.0)
+loom_prefetch("tests/gpu_shaders/15_gt_scalar.spv")
+loom_prefetch("tests/gpu_shaders/18_mul_ab.spv")
+loom_prefetch("stdlib/loom/kernels/reduce/reduce_sum.spv")
 
 // Upload salary data: [1, 2, 3, ..., 65536]
 let mut salaries = []
@@ -51,83 +38,89 @@ while i < N
   push(salaries, i + 1.0)
   i = i + 1.0
 end
-rt_upload(buf_salary, salaries)
+vm_write_register(vm_gt, 0.0, 0.0, salaries)
 
-// Zero all working buffers
+// Zero arrays
 let mut zeros = []
 let mut i = 0.0
 while i < N
   push(zeros, 0.0)
   i = i + 1.0
 end
-rt_upload(buf_mask, zeros)
-rt_upload(buf_masked, zeros)
 
-// Zero partial and result buffers
 let mut pz = []
 let mut i = 0.0
 while i < NUM_WG
   push(pz, 0.0)
   i = i + 1.0
 end
-rt_upload(buf_partial_sum, pz)
-rt_upload(buf_partial_count, pz)
-rt_upload(buf_result_sum, pz)
-rt_upload(buf_result_count, pz)
 
-// ── Record query dispatch chain ──────────────────────────────────────
+// ── Stage 1: FILTER — salary > 32768 → boolean mask ─────────────────
 let t0 = time()
 
-rt_chain_begin(6.0, 3.0)
+vm_write_register(vm_gt, 0.0, 1.0, zeros)
+loom_dispatch(vm_gt, "tests/gpu_shaders/15_gt_scalar.spv", [THRESHOLD], NUM_WG)
+let pg = loom_build(vm_gt)
+loom_run(pg)
+loom_free(pg)
+let mask = loom_read(vm_gt, 0.0, 1.0, N)
 
-// Stage 1: FILTER — salary > 32768 → boolean mask [256 workgroups]
-let mut pc = [THRESHOLD]
-rt_chain_push_constants(pipe_gt, pc)
-let mut b1 = [buf_salary, buf_mask]
-rt_chain_dispatch(pipe_gt, b1, NUM_WG)
+// ── Stage 2: MASK — salary * mask → masked_salary ────────────────────
+vm_write_register(vm_mul, 0.0, 0.0, salaries)
+vm_write_register(vm_mul, 0.0, 1.0, mask)
+vm_write_register(vm_mul, 0.0, 2.0, zeros)
+loom_dispatch(vm_mul, "tests/gpu_shaders/18_mul_ab.spv", [], NUM_WG)
+let pm = loom_build(vm_mul)
+loom_run(pm)
+loom_free(pm)
+let masked = loom_read(vm_mul, 0.0, 2.0, N)
 
-// Stage 2: MASK — salary * mask → masked_salary [256 workgroups]
-let mut b2 = [buf_salary, buf_mask, buf_masked]
-rt_chain_dispatch(pipe_mul, b2, NUM_WG)
+// ── Stage 3: REDUCE SUM pass 1 — masked → 256 partials ──────────────
+vm_write_register(vm_r1s, 0.0, 0.0, masked)
+vm_write_register(vm_r1s, 0.0, 1.0, pz)
+loom_dispatch(vm_r1s, "stdlib/loom/kernels/reduce/reduce_sum.spv", [], NUM_WG)
+let ps1 = loom_build(vm_r1s)
+loom_run(ps1)
+loom_free(ps1)
+let partial_sum = loom_read(vm_r1s, 0.0, 1.0, NUM_WG)
 
-// Stage 3: REDUCE SUM pass 1 — masked → 256 partial sums [256 workgroups]
-let mut b3 = [buf_masked, buf_partial_sum]
-rt_chain_dispatch(pipe_reduce, b3, NUM_WG)
+// ── Stage 4: REDUCE SUM pass 2 — 256 partials → 1 ───────────────────
+vm_write_register(vm_r2s, 0.0, 0.0, partial_sum)
+let mut rz = [0.0]
+vm_write_register(vm_r2s, 0.0, 1.0, rz)
+loom_dispatch(vm_r2s, "stdlib/loom/kernels/reduce/reduce_sum.spv", [], 1.0)
+let ps2 = loom_build(vm_r2s)
+loom_run(ps2)
+loom_free(ps2)
+let sum_result = loom_read(vm_r2s, 0.0, 1.0, 1.0)
+let gpu_sum = sum_result[0]
 
-// Stage 4: REDUCE SUM pass 2 — 256 partials → 1 final sum [1 workgroup]
-let mut b4 = [buf_partial_sum, buf_result_sum]
-rt_chain_dispatch(pipe_reduce, b4, 1.0)
+// ── Stage 5: REDUCE COUNT pass 1 — mask → 256 partials ──────────────
+vm_write_register(vm_r1c, 0.0, 0.0, mask)
+vm_write_register(vm_r1c, 0.0, 1.0, pz)
+loom_dispatch(vm_r1c, "stdlib/loom/kernels/reduce/reduce_sum.spv", [], NUM_WG)
+let pc1 = loom_build(vm_r1c)
+loom_run(pc1)
+loom_free(pc1)
+let partial_count = loom_read(vm_r1c, 0.0, 1.0, NUM_WG)
 
-// Stage 5: REDUCE COUNT pass 1 — mask → 256 partial counts [256 workgroups]
-let mut b5 = [buf_mask, buf_partial_count]
-rt_chain_dispatch(pipe_reduce, b5, NUM_WG)
+// ── Stage 6: REDUCE COUNT pass 2 — 256 partials → 1 ─────────────────
+vm_write_register(vm_r2c, 0.0, 0.0, partial_count)
+let mut rz2 = [0.0]
+vm_write_register(vm_r2c, 0.0, 1.0, rz2)
+loom_dispatch(vm_r2c, "stdlib/loom/kernels/reduce/reduce_sum.spv", [], 1.0)
+let pc2 = loom_build(vm_r2c)
+loom_run(pc2)
+loom_free(pc2)
+let count_result = loom_read(vm_r2c, 0.0, 1.0, 1.0)
+let gpu_count = count_result[0]
 
-// Stage 6: REDUCE COUNT pass 2 — 256 partials → 1 final count [1 workgroup]
-let mut b6 = [buf_partial_count, buf_result_count]
-rt_chain_dispatch(pipe_reduce, b6, 1.0)
-
-rt_chain_end()
 let t1 = time()
-let record_ms = (t1 - t0) * 1000.0
-
-// ── Single submit — GPU processes entire query ───────────────────────
-let t2 = time()
-rt_chain_submit_wait()
-let t3 = time()
-let gpu_ms = (t3 - t2) * 1000.0
-
-// ── Download results (2 floats) ──────────────────────────────────────
-rt_download(buf_result_sum, 1.0)
-let gpu_sum = rt_result[0]
-
-rt_download(buf_result_count, 1.0)
-let gpu_count = rt_result[0]
+let total_ms = (t1 - t0) * 1000.0
 
 let gpu_avg = gpu_sum / gpu_count
 
-// CPU verification: salary > 32768 → salaries 32769..65536 → 32768 matches
-// SUM = sum(32769..65536) = (32769+65536)*32768/2 = 1,610,678,272
-// COUNT = 32768
+// CPU verification
 let expected_count = 32768.0
 let expected_sum = 1610678272.0
 let expected_avg = expected_sum / expected_count
@@ -137,30 +130,30 @@ print("OctoFlow GPU Database Engine")
 print("  Records: {N}")
 print("  Query: SELECT SUM(salary), COUNT(*) WHERE salary > {THRESHOLD}")
 print("  Dispatches: 6 (filter + mask + 2x reduce_sum + 2x reduce_count)")
-print("  Submissions: 1")
 print("  CPU row iterations: 0")
-print("  Record time: {record_ms} ms")
-print("  GPU time:    {gpu_ms} ms")
+print("  Total time: {total_ms} ms")
 print("  SUM:     {gpu_sum}  (expected {expected_sum})")
 print("  COUNT:   {gpu_count}  (expected {expected_count})")
 print("  AVG:     {gpu_avg}  (expected {expected_avg})")
 
-// Tolerance check (f32 precision at large sums)
 let sum_err = abs(gpu_sum - expected_sum)
 let count_err = abs(gpu_count - expected_count)
 let sum_rel = sum_err / expected_sum
 
-if count_err < 1.0 && sum_rel < 0.001
-  print("  MATCH (count exact, sum within 0.1%)")
+if count_err < 1.0
+  if sum_rel < 0.001
+    print("  MATCH (count exact, sum within 0.1%)")
+  else
+    print("  MISMATCH: SUM relative error: {sum_rel}")
+  end
 else
-  print("  MISMATCH")
-  if count_err >= 1.0
-    print("    COUNT error: {count_err}")
-  end
-  if sum_rel >= 0.001
-    print("    SUM relative error: {sum_rel}")
-  end
+  print("  MISMATCH: COUNT error: {count_err}")
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm_gt)
+loom_shutdown(vm_mul)
+loom_shutdown(vm_r1s)
+loom_shutdown(vm_r2s)
+loom_shutdown(vm_r1c)
+loom_shutdown(vm_r2c)

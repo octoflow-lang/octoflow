@@ -1,0 +1,223 @@
+// ase_sort_discovery.flow — ASE Sort Algorithm Discovery Demo
+//
+// Evolves bitonic sort kernel parameters to discover optimal configurations.
+// Genome: [workgroup_size, num_stages]. The evolution discovers that
+// wg=256 + 8 stages = full bitonic sort is optimal for 256 elements.
+//
+// Run: octoflow run examples/ase_sort_discovery.flow --allow-ffi --allow-read --allow-write
+
+use "../stdlib/loom/ase/genome"
+use "../stdlib/loom/ase/evolve"
+use "../stdlib/loom/ase/fitness"
+use "../stdlib/compiler/ir"
+
+print("=== ASE Sort Discovery ===")
+print("")
+
+let N = 256.0
+let POP_SIZE = 8.0
+let GENERATIONS = 5.0
+let KEEP = 4.0
+let MUT_RATE = 0.3
+
+// ── Sort kernel emitter ─────────────────────────────────────────────
+// Emits a bitonic sort network with variable depth in shared memory.
+// Each compare-swap step: partner = lid XOR j, direction = (lid AND k) == 0.
+// Thread keeps min (ascending) or max (descending) based on position.
+
+fn _emit_cmp_swap(blk, lid, j_val, k_val)
+  let j_u = ir_const_u(blk, j_val)
+  let k_u = ir_const_u(blk, k_val)
+  let zero_u = ir_const_u(blk, 0.0)
+
+  let partner = ir_ixor(blk, lid, j_u)
+  let dir_bits = ir_iand(blk, lid, k_u)
+  let is_ascending = ir_uequ(blk, dir_bits, zero_u)
+  let pos_bits = ir_iand(blk, lid, j_u)
+  let is_lower = ir_uequ(blk, pos_bits, zero_u)
+
+  let my_val = ir_shared_load(blk, lid)
+  let p_val = ir_shared_load(blk, partner)
+  let lo = ir_fmin(blk, my_val, p_val)
+  let hi = ir_fmax(blk, my_val, p_val)
+
+  // ascending+lower→min, ascending+higher→max, descending: reversed
+  let asc_pick = ir_select(blk, 1.0, is_ascending, lo, hi)
+  let desc_pick = ir_select(blk, 1.0, is_ascending, hi, lo)
+  let result = ir_select(blk, 1.0, is_lower, asc_pick, desc_pick)
+
+  ir_shared_store(blk, lid, result)
+  ir_barrier(blk)
+  return 0.0
+end
+
+fn emit_sort_variant(wg_size, num_stages, out_path)
+  ir_new()
+  ir_input_count = 1.0
+  ir_shared_size = wg_size
+  ir_workgroup_size = wg_size
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+  let lid = ir_load_local_id(entry)
+
+  // Load input into shared memory
+  let val = ir_load_input_at(entry, 0.0, gid)
+  ir_shared_store(entry, lid, val)
+  ir_barrier(entry)
+
+  // Emit bitonic sort passes (up to num_stages)
+  let mut stage = 0.0
+  let mut k = 2.0
+  while k <= wg_size
+    if stage < num_stages
+      let mut j = k / 2.0
+      while j >= 1.0
+        _emit_cmp_swap(entry, lid, j, k)
+        j = j / 2.0
+      end
+    end
+    stage = stage + 1.0
+    k = k * 2.0
+  end
+
+  // Write sorted result to output binding
+  let sorted_val = ir_shared_load(entry, lid)
+  ir_store_output_at(entry, gid, sorted_val)
+  ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+// ── Generate test data ──────────────────────────────────────────────
+// Reversed input: [255, 254, ..., 1, 0]. Expected: [0, 1, ..., 255].
+
+let mut input_data = []
+let mut expected = []
+let mut zeros_buf = []
+let mut i = 0.0
+while i < N
+  push(input_data, N - 1.0 - i)
+  push(expected, i)
+  push(zeros_buf, 0.0)
+  i = i + 1.0
+end
+
+// ── Schema + population ─────────────────────────────────────────────
+// gene 0: workgroup_size [32..256], discretized to {32,64,128,256}
+// gene 1: num_stages [1..8]
+let schema = [32.0, 256.0, 1.0, 8.0]
+let wg_options = [32.0, 64.0, 128.0, 256.0]
+
+let mut pop = []
+let mut i = 0.0
+while i < POP_SIZE
+  let mut g = ase_genome_create(2.0)
+  ase_genome_randomize(g, schema)
+  push(pop, g)
+  i = i + 1.0
+end
+
+// ── Evolution loop ──────────────────────────────────────────────────
+
+let spv = "ase_sort_variant.spv"
+
+let mut gen = 0.0
+while gen < GENERATIONS
+  let mut fitness = []
+  let mut best_fit = -1.0
+  let mut best_wg = 0.0
+  let mut best_stg = 0.0
+  let mut max_time = 0.001
+
+  // Phase 1: dispatch + collect timing + correctness
+  let mut times = []
+  let mut corr_scores = []
+
+  let mut i = 0.0
+  while i < POP_SIZE
+    let genome = pop[i]
+
+    // Discretize workgroup size, clamp stages
+    ase_genome_discretize(genome, 0.0, wg_options)
+    let wg = genome[0]
+    let mut stages = floor(genome[1])
+    if stages < 1.0
+      stages = 1.0
+    end
+    if stages > 8.0
+      stages = 8.0
+    end
+
+    // Emit + dispatch
+    emit_sort_variant(wg, stages, spv)
+
+    let vm = loom_boot(1.0, 2.0, N)
+    vm_write_register(vm, 0.0, 0.0, input_data)
+    vm_write_register(vm, 0.0, 1.0, zeros_buf)
+
+    let t0 = now_ms()
+    loom_dispatch(vm, spv, [], ceil(N / wg))
+    let prog = loom_build(vm)
+    loom_run(prog)
+    loom_free(prog)
+    let t1 = now_ms()
+
+    let mut elapsed = t1 - t0
+    if elapsed < 0.001
+      elapsed = 0.001
+    end
+    push(times, elapsed)
+    if elapsed > max_time
+      max_time = elapsed
+    end
+
+    // Score correctness
+    let output = loom_read(vm, 0.0, 1.0, N)
+    let corr = ase_evaluate_correctness(output, expected)
+    push(corr_scores, corr)
+
+    loom_shutdown(vm)
+    i = i + 1.0
+  end
+
+  // Phase 2: compute fitness
+  let mut i = 0.0
+  while i < POP_SIZE
+    let f = ase_fitness_score(corr_scores[i], times[i], max_time)
+    push(fitness, f)
+    if f > best_fit
+      best_fit = f
+      let cur = pop[i]
+      best_wg = cur[0]
+      best_stg = floor(cur[1])
+    end
+    i = i + 1.0
+  end
+
+  print("Gen {gen}: best fitness={best_fit} (wg={best_wg}, stages={best_stg})")
+
+  // Evolve to next generation
+  if gen < GENERATIONS - 1.0
+    pop = ase_next_generation(pop, fitness, schema, KEEP, MUT_RATE)
+  end
+  gen = gen + 1.0
+end
+
+// ── Report winner ───────────────────────────────────────────────────
+print("")
+let winner = pop[0]
+ase_genome_discretize(winner, 0.0, wg_options)
+let w_wg = winner[0]
+let w_stg = floor(winner[1])
+
+let mut algo_name = "partial"
+if w_wg > 255.5
+  if w_stg > 7.5
+    algo_name = "full bitonic"
+  end
+end
+
+print("Winner: {algo_name}, wg={w_wg}, stages={w_stg}")
+print("")

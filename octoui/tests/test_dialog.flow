@@ -1,0 +1,161 @@
+// tests/test_dialog.flow — Modal Dialog Tests
+//
+// Tests: modal creation, open/close, panel access, active state.
+//
+// Run: octoflow run octoui/tests/test_dialog.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/text"
+use "../widgets/core/modal"
+use "../widgets/input/button"
+use "../widgets/layout/column"
+use "../platform/desktop/window_win32"
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// Open window
+let _w = ui_window_open(400.0, 300.0, "Dialog Test")
+
+// Root layout (required for pipeline)
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 400.0, 300.0)
+
+// ── Test 1: No modal active by default ──
+let v1 = ui_modal_active()
+if v1 == -1.0
+  print("PASS: no modal active initially")
+  pass = pass + 1.0
+else
+  print("FAIL: expected -1, got active modal")
+  fail = fail + 1.0
+end
+
+// ── Test 2: Create modal ──
+let dlg = ui_modal(280.0, 180.0, "TEST DIALOG")
+if dlg == 0.0
+  print("PASS: first modal has ID 0")
+  pass = pass + 1.0
+else
+  print("FAIL: expected modal ID 0")
+  fail = fail + 1.0
+end
+
+// ── Test 3: Modal starts closed ──
+let v3 = ui_modal_is_open(dlg)
+if v3 == 0.0
+  print("PASS: modal starts closed")
+  pass = pass + 1.0
+else
+  print("FAIL: modal should start closed")
+  fail = fail + 1.0
+end
+
+// ── Test 4: Get content panel ──
+let panel = ui_modal_panel(dlg)
+if panel >= 0.0
+  print("PASS: panel ID valid")
+  pass = pass + 1.0
+else
+  print("FAIL: panel ID invalid")
+  fail = fail + 1.0
+end
+
+// Add content to panel
+let _pt = ui_text(panel, "DIALOG CONTENT", UI_COLOR_TEXT)
+let _pb = ui_button(panel, 100.0, 28.0, "OK")
+
+// ── Test 5: Open modal ──
+let _ms = ui_modal_set_screen(400.0, 300.0)
+let _o = ui_modal_open(dlg)
+let v5 = ui_modal_is_open(dlg)
+if v5 == 1.0
+  print("PASS: modal is open after open()")
+  pass = pass + 1.0
+else
+  print("FAIL: modal should be open")
+  fail = fail + 1.0
+end
+
+// ── Test 6: Active modal ──
+let v6 = ui_modal_active()
+if v6 == 0.0
+  print("PASS: active modal is dlg (0)")
+  pass = pass + 1.0
+else
+  print("FAIL: wrong active modal")
+  fail = fail + 1.0
+end
+
+// ── Test 7: Second modal auto-closes first ──
+let dlg2 = ui_modal(200.0, 140.0, "SECOND")
+let _o2 = ui_modal_open(dlg2)
+let v7 = ui_modal_is_open(dlg)
+if v7 == 0.0
+  print("PASS: first modal auto-closed on second open")
+  pass = pass + 1.0
+else
+  print("FAIL: first modal should be closed")
+  fail = fail + 1.0
+end
+
+// ── Test 8: Second modal is open ──
+let v8 = ui_modal_is_open(dlg2)
+if v8 == 1.0
+  print("PASS: second modal is open")
+  pass = pass + 1.0
+else
+  print("FAIL: second modal should be open")
+  fail = fail + 1.0
+end
+
+// ── Test 9: Close modal ──
+let _cl = ui_modal_close(dlg2)
+let v9 = ui_modal_is_open(dlg2)
+if v9 == 0.0
+  print("PASS: modal closed after close()")
+  pass = pass + 1.0
+else
+  print("FAIL: modal should be closed")
+  fail = fail + 1.0
+end
+
+// ── Test 10: No active modal after close ──
+let v10 = ui_modal_active()
+if v10 == -1.0
+  print("PASS: no active modal after close")
+  pass = pass + 1.0
+else
+  print("FAIL: should have no active modal")
+  fail = fail + 1.0
+end
+
+// ── Test 11: Invalid ID returns 0 ──
+let v11 = ui_modal_is_open(99.0)
+if v11 == 0.0
+  print("PASS: invalid modal_is_open returns 0")
+  pass = pass + 1.0
+else
+  print("FAIL: invalid modal should return 0")
+  fail = fail + 1.0
+end
+
+// ── Summary ──
+let _l = ui_layout_update()
+let _r = ui_pipeline_render()
+let _p = ui_pipeline_present()
+let _sl = sleep(200.0)
+let _wc = ui_window_close()
+
+let total = pass + fail
+print(" ")
+print("test_dialog: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

@@ -1,0 +1,297 @@
+// stdlib/math/matrix.flow — Matrix operations (flat-array, row-major)
+//
+// Matrices stored as flat arrays: mat[row * cols + col]
+// All functions take/return {data, rows, cols} as separate arguments.
+//
+// Functions: mat_create, mat_zeros, mat_identity, mat_get, mat_set,
+//            mat_add, mat_sub, mat_scale, mat_transpose, mat_multiply,
+//            mat_dot, mat_det_2x2, mat_det_3x3, mat_trace,
+//            mat_row, mat_col, mat_print
+//
+// Usage:
+//   use "matrix"
+//   let mut a = mat_identity(3.0)   // 3x3 identity
+//   let mut b = mat_create(3.0, 3.0, 2.0)  // 3x3 filled with 2.0
+//   let mut c = mat_multiply(a, 3.0, 3.0, b, 3.0, 3.0)  // a * b
+
+// ── Creation ────────────────────────────────────────────────────
+
+fn mat_create(rows, cols, fill)
+    // Create a rows x cols matrix filled with fill value.
+    return array_new(rows * cols, fill)
+end
+
+fn mat_zeros(rows, cols)
+    // Create a rows x cols zero matrix.
+    return array_new(rows * cols, 0.0)
+end
+
+fn mat_identity(n)
+    // Create an n x n identity matrix.
+    let mut mat = array_new(n * n, 0.0)
+    let mut i = 0.0
+    while i < n
+        mat[i * n + i] = 1.0
+        i = i + 1.0
+    end
+    return mat
+end
+
+fn mat_from_rows(rows, cols, values)
+    // Create matrix from flat array of values (row-major).
+    // values must have rows * cols elements.
+    let mut mat = []
+    let n = rows * cols
+    let mut i = 0.0
+    while i < n
+        push(mat, values[i])
+        i = i + 1.0
+    end
+    return mat
+end
+
+// ── Access ──────────────────────────────────────────────────────
+
+fn mat_get(mat, cols, row, col)
+    // Get element at (row, col).
+    return mat[row * cols + col]
+end
+
+fn mat_set(mat, cols, row, col, val)
+    // Set element at (row, col).
+    mat[row * cols + col] = val
+    return 0.0
+end
+
+fn mat_row(mat, cols, row)
+    // Extract a row as array.
+    let mut result = []
+    let mut j = 0.0
+    while j < cols
+        push(result, mat[row * cols + j])
+        j = j + 1.0
+    end
+    return result
+end
+
+fn mat_col(mat, rows, cols, col)
+    // Extract a column as array.
+    let mut result = []
+    let mut i = 0.0
+    while i < rows
+        push(result, mat[i * cols + col])
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Arithmetic ──────────────────────────────────────────────────
+
+fn mat_add(a, b, rows, cols)
+    // Element-wise addition: a + b. Returns new matrix.
+    let n = rows * cols
+    let mut result = array_new(n, 0.0)
+    let mut i = 0.0
+    while i < n
+        result[i] = a[i] + b[i]
+        i = i + 1.0
+    end
+    return result
+end
+
+fn mat_sub(a, b, rows, cols)
+    // Element-wise subtraction: a - b. Returns new matrix.
+    let n = rows * cols
+    let mut result = array_new(n, 0.0)
+    let mut i = 0.0
+    while i < n
+        result[i] = a[i] - b[i]
+        i = i + 1.0
+    end
+    return result
+end
+
+fn mat_scale(mat, rows, cols, scalar)
+    // Multiply every element by scalar. Returns new matrix.
+    let n = rows * cols
+    let mut result = array_new(n, 0.0)
+    let mut i = 0.0
+    while i < n
+        result[i] = mat[i] * scalar
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Transpose ───────────────────────────────────────────────────
+
+fn mat_transpose(mat, rows, cols)
+    // Transpose: rows x cols → cols x rows. Returns new matrix.
+    let mut result = array_new(rows * cols, 0.0)
+    let mut i = 0.0
+    while i < rows
+        let mut j = 0.0
+        while j < cols
+            result[j * rows + i] = mat[i * cols + j]
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Multiplication ──────────────────────────────────────────────
+
+fn mat_multiply(a, a_rows, a_cols, b, b_rows, b_cols)
+    // Matrix multiplication: a[a_rows x a_cols] * b[b_rows x b_cols]
+    // a_cols must equal b_rows. Returns [a_rows x b_cols] matrix.
+    let mut result = array_new(a_rows * b_cols, 0.0)
+    let mut i = 0.0
+    while i < a_rows
+        let mut j = 0.0
+        while j < b_cols
+            let mut sum = 0.0
+            let mut k = 0.0
+            while k < a_cols
+                sum = sum + a[i * a_cols + k] * b[k * b_cols + j]
+                k = k + 1.0
+            end
+            result[i * b_cols + j] = sum
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn mat_vec_multiply(mat, rows, cols, vec)
+    // Matrix-vector multiply: mat[rows x cols] * vec[cols] → result[rows]
+    let mut result = array_new(rows, 0.0)
+    let mut i = 0.0
+    while i < rows
+        let mut sum = 0.0
+        let mut j = 0.0
+        while j < cols
+            sum = sum + mat[i * cols + j] * vec[j]
+            j = j + 1.0
+        end
+        result[i] = sum
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Vector Operations ───────────────────────────────────────────
+
+fn mat_dot(a, b, n)
+    // Dot product of two vectors of length n.
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i < n
+        sum = sum + a[i] * b[i]
+        i = i + 1.0
+    end
+    return sum
+end
+
+fn vec_norm(v, n)
+    // Euclidean norm of vector.
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i < n
+        sum = sum + v[i] * v[i]
+        i = i + 1.0
+    end
+    return sqrt(sum)
+end
+
+fn vec_normalize(v, n)
+    // Return unit vector. Returns zero vector if norm is 0.
+    let norm = vec_norm(v, n)
+    let mut result = array_new(n, 0.0)
+    if norm > 0.0
+        let mut i = 0.0
+        while i < n
+            result[i] = v[i] / norm
+            i = i + 1.0
+        end
+    end
+    return result
+end
+
+// ── Properties ──────────────────────────────────────────────────
+
+fn mat_trace(mat, n)
+    // Trace: sum of diagonal elements of n x n matrix.
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i < n
+        sum = sum + mat[i * n + i]
+        i = i + 1.0
+    end
+    return sum
+end
+
+fn mat_det_2x2(mat)
+    // Determinant of 2x2 matrix: ad - bc
+    return mat[0] * mat[3] - mat[1] * mat[2]
+end
+
+fn mat_det_3x3(mat)
+    // Determinant of 3x3 matrix (Sarrus' rule)
+    let a = mat[0]
+    let b = mat[1]
+    let c = mat[2]
+    let d = mat[3]
+    let e = mat[4]
+    let f = mat[5]
+    let g = mat[6]
+    let h = mat[7]
+    let k = mat[8]
+    return a * (e * k - f * h) - b * (d * k - f * g) + c * (d * h - e * g)
+end
+
+fn mat_is_square(rows, cols)
+    if rows == cols
+        return 1.0
+    end
+    return 0.0
+end
+
+fn mat_is_symmetric(mat, n)
+    // Check if n x n matrix is symmetric (mat[i,j] == mat[j,i]).
+    let mut i = 0.0
+    while i < n
+        let mut j = i + 1.0
+        while j < n
+            if abs(mat[i * n + j] - mat[j * n + i]) > 0.0001
+                return 0.0
+            end
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+// ── Display ─────────────────────────────────────────────────────
+
+fn mat_print(mat, rows, cols)
+    // Print matrix in readable format.
+    let mut i = 0.0
+    while i < rows
+        let mut line = "["
+        let mut j = 0.0
+        while j < cols
+            if j > 0.0
+                line = line + ", "
+            end
+            line = line + str(mat[i * cols + j])
+            j = j + 1.0
+        end
+        line = line + "]"
+        print(line)
+        i = i + 1.0
+    end
+    return 0.0
+end

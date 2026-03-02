@@ -1,0 +1,366 @@
+// test_video_player.flow — Tests for stdlib/media/video_player.flow
+use "video_player"
+use "timeline"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Helper: create a simple timeline ─────────────────────
+
+fn make_timeline()
+    let tl = tl_create(30.0)
+    let tk = tl_add_track(tl, TL_VIDEO)
+    let _c1 = tl_add_clip(tl, tk, 0.0, 5.0, 100.0)
+    let _c2 = tl_add_clip(tl, tk, 5.0, 5.0, 101.0)
+    // Duration = 10 seconds
+    return tl
+end
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn test_create()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+    check("create id", p >= 0.0)
+    check("create state", vp_state(p) == VP_STOPPED)
+    check("create fps", vp_fps(p) == 30.0)
+    check("create time", vp_current_time(p) == 0.0)
+    check("create frame", vp_current_frame(p) == 0.0)
+    check("create speed", vp_get_speed(p) == 1.0)
+    check("create vol", vp_get_volume(p) == 1.0)
+    check("create dur", approx(vp_duration(p), 10.0) == 1.0)
+    check("create total", vp_total_frames(p) == 300.0)
+    return 0.0
+end
+
+fn test_destroy()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+    let r = vp_destroy(p)
+    check("destroy ok", r == 0.0)
+    check("destroy state", vp_state(p) == VP_STOPPED)
+    let r2 = vp_destroy(-1.0)
+    check("destroy bad", r2 == -1.0)
+    return 0.0
+end
+
+// ── Transport ────────────────────────────────────────────
+
+fn test_transport()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+
+    vp_play(p)
+    check("play", vp_is_playing(p) == 1.0)
+    check("not paused", vp_is_paused(p) == 0.0)
+
+    vp_pause(p)
+    check("pause", vp_is_paused(p) == 1.0)
+
+    vp_play(p)
+    vp_stop(p)
+    check("stop", vp_is_stopped(p) == 1.0)
+    check("stop time", vp_current_time(p) == 0.0)
+
+    // Toggle
+    vp_toggle(p)
+    check("toggle play", vp_is_playing(p) == 1.0)
+    vp_toggle(p)
+    check("toggle pause", vp_is_paused(p) == 1.0)
+
+    return 0.0
+end
+
+// ── Seek ─────────────────────────────────────────────────
+
+fn test_seek()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+
+    vp_seek(p, 5.0)
+    check("seek time", approx(vp_current_time(p), 5.0) == 1.0)
+    check("seek frame", vp_current_frame(p) == 150.0)
+
+    // Seek percent
+    vp_seek_percent(p, 0.5)
+    check("seek pct", approx(vp_position_percent(p), 0.5) == 1.0)
+
+    // Seek frame
+    vp_seek_frame(p, 60.0)
+    check("seek frame 60", approx(vp_current_time(p), 2.0) == 1.0)
+
+    // Clamp negative
+    vp_seek(p, -10.0)
+    check("seek neg clamp", vp_current_time(p) == 0.0)
+
+    // Clamp past duration
+    vp_seek(p, 999.0)
+    check("seek hi clamp", approx(vp_current_time(p), 10.0) == 1.0)
+
+    return 0.0
+end
+
+// ── Frame stepping ───────────────────────────────────────
+
+fn test_step()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+
+    vp_step_forward(p)
+    check("step fwd frame", vp_current_frame(p) == 1.0)
+    check("step fwd time", approx(vp_current_time(p), 1.0 / 30.0) == 1.0)
+
+    vp_step_backward(p)
+    check("step back frame", vp_current_frame(p) == 0.0)
+    check("step back time", vp_current_time(p) == 0.0)
+
+    // Step backward at 0 → stays at 0
+    vp_step_backward(p)
+    check("step back 0", vp_current_frame(p) == 0.0)
+
+    return 0.0
+end
+
+// ── Advance ──────────────────────────────────────────────
+
+fn test_advance()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+
+    // Advance while stopped → no movement
+    let t1 = vp_advance(p, 1.0)
+    check("adv stopped", t1 == 0.0)
+
+    // Play and advance
+    vp_play(p)
+    let t2 = vp_advance(p, 1.0)
+    check("adv 1s", approx(t2, 1.0) == 1.0)
+    check("adv frame", vp_current_frame(p) == 30.0)
+
+    // Advance to end → stops
+    vp_advance(p, 20.0)
+    check("adv end", vp_is_stopped(p) == 1.0)
+    check("adv end time", approx(vp_current_time(p), 10.0) == 1.0)
+
+    return 0.0
+end
+
+// ── Advance with speed ───────────────────────────────────
+
+fn test_advance_speed()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+
+    vp_set_speed(p, 2.0)
+    vp_play(p)
+    vp_advance(p, 1.0)
+    // 2x speed: 1s real = 2s playback
+    check("speed 2x", approx(vp_current_time(p), 2.0) == 1.0)
+
+    return 0.0
+end
+
+// ── Advance with loop ────────────────────────────────────
+
+fn test_advance_loop()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+    vp_set_loop(p, 1.0)
+
+    vp_play(p)
+    vp_seek(p, 9.5)
+    vp_advance(p, 1.0)
+    // Should loop around, still playing
+    check("loop playing", vp_is_playing(p) == 1.0)
+    check("loop wrapped", vp_current_time(p) < 9.5)
+
+    return 0.0
+end
+
+// ── Region ───────────────────────────────────────────────
+
+fn test_region()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+    vp_set_region(p, 2.0, 5.0)
+
+    vp_play(p)
+    vp_seek(p, 4.5)
+    vp_advance(p, 1.0)
+    // Should stop at region end (5.0)
+    check("region stop", vp_is_stopped(p) == 1.0)
+
+    // Region with loop
+    vp_set_loop(p, 1.0)
+    vp_play(p)
+    vp_seek(p, 4.5)
+    vp_advance(p, 1.0)
+    check("region loop", vp_is_playing(p) == 1.0)
+    check("region wrap", vp_current_time(p) >= 2.0 && vp_current_time(p) < 5.0)
+
+    vp_clear_region(p)
+
+    return 0.0
+end
+
+// ── Speed / Volume ───────────────────────────────────────
+
+fn test_properties()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+
+    vp_set_speed(p, 0.5)
+    check("speed set", vp_get_speed(p) == 0.5)
+
+    vp_set_speed(p, 0.0)
+    check("speed clamp lo", vp_get_speed(p) == 0.1)
+
+    vp_set_speed(p, 999.0)
+    check("speed clamp hi", vp_get_speed(p) == 16.0)
+
+    vp_set_volume(p, 0.7)
+    check("vol set", approx(vp_get_volume(p), 0.7) == 1.0)
+
+    vp_set_volume(p, -1.0)
+    check("vol clamp lo", vp_get_volume(p) == 0.0)
+
+    vp_set_volume(p, 5.0)
+    check("vol clamp hi", vp_get_volume(p) == 1.0)
+
+    vp_set_loop(p, 1.0)
+    check("loop on", vp_get_loop(p) == 1.0)
+
+    return 0.0
+end
+
+// ── Sync ─────────────────────────────────────────────────
+
+fn test_sync()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+
+    vp_set_sync_mode(p, VP_SYNC_AUDIO)
+    vp_set_audio_clock(p, 5.0)
+    vp_seek(p, 5.1)
+    let drift = vp_get_drift(p)
+    check("drift", approx(drift, 0.1) == 1.0)
+
+    check("drop init", vp_get_drop_count(p) == 0.0)
+    vp_reset_stats(p)
+    check("reset stats", vp_get_drop_count(p) == 0.0)
+
+    // Invalid sync mode
+    let r = vp_set_sync_mode(p, 99.0)
+    check("bad sync", r == -1.0)
+
+    return 0.0
+end
+
+// ── Timeline query ───────────────────────────────────────
+
+fn test_timeline_query()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+
+    check("tl id", vp_timeline_id(p) == tl)
+
+    vp_seek(p, 2.0)
+    let clip = vp_get_clip_at(p, 0.0)
+    check("clip at 2", clip >= 0.0)
+
+    return 0.0
+end
+
+// ── Duration / Remaining ─────────────────────────────────
+
+fn test_duration()
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+
+    check("dur", approx(vp_duration(p), 10.0) == 1.0)
+    check("remain full", approx(vp_remaining(p), 10.0) == 1.0)
+
+    vp_seek(p, 3.0)
+    check("remain 7", approx(vp_remaining(p), 7.0) == 1.0)
+
+    return 0.0
+end
+
+// ── FPS clamp ────────────────────────────────────────────
+
+fn test_fps()
+    let tl = make_timeline()
+    let p1 = vp_create(tl, 0.0)
+    check("fps default", vp_fps(p1) == 30.0)
+
+    let p2 = vp_create(tl, 999.0)
+    check("fps clamp hi", vp_fps(p2) == 240.0)
+
+    return 0.0
+end
+
+// ── Edge cases ───────────────────────────────────────────
+
+fn test_edges()
+    check("bad play", vp_play(-1.0) == -1.0)
+    check("bad pause", vp_pause(999.0) == -1.0)
+    check("bad stop", vp_stop(-1.0) == -1.0)
+    check("bad seek", vp_seek(-1.0, 0.0) == -1.0)
+    check("bad step", vp_step_forward(-1.0) == -1.0)
+    check("bad speed", vp_set_speed(-1.0, 1.0) == -1.0)
+    check("bad vol", vp_set_volume(-1.0, 0.5) == -1.0)
+    check("bad state", vp_state(-1.0) == VP_STOPPED)
+    check("bad time", vp_current_time(-1.0) == 0.0)
+    check("bad frame", vp_current_frame(-1.0) == 0.0)
+    check("bad dur", vp_duration(-1.0) == 0.0)
+    check("bad clip at", vp_get_clip_at(-1.0, 0.0) == -1.0)
+    check("bad tl id", vp_timeline_id(-1.0) == -1.0)
+
+    // Advance 0 dt
+    let tl = make_timeline()
+    let p = vp_create(tl, 30.0)
+    vp_play(p)
+    let t = vp_advance(p, 0.0)
+    check("adv zero dt", t == 0.0)
+
+    // Pause when not playing
+    vp_stop(p)
+    vp_pause(p)
+    check("pause stopped", vp_is_stopped(p) == 1.0)
+
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────────
+
+test_create()
+test_destroy()
+test_transport()
+test_seek()
+test_step()
+test_advance()
+test_advance_speed()
+test_advance_loop()
+test_region()
+test_properties()
+test_sync()
+test_timeline_query()
+test_duration()
+test_fps()
+test_edges()
+print("")
+print("All video_player tests passed (15 tests)")

@@ -1,0 +1,174 @@
+// test_number_theory.flow — Tests for stdlib/math/number_theory.flow
+use "number_theory"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Factorial ───────────────────────────────────────────────────
+
+fn test_factorial()
+    check("factorial(0) = 1", factorial(0.0) == 1.0)
+    check("factorial(1) = 1", factorial(1.0) == 1.0)
+    check("factorial(5) = 120", factorial(5.0) == 120.0)
+    check("factorial(10) = 3628800", factorial(10.0) == 3628800.0)
+    check("factorial(-1) = 0", factorial(-1.0) == 0.0)
+    return 0.0
+end
+
+// ── Fibonacci ───────────────────────────────────────────────────
+
+fn test_fibonacci()
+    check("fib(0) = 0", fibonacci(0.0) == 0.0)
+    check("fib(1) = 1", fibonacci(1.0) == 1.0)
+    check("fib(2) = 1", fibonacci(2.0) == 1.0)
+    check("fib(10) = 55", fibonacci(10.0) == 55.0)
+    check("fib(20) = 6765", fibonacci(20.0) == 6765.0)
+    return 0.0
+end
+
+fn test_fibonacci_seq()
+    let mut seq = fibonacci_seq(8.0)
+    check("fib_seq len", len(seq) == 8.0)
+    check("fib_seq[0] = 0", seq[0] == 0.0)
+    check("fib_seq[1] = 1", seq[1] == 1.0)
+    check("fib_seq[7] = 13", seq[7] == 13.0)
+    return 0.0
+end
+
+// ── Primality ───────────────────────────────────────────────────
+
+fn test_is_prime()
+    check("is_prime(2)", is_prime(2.0) == 1.0)
+    check("is_prime(3)", is_prime(3.0) == 1.0)
+    check("is_prime(4) = 0", is_prime(4.0) == 0.0)
+    check("is_prime(17)", is_prime(17.0) == 1.0)
+    check("is_prime(97)", is_prime(97.0) == 1.0)
+    check("is_prime(100) = 0", is_prime(100.0) == 0.0)
+    check("is_prime(1) = 0", is_prime(1.0) == 0.0)
+    check("is_prime(0) = 0", is_prime(0.0) == 0.0)
+    return 0.0
+end
+
+fn test_prime_sieve()
+    let mut primes = prime_sieve(30.0)
+    check("sieve count <= 30", len(primes) == 10.0)
+    check("sieve[0] = 2", primes[0] == 2.0)
+    check("sieve[9] = 29", primes[9] == 29.0)
+    return 0.0
+end
+
+// ── Exponentiation ──────────────────────────────────────────────
+
+fn test_pow_int()
+    check("pow_int(2,0) = 1", pow_int(2.0, 0.0) == 1.0)
+    check("pow_int(2,10) = 1024", pow_int(2.0, 10.0) == 1024.0)
+    check("pow_int(3,4) = 81", pow_int(3.0, 4.0) == 81.0)
+    check("pow_int(5,3) = 125", pow_int(5.0, 3.0) == 125.0)
+    return 0.0
+end
+
+fn test_mod_pow()
+    check("mod_pow(2,10,1000) = 24", mod_pow(2.0, 10.0, 1000.0) == 24.0)
+    check("mod_pow(3,4,5) = 1", mod_pow(3.0, 4.0, 5.0) == 1.0)
+    return 0.0
+end
+
+// ── Combinatorics ───────────────────────────────────────────────
+
+fn test_combinations()
+    check("C(5,2) = 10", combinations(5.0, 2.0) == 10.0)
+    check("C(10,3) = 120", combinations(10.0, 3.0) == 120.0)
+    check("C(5,0) = 1", combinations(5.0, 0.0) == 1.0)
+    check("C(5,5) = 1", combinations(5.0, 5.0) == 1.0)
+    check("C(3,5) = 0", combinations(3.0, 5.0) == 0.0)
+    return 0.0
+end
+
+fn test_permutations()
+    check("P(5,2) = 20", permutations(5.0, 2.0) == 20.0)
+    check("P(5,5) = 120", permutations(5.0, 5.0) == 120.0)
+    check("P(5,0) = 1", permutations(5.0, 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Array Statistics ────────────────────────────────────────────
+
+fn test_array_stats()
+    let mut arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+    check("sum_array", sum_array(arr) == 15.0)
+    check("product_array", product_array(arr) == 120.0)
+    check("mean", mean(arr) == 3.0)
+    check("median odd", median(arr) == 3.0)
+    return 0.0
+end
+
+fn test_median_even()
+    let mut arr = [1.0, 2.0, 3.0, 4.0]
+    check("median even", median(arr) == 2.5)
+    return 0.0
+end
+
+fn test_median_unsorted()
+    let mut arr = [5.0, 1.0, 3.0, 2.0, 4.0]
+    check("median unsorted", median(arr) == 3.0)
+    return 0.0
+end
+
+// ── Number Utilities ────────────────────────────────────────────
+
+fn test_is_even_odd()
+    check("is_even(4)", is_even(4.0) == 1.0)
+    check("is_even(3) = 0", is_even(3.0) == 0.0)
+    check("is_odd(3)", is_odd(3.0) == 1.0)
+    check("is_odd(4) = 0", is_odd(4.0) == 0.0)
+    return 0.0
+end
+
+fn test_divisors()
+    let mut d = divisors(12.0)
+    // Divisors of 12: 1,2,3,4,6,12 (order may vary)
+    check("divisors(12) count", len(d) == 6.0)
+    return 0.0
+end
+
+fn test_digit_sum()
+    check("digit_sum(123) = 6", digit_sum(123.0) == 6.0)
+    check("digit_sum(9999) = 36", digit_sum(9999.0) == 36.0)
+    check("digit_sum(0) = 0", digit_sum(0.0) == 0.0)
+    return 0.0
+end
+
+fn test_collatz()
+    check("collatz(1) = 0", collatz(1.0) == 0.0)
+    check("collatz(6) = 8", collatz(6.0) == 8.0)
+    check("collatz(27) = 111", collatz(27.0) == 111.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_factorial()
+test_fibonacci()
+test_fibonacci_seq()
+test_is_prime()
+test_prime_sieve()
+test_pow_int()
+test_mod_pow()
+test_combinations()
+test_permutations()
+test_array_stats()
+test_median_even()
+test_median_unsorted()
+test_is_even_odd()
+test_divisors()
+test_digit_sum()
+test_collatz()
+print("")
+print("All number theory tests passed (16 tests)")

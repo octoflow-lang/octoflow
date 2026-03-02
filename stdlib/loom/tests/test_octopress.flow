@@ -1,0 +1,85 @@
+// test_octopress.flow — Tests for OctoPress .flow wrappers
+//
+// NOTE: These tests require the OctoPress builtins (octopress_encode,
+// octopress_decode, octopress_analyze, octopress_save, octopress_load)
+// to be implemented in the runtime. They will fail with "undefined"
+// errors until Dev 1 ships those builtins.
+//
+// Run: octoflow run stdlib/loom/tests/test_octopress.flow
+
+use "../octopress"
+
+print("=== Test: OctoPress Wrappers ===")
+print("")
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+fn check(name, got, expected)
+  if abs(got - expected) < 0.01
+    print("  PASS: {name}")
+    return 1.0
+  end
+  print("  FAIL: {name} got={got} expected={expected}")
+  return 0.0
+end
+
+fn tally(result)
+  if result > 0.5
+    pass = pass + 1.0
+  else
+    fail = fail + 1.0
+  end
+  return 0.0
+end
+
+// Test 1: Delta roundtrip
+print("Test 1: Delta roundtrip")
+let data = [1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0]
+let compressed = octopress_compress(data, "delta")
+let decompressed = octopress_decompress(compressed)
+let _t = tally(check("delta roundtrip length", len(decompressed), len(data)))
+let mut i = 0.0
+let mut delta_ok = 1.0
+while i < len(data)
+  if abs(decompressed[i] - data[i]) > 0.001
+    delta_ok = 0.0
+  end
+  i = i + 1.0
+end
+let _t = tally(check("delta roundtrip values", delta_ok, 1.0))
+print("")
+
+// Test 2: Raw roundtrip
+print("Test 2: Raw roundtrip")
+let raw_compressed = octopress_compress(data, "raw")
+let raw_decompressed = octopress_decompress(raw_compressed)
+let _t = tally(check("raw roundtrip length", len(raw_decompressed), len(data)))
+print("")
+
+// Test 3: Compression ratio
+print("Test 3: Compression ratio")
+let ratio = octopress_ratio(data, compressed)
+let mut ratio_ok = 0.0
+if ratio > 0.0
+  ratio_ok = 1.0
+end
+let _t = tally(check("ratio positive", ratio_ok, 1.0))
+print("  Delta compression ratio: {ratio}")
+print("")
+
+// Test 4: Auto mode
+print("Test 4: Auto mode")
+let auto_compressed = octopress_auto(data)
+let auto_decompressed = octopress_decompress(auto_compressed)
+let _t = tally(check("auto roundtrip length", len(auto_decompressed), len(data)))
+print("")
+
+// ── Summary ─────────────────────────────────────────────────────────
+print("Results: {pass} passed, {fail} failed")
+if fail < 0.5
+  print("ALL PASS")
+else
+  print("SOME FAILED")
+end
+print("")

@@ -1,0 +1,142 @@
+// test_probability.flow — Tests for stdlib/math/probability.flow
+use "probability"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Normal distribution ───────────────────────────────────
+
+fn test_normal()
+    // Standard normal at x=0: pdf = 1/sqrt(2*pi) ≈ 0.3989
+    check("normal pdf 0", approx(normal_pdf(0.0, 0.0, 1.0), 0.3989) == 1.0)
+    // CDF at x=0: 0.5
+    check("normal cdf 0", approx(normal_cdf(0.0, 0.0, 1.0), 0.5) == 1.0)
+    // CDF at x=1.96: ~0.975
+    check("normal cdf 1.96", approx(normal_cdf(1.96, 0.0, 1.0), 0.975) == 1.0)
+    // CDF at x=-1.96: ~0.025
+    check("normal cdf -1.96", approx(normal_cdf(-1.96, 0.0, 1.0), 0.025) == 1.0)
+    // Non-standard normal: N(10, 2) at x=10
+    check("normal pdf mu=10", approx(normal_pdf(10.0, 10.0, 2.0), 0.1995) == 1.0)
+    return 0.0
+end
+
+// ── Binomial distribution ─────────────────────────────────
+
+fn test_binomial()
+    // Coin flip: P(X=5) for Binomial(10, 0.5) = C(10,5)*0.5^10 ≈ 0.2461
+    check("binom pmf 5", approx(binomial_pmf(5.0, 10.0, 0.5), 0.246) == 1.0)
+    // P(X=0) for Binomial(10, 0.5) = 0.5^10 ≈ 0.000977
+    check("binom pmf 0", binomial_pmf(0.0, 10.0, 0.5) < 0.001)
+    // CDF: P(X<=5) should be ~0.623
+    check("binom cdf 5", approx(binomial_cdf(5.0, 10.0, 0.5), 0.623) == 1.0)
+    return 0.0
+end
+
+// ── Poisson distribution ──────────────────────────────────
+
+fn test_poisson()
+    // Poisson(3): P(X=3) = e^-3 * 3^3 / 3! ≈ 0.2240
+    check("poisson pmf 3", approx(poisson_pmf(3.0, 3.0), 0.224) == 1.0)
+    // P(X=0) = e^-3 ≈ 0.0498
+    check("poisson pmf 0", approx(poisson_pmf(0.0, 3.0), 0.0498) == 1.0)
+    // CDF: P(X<=3) ≈ 0.6472
+    check("poisson cdf 3", approx(poisson_cdf(3.0, 3.0), 0.647) == 1.0)
+    return 0.0
+end
+
+// ── Exponential distribution ──────────────────────────────
+
+fn test_exponential()
+    // Exp(1): pdf(1) = e^-1 ≈ 0.3679
+    check("exp pdf 1", approx(exponential_pdf(1.0, 1.0), 0.3679) == 1.0)
+    // CDF(1) = 1 - e^-1 ≈ 0.6321
+    check("exp cdf 1", approx(exponential_cdf(1.0, 1.0), 0.6321) == 1.0)
+    // CDF(0) = 0
+    check("exp cdf 0", exponential_cdf(0.0, 1.0) == 0.0)
+    return 0.0
+end
+
+// ── Uniform distribution ──────────────────────────────────
+
+fn test_uniform()
+    check("uniform pdf mid", approx(uniform_pdf(0.5, 0.0, 1.0), 1.0) == 1.0)
+    check("uniform pdf out", uniform_pdf(2.0, 0.0, 1.0) == 0.0)
+    check("uniform cdf mid", approx(uniform_cdf(0.5, 0.0, 1.0), 0.5) == 1.0)
+    check("uniform cdf end", uniform_cdf(1.0, 0.0, 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Geometric distribution ────────────────────────────────
+
+fn test_geometric()
+    // P(X=1) = p = 0.5
+    check("geom pmf 1", geometric_pmf(1.0, 0.5) == 0.5)
+    // P(X=3) = (1-p)^2 * p = 0.125
+    check("geom pmf 3", approx(geometric_pmf(3.0, 0.5), 0.125) == 1.0)
+    // CDF(3) = 1 - (1-p)^3 = 0.875
+    check("geom cdf 3", approx(geometric_cdf(3.0, 0.5), 0.875) == 1.0)
+    return 0.0
+end
+
+// ── Bernoulli ─────────────────────────────────────────────
+
+fn test_bernoulli()
+    check("bernoulli 1", bernoulli_pmf(1.0, 0.3) == 0.3)
+    check("bernoulli 0", approx(bernoulli_pmf(0.0, 0.3), 0.7) == 1.0)
+    return 0.0
+end
+
+// ── Expected value / variance ─────────────────────────────
+
+fn test_expectation()
+    // Fair die: values 1-6, probs 1/6 each
+    let mut vals = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let p = 1.0 / 6.0
+    let mut probs = [p, p, p, p, p, p]
+    let ev = expected_value(vals, probs)
+    check("ev die", approx(ev, 3.5) == 1.0)
+    let v = variance_discrete(vals, probs)
+    check("var die", approx(v, 2.917) == 1.0)
+    return 0.0
+end
+
+// ── Entropy ───────────────────────────────────────────────
+
+fn test_entropy()
+    // Fair coin: H = -2*(0.5*ln(0.5)) = ln(2) ≈ 0.6931
+    let mut probs = [0.5, 0.5]
+    let h = entropy_discrete(probs)
+    check("entropy coin", approx(h, 0.6931) == 1.0)
+    // Certain outcome: H = 0
+    let mut probs2 = [1.0, 0.0]
+    check("entropy certain", entropy_discrete(probs2) == 0.0)
+    return 0.0
+end
+
+// ── Run all ───────────────────────────────────────────────
+
+test_normal()
+test_binomial()
+test_poisson()
+test_exponential()
+test_uniform()
+test_geometric()
+test_bernoulli()
+test_expectation()
+test_entropy()
+print("")
+print("All probability tests passed (9 tests)")

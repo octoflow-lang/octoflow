@@ -1,0 +1,74 @@
+// GPU-Resident Chain Benchmark
+// Measures: gpu_fill -> gpu_add -> gpu_mul -> gpu_scale -> gpu_sum
+// All operations should stay on GPU (zero PCIe between ops)
+
+// Warmup
+let w1 = gpu_fill(1.0, 1000)
+let w2 = gpu_fill(2.0, 1000)
+let w3 = gpu_add(w1, w2)
+let w4 = gpu_sum(w3)
+
+print("=== GPU-Resident Chain Benchmark (10M elements) ===")
+print("")
+
+// Time the full chain
+let t0 = now_ms()
+let a = gpu_fill(1.0, 10000000)
+let b = gpu_fill(2.0, 10000000)
+let c = gpu_add(a, b)
+let d = gpu_mul(c, c)
+let e = gpu_scale(d, 0.5)
+let s = gpu_sum(e)
+let t1 = now_ms()
+let chain_ms = t1 - t0
+print("5-step chain: {chain_ms} ms")
+print("  result: {s}  (expected: 4500000)")
+print("")
+
+// Time individual operations
+let t2 = now_ms()
+let a2 = gpu_fill(1.0, 10000000)
+let b2 = gpu_fill(2.0, 10000000)
+let t3 = now_ms()
+let fill_ms = t3 - t2
+print("gpu_fill 2x10M: {fill_ms} ms")
+
+let t4 = now_ms()
+let c2 = gpu_add(a2, b2)
+let t5 = now_ms()
+let add_ms = t5 - t4
+print("gpu_add 10M:    {add_ms} ms")
+
+let t6 = now_ms()
+let d2 = gpu_mul(c2, c2)
+let t7 = now_ms()
+let mul_ms = t7 - t6
+print("gpu_mul 10M:    {mul_ms} ms")
+
+let t8 = now_ms()
+let e2 = gpu_scale(d2, 0.5)
+let t9 = now_ms()
+let scale_ms = t9 - t8
+print("gpu_scale 10M:  {scale_ms} ms")
+
+let t10 = now_ms()
+let s2 = gpu_sum(e2)
+let t11 = now_ms()
+let sum_ms = t11 - t10
+print("gpu_sum 10M:    {sum_ms} ms")
+print("")
+
+// Run chain 5 times for stability
+print("=== 5 runs of full chain ===")
+for i in range(1, 6)
+    let ta = now_ms()
+    let ra = gpu_fill(1.0, 10000000)
+    let rb = gpu_fill(2.0, 10000000)
+    let rc = gpu_add(ra, rb)
+    let rd = gpu_mul(rc, rc)
+    let re = gpu_scale(rd, 0.5)
+    let rs = gpu_sum(re)
+    let tb = now_ms()
+    let run_ms = tb - ta
+    print("  run {i}: {run_ms} ms  (result={rs})")
+end

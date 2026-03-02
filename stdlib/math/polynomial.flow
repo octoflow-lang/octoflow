@@ -1,0 +1,308 @@
+// stdlib/math/polynomial.flow — Polynomial operations
+//
+// Polynomials stored as coefficient arrays [a0, a1, a2, ...]
+// where p(x) = a0 + a1*x + a2*x^2 + ...
+// The degree is len(coeffs) - 1.
+//
+// Functions: poly_eval, poly_add, poly_sub, poly_mul, poly_scale,
+//            poly_derivative, poly_integral, poly_degree,
+//            poly_roots_quadratic, poly_negate, poly_is_zero,
+//            poly_trim, poly_to_string
+//
+// Usage:
+//   use "polynomial"
+//   let p = [1.0, 2.0, 3.0]       // 1 + 2x + 3x²
+//   poly_eval(p, 2.0)              // 1 + 4 + 12 = 17.0
+//   let q = [0.0, 0.0, 1.0]       // x²
+//   let r = poly_mul(p, q)         // x² + 2x³ + 3x⁴
+
+fn poly_eval(p, x)
+    // Evaluate polynomial at x using Horner's method.
+    let n = len(p)
+    if n == 0.0
+        return 0.0
+    end
+
+    let mut result = p[n - 1.0]
+    let mut i = n - 2.0
+    while i >= 0.0
+        result = result * x + p[i]
+        i = i - 1.0
+    end
+    return result
+end
+
+fn poly_degree(p)
+    // Degree of polynomial (ignoring trailing zero coefficients).
+    let n = len(p)
+    let mut d = n - 1.0
+    while d > 0.0
+        if p[d] != 0.0
+            return d
+        end
+        d = d - 1.0
+    end
+    return 0.0
+end
+
+fn poly_is_zero(p)
+    // Check if polynomial is the zero polynomial.
+    let n = len(p)
+    let mut i = 0.0
+    while i < n
+        if p[i] != 0.0
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn poly_trim(p)
+    // Remove trailing zero coefficients.
+    let n = len(p)
+    if n == 0.0
+        let mut zero = [0.0]
+        return zero
+    end
+
+    let mut last = n - 1.0
+    while last > 0.0 && p[last] == 0.0
+        last = last - 1.0
+    end
+
+    let mut result = []
+    let mut i = 0.0
+    while i <= last
+        push(result, p[i])
+        i = i + 1.0
+    end
+    return result
+end
+
+fn poly_add(a, b)
+    // Add two polynomials.
+    let na = len(a)
+    let nb = len(b)
+    let mut mx = na
+    if nb > mx
+        mx = nb
+    end
+
+    let mut result = []
+    let mut i = 0.0
+    while i < mx
+        let mut va = 0.0
+        if i < na
+            va = a[i]
+        end
+        let mut vb = 0.0
+        if i < nb
+            vb = b[i]
+        end
+        push(result, va + vb)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn poly_sub(a, b)
+    // Subtract polynomial b from a.
+    let na = len(a)
+    let nb = len(b)
+    let mut mx = na
+    if nb > mx
+        mx = nb
+    end
+
+    let mut result = []
+    let mut i = 0.0
+    while i < mx
+        let mut va = 0.0
+        if i < na
+            va = a[i]
+        end
+        let mut vb = 0.0
+        if i < nb
+            vb = b[i]
+        end
+        push(result, va - vb)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn poly_scale(p, s)
+    // Multiply polynomial by scalar.
+    let n = len(p)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        push(result, p[i] * s)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn poly_negate(p)
+    return poly_scale(p, -1.0)
+end
+
+fn poly_mul(a, b)
+    // Multiply two polynomials.
+    let na = len(a)
+    let nb = len(b)
+    if na == 0.0 || nb == 0.0
+        let mut zero = [0.0]
+        return zero
+    end
+
+    let nr = na + nb - 1.0
+    let mut result = []
+    let mut k = 0.0
+    while k < nr
+        push(result, 0.0)
+        k = k + 1.0
+    end
+
+    let mut i = 0.0
+    while i < na
+        let mut j = 0.0
+        while j < nb
+            result[i + j] = result[i + j] + a[i] * b[j]
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn poly_derivative(p)
+    // Compute derivative: d/dx of polynomial.
+    let n = len(p)
+    if n <= 1.0
+        let mut zero = [0.0]
+        return zero
+    end
+
+    let mut result = []
+    let mut i = 1.0
+    while i < n
+        push(result, p[i] * i)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn poly_integral(p)
+    // Compute indefinite integral (constant term = 0).
+    let n = len(p)
+    let mut result = []
+    push(result, 0.0)  // constant of integration
+
+    let mut i = 0.0
+    while i < n
+        push(result, p[i] / (i + 1.0))
+        i = i + 1.0
+    end
+    return result
+end
+
+fn poly_roots_quadratic(p)
+    // Find roots of quadratic ax² + bx + c.
+    // Returns flat array [r1, r2] or [r1] for double root,
+    // or [] for no real roots.
+    // p = [c, b, a]
+    if len(p) < 3.0
+        let mut empty = []
+        return empty
+    end
+
+    let c = p[0]
+    let b = p[1]
+    let a = p[2]
+
+    if a == 0.0
+        // Linear: bx + c = 0
+        if b == 0.0
+            let mut empty = []
+            return empty
+        end
+        let mut result = [0.0 - c / b]
+        return result
+    end
+
+    let disc = b * b - 4.0 * a * c
+
+    if disc < -0.0001
+        // No real roots
+        let mut empty = []
+        return empty
+    end
+
+    if disc < 0.0001
+        // Double root
+        let mut result = [0.0 - b / (2.0 * a)]
+        return result
+    end
+
+    let sq = sqrt(disc)
+    let r1 = (0.0 - b - sq) / (2.0 * a)
+    let r2 = (0.0 - b + sq) / (2.0 * a)
+    let mut result = [r1, r2]
+    return result
+end
+
+fn poly_to_string(p)
+    // Format polynomial as string: "3x^2 + 2x + 1"
+    let n = len(p)
+    if n == 0.0
+        return "0"
+    end
+
+    let mut result = ""
+    let mut first = 1.0
+    let mut i = n - 1.0
+    while i >= 0.0
+        let coeff = p[i]
+        if coeff != 0.0
+            if first == 0.0
+                if coeff > 0.0
+                    result = result + " + "
+                else
+                    result = result + " - "
+                end
+            elif coeff < 0.0
+                result = result + "-"
+            end
+
+            let mut ac = coeff
+            if ac < 0.0
+                ac = 0.0 - ac
+            end
+
+            if i == 0.0
+                result = result + str(ac)
+            elif i == 1.0
+                if ac == 1.0
+                    result = result + "x"
+                else
+                    result = result + str(ac) + "x"
+                end
+            else
+                if ac == 1.0
+                    result = result + "x^" + str(i)
+                else
+                    result = result + str(ac) + "x^" + str(i)
+                end
+            end
+            first = 0.0
+        end
+        i = i - 1.0
+    end
+
+    if len(result) == 0.0
+        return "0"
+    end
+    return result
+end

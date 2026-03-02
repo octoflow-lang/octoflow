@@ -25,7 +25,7 @@ fn ui_checkbox(parent, label)
 
   // Checkbox box (16x16)
   let box_id = ui_tree_add(UI_CHECKBOX, row, 16.0, 16.0, " ")
-  let _bc = ui_tree_set_color_themed(box_id, UI_COLOR_BORDER)
+  let _bc = ui_tree_set_color_themed(box_id, UI_COLOR_SURFACE_2)
 
   // Label text
   let lbl = ui_tree_add(UI_TEXT, row, ui_text_width(label, 16.0), 16.0, label)
@@ -92,8 +92,8 @@ fn ui_checkbox_update_visual(box_id)
     // Checked: primary color fill
     let _s = ui_tree_set_color_themed(box_id, UI_COLOR_PRIMARY)
   else
-    // Unchecked: border color (empty box)
-    let _s = ui_tree_set_color_themed(box_id, UI_COLOR_BORDER)
+    // Unchecked: surface2 color (softer inactive box)
+    let _s = ui_tree_set_color_themed(box_id, UI_COLOR_SURFACE_2)
   end
   return 0.0
 end

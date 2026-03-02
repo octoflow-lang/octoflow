@@ -1,0 +1,196 @@
+// stdlib/algo/segment_tree.flow — Segment tree for range queries
+//
+// Flat array segment tree supporting range sum, min, and max queries
+// with point updates. O(n) build, O(log n) query and update.
+//
+// Tree format: [n, type, tree_data...]
+//   n = number of original elements
+//   type: 0.0 = sum, 1.0 = min, 2.0 = max
+//   tree_data: 4*n sized array (1-indexed, root at position 1)
+//
+// Functions: seg_build_sum, seg_build_min, seg_build_max,
+//            seg_query, seg_update, seg_size,
+//            seg_query_sum, seg_query_min, seg_query_max
+//
+// Usage:
+//   use "segment_tree"
+//   let mut arr = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
+//   let st = seg_build_sum(arr)
+//   seg_query(st, 1.0, 3.0)    // sum of arr[1..3] = 3+5+7 = 15
+//   seg_update(st, 2.0, 10.0)  // arr[2] = 10
+//   seg_query(st, 1.0, 3.0)    // 3+10+7 = 20
+
+fn _seg_build(arr, tree, node, start, end_idx, seg_type)
+    // Recursive build.
+    if start == end_idx
+        tree[2.0 + node] = arr[start]
+        return 0.0
+    end
+    let mid = floor((start + end_idx) / 2.0)
+    let left = node * 2.0
+    let right = node * 2.0 + 1.0
+    _seg_build(arr, tree, left, start, mid, seg_type)
+    _seg_build(arr, tree, right, mid + 1.0, end_idx, seg_type)
+    // Combine
+    if seg_type == 0.0
+        tree[2.0 + node] = tree[2.0 + left] + tree[2.0 + right]
+    elif seg_type == 1.0
+        let lv = tree[2.0 + left]
+        let rv = tree[2.0 + right]
+        if lv < rv
+            tree[2.0 + node] = lv
+        else
+            tree[2.0 + node] = rv
+        end
+    else
+        let lv = tree[2.0 + left]
+        let rv = tree[2.0 + right]
+        if lv > rv
+            tree[2.0 + node] = lv
+        else
+            tree[2.0 + node] = rv
+        end
+    end
+    return 0.0
+end
+
+fn _seg_create(arr, seg_type)
+    // Create segment tree from array.
+    let n = len(arr)
+    if n == 0.0
+        let mut empty = [0.0, seg_type]
+        return empty
+    end
+    let tree_size = n * 4.0
+    let mut tree = []
+    push(tree, n)
+    push(tree, seg_type)
+    let mut i = 0.0
+    while i < tree_size
+        push(tree, 0.0)
+        i = i + 1.0
+    end
+    _seg_build(arr, tree, 1.0, 0.0, n - 1.0, seg_type)
+    return tree
+end
+
+fn seg_build_sum(arr)
+    // Build segment tree for range sum queries.
+    return _seg_create(arr, 0.0)
+end
+
+fn seg_build_min(arr)
+    // Build segment tree for range minimum queries.
+    return _seg_create(arr, 1.0)
+end
+
+fn seg_build_max(arr)
+    // Build segment tree for range maximum queries.
+    return _seg_create(arr, 2.0)
+end
+
+fn _seg_query(tree, node, start, end_idx, l, r, seg_type)
+    // Recursive query on range [l, r].
+    if r < start || end_idx < l
+        // Out of range
+        if seg_type == 0.0
+            return 0.0
+        elif seg_type == 1.0
+            return 999999999.0
+        else
+            return -999999999.0
+        end
+    end
+    if l <= start && end_idx <= r
+        return tree[2.0 + node]
+    end
+    let mid = floor((start + end_idx) / 2.0)
+    let left_val = _seg_query(tree, node * 2.0, start, mid, l, r, seg_type)
+    let right_val = _seg_query(tree, node * 2.0 + 1.0, mid + 1.0, end_idx, l, r, seg_type)
+    if seg_type == 0.0
+        return left_val + right_val
+    elif seg_type == 1.0
+        if left_val < right_val
+            return left_val
+        end
+        return right_val
+    else
+        if left_val > right_val
+            return left_val
+        end
+        return right_val
+    end
+end
+
+fn seg_query(tree, l, r)
+    // Query range [l, r] (0-indexed, inclusive).
+    let n = tree[0]
+    let seg_type = tree[1]
+    if n == 0.0
+        return 0.0
+    end
+    return _seg_query(tree, 1.0, 0.0, n - 1.0, l, r, seg_type)
+end
+
+fn seg_query_sum(tree, l, r)
+    return seg_query(tree, l, r)
+end
+
+fn seg_query_min(tree, l, r)
+    return seg_query(tree, l, r)
+end
+
+fn seg_query_max(tree, l, r)
+    return seg_query(tree, l, r)
+end
+
+fn _seg_update(tree, node, start, end_idx, idx, val, seg_type)
+    // Recursive point update.
+    if start == end_idx
+        tree[2.0 + node] = val
+        return 0.0
+    end
+    let mid = floor((start + end_idx) / 2.0)
+    if idx <= mid
+        _seg_update(tree, node * 2.0, start, mid, idx, val, seg_type)
+    else
+        _seg_update(tree, node * 2.0 + 1.0, mid + 1.0, end_idx, idx, val, seg_type)
+    end
+    let left = node * 2.0
+    let right = node * 2.0 + 1.0
+    if seg_type == 0.0
+        tree[2.0 + node] = tree[2.0 + left] + tree[2.0 + right]
+    elif seg_type == 1.0
+        let lv = tree[2.0 + left]
+        let rv = tree[2.0 + right]
+        if lv < rv
+            tree[2.0 + node] = lv
+        else
+            tree[2.0 + node] = rv
+        end
+    else
+        let lv = tree[2.0 + left]
+        let rv = tree[2.0 + right]
+        if lv > rv
+            tree[2.0 + node] = lv
+        else
+            tree[2.0 + node] = rv
+        end
+    end
+    return 0.0
+end
+
+fn seg_update(tree, idx, val)
+    // Point update: set element at idx to val.
+    let n = tree[0]
+    let seg_type = tree[1]
+    if n == 0.0
+        return 0.0
+    end
+    _seg_update(tree, 1.0, 0.0, n - 1.0, idx, val, seg_type)
+    return 0.0
+end
+
+fn seg_size(tree)
+    return tree[0]
+end

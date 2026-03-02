@@ -1,0 +1,173 @@
+// test_trie.flow — Tests for stdlib/collections/trie.flow
+use "trie"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic Operations ────────────────────────────────────────────
+
+fn test_trie_create()
+    let mut t = trie_create()
+    check("create empty", trie_size(t) == 0.0)
+    return 0.0
+end
+
+fn test_trie_insert_search()
+    let mut t = trie_create()
+    trie_insert(t, "hello")
+    check("search found", trie_search(t, "hello") == 1.0)
+    check("search not found", trie_search(t, "hell") == 0.0)
+    check("search not found 2", trie_search(t, "helloo") == 0.0)
+    check("size 1", trie_size(t) == 1.0)
+    return 0.0
+end
+
+fn test_trie_multiple()
+    let mut t = trie_create()
+    trie_insert(t, "cat")
+    trie_insert(t, "car")
+    trie_insert(t, "card")
+    check("multi size", trie_size(t) == 3.0)
+    check("multi cat", trie_search(t, "cat") == 1.0)
+    check("multi car", trie_search(t, "car") == 1.0)
+    check("multi card", trie_search(t, "card") == 1.0)
+    check("multi ca miss", trie_search(t, "ca") == 0.0)
+    return 0.0
+end
+
+fn test_trie_duplicate()
+    let mut t = trie_create()
+    trie_insert(t, "test")
+    trie_insert(t, "test")
+    check("dup size", trie_size(t) == 1.0)
+    return 0.0
+end
+
+// ── Prefix Search ───────────────────────────────────────────────
+
+fn test_starts_with()
+    let mut t = trie_create()
+    trie_insert(t, "apple")
+    trie_insert(t, "app")
+    check("prefix app", trie_starts_with(t, "app") == 1.0)
+    check("prefix ap", trie_starts_with(t, "ap") == 1.0)
+    check("prefix a", trie_starts_with(t, "a") == 1.0)
+    check("prefix apx miss", trie_starts_with(t, "apx") == 0.0)
+    check("prefix empty", trie_starts_with(t, "") == 1.0)
+    return 0.0
+end
+
+// ── Autocomplete ────────────────────────────────────────────────
+
+fn test_autocomplete()
+    let mut t = trie_create()
+    trie_insert(t, "hello")
+    trie_insert(t, "help")
+    trie_insert(t, "hero")
+    trie_insert(t, "world")
+
+    let hel = trie_autocomplete(t, "hel")
+    check("auto hel count", len(hel) == 2.0)
+
+    let he = trie_autocomplete(t, "he")
+    check("auto he count", len(he) == 3.0)
+
+    let w = trie_autocomplete(t, "w")
+    check("auto w count", len(w) == 1.0)
+    check("auto w word", w[0] == "world")
+
+    let z = trie_autocomplete(t, "z")
+    check("auto z empty", len(z) == 0.0)
+    return 0.0
+end
+
+fn test_trie_words()
+    let mut t = trie_create()
+    trie_insert(t, "a")
+    trie_insert(t, "ab")
+    trie_insert(t, "abc")
+    let words = trie_words(t)
+    check("words count", len(words) == 3.0)
+    return 0.0
+end
+
+// ── Count Prefix ────────────────────────────────────────────────
+
+fn test_count_prefix()
+    let mut t = trie_create()
+    trie_insert(t, "go")
+    trie_insert(t, "gone")
+    trie_insert(t, "good")
+    trie_insert(t, "gopher")
+    trie_insert(t, "rust")
+    check("count go", trie_count_prefix(t, "go") == 4.0)
+    check("count gon", trie_count_prefix(t, "gon") == 1.0)
+    check("count r", trie_count_prefix(t, "r") == 1.0)
+    check("count z", trie_count_prefix(t, "z") == 0.0)
+    return 0.0
+end
+
+// ── Longest Prefix ──────────────────────────────────────────────
+
+fn test_longest_prefix()
+    let mut t = trie_create()
+    trie_insert(t, "a")
+    trie_insert(t, "ab")
+    trie_insert(t, "abc")
+    check("longest abcde", trie_longest_prefix(t, "abcde") == "abc")
+    check("longest ab", trie_longest_prefix(t, "ab") == "ab")
+    check("longest xyz", trie_longest_prefix(t, "xyz") == "")
+    return 0.0
+end
+
+// ── Remove ──────────────────────────────────────────────────────
+
+fn test_trie_remove()
+    let mut t = trie_create()
+    trie_insert(t, "cat")
+    trie_insert(t, "car")
+    let removed = trie_remove(t, "cat")
+    check("remove success", removed == 1.0)
+    check("remove gone", trie_search(t, "cat") == 0.0)
+    check("remove other kept", trie_search(t, "car") == 1.0)
+    check("remove size", trie_size(t) == 1.0)
+
+    let not_found = trie_remove(t, "dog")
+    check("remove not found", not_found == 0.0)
+    return 0.0
+end
+
+// ── Single Character ────────────────────────────────────────────
+
+fn test_single_char()
+    let mut t = trie_create()
+    trie_insert(t, "a")
+    trie_insert(t, "b")
+    check("single a", trie_search(t, "a") == 1.0)
+    check("single b", trie_search(t, "b") == 1.0)
+    check("single size", trie_size(t) == 2.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_trie_create()
+test_trie_insert_search()
+test_trie_multiple()
+test_trie_duplicate()
+test_starts_with()
+test_autocomplete()
+test_trie_words()
+test_count_prefix()
+test_longest_prefix()
+test_trie_remove()
+test_single_char()
+print("")
+print("All trie tests passed (11 tests)")

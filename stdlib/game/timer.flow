@@ -1,0 +1,433 @@
+// stdlib/game/timer.flow — Timer and scheduler system
+//
+// One-shot, repeating, and counted timers for game events.
+// Timers are updated by passing dt (delta time) each frame.
+// "Fired" state is polled — no function-pointer callbacks.
+//
+// Timer storage: flat parallel arrays, index = timer ID.
+// Modes: ONCE (fire once, done), REPEAT (fire every interval, loop),
+//        COUNT (fire N times then done).
+//
+// Functions: timer_create, timer_after, timer_every, timer_count,
+//            timer_update, timer_fired, timer_done, timer_reset,
+//            timer_pause, timer_resume, timer_cancel,
+//            timer_elapsed, timer_remaining, timer_progress,
+//            timer_update_all, timer_active_count,
+//            sched_create, sched_add, sched_update, sched_done, sched_current
+//
+// Usage:
+//   use "timer"
+//   let t = timer_after(2.0)           // fires once after 2 seconds
+//   // In frame loop:
+//   timer_update(t, dt)
+//   if timer_fired(t) == 1.0
+//       print("Timer fired!")
+//   end
+
+// Mode constants
+let TIMER_ONCE = 0.0
+let TIMER_REPEAT = 1.0
+let TIMER_COUNT = 2.0
+
+// Storage
+let mut _tm_duration = []
+let mut _tm_elapsed = []
+let mut _tm_mode = []
+let mut _tm_active = []
+let mut _tm_paused = []
+let mut _tm_fired = []
+let mut _tm_fire_count = []
+let mut _tm_max_fires = []
+let mut _tm_action_id = []
+
+// ── Core API ─────────────────────────────────────────
+
+fn timer_create(duration, mode, max_fires, action_id)
+    // Create timer. Returns timer ID.
+    // duration: seconds between fires
+    // mode: TIMER_ONCE, TIMER_REPEAT, or TIMER_COUNT
+    // max_fires: for TIMER_COUNT mode (ignored for ONCE/REPEAT)
+    // action_id: caller-defined ID to identify what to do when fired
+    let id = len(_tm_duration)
+    let mut dur = duration
+    if dur <= 0.0
+        dur = 0.001
+    end
+    push(_tm_duration, dur)
+    push(_tm_elapsed, 0.0)
+    push(_tm_mode, mode)
+    push(_tm_active, 1.0)
+    push(_tm_paused, 0.0)
+    push(_tm_fired, 0.0)
+    push(_tm_fire_count, 0.0)
+    let mut mf = max_fires
+    if mode == TIMER_ONCE
+        mf = 1.0
+    elif mode == TIMER_REPEAT
+        mf = -1.0
+    end
+    push(_tm_max_fires, mf)
+    push(_tm_action_id, action_id)
+    return id
+end
+
+// ── Convenience constructors ─────────────────────────
+
+fn timer_after(duration)
+    // Create one-shot timer (fires once after duration).
+    return timer_create(duration, TIMER_ONCE, 1.0, 0.0)
+end
+
+fn timer_every(duration)
+    // Create repeating timer (fires every duration, forever).
+    return timer_create(duration, TIMER_REPEAT, -1.0, 0.0)
+end
+
+fn timer_count(duration, times)
+    // Create counted timer (fires N times then stops).
+    let mut t = times
+    if t < 1.0
+        t = 1.0
+    end
+    return timer_create(duration, TIMER_COUNT, t, 0.0)
+end
+
+fn timer_after_action(duration, action_id)
+    // One-shot timer with action ID for dispatch.
+    return timer_create(duration, TIMER_ONCE, 1.0, action_id)
+end
+
+fn timer_every_action(duration, action_id)
+    // Repeating timer with action ID.
+    return timer_create(duration, TIMER_REPEAT, -1.0, action_id)
+end
+
+// ── Update ───────────────────────────────────────────
+
+fn timer_update(id, dt)
+    // Advance timer by dt seconds. Returns 1.0 if timer fired this frame.
+    let i = int(id)
+    if i < 0.0 || i >= len(_tm_active)
+        return 0.0
+    end
+    _tm_fired[i] = 0.0
+    if _tm_active[i] == 0.0 || _tm_paused[i] == 1.0
+        return 0.0
+    end
+    if dt <= 0.0
+        return 0.0
+    end
+    _tm_elapsed[i] = _tm_elapsed[i] + dt
+    if _tm_elapsed[i] >= _tm_duration[i]
+        // Fire!
+        _tm_fired[i] = 1.0
+        _tm_fire_count[i] = _tm_fire_count[i] + 1.0
+        let mode = _tm_mode[i]
+        if mode == TIMER_ONCE
+            _tm_active[i] = 0.0
+        elif mode == TIMER_REPEAT
+            // Reset elapsed, keeping overshoot
+            _tm_elapsed[i] = _tm_elapsed[i] - _tm_duration[i]
+            if _tm_elapsed[i] < 0.0
+                _tm_elapsed[i] = 0.0
+            end
+        elif mode == TIMER_COUNT
+            if _tm_fire_count[i] >= _tm_max_fires[i]
+                _tm_active[i] = 0.0
+            else
+                _tm_elapsed[i] = _tm_elapsed[i] - _tm_duration[i]
+                if _tm_elapsed[i] < 0.0
+                    _tm_elapsed[i] = 0.0
+                end
+            end
+        end
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Queries ──────────────────────────────────────────
+
+fn timer_fired(id)
+    // Returns 1.0 if timer fired on its most recent update.
+    let i = int(id)
+    if i < 0.0 || i >= len(_tm_fired)
+        return 0.0
+    end
+    return _tm_fired[i]
+end
+
+fn timer_done(id)
+    // Returns 1.0 if timer is complete (no longer active).
+    let i = int(id)
+    if i < 0.0 || i >= len(_tm_active)
+        return 1.0
+    end
+    if _tm_active[i] == 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn timer_elapsed(id)
+    // Seconds elapsed since last fire (or since start).
+    let i = int(id)
+    if i < 0.0 || i >= len(_tm_elapsed)
+        return 0.0
+    end
+    return _tm_elapsed[i]
+end
+
+fn timer_remaining(id)
+    // Seconds remaining until next fire.
+    let i = int(id)
+    if i < 0.0 || i >= len(_tm_duration)
+        return 0.0
+    end
+    let rem = _tm_duration[i] - _tm_elapsed[i]
+    if rem < 0.0
+        return 0.0
+    end
+    return rem
+end
+
+fn timer_progress(id)
+    // Progress toward next fire [0, 1].
+    let i = int(id)
+    if i < 0.0 || i >= len(_tm_duration)
+        return 0.0
+    end
+    let dur = _tm_duration[i]
+    if dur <= 0.0
+        return 1.0
+    end
+    let p = _tm_elapsed[i] / dur
+    if p > 1.0
+        return 1.0
+    end
+    if p < 0.0
+        return 0.0
+    end
+    return p
+end
+
+fn timer_fire_count(id)
+    // Total number of times this timer has fired.
+    let i = int(id)
+    if i < 0.0 || i >= len(_tm_fire_count)
+        return 0.0
+    end
+    return _tm_fire_count[i]
+end
+
+fn timer_action(id)
+    // Get the action ID associated with this timer.
+    let i = int(id)
+    if i < 0.0 || i >= len(_tm_action_id)
+        return -1.0
+    end
+    return _tm_action_id[i]
+end
+
+fn timer_is_paused(id)
+    let i = int(id)
+    if i < 0.0 || i >= len(_tm_paused)
+        return 0.0
+    end
+    return _tm_paused[i]
+end
+
+// ── Control ──────────────────────────────────────────
+
+fn timer_pause(id)
+    // Pause timer (keeps elapsed, stops advancing).
+    let i = int(id)
+    if i >= 0.0 && i < len(_tm_paused)
+        _tm_paused[i] = 1.0
+    end
+    return 0.0
+end
+
+fn timer_resume(id)
+    // Resume paused timer.
+    let i = int(id)
+    if i >= 0.0 && i < len(_tm_paused)
+        _tm_paused[i] = 0.0
+    end
+    return 0.0
+end
+
+fn timer_reset(id)
+    // Reset timer to start (keeps duration and mode).
+    let i = int(id)
+    if i >= 0.0 && i < len(_tm_elapsed)
+        _tm_elapsed[i] = 0.0
+        _tm_fired[i] = 0.0
+        _tm_fire_count[i] = 0.0
+        _tm_active[i] = 1.0
+    end
+    return 0.0
+end
+
+fn timer_cancel(id)
+    // Cancel timer (deactivate permanently).
+    let i = int(id)
+    if i >= 0.0 && i < len(_tm_active)
+        _tm_active[i] = 0.0
+    end
+    return 0.0
+end
+
+fn timer_set_duration(id, duration)
+    // Change timer duration.
+    let i = int(id)
+    if i >= 0.0 && i < len(_tm_duration)
+        let mut dur = duration
+        if dur <= 0.0
+            dur = 0.001
+        end
+        _tm_duration[i] = dur
+    end
+    return 0.0
+end
+
+// ── Bulk operations ──────────────────────────────────
+
+fn timer_update_all(dt)
+    // Update all timers. Returns number that fired this frame.
+    let n = len(_tm_active)
+    let mut fired_total = 0.0
+    let mut i = 0.0
+    while i < n
+        let f = timer_update(i, dt)
+        fired_total = fired_total + f
+        i = i + 1.0
+    end
+    return fired_total
+end
+
+fn timer_active_count()
+    // Count of currently active (non-done) timers.
+    let n = len(_tm_active)
+    let mut count = 0.0
+    let mut i = 0.0
+    while i < n
+        if _tm_active[int(i)] == 1.0
+            count = count + 1.0
+        end
+        i = i + 1.0
+    end
+    return count
+end
+
+fn timer_total_count()
+    // Total timers created (including done/cancelled).
+    return len(_tm_active)
+end
+
+// ── Scheduler (sequenced actions) ────────────────────
+// A scheduler runs timers in sequence: when one fires,
+// the next begins. Useful for cutscenes, tutorials, etc.
+//
+// Storage: flat arrays. Scheduler references timer IDs.
+
+let mut _sched_ids = []
+let mut _sched_start = []
+let mut _sched_count = []
+let mut _sched_current = []
+
+fn sched_create()
+    // Create empty scheduler. Returns scheduler ID.
+    let id = len(_sched_start)
+    push(_sched_start, len(_sched_ids))
+    push(_sched_count, 0.0)
+    push(_sched_current, 0.0)
+    return id
+end
+
+fn sched_add(sched_id, timer_id)
+    // Add timer to scheduler (plays in order).
+    let si = int(sched_id)
+    if si < 0.0 || si >= len(_sched_count)
+        return 0.0
+    end
+    push(_sched_ids, timer_id)
+    _sched_count[si] = _sched_count[si] + 1.0
+    // Pause all except first
+    if _sched_count[si] > 1.0
+        timer_pause(timer_id)
+    end
+    return _sched_count[si]
+end
+
+fn sched_update(sched_id, dt)
+    // Update current timer in scheduler. Returns action_id if timer fired, else -1.
+    let si = int(sched_id)
+    if si < 0.0 || si >= len(_sched_count)
+        return -1.0
+    end
+    let count = _sched_count[si]
+    let cur = _sched_current[si]
+    if cur >= count
+        return -1.0
+    end
+    let start = int(_sched_start[si])
+    let tid = _sched_ids[int(start + cur)]
+    let f = timer_update(tid, dt)
+    if f == 1.0
+        let action = timer_action(tid)
+        // Advance to next timer
+        if timer_done(tid) == 1.0
+            _sched_current[si] = cur + 1.0
+            // Resume next timer
+            if cur + 1.0 < count
+                let next_tid = _sched_ids[int(start + cur + 1.0)]
+                let _r = timer_resume(next_tid)
+            end
+        end
+        return action
+    end
+    return -1.0
+end
+
+fn sched_done(sched_id)
+    // Returns 1.0 if all timers in scheduler have fired.
+    let si = int(sched_id)
+    if si < 0.0 || si >= len(_sched_count)
+        return 1.0
+    end
+    if _sched_current[si] >= _sched_count[si]
+        return 1.0
+    end
+    return 0.0
+end
+
+fn sched_current(sched_id)
+    // Index of current timer in scheduler.
+    let si = int(sched_id)
+    if si < 0.0 || si >= len(_sched_current)
+        return -1.0
+    end
+    return _sched_current[si]
+end
+
+fn sched_reset(sched_id)
+    // Reset scheduler to first timer.
+    let si = int(sched_id)
+    if si < 0.0 || si >= len(_sched_count)
+        return 0.0
+    end
+    _sched_current[si] = 0.0
+    let start = int(_sched_start[si])
+    let count = int(_sched_count[si])
+    let mut i = 0.0
+    while i < count
+        let tid = _sched_ids[int(start + i)]
+        let _r = timer_reset(tid)
+        if i > 0.0
+            let _p = timer_pause(tid)
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end

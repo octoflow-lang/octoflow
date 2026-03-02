@@ -1,0 +1,290 @@
+// test_dataframe.flow — Tests for stdlib/data/dataframe.flow
+use "dataframe"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Creation ────────────────────────────────────────────────────
+
+fn test_df_create()
+    let mut df = df_create("x,y,z")
+    check("df_create ncols", df_ncols(df) == 3.0)
+    check("df_create nrows", df_nrows(df) == 0.0)
+    return 0.0
+end
+
+fn test_df_add_row()
+    let mut df = df_create("age,score")
+    df_add_row(df, "30,95")
+    df_add_row(df, "25,87")
+    check("add_row nrows", df_nrows(df) == 2.0)
+    check("add_row get", df_get(df, 0.0, "age") == 30.0)
+    check("add_row get2", df_get(df, 1.0, "score") == 87.0)
+    return 0.0
+end
+
+fn test_df_add_row_array()
+    let mut df = df_create("a,b,c")
+    let mut vals = [1.0, 2.0, 3.0]
+    df_add_row_array(df, vals)
+    check("add_row_array", df_get(df, 0.0, "a") == 1.0 && df_get(df, 0.0, "c") == 3.0)
+    return 0.0
+end
+
+// ── Column Access ───────────────────────────────────────────────
+
+fn test_df_column()
+    let mut df = df_create("x,y")
+    df_add_row(df, "1,10")
+    df_add_row(df, "2,20")
+    df_add_row(df, "3,30")
+    let col = df_column(df, "y")
+    check("df_column len", len(col) == 3.0)
+    check("df_column values", col[0] == 10.0 && col[2] == 30.0)
+    return 0.0
+end
+
+fn test_df_set()
+    let mut df = df_create("x")
+    df_add_row(df, "5")
+    df_set(df, 0.0, "x", 99.0)
+    check("df_set", df_get(df, 0.0, "x") == 99.0)
+    return 0.0
+end
+
+fn test_df_add_column()
+    let mut df = df_create("x")
+    df_add_row(df, "1")
+    df_add_row(df, "2")
+    df_add_column(df, "y", 0.0)
+    check("add_column ncols", df_ncols(df) == 2.0)
+    check("add_column default", df_get(df, 0.0, "y") == 0.0)
+    return 0.0
+end
+
+// ── Aggregation ─────────────────────────────────────────────────
+
+fn test_df_sum()
+    let mut df = df_create("val")
+    df_add_row(df, "10")
+    df_add_row(df, "20")
+    df_add_row(df, "30")
+    check("df_sum", df_sum(df, "val") == 60.0)
+    return 0.0
+end
+
+fn test_df_mean()
+    let mut df = df_create("val")
+    df_add_row(df, "10")
+    df_add_row(df, "20")
+    df_add_row(df, "30")
+    check("df_mean", df_mean(df, "val") == 20.0)
+    return 0.0
+end
+
+fn test_df_min_max()
+    let mut df = df_create("val")
+    df_add_row(df, "5")
+    df_add_row(df, "2")
+    df_add_row(df, "8")
+    df_add_row(df, "1")
+    df_add_row(df, "9")
+    check("df_min", df_min(df, "val") == 1.0)
+    check("df_max", df_max(df, "val") == 9.0)
+    return 0.0
+end
+
+fn test_df_std()
+    let mut df = df_create("val")
+    df_add_row(df, "2")
+    df_add_row(df, "4")
+    df_add_row(df, "4")
+    df_add_row(df, "4")
+    df_add_row(df, "5")
+    df_add_row(df, "5")
+    df_add_row(df, "7")
+    df_add_row(df, "9")
+    // std dev = ~2.14
+    check("df_std", approx(df_std(df, "val"), 2.14) == 1.0)
+    return 0.0
+end
+
+// ── Head / Tail ─────────────────────────────────────────────────
+
+fn test_df_head()
+    let mut df = df_create("val")
+    df_add_row(df, "1")
+    df_add_row(df, "2")
+    df_add_row(df, "3")
+    df_add_row(df, "4")
+    df_add_row(df, "5")
+    let mut h = df_head(df, 3.0)
+    check("head nrows", df_nrows(h) == 3.0)
+    check("head last", df_get(h, 2.0, "val") == 3.0)
+    return 0.0
+end
+
+fn test_df_tail()
+    let mut df = df_create("val")
+    df_add_row(df, "1")
+    df_add_row(df, "2")
+    df_add_row(df, "3")
+    df_add_row(df, "4")
+    df_add_row(df, "5")
+    let mut t = df_tail(df, 2.0)
+    check("tail nrows", df_nrows(t) == 2.0)
+    check("tail first", df_get(t, 0.0, "val") == 4.0)
+    return 0.0
+end
+
+// ── Filter ──────────────────────────────────────────────────────
+
+fn test_df_filter_gt()
+    let mut df = df_create("age,score")
+    df_add_row(df, "30,95")
+    df_add_row(df, "20,60")
+    df_add_row(df, "25,85")
+    df_add_row(df, "35,70")
+    let mut filtered = df_filter_gt(df, "score", 80.0)
+    check("filter_gt nrows", df_nrows(filtered) == 2.0)
+    check("filter_gt values", df_get(filtered, 0.0, "score") == 95.0)
+    return 0.0
+end
+
+fn test_df_filter_lt()
+    let mut df = df_create("val")
+    df_add_row(df, "10")
+    df_add_row(df, "5")
+    df_add_row(df, "15")
+    df_add_row(df, "3")
+    let mut filtered = df_filter_lt(df, "val", 10.0)
+    check("filter_lt nrows", df_nrows(filtered) == 2.0)
+    return 0.0
+end
+
+fn test_df_filter_eq()
+    let mut df = df_create("cat,val")
+    df_add_row(df, "1,10")
+    df_add_row(df, "2,20")
+    df_add_row(df, "1,30")
+    df_add_row(df, "2,40")
+    let mut filtered = df_filter_eq(df, "cat", 1.0)
+    check("filter_eq nrows", df_nrows(filtered) == 2.0)
+    check("filter_eq sum", df_sum(filtered, "val") == 40.0)
+    return 0.0
+end
+
+// ── Sort ────────────────────────────────────────────────────────
+
+fn test_df_sort_by_asc()
+    let mut df = df_create("name_id,score")
+    df_add_row(df, "1,70")
+    df_add_row(df, "2,95")
+    df_add_row(df, "3,60")
+    df_add_row(df, "4,85")
+    let mut sorted = df_sort_by(df, "score", 1.0)
+    check("sort asc first", df_get(sorted, 0.0, "score") == 60.0)
+    check("sort asc last", df_get(sorted, 3.0, "score") == 95.0)
+    // Corresponding name_id should follow
+    check("sort asc name follows", df_get(sorted, 0.0, "name_id") == 3.0)
+    return 0.0
+end
+
+fn test_df_sort_by_desc()
+    let mut df = df_create("val")
+    df_add_row(df, "3")
+    df_add_row(df, "1")
+    df_add_row(df, "4")
+    df_add_row(df, "2")
+    let mut sorted = df_sort_by(df, "val", 0.0)
+    check("sort desc", df_get(sorted, 0.0, "val") == 4.0 && df_get(sorted, 3.0, "val") == 1.0)
+    return 0.0
+end
+
+// ── Computed Columns ────────────────────────────────────────────
+
+fn test_df_computed()
+    let mut df = df_create("price,qty")
+    df_add_row(df, "10,5")
+    df_add_row(df, "20,3")
+    df_add_row(df, "15,4")
+    df_add_computed(df, "total", "price", "qty", "mul")
+    check("computed mul", df_get(df, 0.0, "total") == 50.0)
+    check("computed mul 2", df_get(df, 1.0, "total") == 60.0)
+    return 0.0
+end
+
+fn test_df_scaled()
+    let mut df = df_create("val")
+    df_add_row(df, "10")
+    df_add_row(df, "20")
+    df_add_scaled(df, "doubled", "val", 2.0)
+    check("scaled", df_get(df, 0.0, "doubled") == 20.0 && df_get(df, 1.0, "doubled") == 40.0)
+    return 0.0
+end
+
+// ── Select ──────────────────────────────────────────────────────
+
+fn test_df_select()
+    let mut df = df_create("a,b,c")
+    df_add_row(df, "1,2,3")
+    df_add_row(df, "4,5,6")
+    let mut sel = df_select(df, "a,c")
+    check("select ncols", df_ncols(sel) == 2.0)
+    check("select values", df_get(sel, 0.0, "a") == 1.0 && df_get(sel, 0.0, "c") == 3.0)
+    return 0.0
+end
+
+// ── CSV ─────────────────────────────────────────────────────────
+
+fn test_df_csv_roundtrip()
+    let csv = "x,y\n1,10\n2,20\n3,30"
+    let mut df = df_from_csv_string(csv)
+    check("csv nrows", df_nrows(df) == 3.0)
+    check("csv values", df_get(df, 0.0, "x") == 1.0 && df_get(df, 2.0, "y") == 30.0)
+
+    let csv_out = df_to_csv_string(df)
+    let mut df2 = df_from_csv_string(csv_out)
+    check("csv roundtrip", df_get(df2, 1.0, "x") == 2.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_df_create()
+test_df_add_row()
+test_df_add_row_array()
+test_df_column()
+test_df_set()
+test_df_add_column()
+test_df_sum()
+test_df_mean()
+test_df_min_max()
+test_df_std()
+test_df_head()
+test_df_tail()
+test_df_filter_gt()
+test_df_filter_lt()
+test_df_filter_eq()
+test_df_sort_by_asc()
+test_df_sort_by_desc()
+test_df_computed()
+test_df_scaled()
+test_df_select()
+test_df_csv_roundtrip()
+print("")
+print("All DataFrame tests passed (21 tests)")

@@ -1,14 +1,14 @@
 // engine/pipeline.flow — OctoUI GPU Render Pipeline
 //
-// Core rendering engine. Uses GPU VM dispatch chains to render UI frames:
-//   1. Present previous frame (vm_wait — usually instant, GPU worked during idle)
+// Core rendering engine. Uses Loom GPU dispatch chains to render UI frames:
+//   1. Present previous frame (loom_wait — usually instant, GPU worked during idle)
 //   2. Collect all text for frame (gdi_text_begin/add/atlas)
 //   3. Upload text atlas to GPU heap
 //   4. Clear framebuffer (ui_clear.spv)
 //   5. Draw rectangles per widget (ui_rect.spv)
 //   6. Draw text blits per widget (ui_text_blit.spv)
-//   7. Build single VkCommandBuffer (vm_build)
-//   8. Async submit (vm_execute_async — returns instantly)
+//   7. Build single VkCommandBuffer (loom_build)
+//   8. Async submit (loom_launch — returns instantly)
 //
 // Two-phase rendering: Phase A collects all text via GDI rasterizer (cached),
 // packs into atlas, uploads to GPU heap. Phase B dispatches GPU work.
@@ -50,7 +50,7 @@ fn ui_pipeline_init(w, h)
 
   // Boot GPU VM: globals hold framebuffer (total*3 for planar RGB)
   let globals_size = total * 3.0
-  let vm = vm_boot(1.0, 1.0, globals_size)
+  let vm = loom_boot(1.0, 1.0, globals_size)
 
   _ui_vm[0] = vm
   _ui_vm[1] = w
@@ -66,12 +66,12 @@ fn ui_pipeline_init(w, h)
   let _pc4 = [0.0, 0.0, 0.0, 0.0]
   let _pc9 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
   let _pc10 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-  let _wu1 = vm_dispatch(vm, _ui_spv_clear, _pc4, 1.0)
-  let _wu2 = vm_dispatch(vm, _ui_spv_rect, _pc9, 1.0)
-  let _wu3 = vm_dispatch(vm, _ui_blit_spv, _pc10, 1.0)
-  let prog_wu = vm_build(vm)
-  let _ewu = vm_execute(prog_wu)
-  let _fwu = vm_free_prog(prog_wu)
+  let _wu1 = loom_dispatch(vm, _ui_spv_clear, _pc4, 1.0)
+  let _wu2 = loom_dispatch(vm, _ui_spv_rect, _pc9, 1.0)
+  let _wu3 = loom_dispatch(vm, _ui_blit_spv, _pc10, 1.0)
+  let prog_wu = loom_build(vm)
+  let _ewu = loom_run(prog_wu)
+  let _fwu = loom_free(prog_wu)
 
   // Set screen dimensions for notification and modal positioning
   let _nsw = ui_notify_set_screen_w(w)
@@ -85,11 +85,11 @@ end
 fn ui_pipeline_present_pending()
   let prev = _ui_vm[5]
   if prev >= 0.0
-    let _w = vm_wait(prev)
+    let _w = loom_wait(prev)
     let vm = _ui_vm[0]
     let total = _ui_vm[4]
-    let _p = vm_present(vm, total)
-    let _f = vm_free_prog(prev)
+    let _p = loom_present(vm, total)
+    let _f = loom_free(prev)
     _ui_vm[5] = -1.0
   end
   return 0.0
@@ -105,9 +105,9 @@ fn ui_pipeline_render()
   // ── 0. Present previous frame (wait usually instant — GPU worked during idle) ──
   let prev = _ui_vm[5]
   if prev >= 0.0
-    let _w = vm_wait(prev)
-    let _p = vm_present(vm, total)
-    let _f = vm_free_prog(prev)
+    let _w = loom_wait(prev)
+    let _p = loom_present(vm, total)
+    let _f = loom_free(prev)
     _ui_vm[5] = -1.0
   end
 
@@ -419,7 +419,7 @@ fn ui_pipeline_render()
 
   // ── Atlas upload ──
   let atlas = gdi_text_atlas()
-  let _sh = vm_set_heap(vm, atlas)
+  let _sh = loom_set_heap(vm, atlas)
 
   // ═══════════════════════════════════════════════════════════════
   // Phase B: GPU dispatches
@@ -434,7 +434,7 @@ fn ui_pipeline_render()
   _ui_pc_clear[2] = bg_b
   _ui_pc_clear[3] = total
   let wg_clear = floor((total + 255.0) / 256.0)
-  let _dc = vm_dispatch(vm, _ui_spv_clear, _ui_pc_clear, wg_clear)
+  let _dc = loom_dispatch(vm, _ui_spv_clear, _ui_pc_clear, wg_clear)
 
   // ── 1b. Draw focus border ──
   if _ui_focus_id >= 0.0
@@ -490,14 +490,14 @@ fn ui_pipeline_render()
           _ui_pc_rect[1] = _ui_y[fi] - bpad
           _ui_pc_rect[2] = _ui_w[fi] + bpad * 2.0
           _ui_pc_rect[3] = _ui_h[fi] + bpad * 2.0
-          _ui_pc_rect[4] = ui_theme_r(UI_COLOR_PRIMARY)
-          _ui_pc_rect[5] = ui_theme_g(UI_COLOR_PRIMARY)
-          _ui_pc_rect[6] = ui_theme_b(UI_COLOR_PRIMARY)
+          _ui_pc_rect[4] = ui_theme_r(UI_COLOR_FOCUS_RING)
+          _ui_pc_rect[5] = ui_theme_g(UI_COLOR_FOCUS_RING)
+          _ui_pc_rect[6] = ui_theme_b(UI_COLOR_FOCUS_RING)
           _ui_pc_rect[7] = w
           _ui_pc_rect[8] = total
           let bpixels = ((_ui_w[fi] + bpad * 2.0) * (_ui_h[fi] + bpad * 2.0))
           let bwg = floor((bpixels + 255.0) / 256.0)
-          let _db = vm_dispatch(vm, _ui_spv_rect, _ui_pc_rect, bwg)
+          let _db = loom_dispatch(vm, _ui_spv_rect, _ui_pc_rect, bwg)
         end
       end
     end
@@ -635,7 +635,7 @@ fn ui_pipeline_render()
             _ui_pc_rect[8] = total
             let cpx = 2.0 * cursor_h
             let cwg = floor((cpx + 255.0) / 256.0)
-            let _dcur = vm_dispatch(vm, _ui_spv_rect, _ui_pc_rect, cwg)
+            let _dcur = loom_dispatch(vm, _ui_spv_rect, _ui_pc_rect, cwg)
           end
         end
       end
@@ -691,7 +691,7 @@ fn ui_pipeline_render()
                 _ui_pc_rect[8] = total
                 let cpx = 2.0 * cursor_h
                 let cwg = floor((cpx + 255.0) / 256.0)
-                let _dcur = vm_dispatch(vm, _ui_spv_rect, _ui_pc_rect, cwg)
+                let _dcur = loom_dispatch(vm, _ui_spv_rect, _ui_pc_rect, cwg)
               end
             end
           end
@@ -722,19 +722,19 @@ fn ui_pipeline_render()
     _ui_pc_rect[8] = total
     let tt_bp = (tt_w + 2.0) * (tt_h + 2.0)
     let tt_bwg = floor((tt_bp + 255.0) / 256.0)
-    let _dttb = vm_dispatch(vm, _ui_spv_rect, _ui_pc_rect, tt_bwg)
+    let _dttb = loom_dispatch(vm, _ui_spv_rect, _ui_pc_rect, tt_bwg)
 
     // Background rect
     _ui_pc_rect[0] = tt_x
     _ui_pc_rect[1] = tt_y
     _ui_pc_rect[2] = tt_w
     _ui_pc_rect[3] = tt_h
-    _ui_pc_rect[4] = ui_theme_r(UI_COLOR_SURFACE)
-    _ui_pc_rect[5] = ui_theme_g(UI_COLOR_SURFACE)
-    _ui_pc_rect[6] = ui_theme_b(UI_COLOR_SURFACE)
+    _ui_pc_rect[4] = ui_theme_r(UI_COLOR_SURFACE_2)
+    _ui_pc_rect[5] = ui_theme_g(UI_COLOR_SURFACE_2)
+    _ui_pc_rect[6] = ui_theme_b(UI_COLOR_SURFACE_2)
     let tt_pixels = tt_w * tt_h
     let tt_wg = floor((tt_pixels + 255.0) / 256.0)
-    let _dttf = vm_dispatch(vm, _ui_spv_rect, _ui_pc_rect, tt_wg)
+    let _dttf = loom_dispatch(vm, _ui_spv_rect, _ui_pc_rect, tt_wg)
 
     // Tooltip text blit
     let _dtt = ui_pipeline_dispatch_text_blit(vm, tt_bidx, tt_bx, tt_by, tt_cr, tt_cg, tt_cb, w, total)
@@ -763,7 +763,7 @@ fn ui_pipeline_render()
     _ui_pc_rect[8] = total
     let nt_pixels = nt_w * nt_h
     let nt_wg = floor((nt_pixels + 255.0) / 256.0)
-    let _dnt = vm_dispatch(vm, _ui_spv_rect, _ui_pc_rect, nt_wg)
+    let _dnt = loom_dispatch(vm, _ui_spv_rect, _ui_pc_rect, nt_wg)
 
     // Notification text blit
     let _dntb = ui_pipeline_dispatch_text_blit(vm, nt_bidx, nt_bx, nt_by, nt_cr, nt_cg, nt_cb, w, total)
@@ -785,7 +785,7 @@ fn ui_pipeline_render()
     _ui_pc_rect[7] = w
     _ui_pc_rect[8] = total
     let dim_wg = floor((total + 255.0) / 256.0)
-    let _ddim = vm_dispatch(vm, _ui_spv_rect, _ui_pc_rect, dim_wg)
+    let _ddim = loom_dispatch(vm, _ui_spv_rect, _ui_pc_rect, dim_wg)
 
     // Re-render modal widget rects
     let mut mi = 0.0
@@ -858,10 +858,10 @@ fn ui_pipeline_render()
   end
 
   // ── 7. Build single command buffer ──
-  let prog = vm_build(vm)
+  let prog = loom_build(vm)
 
   // ── 8. Async submit — GPU renders while CPU handles next frame ──
-  let _ea = vm_execute_async(prog)
+  let _ea = loom_launch(prog)
   _ui_vm[5] = prog
 
   return 0.0
@@ -872,11 +872,11 @@ fn ui_pipeline_present()
   // Inline present_pending (avoid fn call — snapshot clones ~250K floats)
   let prev = _ui_vm[5]
   if prev >= 0.0
-    let _w = vm_wait(prev)
+    let _w = loom_wait(prev)
     let vm = _ui_vm[0]
     let total = _ui_vm[4]
-    let _p = vm_present(vm, total)
-    let _f = vm_free_prog(prev)
+    let _p = loom_present(vm, total)
+    let _f = loom_free(prev)
     _ui_vm[5] = -1.0
   end
   return 0.0
@@ -886,15 +886,15 @@ end
 fn ui_pipeline_shutdown()
   let prev = _ui_vm[5]
   if prev >= 0.0
-    let _w = vm_wait(prev)
+    let _w = loom_wait(prev)
     let svm = _ui_vm[0]
     let stotal = _ui_vm[4]
-    let _p = vm_present(svm, stotal)
-    let _f = vm_free_prog(prev)
+    let _p = loom_present(svm, stotal)
+    let _f = loom_free(prev)
     _ui_vm[5] = -1.0
   end
   let vm = _ui_vm[0]
-  let _s = vm_shutdown(vm)
+  let _s = loom_shutdown(vm)
   _ui_vm[3] = 0.0
   return 0.0
 end
@@ -933,7 +933,7 @@ fn ui_pipeline_dispatch_rect(vm, idx, screen_w, total)
 
   let pixels = rw * rh
   let wg = floor((pixels + 255.0) / 256.0)
-  let _d = vm_dispatch(vm, _ui_spv_rect, _ui_pc_rect, wg)
+  let _d = loom_dispatch(vm, _ui_spv_rect, _ui_pc_rect, wg)
   return 0.0
 end
 
@@ -957,6 +957,6 @@ fn ui_pipeline_dispatch_text_blit(vm, bidx, dest_x, dest_y, cr, cg, cb, screen_w
   _ui_pc_blit[7] = screen_w
   _ui_pc_blit[8] = total
   _ui_pc_blit[9] = toff
-  let _d = vm_dispatch(vm, _ui_blit_spv, _ui_pc_blit, wg)
+  let _d = loom_dispatch(vm, _ui_blit_spv, _ui_pc_blit, wg)
   return 0.0
 end

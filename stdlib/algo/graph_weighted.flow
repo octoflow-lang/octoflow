@@ -1,0 +1,323 @@
+// stdlib/algo/graph_weighted.flow — Weighted graph algorithms
+//
+// Classic graph algorithms: Bellman-Ford, Floyd-Warshall, Prim's MST, Kruskal's MST.
+//
+// Edge list format: flat array [u0, v0, w0, u1, v1, w1, ...]
+// where each triple is (source, destination, weight).
+// Nodes are numbered 0..n-1.
+//
+// Functions: gw_bellman_ford, gw_floyd_warshall, gw_prim_mst,
+//            gw_kruskal_mst, gw_has_negative_cycle, gw_shortest_path_dag
+//
+// Usage:
+//   use "graph_weighted"
+//   // 3 edges: 0->1 (4), 0->2 (1), 2->1 (2)
+//   let mut edges = [0.0, 1.0, 4.0, 0.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+//   let dist = gw_bellman_ford(edges, 3.0, 3.0, 0.0)
+//   // dist[1] == 3.0 (path 0->2->1)
+
+fn gw_bellman_ford(edges, n_edges, n_nodes, source)
+    // Bellman-Ford: single-source shortest paths. Handles negative weights.
+    // Returns distance array of size n_nodes. dist[i] = shortest distance from source.
+    // Unreachable nodes have distance 999999.0.
+    let INF = 999999.0
+    let mut dist = []
+    let mut i = 0.0
+    while i < n_nodes
+        push(dist, INF)
+        i = i + 1.0
+    end
+    dist[source] = 0.0
+
+    // Relax edges n-1 times
+    let mut iter = 0.0
+    while iter < n_nodes - 1.0
+        let mut j = 0.0
+        while j < n_edges
+            let u = edges[j * 3.0]
+            let v = edges[j * 3.0 + 1.0]
+            let w = edges[j * 3.0 + 2.0]
+            if dist[u] < INF && dist[u] + w < dist[v]
+                dist[v] = dist[u] + w
+            end
+            j = j + 1.0
+        end
+        iter = iter + 1.0
+    end
+    return dist
+end
+
+fn gw_has_negative_cycle(edges, n_edges, n_nodes, source)
+    // Check for negative-weight cycles reachable from source.
+    // Returns 1.0 if negative cycle exists, 0.0 otherwise.
+    let dist = gw_bellman_ford(edges, n_edges, n_nodes, source)
+    let INF = 999999.0
+
+    // One more relaxation pass
+    let mut j = 0.0
+    while j < n_edges
+        let u = edges[j * 3.0]
+        let v = edges[j * 3.0 + 1.0]
+        let w = edges[j * 3.0 + 2.0]
+        if dist[u] < INF && dist[u] + w < dist[v]
+            return 1.0
+        end
+        j = j + 1.0
+    end
+    return 0.0
+end
+
+fn gw_floyd_warshall(edges, n_edges, n_nodes)
+    // Floyd-Warshall: all-pairs shortest paths.
+    // Returns flat n_nodes x n_nodes distance matrix.
+    // dist[i * n_nodes + j] = shortest distance from i to j.
+    let INF = 999999.0
+    let n = n_nodes
+
+    // Initialize distance matrix
+    let mut dist = []
+    let mut i = 0.0
+    while i < n * n
+        push(dist, INF)
+        i = i + 1.0
+    end
+    // Self-distance = 0
+    i = 0.0
+    while i < n
+        dist[i * n + i] = 0.0
+        i = i + 1.0
+    end
+    // Fill with edge weights
+    let mut e = 0.0
+    while e < n_edges
+        let u = edges[e * 3.0]
+        let v = edges[e * 3.0 + 1.0]
+        let w = edges[e * 3.0 + 2.0]
+        if w < dist[u * n + v]
+            dist[u * n + v] = w
+        end
+        e = e + 1.0
+    end
+
+    // Triple loop
+    let mut k = 0.0
+    while k < n
+        i = 0.0
+        while i < n
+            let mut j = 0.0
+            while j < n
+                let through_k = dist[i * n + k] + dist[k * n + j]
+                if through_k < dist[i * n + j]
+                    dist[i * n + j] = through_k
+                end
+                j = j + 1.0
+            end
+            i = i + 1.0
+        end
+        k = k + 1.0
+    end
+    return dist
+end
+
+fn gw_prim_mst(edges, n_edges, n_nodes)
+    // Prim's algorithm for minimum spanning tree.
+    // Input: undirected edge list. Returns MST edge list and total weight.
+    // Output: flat array [u0,v0,w0, u1,v1,w1, ..., total_weight]
+    // (last element is total MST weight)
+    let INF = 999999.0
+
+    // Build adjacency: for each node, store its edges
+    // Use key array for minimum edge weight to reach each node
+    let mut key = []
+    let mut parent = []
+    let mut in_mst = []
+    let mut i = 0.0
+    while i < n_nodes
+        push(key, INF)
+        push(parent, -1.0)
+        push(in_mst, 0.0)
+        i = i + 1.0
+    end
+    key[0] = 0.0
+
+    let mut mst_edges = []
+    let mut total = 0.0
+
+    // Repeat n_nodes times
+    let mut count = 0.0
+    while count < n_nodes
+        // Find minimum key vertex not in MST
+        let mut min_val = INF
+        let mut u = -1.0
+        i = 0.0
+        while i < n_nodes
+            if in_mst[i] < 0.5 && key[i] < min_val
+                min_val = key[i]
+                u = i
+            end
+            i = i + 1.0
+        end
+        if u < 0.0
+            break
+        end
+        in_mst[u] = 1.0
+
+        if parent[u] >= 0.0
+            push(mst_edges, parent[u])
+            push(mst_edges, u)
+            push(mst_edges, min_val)
+            total = total + min_val
+        end
+
+        // Update keys of adjacent vertices
+        let mut e = 0.0
+        while e < n_edges
+            let eu = edges[e * 3.0]
+            let ev = edges[e * 3.0 + 1.0]
+            let ew = edges[e * 3.0 + 2.0]
+            // Check both directions (undirected)
+            if eu == u && in_mst[ev] < 0.5 && ew < key[ev]
+                key[ev] = ew
+                parent[ev] = u
+            end
+            if ev == u && in_mst[eu] < 0.5 && ew < key[eu]
+                key[eu] = ew
+                parent[eu] = u
+            end
+            e = e + 1.0
+        end
+        count = count + 1.0
+    end
+
+    push(mst_edges, total)
+    return mst_edges
+end
+
+fn _gw_uf_find(parent, x)
+    // Path compression find for Kruskal's.
+    let mut r = x
+    while parent[r] != r
+        r = parent[r]
+    end
+    // Path compression
+    let mut c = x
+    while c != r
+        let next = parent[c]
+        parent[c] = r
+        c = next
+    end
+    return r
+end
+
+fn gw_kruskal_mst(edges, n_edges, n_nodes)
+    // Kruskal's algorithm for minimum spanning tree.
+    // Returns MST edge list + total weight (same format as prim_mst).
+
+    // Sort edges by weight (insertion sort on triples)
+    let mut sorted = []
+    let mut i = 0.0
+    while i < n_edges * 3.0
+        push(sorted, edges[i])
+        i = i + 1.0
+    end
+
+    let mut j = 1.0
+    while j < n_edges
+        let su = sorted[j * 3.0]
+        let sv = sorted[j * 3.0 + 1.0]
+        let sw = sorted[j * 3.0 + 2.0]
+        let mut k = j - 1.0
+        while k >= 0.0 && sorted[k * 3.0 + 2.0] > sw
+            sorted[(k + 1.0) * 3.0] = sorted[k * 3.0]
+            sorted[(k + 1.0) * 3.0 + 1.0] = sorted[k * 3.0 + 1.0]
+            sorted[(k + 1.0) * 3.0 + 2.0] = sorted[k * 3.0 + 2.0]
+            k = k - 1.0
+        end
+        sorted[(k + 1.0) * 3.0] = su
+        sorted[(k + 1.0) * 3.0 + 1.0] = sv
+        sorted[(k + 1.0) * 3.0 + 2.0] = sw
+        j = j + 1.0
+    end
+
+    // Union-Find
+    let mut parent = []
+    let mut rank = []
+    i = 0.0
+    while i < n_nodes
+        push(parent, i)
+        push(rank, 0.0)
+        i = i + 1.0
+    end
+
+    let mut mst_edges = []
+    let mut total = 0.0
+    let mut edge_count = 0.0
+
+    i = 0.0
+    while i < n_edges && edge_count < n_nodes - 1.0
+        let u = sorted[i * 3.0]
+        let v = sorted[i * 3.0 + 1.0]
+        let w = sorted[i * 3.0 + 2.0]
+
+        let ru = _gw_uf_find(parent, u)
+        let rv = _gw_uf_find(parent, v)
+
+        if ru != rv
+            // Union by rank
+            if rank[ru] < rank[rv]
+                parent[ru] = rv
+            elif rank[ru] > rank[rv]
+                parent[rv] = ru
+            else
+                parent[rv] = ru
+                rank[ru] = rank[ru] + 1.0
+            end
+            push(mst_edges, u)
+            push(mst_edges, v)
+            push(mst_edges, w)
+            total = total + w
+            edge_count = edge_count + 1.0
+        end
+        i = i + 1.0
+    end
+
+    push(mst_edges, total)
+    return mst_edges
+end
+
+fn gw_shortest_path_dag(edges, n_edges, n_nodes, topo_order, source)
+    // Shortest paths in a DAG using topological order.
+    // topo_order: array of node indices in topological order.
+    // Returns distance array.
+    let INF = 999999.0
+    let mut dist = []
+    let mut i = 0.0
+    while i < n_nodes
+        push(dist, INF)
+        i = i + 1.0
+    end
+    dist[source] = 0.0
+
+    // Process in topological order
+    let n_topo = len(topo_order)
+    let mut ti = 0.0
+    while ti < n_topo
+        let u = topo_order[ti]
+        if dist[u] < INF
+            // Relax all edges from u
+            let mut e = 0.0
+            while e < n_edges
+                if edges[e * 3.0] == u
+                    let v = edges[e * 3.0 + 1.0]
+                    let w = edges[e * 3.0 + 2.0]
+                    if dist[u] + w < dist[v]
+                        dist[v] = dist[u] + w
+                    end
+                end
+                e = e + 1.0
+            end
+        end
+        ti = ti + 1.0
+    end
+    return dist
+end

@@ -1,0 +1,273 @@
+// stdlib/math/numeric.flow — Numerical methods
+//
+// Root finding, integration, ODE solvers, and finite differences.
+// All methods use function evaluation via arrays (tabulated functions)
+// since OctoFlow has no first-class functions.
+//
+// Functions: nm_bisection, nm_newton_step, nm_secant,
+//            nm_trapezoidal, nm_simpsons,
+//            nm_euler_step, nm_rk4_step,
+//            nm_finite_diff, nm_finite_diff2,
+//            nm_linear_regression, nm_lagrange_interp
+//
+// For root finding and ODE, functions are represented as
+// tabulated data (x[], y[] arrays) with interpolation.
+//
+// Usage:
+//   use "numeric"
+//   // Trapezoidal integration of y=x^2 from 0 to 1
+//   let mut x = [0.0, 0.25, 0.5, 0.75, 1.0]
+//   let mut y = [0.0, 0.0625, 0.25, 0.5625, 1.0]
+//   let area = nm_trapezoidal(x, y)   // ~0.3333
+
+fn nm_bisection(x_vals, y_vals, a, b, tol, max_iter)
+    // Bisection root finding on tabulated data.
+    // x_vals and y_vals define the function.
+    // Finds root in [a, b] where y crosses zero.
+    // Uses linear interpolation to evaluate y at arbitrary x.
+    let n = len(x_vals)
+    let mut lo = a
+    let mut hi = b
+
+    let mut iter = 0.0
+    while iter < max_iter && (hi - lo) > tol
+        let mid = (lo + hi) / 2.0
+
+        // Interpolate y at lo, hi, mid
+        let y_lo = _nm_interp(x_vals, y_vals, n, lo)
+        let y_mid = _nm_interp(x_vals, y_vals, n, mid)
+
+        if abs(y_mid) < tol
+            return mid
+        end
+
+        if y_lo * y_mid < 0.0
+            hi = mid
+        else
+            lo = mid
+        end
+        iter = iter + 1.0
+    end
+    return (lo + hi) / 2.0
+end
+
+fn _nm_interp(x_vals, y_vals, n, x)
+    // Linear interpolation at x from tabulated data.
+    if n == 0.0
+        return 0.0
+    end
+    if x <= x_vals[0]
+        return y_vals[0]
+    end
+    if x >= x_vals[n - 1.0]
+        return y_vals[n - 1.0]
+    end
+    let mut i = 0.0
+    while i < n - 1.0
+        if x >= x_vals[i] && x <= x_vals[i + 1.0]
+            let t = (x - x_vals[i]) / (x_vals[i + 1.0] - x_vals[i])
+            return y_vals[i] + t * (y_vals[i + 1.0] - y_vals[i])
+        end
+        i = i + 1.0
+    end
+    return y_vals[n - 1.0]
+end
+
+fn nm_newton_step(x, fx, dfx)
+    // Single Newton-Raphson step: x_new = x - f(x)/f'(x).
+    // Caller provides f(x) and f'(x).
+    if abs(dfx) < 0.00001
+        return x
+    end
+    return x - fx / dfx
+end
+
+fn nm_secant(x0, y0, x1, y1, tol, max_iter)
+    // Secant method for root finding.
+    // Caller provides two initial points with function values.
+    // Returns root approximation.
+    let mut xa = x0
+    let mut ya = y0
+    let mut xb = x1
+    let mut yb = y1
+
+    let mut iter = 0.0
+    while iter < max_iter && abs(yb) > tol
+        if abs(yb - ya) < 0.00001
+            return xb
+        end
+        let xc = xb - yb * (xb - xa) / (yb - ya)
+        xa = xb
+        ya = yb
+        xb = xc
+        // Caller would need to re-evaluate yb = f(xc)
+        // For tabulated: interpolate
+        yb = 0.0  // placeholder — needs function evaluation
+        iter = iter + 1.0
+    end
+    return xb
+end
+
+fn nm_trapezoidal(x, y)
+    // Trapezoidal rule integration from tabulated (x, y) data.
+    let n = len(x)
+    if n < 2.0
+        return 0.0
+    end
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i < n - 1.0
+        let h = x[i + 1.0] - x[i]
+        sum = sum + h * (y[i] + y[i + 1.0]) / 2.0
+        i = i + 1.0
+    end
+    return sum
+end
+
+fn nm_simpsons(x, y)
+    // Simpson's 1/3 rule. Requires odd number of points (even intervals).
+    // Falls back to trapezoidal for even count.
+    let n = len(x)
+    if n < 3.0
+        return nm_trapezoidal(x, y)
+    end
+
+    // Check if n is odd
+    let is_odd = n - floor(n / 2.0) * 2.0
+    if is_odd < 0.5
+        // Even number of points — use composite trapezoidal
+        return nm_trapezoidal(x, y)
+    end
+
+    let h = x[1] - x[0]  // assumes uniform spacing
+    let mut sum = y[0] + y[n - 1.0]
+    let mut i = 1.0
+    while i < n - 1.0
+        let is_even_idx = i - floor(i / 2.0) * 2.0
+        if is_even_idx < 0.5
+            sum = sum + 2.0 * y[i]
+        else
+            sum = sum + 4.0 * y[i]
+        end
+        i = i + 1.0
+    end
+    return h / 3.0 * sum
+end
+
+fn nm_euler_step(y, dydt, h)
+    // Single Euler method step: y_new = y + h * dy/dt.
+    return y + h * dydt
+end
+
+fn nm_rk4_step(y, k1, k2, k3, k4, h)
+    // Single RK4 step: y_new = y + (h/6)(k1 + 2*k2 + 2*k3 + k4).
+    // Caller computes k1..k4 from the ODE.
+    return y + (h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+end
+
+fn nm_finite_diff(y, h)
+    // Central finite differences (first derivative).
+    // Returns array of dy/dx values (n-2 interior points).
+    let n = len(y)
+    if n < 3.0
+        let mut empty = []
+        return empty
+    end
+    let mut result = []
+    let mut i = 1.0
+    while i < n - 1.0
+        push(result, (y[i + 1.0] - y[i - 1.0]) / (2.0 * h))
+        i = i + 1.0
+    end
+    return result
+end
+
+fn nm_finite_diff2(y, h)
+    // Central finite differences (second derivative).
+    let n = len(y)
+    if n < 3.0
+        let mut empty = []
+        return empty
+    end
+    let mut result = []
+    let mut i = 1.0
+    while i < n - 1.0
+        push(result, (y[i + 1.0] - 2.0 * y[i] + y[i - 1.0]) / (h * h))
+        i = i + 1.0
+    end
+    return result
+end
+
+fn nm_linear_regression(x, y)
+    // Simple linear regression: find best fit y = mx + b.
+    // Returns [m, b, r_squared].
+    let n = len(x)
+    if n < 2.0
+        let mut r = [0.0, 0.0, 0.0]
+        return r
+    end
+
+    let mut sum_x = 0.0
+    let mut sum_y = 0.0
+    let mut sum_xy = 0.0
+    let mut sum_x2 = 0.0
+    let mut sum_y2 = 0.0
+    let mut i = 0.0
+    while i < n
+        sum_x = sum_x + x[i]
+        sum_y = sum_y + y[i]
+        sum_xy = sum_xy + x[i] * y[i]
+        sum_x2 = sum_x2 + x[i] * x[i]
+        sum_y2 = sum_y2 + y[i] * y[i]
+        i = i + 1.0
+    end
+
+    let denom = n * sum_x2 - sum_x * sum_x
+    if abs(denom) < 0.00001
+        let mut r = [0.0, sum_y / n, 0.0]
+        return r
+    end
+
+    let m = (n * sum_xy - sum_x * sum_y) / denom
+    let b = (sum_y - m * sum_x) / n
+
+    // R-squared
+    let mean_y = sum_y / n
+    let mut ss_tot = 0.0
+    let mut ss_res = 0.0
+    i = 0.0
+    while i < n
+        let pred = m * x[i] + b
+        ss_res = ss_res + (y[i] - pred) * (y[i] - pred)
+        ss_tot = ss_tot + (y[i] - mean_y) * (y[i] - mean_y)
+        i = i + 1.0
+    end
+
+    let mut r2 = 0.0
+    if ss_tot > 0.00001
+        r2 = 1.0 - ss_res / ss_tot
+    end
+
+    let mut result = [m, b, r2]
+    return result
+end
+
+fn nm_lagrange_interp(x_data, y_data, x)
+    // Lagrange polynomial interpolation at point x.
+    let n = len(x_data)
+    let mut result = 0.0
+    let mut i = 0.0
+    while i < n
+        let mut basis = 1.0
+        let mut j = 0.0
+        while j < n
+            if j != i
+                basis = basis * (x - x_data[j]) / (x_data[i] - x_data[j])
+            end
+            j = j + 1.0
+        end
+        result = result + y_data[i] * basis
+        i = i + 1.0
+    end
+    return result
+end

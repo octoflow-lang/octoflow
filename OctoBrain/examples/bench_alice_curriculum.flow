@@ -1,0 +1,3084 @@
+// OctoBrain Phase 23: Two-Stage Curriculum Training (1584 learnable parameters)
+// Architecture:
+//   L1 prototype matching at dim=16, GPU batch classification
+//   2-head attention (W_Q/W_K: 512 params) + FFN (W1/b1/W2/b2: 1072 params)
+//   Two-stage curriculum: Stage A (pure FFN loss) → Stage B (blended loss)
+//   End-to-end analytical backpropagation through FFN + attention
+//
+// Run: octoflow run "OctoBrain/examples/bench_alice_curriculum.flow" --allow-ffi --allow-read
+
+use "../lib/text_word"
+use "../lib/proto"
+use "../lib/sequence"
+
+print("=== OctoBrain Phase 23: Two-Stage Curriculum Training (1584 params) ===")
+print("    Stage A: pure FFN loss → Stage B: blended loss. lr=0.01, 20 passes")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 1: Load Corpus + Train/Test Split
+// ══════════════════════════════════════════════════════════════════════
+print("--- Phase 1: Load Corpus + Train/Test Split ---")
+let t_load_start = time()
+
+let corpus_path = "OctoBrain/data/alice.txt"
+let lines = read_lines(corpus_path)
+let total_lines = len(lines)
+
+let mut all_words = []
+let mut word_chapters = []
+let mut chapter_word_starts = []
+let mut vocab_map = map()
+let mut vocab = []
+let mut next_vocab_id = 0.0
+let mut current_chapter = 0.0
+let mut num_chapters = 0.0
+
+let mut li = 0.0
+while li < total_lines
+  let line = lines[li]
+  if starts_with(line, "CHAPTER")
+    current_chapter = current_chapter + 1.0
+    num_chapters = num_chapters + 1.0
+    push(chapter_word_starts, len(all_words))
+  elif len(line) > 0.0
+    if current_chapter > 0.0
+      let words = word_clean_split_fast(line)
+      let wlen = len(words)
+      let mut wi = 0.0
+      while wi < wlen
+        let w = words[wi]
+        if len(w) > 0.0
+          push(all_words, w)
+          push(word_chapters, current_chapter)
+          if map_has(vocab_map, w) == 0.0
+            map_set(vocab_map, w, next_vocab_id)
+            push(vocab, w)
+            next_vocab_id = next_vocab_id + 1.0
+          end
+        end
+        wi = wi + 1.0
+      end
+    end
+  end
+  li = li + 1.0
+end
+
+push(chapter_word_starts, len(all_words))
+
+let total_words = len(all_words)
+let num_vocab = len(vocab)
+let embed_dim = 16.0
+
+let train_end_idx = chapter_word_starts[11]
+let test_start_idx = chapter_word_starts[11]
+let test_end_idx = chapter_word_starts[12]
+let train_word_count = train_end_idx
+let test_word_count = test_end_idx - test_start_idx
+
+let t_load_end = time()
+let load_ms = int((t_load_end - t_load_start) * 1000.0)
+let total_words_int = int(total_words)
+let num_vocab_int = int(num_vocab)
+let train_int = int(train_word_count)
+let test_int = int(test_word_count)
+print("  Corpus: {total_words_int} words, {num_vocab_int} unique")
+print("  Train: chapters 1-11 ({train_int} words)")
+print("  Test:  chapter 12 ({test_int} words)")
+print("  Time: {load_ms} ms")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 2: L1 Prototype Formation
+// ══════════════════════════════════════════════════════════════════════
+print("--- Phase 2: L1 Prototype Formation ---")
+let t_proto_start = time()
+
+let mut psL1 = proto_new()
+let mut peL1 = []
+let mut pmL1 = []
+let mut cmL1 = []
+let mut ccL1 = [0.0]
+
+let threshold_r1 = compute_threshold(embed_dim)
+
+let mut normed_buf = []
+let mut di = 0.0
+while di < embed_dim
+  push(normed_buf, 0.0)
+  di = di + 1.0
+end
+
+let mut vi = 0.0
+while vi < num_vocab
+  let vw = vocab[vi]
+  let venc = word_encode_hash(vw, embed_dim)
+
+  let cc = ccL1[0]
+  if cc < 0.5
+    let mut d = 0.0
+    while d < embed_dim
+      push(cmL1, venc[d])
+      d = d + 1.0
+    end
+    ccL1[0] = 1.0
+  else
+    let mut d = 0.0
+    while d < embed_dim
+      cmL1[d] = 0.99 * cmL1[d] + 0.01 * venc[d]
+      d = d + 1.0
+    end
+    ccL1[0] = cc + 1.0
+
+    let mut norm_sq = 0.0
+    d = 0.0
+    while d < embed_dim
+      let c = venc[d] - cmL1[d]
+      norm_sq = norm_sq + c * c
+      d = d + 1.0
+    end
+
+    if norm_sq > 0.000001
+      let inv_norm = 1.0 / sqrt(norm_sq)
+      d = 0.0
+      while d < embed_dim
+        normed_buf[d] = (venc[d] - cmL1[d]) * inv_norm
+        d = d + 1.0
+      end
+
+      let pcL1_now = map_get(psL1, "proto_count")
+      let mut best_id = -1.0
+      let mut best_sim = -2.0
+      let mut p = 0.0
+      while p < pcL1_now
+        let base = p * embed_dim
+        let mut dot = 0.0
+        d = 0.0
+        while d < embed_dim
+          dot = dot + peL1[base + d] * normed_buf[d]
+          d = d + 1.0
+        end
+        if dot > best_sim
+          best_sim = dot
+          best_id = p
+        end
+        p = p + 1.0
+      end
+
+      if pcL1_now == 0.0 || best_sim < threshold_r1
+        d = 0.0
+        while d < embed_dim
+          push(peL1, normed_buf[d])
+          d = d + 1.0
+        end
+        push(pmL1, 1.0)
+        map_set(psL1, "proto_count", pcL1_now + 1.0)
+      else
+        let base = best_id * embed_dim
+        let mut dnorm_sq = 0.0
+        d = 0.0
+        while d < embed_dim
+          let dv = 0.9 * peL1[base + d] + 0.1 * normed_buf[d]
+          dnorm_sq = dnorm_sq + dv * dv
+          d = d + 1.0
+        end
+        let dinv = 1.0 / sqrt(dnorm_sq)
+        d = 0.0
+        while d < embed_dim
+          peL1[base + d] = (0.9 * peL1[base + d] + 0.1 * normed_buf[d]) * dinv
+          d = d + 1.0
+        end
+        pmL1[best_id] = pmL1[best_id] + 1.0
+      end
+    end
+  end
+
+  vi = vi + 1.0
+end
+
+// Batch-encode all vocab for reps 2+3
+let mut vocab_batch_flat = []
+vi = 0.0
+while vi < num_vocab
+  let vw = vocab[vi]
+  let venc = word_encode_hash(vw, embed_dim)
+  let mut norm_sq = 0.0
+  let mut d = 0.0
+  while d < embed_dim
+    let c = venc[d] - cmL1[d]
+    norm_sq = norm_sq + c * c
+    d = d + 1.0
+  end
+  let mut inv_norm = 0.0
+  if norm_sq > 0.0000001
+    inv_norm = 1.0 / sqrt(norm_sq)
+  end
+  d = 0.0
+  while d < embed_dim
+    let c = venc[d] - cmL1[d]
+    push(vocab_batch_flat, c * inv_norm)
+    d = d + 1.0
+  end
+  vi = vi + 1.0
+end
+
+// Reps 2+3: gpu_matmul batch scoring
+let batch_threshold = compute_threshold(embed_dim)
+let mut brep = 0.0
+while brep < 2.0
+  let pcL1_now = map_get(psL1, "proto_count")
+  let mut peL1_T = []
+  let mut td = 0.0
+  while td < embed_dim
+    let mut tp = 0.0
+    while tp < pcL1_now
+      push(peL1_T, peL1[tp * embed_dim + td])
+      tp = tp + 1.0
+    end
+    td = td + 1.0
+  end
+  let sims = gpu_matmul(vocab_batch_flat, peL1_T, num_vocab, pcL1_now, embed_dim)
+  let mut bvi = 0.0
+  while bvi < num_vocab
+    let row_base = bvi * pcL1_now
+    let mut best_id = 0.0
+    let mut best_sim = sims[row_base]
+    let mut p = 1.0
+    while p < pcL1_now
+      let s = sims[row_base + p]
+      if s > best_sim
+        best_sim = s
+        best_id = p
+      end
+      p = p + 1.0
+    end
+    if best_sim >= batch_threshold
+      let base = best_id * embed_dim
+      let vbase = bvi * embed_dim
+      let mut dnorm = 0.0
+      let mut d = 0.0
+      while d < embed_dim
+        let dv = 0.9 * peL1[base + d] + 0.1 * vocab_batch_flat[vbase + d]
+        dnorm = dnorm + dv * dv
+        d = d + 1.0
+      end
+      let dinv = 1.0 / sqrt(dnorm)
+      d = 0.0
+      while d < embed_dim
+        peL1[base + d] = (0.9 * peL1[base + d] + 0.1 * vocab_batch_flat[vbase + d]) * dinv
+        d = d + 1.0
+      end
+      pmL1[best_id] = pmL1[best_id] + 1.0
+    else
+      let vbase = bvi * embed_dim
+      let mut d = 0.0
+      while d < embed_dim
+        push(peL1, vocab_batch_flat[vbase + d])
+        d = d + 1.0
+      end
+      push(pmL1, 1.0)
+      map_set(psL1, "proto_count", map_get(psL1, "proto_count") + 1.0)
+    end
+    bvi = bvi + 1.0
+  end
+  brep = brep + 1.0
+end
+
+let pcL1 = map_get(psL1, "proto_count")
+let pcL1_int = int(pcL1)
+let compression_pct = (1.0 - pcL1 / num_vocab) * 100.0
+let compression_r = floor(compression_pct * 10.0) / 10.0
+
+// Batch classify all vocab → vocab_proto_ids
+let mut vocab_flat = []
+let mut evi = 0.0
+while evi < num_vocab
+  let vw = vocab[evi]
+  let enc = word_encode_hash(vw, embed_dim)
+  let mut norm_sq = 0.0
+  let mut d = 0.0
+  while d < embed_dim
+    let c = enc[d] - cmL1[d]
+    norm_sq = norm_sq + c * c
+    d = d + 1.0
+  end
+  let mut inv_norm = 0.0
+  if norm_sq > 0.0000001
+    inv_norm = 1.0 / sqrt(norm_sq)
+  end
+  d = 0.0
+  while d < embed_dim
+    let c = enc[d] - cmL1[d]
+    push(vocab_flat, c * inv_norm)
+    d = d + 1.0
+  end
+  evi = evi + 1.0
+end
+
+let mut peL1_T_cls = []
+let mut td_cls = 0.0
+while td_cls < embed_dim
+  let mut tp_cls = 0.0
+  while tp_cls < pcL1
+    push(peL1_T_cls, peL1[tp_cls * embed_dim + td_cls])
+    tp_cls = tp_cls + 1.0
+  end
+  td_cls = td_cls + 1.0
+end
+
+let sims_cls = gpu_matmul(vocab_flat, peL1_T_cls, num_vocab, pcL1, embed_dim)
+
+let mut vocab_proto_ids = []
+let mut qi = 0.0
+while qi < num_vocab
+  let row_base = qi * pcL1
+  let mut best_id = 0.0
+  let mut best_sim = sims_cls[row_base]
+  let mut p3 = 1.0
+  while p3 < pcL1
+    let s3 = sims_cls[row_base + p3]
+    if s3 > best_sim
+      best_sim = s3
+      best_id = p3
+    end
+    p3 = p3 + 1.0
+  end
+  push(vocab_proto_ids, best_id)
+  qi = qi + 1.0
+end
+
+// Build per-occurrence proto_ids via vocab lookup
+let mut proto_ids = []
+let mut lki = 0.0
+while lki < total_words
+  let w = all_words[lki]
+  let vid_lk = map_get(vocab_map, w)
+  push(proto_ids, vocab_proto_ids[vid_lk])
+  lki = lki + 1.0
+end
+
+let t_proto_end = time()
+let proto_ms = int((t_proto_end - t_proto_start) * 1000.0)
+print("  L1 protos: {pcL1_int} (from {num_vocab_int} unique words)")
+print("  Compression: {compression_r}%")
+print("  Time: {proto_ms} ms")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 3: Build Initial Generative Model
+// ══════════════════════════════════════════════════════════════════════
+print("--- Phase 3: Build Initial Generative Model ---")
+let t_model_start = time()
+
+// 3a: Word frequencies in training set
+let mut word_freq = []
+let mut wfi = 0.0
+while wfi < num_vocab
+  push(word_freq, 0.0)
+  wfi = wfi + 1.0
+end
+let mut ti = 0.0
+while ti < train_end_idx
+  let w = all_words[ti]
+  let vid_wf = map_get(vocab_map, w)
+  word_freq[vid_wf] = word_freq[vid_wf] + 1.0
+  ti = ti + 1.0
+end
+
+// 3b: Reverse vocabulary — proto → word list + frequencies
+let mut rv_words = []
+let mut rv_freqs = []
+let mut rv_offsets_final = []
+let mut rp = 0.0
+while rp < pcL1
+  push(rv_offsets_final, len(rv_words))
+  let mut rv_vi = 0.0
+  while rv_vi < num_vocab
+    if vocab_proto_ids[rv_vi] == rp
+      if word_freq[rv_vi] > 0.0
+        push(rv_words, vocab[rv_vi])
+        push(rv_freqs, word_freq[rv_vi])
+      end
+    end
+    rv_vi = rv_vi + 1.0
+  end
+  rp = rp + 1.0
+end
+push(rv_offsets_final, len(rv_words))
+
+let rv_total_int = int(len(rv_words))
+print("  Reverse vocab: {rv_total_int} word-proto entries")
+
+// 3c: Training proto sequence
+let mut train_proto_seq = []
+let mut tpi = 0.0
+while tpi < train_end_idx
+  push(train_proto_seq, proto_ids[tpi])
+  tpi = tpi + 1.0
+end
+let train_seq_len = len(train_proto_seq)
+
+// 3d: 1st-order Markov table → mutable cur_table (persists across epochs)
+let init_table = markov1_build(train_proto_seq, train_seq_len, pcL1)
+let mut cur_table = []
+let mut cti = 0.0
+while cti < pcL1 * pcL1
+  push(cur_table, init_table[cti])
+  cti = cti + 1.0
+end
+
+// Row sums for normalization
+let mut row_sums = []
+let mut rsi = 0.0
+while rsi < pcL1
+  let mut rsum = 0.0
+  let mut rsj = 0.0
+  while rsj < pcL1
+    rsum = rsum + cur_table[rsi * pcL1 + rsj]
+    rsj = rsj + 1.0
+  end
+  push(row_sums, rsum)
+  rsi = rsi + 1.0
+end
+print("  Markov table: {pcL1_int} x {pcL1_int}")
+
+// 3e: Bigram set from training corpus (for coherence evaluation)
+let mut bigram_set = map()
+let mut bi = 1.0
+while bi < train_end_idx
+  let bg = all_words[bi - 1.0] + " " + all_words[bi]
+  map_set(bigram_set, bg, 1.0)
+  bi = bi + 1.0
+end
+
+// 3f: Chapter seed protos — first 5 proto IDs of chapter 1
+let mut seed_protos = []
+let mut si = 0.0
+while si < 5.0
+  push(seed_protos, proto_ids[si])
+  si = si + 1.0
+end
+
+let t_model_end = time()
+let model_ms = int((t_model_end - t_model_start) * 1000.0)
+print("  Time: {model_ms} ms")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// Helper Functions
+// ══════════════════════════════════════════════════════════════════════
+
+// ── Helper: sample_word_soft ──
+fn sample_word_soft(activation, act_len, rv_w, rv_f, rv_off, temp_word)
+  let mut cand_words = []
+  let mut cand_weights = []
+
+  let mut pi_s = 0.0
+  while pi_s < act_len
+    let act = activation[pi_s]
+    if act > 0.01
+      let s_start = rv_off[pi_s]
+      let s_end = rv_off[pi_s + 1.0]
+      let mut fi = s_start
+      while fi < s_end
+        let w = act * log(rv_f[fi] + 1.0)
+        push(cand_words, rv_w[fi])
+        push(cand_weights, w)
+        fi = fi + 1.0
+      end
+    end
+    pi_s = pi_s + 1.0
+  end
+
+  if len(cand_words) < 1.0
+    return "the"
+  end
+
+  let num_cand = len(cand_words)
+  let mut max_w = -100.0
+  let mut mwi = 0.0
+  while mwi < num_cand
+    if cand_weights[mwi] > max_w
+      max_w = cand_weights[mwi]
+    end
+    mwi = mwi + 1.0
+  end
+
+  let mut temp_sum = 0.0
+  let mut temp_vals = []
+  let mut twi = 0.0
+  while twi < num_cand
+    let e = exp((cand_weights[twi] - max_w) / temp_word)
+    push(temp_vals, e)
+    temp_sum = temp_sum + e
+    twi = twi + 1.0
+  end
+
+  let r = random() * temp_sum
+  let mut cum = 0.0
+  let mut ci_s = 0.0
+  while ci_s < num_cand
+    cum = cum + temp_vals[ci_s]
+    if cum >= r
+      return cand_words[ci_s]
+    end
+    ci_s = ci_s + 1.0
+  end
+  return cand_words[num_cand - 1.0]
+end
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 3.5: Initialize Multi-Head Projections (2 heads)
+// ══════════════════════════════════════════════════════════════════════
+print("--- Phase 3.5: Initialize Multi-Head Projections ---")
+let t_proj_start = time()
+
+let head_dim = 8.0
+let wh_size = embed_dim * head_dim
+let scale_init = sqrt(2.0 / (embed_dim + head_dim))
+let PI_const = 3.14159265358979
+let attn_temp = 0.25
+
+// Head 0: W_Q_0[16x8], W_K_0[16x8]
+let mut W_Q_0 = []
+let mut wqi = 0.0
+while wqi < wh_size
+  let u1 = random() + 0.00001
+  let u2 = random()
+  let z = sqrt(-2.0 * log(u1)) * cos(2.0 * PI_const * u2)
+  push(W_Q_0, z * scale_init)
+  wqi = wqi + 1.0
+end
+
+let mut W_K_0 = []
+let mut wki = 0.0
+while wki < wh_size
+  let u1 = random() + 0.00001
+  let u2 = random()
+  let z = sqrt(-2.0 * log(u1)) * cos(2.0 * PI_const * u2)
+  push(W_K_0, z * scale_init)
+  wki = wki + 1.0
+end
+
+// Head 1: W_Q_1[16x8], W_K_1[16x8]
+let mut W_Q_1 = []
+wqi = 0.0
+while wqi < wh_size
+  let u1 = random() + 0.00001
+  let u2 = random()
+  let z = sqrt(-2.0 * log(u1)) * cos(2.0 * PI_const * u2)
+  push(W_Q_1, z * scale_init)
+  wqi = wqi + 1.0
+end
+
+let mut W_K_1 = []
+wki = 0.0
+while wki < wh_size
+  let u1 = random() + 0.00001
+  let u2 = random()
+  let z = sqrt(-2.0 * log(u1)) * cos(2.0 * PI_const * u2)
+  push(W_K_1, z * scale_init)
+  wki = wki + 1.0
+end
+
+// Gradient accumulators — one set per head
+let mut grad_W_Q_0 = []
+let mut grad_W_K_0 = []
+let mut grad_W_Q_1 = []
+let mut grad_W_K_1 = []
+let mut gi = 0.0
+while gi < wh_size
+  push(grad_W_Q_0, 0.0)
+  push(grad_W_K_0, 0.0)
+  push(grad_W_Q_1, 0.0)
+  push(grad_W_K_1, 0.0)
+  gi = gi + 1.0
+end
+
+// ── FFN Parameters: W1[16x32], b1[32], W2[32x16], b2[16] ──
+let ffn_hidden = 32.0
+let ffn_w1_size = embed_dim * ffn_hidden
+let ffn_w2_size = ffn_hidden * embed_dim
+let ffn_mix = 0.4
+
+let scale_w1 = sqrt(2.0 / (embed_dim + ffn_hidden))
+let scale_w2 = sqrt(2.0 / (ffn_hidden + embed_dim))
+
+let mut W1_ffn = []
+let mut wfi = 0.0
+while wfi < ffn_w1_size
+  let u1 = random() + 0.00001
+  let u2 = random()
+  let z = sqrt(-2.0 * log(u1)) * cos(2.0 * PI_const * u2)
+  push(W1_ffn, z * scale_w1)
+  wfi = wfi + 1.0
+end
+
+let mut b1_ffn = []
+wfi = 0.0
+while wfi < ffn_hidden
+  push(b1_ffn, 0.0)
+  wfi = wfi + 1.0
+end
+
+let mut W2_ffn = []
+wfi = 0.0
+while wfi < ffn_w2_size
+  let u1 = random() + 0.00001
+  let u2 = random()
+  let z = sqrt(-2.0 * log(u1)) * cos(2.0 * PI_const * u2)
+  push(W2_ffn, z * scale_w2)
+  wfi = wfi + 1.0
+end
+
+let mut b2_ffn = []
+wfi = 0.0
+while wfi < embed_dim
+  push(b2_ffn, 0.0)
+  wfi = wfi + 1.0
+end
+
+// FFN gradient accumulators
+let mut grad_W1_ffn = []
+let mut grad_b1_ffn = []
+let mut grad_W2_ffn = []
+let mut grad_b2_ffn = []
+wfi = 0.0
+while wfi < ffn_w1_size
+  push(grad_W1_ffn, 0.0)
+  wfi = wfi + 1.0
+end
+wfi = 0.0
+while wfi < ffn_hidden
+  push(grad_b1_ffn, 0.0)
+  wfi = wfi + 1.0
+end
+wfi = 0.0
+while wfi < ffn_w2_size
+  push(grad_W2_ffn, 0.0)
+  wfi = wfi + 1.0
+end
+wfi = 0.0
+while wfi < embed_dim
+  push(grad_b2_ffn, 0.0)
+  wfi = wfi + 1.0
+end
+
+let t_proj_end = time()
+let proj_ms = int((t_proj_end - t_proj_start) * 1000.0)
+let wh_int = int(wh_size)
+let attn_params = wh_size * 4.0
+let ffn_params = ffn_w1_size + ffn_hidden + ffn_w2_size + embed_dim
+let total_params = attn_params + ffn_params
+let total_params_int = int(total_params)
+let attn_int = int(attn_params)
+let ffn_int = int(ffn_params)
+print("  Attention: 2 heads, head_dim=8, {attn_int} params")
+print("  FFN: hidden=32, {ffn_int} params (W1+b1+W2+b2)")
+print("  Total learnable: {total_params_int} params")
+print("  Time: {proj_ms} ms")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 4: Two-Stage Curriculum Training
+//   Stage A (passes 0-9): Pure FFN loss (mix=1.0) — force FFN to learn
+//   Stage B (passes 10-19): Blended loss (mix=0.5) — fine-tune together
+// ══════════════════════════════════════════════════════════════════════
+print("--- Phase 4: Two-Stage Curriculum Training ---")
+let t_train_start = time()
+
+let train_context = 10.0
+let train_batch_size = 150.0
+let num_pretrain_passes = 10.0
+let num_finetune_passes = 10.0
+let num_train_passes = num_pretrain_passes + num_finetune_passes
+let train_lr = 0.01
+let pretrain_ffn_mix = 1.0
+let finetune_ffn_mix = 0.5
+
+// Pre-allocate training context buffer
+let mut ctx_protos = []
+let mut cpi = 0.0
+while cpi < train_context
+  push(ctx_protos, 0.0)
+  cpi = cpi + 1.0
+end
+
+let mut pass_losses = []
+
+// Fixed evaluation set for deterministic loss comparison
+let eval_set_size = 200.0
+let mut eval_positions = []
+let mut epi = train_context
+while epi < train_end_idx - 1.0 && len(eval_positions) < eval_set_size
+  push(eval_positions, epi)
+  epi = epi + 1.0
+end
+let actual_eval_size = len(eval_positions)
+
+// ── Compute pre-training loss on fixed evaluation set (multi-head forward) ──
+let mut pre_train_loss = 0.0
+let mut pre_eval_count = 0.0
+evi = 0.0
+while evi < actual_eval_size
+  let ev_pos = eval_positions[evi]
+  let mut ev_ci = 0.0
+  while ev_ci < train_context
+    ctx_protos[ev_ci] = train_proto_seq[ev_pos - train_context + ev_ci]
+    ev_ci = ev_ci + 1.0
+  end
+  let ev_query = train_proto_seq[ev_pos - 1.0]
+  let ev_target = train_proto_seq[ev_pos]
+  let ev_q_base = ev_query * embed_dim
+
+  // --- Head 0 forward ---
+  let mut ev_Q0 = []
+  let mut ev_qns0 = 0.0
+  let mut ev_qd = 0.0
+  while ev_qd < head_dim
+    let mut ev_qs = 0.0
+    let mut ev_qi = 0.0
+    while ev_qi < embed_dim
+      ev_qs = ev_qs + peL1[ev_q_base + ev_qi] * W_Q_0[ev_qi * head_dim + ev_qd]
+      ev_qi = ev_qi + 1.0
+    end
+    push(ev_Q0, ev_qs)
+    ev_qns0 = ev_qns0 + ev_qs * ev_qs
+    ev_qd = ev_qd + 1.0
+  end
+  let ev_qinv0 = 1.0 / sqrt(ev_qns0 + 0.00001)
+  ev_qd = 0.0
+  while ev_qd < head_dim
+    ev_Q0[ev_qd] = ev_Q0[ev_qd] * ev_qinv0
+    ev_qd = ev_qd + 1.0
+  end
+
+  let mut ev_scores0 = []
+  let mut ev_max0 = -100.0
+  let mut ev_ci2 = 0.0
+  while ev_ci2 < train_context
+    let ev_kp = ctx_protos[ev_ci2]
+    let ev_kb = ev_kp * embed_dim
+    let mut ev_dot0 = 0.0
+    let mut ev_kns0 = 0.0
+    let mut ev_dd = 0.0
+    while ev_dd < head_dim
+      let mut ev_ks = 0.0
+      let mut ev_kj = 0.0
+      while ev_kj < embed_dim
+        ev_ks = ev_ks + peL1[ev_kb + ev_kj] * W_K_0[ev_kj * head_dim + ev_dd]
+        ev_kj = ev_kj + 1.0
+      end
+      ev_dot0 = ev_dot0 + ev_Q0[ev_dd] * ev_ks
+      ev_kns0 = ev_kns0 + ev_ks * ev_ks
+      ev_dd = ev_dd + 1.0
+    end
+    ev_dot0 = ev_dot0 / sqrt(ev_kns0 + 0.00001)
+    let ev_sc0 = ev_dot0 / attn_temp
+    push(ev_scores0, ev_sc0)
+    if ev_sc0 > ev_max0
+      ev_max0 = ev_sc0
+    end
+    ev_ci2 = ev_ci2 + 1.0
+  end
+
+  let mut ev_exp_sum0 = 0.0
+  let mut ev_attn0 = []
+  let mut ev_si = 0.0
+  while ev_si < train_context
+    let ev_e = exp(ev_scores0[ev_si] - ev_max0)
+    push(ev_attn0, ev_e)
+    ev_exp_sum0 = ev_exp_sum0 + ev_e
+    ev_si = ev_si + 1.0
+  end
+  ev_si = 0.0
+  while ev_si < train_context
+    ev_attn0[ev_si] = ev_attn0[ev_si] / ev_exp_sum0
+    ev_si = ev_si + 1.0
+  end
+
+  // --- Head 1 forward ---
+  let mut ev_Q1 = []
+  let mut ev_qns1 = 0.0
+  ev_qd = 0.0
+  while ev_qd < head_dim
+    let mut ev_qs = 0.0
+    let mut ev_qi = 0.0
+    while ev_qi < embed_dim
+      ev_qs = ev_qs + peL1[ev_q_base + ev_qi] * W_Q_1[ev_qi * head_dim + ev_qd]
+      ev_qi = ev_qi + 1.0
+    end
+    push(ev_Q1, ev_qs)
+    ev_qns1 = ev_qns1 + ev_qs * ev_qs
+    ev_qd = ev_qd + 1.0
+  end
+  let ev_qinv1 = 1.0 / sqrt(ev_qns1 + 0.00001)
+  ev_qd = 0.0
+  while ev_qd < head_dim
+    ev_Q1[ev_qd] = ev_Q1[ev_qd] * ev_qinv1
+    ev_qd = ev_qd + 1.0
+  end
+
+  let mut ev_scores1 = []
+  let mut ev_max1 = -100.0
+  ev_ci2 = 0.0
+  while ev_ci2 < train_context
+    let ev_kp = ctx_protos[ev_ci2]
+    let ev_kb = ev_kp * embed_dim
+    let mut ev_dot1 = 0.0
+    let mut ev_kns1 = 0.0
+    let mut ev_dd = 0.0
+    while ev_dd < head_dim
+      let mut ev_ks = 0.0
+      let mut ev_kj = 0.0
+      while ev_kj < embed_dim
+        ev_ks = ev_ks + peL1[ev_kb + ev_kj] * W_K_1[ev_kj * head_dim + ev_dd]
+        ev_kj = ev_kj + 1.0
+      end
+      ev_dot1 = ev_dot1 + ev_Q1[ev_dd] * ev_ks
+      ev_kns1 = ev_kns1 + ev_ks * ev_ks
+      ev_dd = ev_dd + 1.0
+    end
+    ev_dot1 = ev_dot1 / sqrt(ev_kns1 + 0.00001)
+    let ev_sc1 = ev_dot1 / attn_temp
+    push(ev_scores1, ev_sc1)
+    if ev_sc1 > ev_max1
+      ev_max1 = ev_sc1
+    end
+    ev_ci2 = ev_ci2 + 1.0
+  end
+
+  let mut ev_exp_sum1 = 0.0
+  let mut ev_attn1 = []
+  ev_si = 0.0
+  while ev_si < train_context
+    let ev_e = exp(ev_scores1[ev_si] - ev_max1)
+    push(ev_attn1, ev_e)
+    ev_exp_sum1 = ev_exp_sum1 + ev_e
+    ev_si = ev_si + 1.0
+  end
+  ev_si = 0.0
+  while ev_si < train_context
+    ev_attn1[ev_si] = ev_attn1[ev_si] / ev_exp_sum1
+    ev_si = ev_si + 1.0
+  end
+
+  // ctx_repr + FFN forward + Markov blend → combined target prob
+  let mut ev_ctx = []
+  let mut ev_cd = 0.0
+  while ev_cd < embed_dim
+    let mut ev_cr = 0.0
+    let mut ev_ci_r = 0.0
+    while ev_ci_r < train_context
+      ev_cr = ev_cr + (0.5 * ev_attn0[ev_ci_r] + 0.5 * ev_attn1[ev_ci_r]) * peL1[ctx_protos[ev_ci_r] * embed_dim + ev_cd]
+      ev_ci_r = ev_ci_r + 1.0
+    end
+    push(ev_ctx, ev_cr)
+    ev_cd = ev_cd + 1.0
+  end
+  let mut ev_fh = []
+  let mut ev_hi = 0.0
+  while ev_hi < ffn_hidden
+    let mut ev_hs = b1_ffn[ev_hi]
+    let mut ev_hj = 0.0
+    while ev_hj < embed_dim
+      ev_hs = ev_hs + ev_ctx[ev_hj] * W1_ffn[ev_hj * ffn_hidden + ev_hi]
+      ev_hj = ev_hj + 1.0
+    end
+    if ev_hs < 0.0
+      ev_hs = 0.0
+    end
+    push(ev_fh, ev_hs)
+    ev_hi = ev_hi + 1.0
+  end
+  let mut ev_fo = []
+  let mut ev_foi = 0.0
+  while ev_foi < embed_dim
+    let mut ev_fs = b2_ffn[ev_foi]
+    let mut ev_fj = 0.0
+    while ev_fj < ffn_hidden
+      ev_fs = ev_fs + ev_fh[ev_fj] * W2_ffn[ev_fj * embed_dim + ev_foi]
+      ev_fj = ev_fj + 1.0
+    end
+    push(ev_fo, ev_fs)
+    ev_foi = ev_foi + 1.0
+  end
+  let mut ev_ffn_max = -100.0
+  let mut ev_ffn_logits = []
+  let mut ev_fli = 0.0
+  while ev_fli < pcL1
+    let mut ev_fdot = 0.0
+    let mut ev_fd = 0.0
+    while ev_fd < embed_dim
+      ev_fdot = ev_fdot + ev_fo[ev_fd] * peL1[ev_fli * embed_dim + ev_fd]
+      ev_fd = ev_fd + 1.0
+    end
+    push(ev_ffn_logits, ev_fdot)
+    if ev_fdot > ev_ffn_max
+      ev_ffn_max = ev_fdot
+    end
+    ev_fli = ev_fli + 1.0
+  end
+  let mut ev_ffn_es = 0.0
+  let mut ev_ffn_pr = []
+  ev_fli = 0.0
+  while ev_fli < pcL1
+    let ev_fe = exp(ev_ffn_logits[ev_fli] - ev_ffn_max)
+    push(ev_ffn_pr, ev_fe)
+    ev_ffn_es = ev_ffn_es + ev_fe
+    ev_fli = ev_fli + 1.0
+  end
+  ev_fli = 0.0
+  while ev_fli < pcL1
+    ev_ffn_pr[ev_fli] = ev_ffn_pr[ev_fli] / ev_ffn_es
+    ev_fli = ev_fli + 1.0
+  end
+  let mut ev_markov = 0.0
+  let mut ev_bi = 0.0
+  while ev_bi < train_context
+    let ev_avg = 0.5 * ev_attn0[ev_bi] + 0.5 * ev_attn1[ev_bi]
+    let ev_cp = ctx_protos[ev_bi]
+    let ev_rs = row_sums[ev_cp]
+    if ev_rs > 0.5
+      ev_markov = ev_markov + ev_avg * cur_table[ev_cp * pcL1 + ev_target] / ev_rs
+    end
+    ev_bi = ev_bi + 1.0
+  end
+  let ev_blend = (1.0 - ffn_mix) * ev_markov + ffn_mix * ev_ffn_pr[ev_target] + 0.00001
+
+  if ev_blend > 0.00001
+    pre_train_loss = pre_train_loss - log(ev_blend)
+  else
+    pre_train_loss = pre_train_loss + 10.0
+  end
+  pre_eval_count = pre_eval_count + 1.0
+  evi = evi + 1.0
+end
+pre_train_loss = pre_train_loss / pre_eval_count
+let pre_loss_r = floor(pre_train_loss * 1000.0) / 1000.0
+print("  Pre-training eval loss (fixed set): {pre_loss_r}")
+
+// ── Training Loop (Two-Stage Curriculum) ──
+let mut pass = 0.0
+while pass < num_train_passes
+  let pass_int = int(pass)
+  // Stage A: pure FFN loss (passes 0..pretrain-1), Stage B: blended (pretrain..total-1)
+  let mut cur_ffn_mix = finetune_ffn_mix
+  let mut stage_name = "B:blend"
+  if pass < num_pretrain_passes
+    cur_ffn_mix = pretrain_ffn_mix
+    stage_name = "A:ffn"
+  end
+
+  // Zero gradients — attention
+  let mut zi = 0.0
+  while zi < wh_size
+    grad_W_Q_0[zi] = 0.0
+    grad_W_K_0[zi] = 0.0
+    grad_W_Q_1[zi] = 0.0
+    grad_W_K_1[zi] = 0.0
+    zi = zi + 1.0
+  end
+  // Zero gradients — FFN
+  let mut zfi = 0.0
+  while zfi < ffn_w1_size
+    grad_W1_ffn[zfi] = 0.0
+    zfi = zfi + 1.0
+  end
+  zfi = 0.0
+  while zfi < ffn_hidden
+    grad_b1_ffn[zfi] = 0.0
+    zfi = zfi + 1.0
+  end
+  zfi = 0.0
+  while zfi < ffn_w2_size
+    grad_W2_ffn[zfi] = 0.0
+    zfi = zfi + 1.0
+  end
+  zfi = 0.0
+  while zfi < embed_dim
+    grad_b2_ffn[zfi] = 0.0
+    zfi = zfi + 1.0
+  end
+
+  let mut total_loss = 0.0
+  let mut loss_count = 0.0
+
+  let mut sbi = 0.0
+  while sbi < train_batch_size
+    // Sample random position from training set
+    let range = train_end_idx - train_context - 1.0
+    let pos = floor(random() * range) + train_context
+
+    // Build context
+    let mut ci = 0.0
+    while ci < train_context
+      ctx_protos[ci] = train_proto_seq[pos - train_context + ci]
+      ci = ci + 1.0
+    end
+    let query_proto = train_proto_seq[pos - 1.0]
+    let target_proto = train_proto_seq[pos]
+
+    // ── FORWARD PASS (Multi-Head) ──
+    let q_embed_base = query_proto * embed_dim
+
+    // --- Head 0: Q projection + normalize ---
+    let mut Q_proj_0 = []
+    let mut q_norm_sq_0 = 0.0
+    let mut qd = 0.0
+    while qd < head_dim
+      let mut qs = 0.0
+      let mut qii = 0.0
+      while qii < embed_dim
+        qs = qs + peL1[q_embed_base + qii] * W_Q_0[qii * head_dim + qd]
+        qii = qii + 1.0
+      end
+      push(Q_proj_0, qs)
+      q_norm_sq_0 = q_norm_sq_0 + qs * qs
+      qd = qd + 1.0
+    end
+    let q_inv_0 = 1.0 / sqrt(q_norm_sq_0 + 0.00001)
+    qd = 0.0
+    while qd < head_dim
+      Q_proj_0[qd] = Q_proj_0[qd] * q_inv_0
+      qd = qd + 1.0
+    end
+
+    // --- Head 0: K projections (stored flat) + normalize ---
+    let mut K_projs_0 = []
+    let mut ki = 0.0
+    while ki < train_context
+      let k_proto = ctx_protos[ki]
+      let k_embed_base = k_proto * embed_dim
+      let mut k_norm_sq = 0.0
+      let k_start = len(K_projs_0)
+      let mut kd = 0.0
+      while kd < head_dim
+        let mut ks = 0.0
+        let mut kj = 0.0
+        while kj < embed_dim
+          ks = ks + peL1[k_embed_base + kj] * W_K_0[kj * head_dim + kd]
+          kj = kj + 1.0
+        end
+        push(K_projs_0, ks)
+        k_norm_sq = k_norm_sq + ks * ks
+        kd = kd + 1.0
+      end
+      let k_inv = 1.0 / sqrt(k_norm_sq + 0.00001)
+      kd = 0.0
+      while kd < head_dim
+        K_projs_0[k_start + kd] = K_projs_0[k_start + kd] * k_inv
+        kd = kd + 1.0
+      end
+      ki = ki + 1.0
+    end
+
+    // --- Head 0: scores + softmax ---
+    let mut scores_0 = []
+    let mut max_score_0 = -100.0
+    ki = 0.0
+    while ki < train_context
+      let mut s = 0.0
+      let mut sd = 0.0
+      while sd < head_dim
+        s = s + Q_proj_0[sd] * K_projs_0[ki * head_dim + sd]
+        sd = sd + 1.0
+      end
+      s = s / attn_temp
+      push(scores_0, s)
+      if s > max_score_0
+        max_score_0 = s
+      end
+      ki = ki + 1.0
+    end
+
+    let mut attn_0 = []
+    let mut attn_sum_0 = 0.0
+    ki = 0.0
+    while ki < train_context
+      let e = exp(scores_0[ki] - max_score_0)
+      push(attn_0, e)
+      attn_sum_0 = attn_sum_0 + e
+      ki = ki + 1.0
+    end
+    ki = 0.0
+    while ki < train_context
+      attn_0[ki] = attn_0[ki] / attn_sum_0
+      ki = ki + 1.0
+    end
+
+    // --- Head 1: Q projection + normalize ---
+    let mut Q_proj_1 = []
+    let mut q_norm_sq_1 = 0.0
+    qd = 0.0
+    while qd < head_dim
+      let mut qs = 0.0
+      let mut qii = 0.0
+      while qii < embed_dim
+        qs = qs + peL1[q_embed_base + qii] * W_Q_1[qii * head_dim + qd]
+        qii = qii + 1.0
+      end
+      push(Q_proj_1, qs)
+      q_norm_sq_1 = q_norm_sq_1 + qs * qs
+      qd = qd + 1.0
+    end
+    let q_inv_1 = 1.0 / sqrt(q_norm_sq_1 + 0.00001)
+    qd = 0.0
+    while qd < head_dim
+      Q_proj_1[qd] = Q_proj_1[qd] * q_inv_1
+      qd = qd + 1.0
+    end
+
+    // --- Head 1: K projections (stored flat) + normalize ---
+    let mut K_projs_1 = []
+    ki = 0.0
+    while ki < train_context
+      let k_proto = ctx_protos[ki]
+      let k_embed_base = k_proto * embed_dim
+      let mut k_norm_sq = 0.0
+      let k_start = len(K_projs_1)
+      let mut kd = 0.0
+      while kd < head_dim
+        let mut ks = 0.0
+        let mut kj = 0.0
+        while kj < embed_dim
+          ks = ks + peL1[k_embed_base + kj] * W_K_1[kj * head_dim + kd]
+          kj = kj + 1.0
+        end
+        push(K_projs_1, ks)
+        k_norm_sq = k_norm_sq + ks * ks
+        kd = kd + 1.0
+      end
+      let k_inv = 1.0 / sqrt(k_norm_sq + 0.00001)
+      kd = 0.0
+      while kd < head_dim
+        K_projs_1[k_start + kd] = K_projs_1[k_start + kd] * k_inv
+        kd = kd + 1.0
+      end
+      ki = ki + 1.0
+    end
+
+    // --- Head 1: scores + softmax ---
+    let mut scores_1 = []
+    let mut max_score_1 = -100.0
+    ki = 0.0
+    while ki < train_context
+      let mut s = 0.0
+      let mut sd = 0.0
+      while sd < head_dim
+        s = s + Q_proj_1[sd] * K_projs_1[ki * head_dim + sd]
+        sd = sd + 1.0
+      end
+      s = s / attn_temp
+      push(scores_1, s)
+      if s > max_score_1
+        max_score_1 = s
+      end
+      ki = ki + 1.0
+    end
+
+    let mut attn_1 = []
+    let mut attn_sum_1 = 0.0
+    ki = 0.0
+    while ki < train_context
+      let e = exp(scores_1[ki] - max_score_1)
+      push(attn_1, e)
+      attn_sum_1 = attn_sum_1 + e
+      ki = ki + 1.0
+    end
+    ki = 0.0
+    while ki < train_context
+      attn_1[ki] = attn_1[ki] / attn_sum_1
+      ki = ki + 1.0
+    end
+
+    // --- Compute attention-weighted context representation (16-dim) ---
+    let mut ctx_repr = []
+    let mut cd = 0.0
+    while cd < embed_dim
+      let mut cr_sum = 0.0
+      ki = 0.0
+      while ki < train_context
+        let avg_a = 0.5 * attn_0[ki] + 0.5 * attn_1[ki]
+        cr_sum = cr_sum + avg_a * peL1[ctx_protos[ki] * embed_dim + cd]
+        ki = ki + 1.0
+      end
+      push(ctx_repr, cr_sum)
+      cd = cd + 1.0
+    end
+
+    // --- FFN Layer 1: hidden = ReLU(ctx_repr @ W1 + b1) ---
+    let mut ffn_pre = []
+    let mut ffn_hid = []
+    let mut hi = 0.0
+    while hi < ffn_hidden
+      let mut hs = b1_ffn[hi]
+      let mut hj = 0.0
+      while hj < embed_dim
+        hs = hs + ctx_repr[hj] * W1_ffn[hj * ffn_hidden + hi]
+        hj = hj + 1.0
+      end
+      push(ffn_pre, hs)
+      let mut ha = hs
+      if ha < 0.0
+        ha = 0.0
+      end
+      push(ffn_hid, ha)
+      hi = hi + 1.0
+    end
+
+    // --- FFN Layer 2: ffn_out = hidden @ W2 + b2 (16-dim) ---
+    let mut ffn_out = []
+    let mut fo = 0.0
+    while fo < embed_dim
+      let mut fs = b2_ffn[fo]
+      let mut fj = 0.0
+      while fj < ffn_hidden
+        fs = fs + ffn_hid[fj] * W2_ffn[fj * embed_dim + fo]
+        fj = fj + 1.0
+      end
+      push(ffn_out, fs)
+      fo = fo + 1.0
+    end
+
+    // --- FFN logits: dot(ffn_out, proto_embeddings) → softmax ---
+    let mut ffn_logits = []
+    let mut ffn_max = -100.0
+    let mut fli = 0.0
+    while fli < pcL1
+      let mut fdot = 0.0
+      let mut fd = 0.0
+      while fd < embed_dim
+        fdot = fdot + ffn_out[fd] * peL1[fli * embed_dim + fd]
+        fd = fd + 1.0
+      end
+      push(ffn_logits, fdot)
+      if fdot > ffn_max
+        ffn_max = fdot
+      end
+      fli = fli + 1.0
+    end
+    let mut ffn_exp_sum = 0.0
+    let mut ffn_probs = []
+    fli = 0.0
+    while fli < pcL1
+      let fe = exp(ffn_logits[fli] - ffn_max)
+      push(ffn_probs, fe)
+      ffn_exp_sum = ffn_exp_sum + fe
+      fli = fli + 1.0
+    end
+    fli = 0.0
+    while fli < pcL1
+      ffn_probs[fli] = ffn_probs[fli] / ffn_exp_sum
+      fli = fli + 1.0
+    end
+
+    // --- Markov blend (same as before) ---
+    let mut markov_blend = 0.0
+    ki = 0.0
+    while ki < train_context
+      let avg_a = 0.5 * attn_0[ki] + 0.5 * attn_1[ki]
+      let cp = ctx_protos[ki]
+      let rs = row_sums[cp]
+      if rs > 0.5
+        markov_blend = markov_blend + avg_a * cur_table[cp * pcL1 + target_proto] / rs
+      end
+      ki = ki + 1.0
+    end
+
+    // --- Combine: (1-mix)*markov + mix*ffn_softmax (mix depends on stage) ---
+    let target_prob = (1.0 - cur_ffn_mix) * markov_blend + cur_ffn_mix * ffn_probs[target_proto] + 0.001
+    let loss = 0.0 - log(target_prob)
+    total_loss = total_loss + loss
+    loss_count = loss_count + 1.0
+
+    // ── BACKWARD PASS (FFN + Multi-Head) ──
+    let d_target_prob = -1.0 / target_prob
+
+    // === FFN backward branch ===
+    let d_ffn_p_t = cur_ffn_mix * d_target_prob
+    // Softmax backward: only target has non-zero d_output
+    let mut d_ffn_logits = []
+    fli = 0.0
+    while fli < pcL1
+      let mut dl = ffn_probs[fli] * (0.0 - ffn_probs[target_proto] * d_ffn_p_t)
+      if fli == target_proto
+        dl = ffn_probs[fli] * (d_ffn_p_t - ffn_probs[target_proto] * d_ffn_p_t)
+      end
+      push(d_ffn_logits, dl)
+      fli = fli + 1.0
+    end
+
+    // d_ffn_out[d] = sum_p(d_ffn_logits[p] * peL1[p*embed_dim + d])
+    let mut d_ffn_out = []
+    let mut dfo = 0.0
+    while dfo < embed_dim
+      let mut dfs = 0.0
+      fli = 0.0
+      while fli < pcL1
+        dfs = dfs + d_ffn_logits[fli] * peL1[fli * embed_dim + dfo]
+        fli = fli + 1.0
+      end
+      push(d_ffn_out, dfs)
+      dfo = dfo + 1.0
+    end
+
+    // Layer 2 backward: grad_W2, grad_b2, d_hidden
+    let mut d_hidden = []
+    let mut dhi = 0.0
+    while dhi < ffn_hidden
+      let mut dhs = 0.0
+      let mut dho = 0.0
+      while dho < embed_dim
+        grad_W2_ffn[dhi * embed_dim + dho] = grad_W2_ffn[dhi * embed_dim + dho] + ffn_hid[dhi] * d_ffn_out[dho]
+        dhs = dhs + d_ffn_out[dho] * W2_ffn[dhi * embed_dim + dho]
+        dho = dho + 1.0
+      end
+      push(d_hidden, dhs)
+      dhi = dhi + 1.0
+    end
+    dfo = 0.0
+    while dfo < embed_dim
+      grad_b2_ffn[dfo] = grad_b2_ffn[dfo] + d_ffn_out[dfo]
+      dfo = dfo + 1.0
+    end
+
+    // ReLU backward
+    let mut d_pre = []
+    dhi = 0.0
+    while dhi < ffn_hidden
+      let mut dp = 0.0
+      if ffn_pre[dhi] > 0.0
+        dp = d_hidden[dhi]
+      end
+      push(d_pre, dp)
+      dhi = dhi + 1.0
+    end
+
+    // Layer 1 backward: grad_W1, grad_b1, d_ctx_repr
+    let mut d_ctx_repr = []
+    let mut dcr = 0.0
+    while dcr < embed_dim
+      let mut dcrs = 0.0
+      dhi = 0.0
+      while dhi < ffn_hidden
+        grad_W1_ffn[dcr * ffn_hidden + dhi] = grad_W1_ffn[dcr * ffn_hidden + dhi] + ctx_repr[dcr] * d_pre[dhi]
+        dcrs = dcrs + d_pre[dhi] * W1_ffn[dcr * ffn_hidden + dhi]
+        dhi = dhi + 1.0
+      end
+      push(d_ctx_repr, dcrs)
+      dcr = dcr + 1.0
+    end
+    dhi = 0.0
+    while dhi < ffn_hidden
+      grad_b1_ffn[dhi] = grad_b1_ffn[dhi] + d_pre[dhi]
+      dhi = dhi + 1.0
+    end
+
+    // === Markov backward + FFN ctx_repr backward → combined d_attn_avg ===
+    let d_markov = (1.0 - cur_ffn_mix) * d_target_prob
+    let mut d_attn_avg = []
+    ki = 0.0
+    while ki < train_context
+      let cp = ctx_protos[ki]
+      let rs = row_sums[cp]
+      let mut da_m = 0.0
+      if rs > 0.5
+        da_m = d_markov * cur_table[cp * pcL1 + target_proto] / rs
+      end
+      // FFN path: d_ctx_repr → d_attn_avg
+      let mut da_f = 0.0
+      let mut dd = 0.0
+      while dd < embed_dim
+        da_f = da_f + d_ctx_repr[dd] * peL1[cp * embed_dim + dd]
+        dd = dd + 1.0
+      end
+      push(d_attn_avg, da_m + da_f)
+      ki = ki + 1.0
+    end
+
+    // --- Head 0 backward ---
+    let mut d_attn_0 = []
+    ki = 0.0
+    while ki < train_context
+      push(d_attn_0, 0.5 * d_attn_avg[ki])
+      ki = ki + 1.0
+    end
+
+    // Softmax backward head 0
+    let mut attn_da_dot_0 = 0.0
+    ki = 0.0
+    while ki < train_context
+      attn_da_dot_0 = attn_da_dot_0 + attn_0[ki] * d_attn_0[ki]
+      ki = ki + 1.0
+    end
+    let inv_temp = 1.0 / attn_temp
+    let mut d_scores_0 = []
+    ki = 0.0
+    while ki < train_context
+      push(d_scores_0, inv_temp * attn_0[ki] * (d_attn_0[ki] - attn_da_dot_0))
+      ki = ki + 1.0
+    end
+
+    // Score backward head 0 → d_Q_0, grad_W_K_0
+    let mut d_Q_0 = []
+    let mut dqi = 0.0
+    while dqi < head_dim
+      push(d_Q_0, 0.0)
+      dqi = dqi + 1.0
+    end
+
+    ki = 0.0
+    while ki < train_context
+      let ds = d_scores_0[ki]
+      let mut dd = 0.0
+      while dd < head_dim
+        d_Q_0[dd] = d_Q_0[dd] + ds * K_projs_0[ki * head_dim + dd]
+        dd = dd + 1.0
+      end
+      // grad_W_K_0 += embed_k * d_score * Q
+      let k_proto = ctx_protos[ki]
+      let k_eb = k_proto * embed_dim
+      let mut ri = 0.0
+      while ri < embed_dim
+        let mut ci2 = 0.0
+        while ci2 < head_dim
+          grad_W_K_0[ri * head_dim + ci2] = grad_W_K_0[ri * head_dim + ci2] + peL1[k_eb + ri] * ds * Q_proj_0[ci2]
+          ci2 = ci2 + 1.0
+        end
+        ri = ri + 1.0
+      end
+      ki = ki + 1.0
+    end
+
+    // grad_W_Q_0 += embed_q * d_Q_0
+    let mut ri = 0.0
+    while ri < embed_dim
+      let mut ci2 = 0.0
+      while ci2 < head_dim
+        grad_W_Q_0[ri * head_dim + ci2] = grad_W_Q_0[ri * head_dim + ci2] + peL1[q_embed_base + ri] * d_Q_0[ci2]
+        ci2 = ci2 + 1.0
+      end
+      ri = ri + 1.0
+    end
+
+    // --- Head 1 backward ---
+    let mut d_attn_1 = []
+    ki = 0.0
+    while ki < train_context
+      push(d_attn_1, 0.5 * d_attn_avg[ki])
+      ki = ki + 1.0
+    end
+
+    // Softmax backward head 1
+    let mut attn_da_dot_1 = 0.0
+    ki = 0.0
+    while ki < train_context
+      attn_da_dot_1 = attn_da_dot_1 + attn_1[ki] * d_attn_1[ki]
+      ki = ki + 1.0
+    end
+    let mut d_scores_1 = []
+    ki = 0.0
+    while ki < train_context
+      push(d_scores_1, inv_temp * attn_1[ki] * (d_attn_1[ki] - attn_da_dot_1))
+      ki = ki + 1.0
+    end
+
+    // Score backward head 1 → d_Q_1, grad_W_K_1
+    let mut d_Q_1 = []
+    dqi = 0.0
+    while dqi < head_dim
+      push(d_Q_1, 0.0)
+      dqi = dqi + 1.0
+    end
+
+    ki = 0.0
+    while ki < train_context
+      let ds = d_scores_1[ki]
+      let mut dd = 0.0
+      while dd < head_dim
+        d_Q_1[dd] = d_Q_1[dd] + ds * K_projs_1[ki * head_dim + dd]
+        dd = dd + 1.0
+      end
+      let k_proto = ctx_protos[ki]
+      let k_eb = k_proto * embed_dim
+      ri = 0.0
+      while ri < embed_dim
+        let mut ci2 = 0.0
+        while ci2 < head_dim
+          grad_W_K_1[ri * head_dim + ci2] = grad_W_K_1[ri * head_dim + ci2] + peL1[k_eb + ri] * ds * Q_proj_1[ci2]
+          ci2 = ci2 + 1.0
+        end
+        ri = ri + 1.0
+      end
+      ki = ki + 1.0
+    end
+
+    // grad_W_Q_1 += embed_q * d_Q_1
+    ri = 0.0
+    while ri < embed_dim
+      let mut ci2 = 0.0
+      while ci2 < head_dim
+        grad_W_Q_1[ri * head_dim + ci2] = grad_W_Q_1[ri * head_dim + ci2] + peL1[q_embed_base + ri] * d_Q_1[ci2]
+        ci2 = ci2 + 1.0
+      end
+      ri = ri + 1.0
+    end
+
+    sbi = sbi + 1.0
+  end
+
+  // Compute gradient norms for monitoring
+  let mut gnorm_attn = 0.0
+  let mut gnorm_ffn = 0.0
+  let mut gni = 0.0
+  while gni < wh_size
+    gnorm_attn = gnorm_attn + grad_W_Q_0[gni] * grad_W_Q_0[gni]
+    gnorm_attn = gnorm_attn + grad_W_K_0[gni] * grad_W_K_0[gni]
+    gnorm_attn = gnorm_attn + grad_W_Q_1[gni] * grad_W_Q_1[gni]
+    gnorm_attn = gnorm_attn + grad_W_K_1[gni] * grad_W_K_1[gni]
+    gni = gni + 1.0
+  end
+  gni = 0.0
+  while gni < ffn_w1_size
+    gnorm_ffn = gnorm_ffn + grad_W1_ffn[gni] * grad_W1_ffn[gni]
+    gni = gni + 1.0
+  end
+  gni = 0.0
+  while gni < ffn_w2_size
+    gnorm_ffn = gnorm_ffn + grad_W2_ffn[gni] * grad_W2_ffn[gni]
+    gni = gni + 1.0
+  end
+  gnorm_attn = sqrt(gnorm_attn / train_batch_size)
+  gnorm_ffn = sqrt(gnorm_ffn / train_batch_size)
+
+  // Gradient clipping (max norm = 5.0)
+  let max_grad_norm = 5.0
+  let mut clip_scale_attn = 1.0
+  if gnorm_attn > max_grad_norm
+    clip_scale_attn = max_grad_norm / gnorm_attn
+  end
+  let mut clip_scale_ffn = 1.0
+  if gnorm_ffn > max_grad_norm
+    clip_scale_ffn = max_grad_norm / gnorm_ffn
+  end
+
+  // SGD update — attention (4 matrices) with gradient clipping
+  let mut ui = 0.0
+  while ui < wh_size
+    W_Q_0[ui] = W_Q_0[ui] - train_lr * clip_scale_attn * grad_W_Q_0[ui] / train_batch_size
+    W_K_0[ui] = W_K_0[ui] - train_lr * clip_scale_attn * grad_W_K_0[ui] / train_batch_size
+    W_Q_1[ui] = W_Q_1[ui] - train_lr * clip_scale_attn * grad_W_Q_1[ui] / train_batch_size
+    W_K_1[ui] = W_K_1[ui] - train_lr * clip_scale_attn * grad_W_K_1[ui] / train_batch_size
+    ui = ui + 1.0
+  end
+  // SGD update — FFN with gradient clipping
+  let mut ufi = 0.0
+  while ufi < ffn_w1_size
+    W1_ffn[ufi] = W1_ffn[ufi] - train_lr * clip_scale_ffn * grad_W1_ffn[ufi] / train_batch_size
+    ufi = ufi + 1.0
+  end
+  ufi = 0.0
+  while ufi < ffn_hidden
+    b1_ffn[ufi] = b1_ffn[ufi] - train_lr * clip_scale_ffn * grad_b1_ffn[ufi] / train_batch_size
+    ufi = ufi + 1.0
+  end
+  ufi = 0.0
+  while ufi < ffn_w2_size
+    W2_ffn[ufi] = W2_ffn[ufi] - train_lr * clip_scale_ffn * grad_W2_ffn[ufi] / train_batch_size
+    ufi = ufi + 1.0
+  end
+  ufi = 0.0
+  while ufi < embed_dim
+    b2_ffn[ufi] = b2_ffn[ufi] - train_lr * clip_scale_ffn * grad_b2_ffn[ufi] / train_batch_size
+    ufi = ufi + 1.0
+  end
+
+  let avg_loss = total_loss / loss_count
+  push(pass_losses, avg_loss)
+  let avg_loss_r = floor(avg_loss * 1000.0) / 1000.0
+  let gnorm_attn_r = floor(gnorm_attn * 1000.0) / 1000.0
+  let gnorm_ffn_r = floor(gnorm_ffn * 1000.0) / 1000.0
+  print("  Pass {pass_int} [{stage_name}]: loss={avg_loss_r}  g_attn={gnorm_attn_r}  g_ffn={gnorm_ffn_r}")
+
+  pass = pass + 1.0
+end
+
+// ── Compute post-training loss on SAME fixed evaluation set ──
+let mut post_train_loss = 0.0
+let mut post_eval_count = 0.0
+evi = 0.0
+while evi < actual_eval_size
+  let ev_pos2 = eval_positions[evi]
+  let mut ev2_ci = 0.0
+  while ev2_ci < train_context
+    ctx_protos[ev2_ci] = train_proto_seq[ev_pos2 - train_context + ev2_ci]
+    ev2_ci = ev2_ci + 1.0
+  end
+  let ev2_query = train_proto_seq[ev_pos2 - 1.0]
+  let ev2_target = train_proto_seq[ev_pos2]
+  let ev2_q_base = ev2_query * embed_dim
+
+  // --- Head 0 forward ---
+  let mut ev2_Q0 = []
+  let mut ev2_qns0 = 0.0
+  let mut ev2_qd = 0.0
+  while ev2_qd < head_dim
+    let mut ev2_qs = 0.0
+    let mut ev2_qi = 0.0
+    while ev2_qi < embed_dim
+      ev2_qs = ev2_qs + peL1[ev2_q_base + ev2_qi] * W_Q_0[ev2_qi * head_dim + ev2_qd]
+      ev2_qi = ev2_qi + 1.0
+    end
+    push(ev2_Q0, ev2_qs)
+    ev2_qns0 = ev2_qns0 + ev2_qs * ev2_qs
+    ev2_qd = ev2_qd + 1.0
+  end
+  let ev2_qinv0 = 1.0 / sqrt(ev2_qns0 + 0.00001)
+  ev2_qd = 0.0
+  while ev2_qd < head_dim
+    ev2_Q0[ev2_qd] = ev2_Q0[ev2_qd] * ev2_qinv0
+    ev2_qd = ev2_qd + 1.0
+  end
+
+  let mut ev2_scores0 = []
+  let mut ev2_max0 = -100.0
+  let mut ev2_ci2 = 0.0
+  while ev2_ci2 < train_context
+    let ev2_kp = ctx_protos[ev2_ci2]
+    let ev2_kb = ev2_kp * embed_dim
+    let mut ev2_dot0 = 0.0
+    let mut ev2_kns0 = 0.0
+    let mut ev2_dd = 0.0
+    while ev2_dd < head_dim
+      let mut ev2_ks = 0.0
+      let mut ev2_kj = 0.0
+      while ev2_kj < embed_dim
+        ev2_ks = ev2_ks + peL1[ev2_kb + ev2_kj] * W_K_0[ev2_kj * head_dim + ev2_dd]
+        ev2_kj = ev2_kj + 1.0
+      end
+      ev2_dot0 = ev2_dot0 + ev2_Q0[ev2_dd] * ev2_ks
+      ev2_kns0 = ev2_kns0 + ev2_ks * ev2_ks
+      ev2_dd = ev2_dd + 1.0
+    end
+    ev2_dot0 = ev2_dot0 / sqrt(ev2_kns0 + 0.00001)
+    let ev2_sc0 = ev2_dot0 / attn_temp
+    push(ev2_scores0, ev2_sc0)
+    if ev2_sc0 > ev2_max0
+      ev2_max0 = ev2_sc0
+    end
+    ev2_ci2 = ev2_ci2 + 1.0
+  end
+
+  let mut ev2_exp_sum0 = 0.0
+  let mut ev2_attn0 = []
+  let mut ev2_si = 0.0
+  while ev2_si < train_context
+    let ev2_e = exp(ev2_scores0[ev2_si] - ev2_max0)
+    push(ev2_attn0, ev2_e)
+    ev2_exp_sum0 = ev2_exp_sum0 + ev2_e
+    ev2_si = ev2_si + 1.0
+  end
+  ev2_si = 0.0
+  while ev2_si < train_context
+    ev2_attn0[ev2_si] = ev2_attn0[ev2_si] / ev2_exp_sum0
+    ev2_si = ev2_si + 1.0
+  end
+
+  // --- Head 1 forward ---
+  let mut ev2_Q1 = []
+  let mut ev2_qns1 = 0.0
+  ev2_qd = 0.0
+  while ev2_qd < head_dim
+    let mut ev2_qs = 0.0
+    let mut ev2_qi = 0.0
+    while ev2_qi < embed_dim
+      ev2_qs = ev2_qs + peL1[ev2_q_base + ev2_qi] * W_Q_1[ev2_qi * head_dim + ev2_qd]
+      ev2_qi = ev2_qi + 1.0
+    end
+    push(ev2_Q1, ev2_qs)
+    ev2_qns1 = ev2_qns1 + ev2_qs * ev2_qs
+    ev2_qd = ev2_qd + 1.0
+  end
+  let ev2_qinv1 = 1.0 / sqrt(ev2_qns1 + 0.00001)
+  ev2_qd = 0.0
+  while ev2_qd < head_dim
+    ev2_Q1[ev2_qd] = ev2_Q1[ev2_qd] * ev2_qinv1
+    ev2_qd = ev2_qd + 1.0
+  end
+
+  let mut ev2_scores1 = []
+  let mut ev2_max1 = -100.0
+  ev2_ci2 = 0.0
+  while ev2_ci2 < train_context
+    let ev2_kp = ctx_protos[ev2_ci2]
+    let ev2_kb = ev2_kp * embed_dim
+    let mut ev2_dot1 = 0.0
+    let mut ev2_kns1 = 0.0
+    let mut ev2_dd = 0.0
+    while ev2_dd < head_dim
+      let mut ev2_ks = 0.0
+      let mut ev2_kj = 0.0
+      while ev2_kj < embed_dim
+        ev2_ks = ev2_ks + peL1[ev2_kb + ev2_kj] * W_K_1[ev2_kj * head_dim + ev2_dd]
+        ev2_kj = ev2_kj + 1.0
+      end
+      ev2_dot1 = ev2_dot1 + ev2_Q1[ev2_dd] * ev2_ks
+      ev2_kns1 = ev2_kns1 + ev2_ks * ev2_ks
+      ev2_dd = ev2_dd + 1.0
+    end
+    ev2_dot1 = ev2_dot1 / sqrt(ev2_kns1 + 0.00001)
+    let ev2_sc1 = ev2_dot1 / attn_temp
+    push(ev2_scores1, ev2_sc1)
+    if ev2_sc1 > ev2_max1
+      ev2_max1 = ev2_sc1
+    end
+    ev2_ci2 = ev2_ci2 + 1.0
+  end
+
+  let mut ev2_exp_sum1 = 0.0
+  let mut ev2_attn1 = []
+  ev2_si = 0.0
+  while ev2_si < train_context
+    let ev2_e = exp(ev2_scores1[ev2_si] - ev2_max1)
+    push(ev2_attn1, ev2_e)
+    ev2_exp_sum1 = ev2_exp_sum1 + ev2_e
+    ev2_si = ev2_si + 1.0
+  end
+  ev2_si = 0.0
+  while ev2_si < train_context
+    ev2_attn1[ev2_si] = ev2_attn1[ev2_si] / ev2_exp_sum1
+    ev2_si = ev2_si + 1.0
+  end
+
+  // ctx_repr + FFN forward + Markov blend → combined target prob (post-train)
+  let mut ev2_ctx = []
+  let mut ev2_cd = 0.0
+  while ev2_cd < embed_dim
+    let mut ev2_cr = 0.0
+    let mut ev2_ci_r = 0.0
+    while ev2_ci_r < train_context
+      ev2_cr = ev2_cr + (0.5 * ev2_attn0[ev2_ci_r] + 0.5 * ev2_attn1[ev2_ci_r]) * peL1[ctx_protos[ev2_ci_r] * embed_dim + ev2_cd]
+      ev2_ci_r = ev2_ci_r + 1.0
+    end
+    push(ev2_ctx, ev2_cr)
+    ev2_cd = ev2_cd + 1.0
+  end
+  let mut ev2_fh = []
+  let mut ev2_hi = 0.0
+  while ev2_hi < ffn_hidden
+    let mut ev2_hs = b1_ffn[ev2_hi]
+    let mut ev2_hj = 0.0
+    while ev2_hj < embed_dim
+      ev2_hs = ev2_hs + ev2_ctx[ev2_hj] * W1_ffn[ev2_hj * ffn_hidden + ev2_hi]
+      ev2_hj = ev2_hj + 1.0
+    end
+    if ev2_hs < 0.0
+      ev2_hs = 0.0
+    end
+    push(ev2_fh, ev2_hs)
+    ev2_hi = ev2_hi + 1.0
+  end
+  let mut ev2_fo = []
+  let mut ev2_foi = 0.0
+  while ev2_foi < embed_dim
+    let mut ev2_fs = b2_ffn[ev2_foi]
+    let mut ev2_fj = 0.0
+    while ev2_fj < ffn_hidden
+      ev2_fs = ev2_fs + ev2_fh[ev2_fj] * W2_ffn[ev2_fj * embed_dim + ev2_foi]
+      ev2_fj = ev2_fj + 1.0
+    end
+    push(ev2_fo, ev2_fs)
+    ev2_foi = ev2_foi + 1.0
+  end
+  let mut ev2_ffn_max = -100.0
+  let mut ev2_ffn_logits = []
+  let mut ev2_fli = 0.0
+  while ev2_fli < pcL1
+    let mut ev2_fdot = 0.0
+    let mut ev2_fd = 0.0
+    while ev2_fd < embed_dim
+      ev2_fdot = ev2_fdot + ev2_fo[ev2_fd] * peL1[ev2_fli * embed_dim + ev2_fd]
+      ev2_fd = ev2_fd + 1.0
+    end
+    push(ev2_ffn_logits, ev2_fdot)
+    if ev2_fdot > ev2_ffn_max
+      ev2_ffn_max = ev2_fdot
+    end
+    ev2_fli = ev2_fli + 1.0
+  end
+  let mut ev2_ffn_es = 0.0
+  let mut ev2_ffn_pr = []
+  ev2_fli = 0.0
+  while ev2_fli < pcL1
+    let ev2_fe = exp(ev2_ffn_logits[ev2_fli] - ev2_ffn_max)
+    push(ev2_ffn_pr, ev2_fe)
+    ev2_ffn_es = ev2_ffn_es + ev2_fe
+    ev2_fli = ev2_fli + 1.0
+  end
+  ev2_fli = 0.0
+  while ev2_fli < pcL1
+    ev2_ffn_pr[ev2_fli] = ev2_ffn_pr[ev2_fli] / ev2_ffn_es
+    ev2_fli = ev2_fli + 1.0
+  end
+  let mut ev2_markov = 0.0
+  let mut ev2_bi = 0.0
+  while ev2_bi < train_context
+    let ev2_avg = 0.5 * ev2_attn0[ev2_bi] + 0.5 * ev2_attn1[ev2_bi]
+    let ev2_cp = ctx_protos[ev2_bi]
+    let ev2_rs = row_sums[ev2_cp]
+    if ev2_rs > 0.5
+      ev2_markov = ev2_markov + ev2_avg * cur_table[ev2_cp * pcL1 + ev2_target] / ev2_rs
+    end
+    ev2_bi = ev2_bi + 1.0
+  end
+  let ev2_blend = (1.0 - ffn_mix) * ev2_markov + ffn_mix * ev2_ffn_pr[ev2_target] + 0.00001
+
+  if ev2_blend > 0.00001
+    post_train_loss = post_train_loss - log(ev2_blend)
+  else
+    post_train_loss = post_train_loss + 10.0
+  end
+  post_eval_count = post_eval_count + 1.0
+  evi = evi + 1.0
+end
+post_train_loss = post_train_loss / post_eval_count
+let post_loss_r = floor(post_train_loss * 1000.0) / 1000.0
+print("  Post-training eval loss (fixed set): {post_loss_r}")
+let loss_improve = pre_train_loss - post_train_loss
+let loss_improve_r = floor(loss_improve * 1000.0) / 1000.0
+print("  Eval loss improvement: {loss_improve_r}")
+
+let t_train_end = time()
+let train_ms = int((t_train_end - t_train_start) * 1000.0)
+print("  Time: {train_ms} ms")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 5: Epoch Loop with FFN + Multi-Head Attention
+// ══════════════════════════════════════════════════════════════════════
+print("--- Phase 5: Epoch Loop with Multi-Head Attention ---")
+let t_epoch_start = time()
+
+let num_epochs = 4.0
+let gen_count = 200.0
+
+// Pre-allocate per-proto surprise accumulators
+let mut proto_surprise_sum = []
+let mut proto_surprise_count = []
+let mut psa_init = 0.0
+while psa_init < pcL1
+  push(proto_surprise_sum, 0.0)
+  push(proto_surprise_count, 0.0)
+  psa_init = psa_init + 1.0
+end
+
+// Pre-allocate Strategy B working arrays
+let mut blended = []
+let mut modulated = []
+let mut exp_mod = []
+let mut activation = []
+let mut mod_copy = []
+let mut pa_init = 0.0
+while pa_init < pcL1
+  push(blended, 0.0)
+  push(modulated, 0.0)
+  push(exp_mod, 0.0)
+  push(activation, 0.0)
+  push(mod_copy, 0.0)
+  pa_init = pa_init + 1.0
+end
+
+// Pre-allocate context window
+let context_max = 20.0
+let mut context_window = []
+let mut cwi = 0.0
+while cwi < context_max
+  push(context_window, 0.0)
+  cwi = cwi + 1.0
+end
+
+// Pre-allocate generation transition counts (pcL1 x pcL1)
+let table_size = pcL1 * pcL1
+let mut gen_trans = []
+let mut gti_init = 0.0
+while gti_init < table_size
+  push(gen_trans, 0.0)
+  gti_init = gti_init + 1.0
+end
+
+// Pre-allocate per-head attention arrays
+let mut attn_raw_0 = []
+let mut attn_raw_1 = []
+let mut attn_weights_0 = []
+let mut attn_weights_1 = []
+let mut attn_combined = []
+let mut pos_weights = []
+let mut awi = 0.0
+while awi < context_max
+  push(attn_raw_0, 0.0)
+  push(attn_raw_1, 0.0)
+  push(attn_weights_0, 0.0)
+  push(attn_weights_1, 0.0)
+  push(attn_combined, 0.0)
+  push(pos_weights, 0.0)
+  awi = awi + 1.0
+end
+
+// Epoch metrics arrays
+let mut epoch_avg_surprise = []
+let mut epoch_coherence = []
+let mut epoch_diversity = []
+let mut epoch_drift_count = []
+let mut epoch_ppl = []
+let mut epoch_attn_entropy = []
+let mut epoch_attn_entropy_0 = []
+let mut epoch_attn_entropy_1 = []
+let mut epoch_head_divergence = []
+
+// ── Epoch Loop ──
+let mut epoch = 0.0
+while epoch < num_epochs
+  let epoch_int = int(epoch)
+  print("")
+  print("  ── Epoch {epoch_int} ──")
+  let t_ep_start = time()
+
+  // ────────────────────────────────────────────────────────────────
+  // Step 0: Drift + Rebuild (skip epoch 0)
+  // ────────────────────────────────────────────────────────────────
+  let mut drift_count = 0.0
+  if epoch > 0.5
+    let t_drift_start = time()
+
+    let mut surp_mean_sum = 0.0
+    let mut surp_mean_n = 0.0
+    let mut sm_i = 0.0
+    while sm_i < pcL1
+      if proto_surprise_count[sm_i] > 1.5
+        surp_mean_sum = surp_mean_sum + proto_surprise_sum[sm_i] / proto_surprise_count[sm_i]
+        surp_mean_n = surp_mean_n + 1.0
+      end
+      sm_i = sm_i + 1.0
+    end
+    let mut surp_threshold = 0.99
+    if surp_mean_n > 0.5
+      surp_threshold = surp_mean_sum / surp_mean_n
+    end
+
+    let alpha_high = 0.12 / epoch
+    let alpha_low = 0.03 / epoch
+
+    let mut dp = 0.0
+    while dp < pcL1
+      if proto_surprise_count[dp] > 1.5
+        let avg_surp = proto_surprise_sum[dp] / proto_surprise_count[dp]
+
+        let mut alpha = alpha_low
+        if avg_surp > surp_threshold
+          alpha = alpha_high
+        end
+
+        let mut cd = 0.0
+        while cd < embed_dim
+          normed_buf[cd] = 0.0
+          cd = cd + 1.0
+        end
+        let mut centroid_weight = 0.0
+
+        let mut cv = 0.0
+        while cv < num_vocab
+          if vocab_proto_ids[cv] == dp
+            let wf = word_freq[cv]
+            if wf > 0.0
+              let vbase = cv * embed_dim
+              cd = 0.0
+              while cd < embed_dim
+                normed_buf[cd] = normed_buf[cd] + wf * vocab_flat[vbase + cd]
+                cd = cd + 1.0
+              end
+              centroid_weight = centroid_weight + wf
+            end
+          end
+          cv = cv + 1.0
+        end
+
+        if centroid_weight > 0.5
+          let mut cnorm_sq = 0.0
+          cd = 0.0
+          while cd < embed_dim
+            normed_buf[cd] = normed_buf[cd] / centroid_weight
+            cnorm_sq = cnorm_sq + normed_buf[cd] * normed_buf[cd]
+            cd = cd + 1.0
+          end
+
+          if cnorm_sq > 0.000001
+            let cinv = 1.0 / sqrt(cnorm_sq)
+            cd = 0.0
+            while cd < embed_dim
+              normed_buf[cd] = normed_buf[cd] * cinv
+              cd = cd + 1.0
+            end
+
+            let pbase = dp * embed_dim
+            let mut dnorm_sq = 0.0
+            cd = 0.0
+            while cd < embed_dim
+              let dv = (1.0 - alpha) * peL1[pbase + cd] + alpha * normed_buf[cd]
+              peL1[pbase + cd] = dv
+              dnorm_sq = dnorm_sq + dv * dv
+              cd = cd + 1.0
+            end
+
+            if dnorm_sq > 0.000001
+              let dinv = 1.0 / sqrt(dnorm_sq)
+              cd = 0.0
+              while cd < embed_dim
+                peL1[pbase + cd] = peL1[pbase + cd] * dinv
+                cd = cd + 1.0
+              end
+            end
+
+            drift_count = drift_count + 1.0
+          end
+        end
+      end
+      dp = dp + 1.0
+    end
+
+    let drift_int = int(drift_count)
+    print("    Drift: {drift_int} protos updated")
+
+    // Reclassify: transpose peL1 → gpu_matmul → argmax → update vocab_proto_ids
+    let mut peL1_T_e = []
+    let mut td_e = 0.0
+    while td_e < embed_dim
+      let mut tp_e = 0.0
+      while tp_e < pcL1
+        push(peL1_T_e, peL1[tp_e * embed_dim + td_e])
+        tp_e = tp_e + 1.0
+      end
+      td_e = td_e + 1.0
+    end
+    let sims_e = gpu_matmul(vocab_flat, peL1_T_e, num_vocab, pcL1, embed_dim)
+
+    let mut rci = 0.0
+    while rci < num_vocab
+      let row_base = rci * pcL1
+      let mut best_id = 0.0
+      let mut best_sim = sims_e[row_base]
+      let mut rcp = 1.0
+      while rcp < pcL1
+        let s = sims_e[row_base + rcp]
+        if s > best_sim
+          best_sim = s
+          best_id = rcp
+        end
+        rcp = rcp + 1.0
+      end
+      vocab_proto_ids[rci] = best_id
+      rci = rci + 1.0
+    end
+
+    let mut rpi = 0.0
+    while rpi < total_words
+      let w = all_words[rpi]
+      let vid_rp = map_get(vocab_map, w)
+      proto_ids[rpi] = vocab_proto_ids[vid_rp]
+      rpi = rpi + 1.0
+    end
+
+    let mut rtsi = 0.0
+    while rtsi < train_end_idx
+      train_proto_seq[rtsi] = proto_ids[rtsi]
+      rtsi = rtsi + 1.0
+    end
+
+    let new_table = markov1_build(train_proto_seq, train_seq_len, pcL1)
+
+    let reinforce = 15.0 / epoch
+    let mut rei = 0.0
+    while rei < table_size
+      cur_table[rei] = new_table[rei] + reinforce * gen_trans[rei]
+      rei = rei + 1.0
+    end
+
+    let mut rrs = 0.0
+    while rrs < pcL1
+      let mut rsum = 0.0
+      let mut rrj = 0.0
+      while rrj < pcL1
+        rsum = rsum + cur_table[rrs * pcL1 + rrj]
+        rrj = rrj + 1.0
+      end
+      row_sums[rrs] = rsum
+      rrs = rrs + 1.0
+    end
+
+    let t_drift_end = time()
+    let drift_ms = int((t_drift_end - t_drift_start) * 1000.0)
+    print("    Rebuild: {drift_ms} ms")
+  end
+
+  push(epoch_drift_count, drift_count)
+
+  // ────────────────────────────────────────────────────────────────
+  // Build reverse vocab for this epoch (fresh arrays per epoch)
+  // ────────────────────────────────────────────────────────────────
+  let mut rv_words_e = []
+  let mut rv_freqs_e = []
+  let mut rv_offsets_e = []
+  let mut rvp = 0.0
+  while rvp < pcL1
+    push(rv_offsets_e, len(rv_words_e))
+    let mut rv_ev = 0.0
+    while rv_ev < num_vocab
+      if vocab_proto_ids[rv_ev] == rvp
+        if word_freq[rv_ev] > 0.0
+          push(rv_words_e, vocab[rv_ev])
+          push(rv_freqs_e, word_freq[rv_ev])
+        end
+      end
+      rv_ev = rv_ev + 1.0
+    end
+    rvp = rvp + 1.0
+  end
+  push(rv_offsets_e, len(rv_words_e))
+
+  // ────────────────────────────────────────────────────────────────
+  // Step 1: Generate 200 words (Multi-Head Attention + Strategy B)
+  // ────────────────────────────────────────────────────────────────
+
+  // Zero-reset surprise accumulators and gen_trans
+  let mut zs = 0.0
+  while zs < pcL1
+    proto_surprise_sum[zs] = 0.0
+    proto_surprise_count[zs] = 0.0
+    zs = zs + 1.0
+  end
+  let mut zt = 0.0
+  while zt < table_size
+    gen_trans[zt] = 0.0
+    zt = zt + 1.0
+  end
+
+  // Reset context window with seed protos
+  let mut ctx_count = 0.0
+  let mut cwri = 0.0
+  while cwri < context_max
+    if cwri < 5.0
+      context_window[cwri] = seed_protos[cwri]
+      ctx_count = ctx_count + 1.0
+    else
+      context_window[cwri] = 0.0
+    end
+    cwri = cwri + 1.0
+  end
+
+  let mut curr_proto_b = seed_protos[4]
+  let mut context_strength = 1.0
+  let decay_rate = 0.15
+  let top_k = 2.0
+  let mut total_surprise = 0.0
+  let mut attn_entropy_sum_0 = 0.0
+  let mut attn_entropy_sum_1 = 0.0
+  let mut attn_entropy_count = 0.0
+  let mut head_div_sum = 0.0
+  let mut head_div_count = 0.0
+
+  let mut gen_words = []
+
+  let mut gb = 0.0
+  while gb < gen_count
+
+    // ── Stage 1: CONTEXT PRIOR (Multi-Head Attention) ──
+    let mut bi_init = 0.0
+    while bi_init < pcL1
+      blended[bi_init] = 0.0
+      bi_init = bi_init + 1.0
+    end
+
+    let ctx_len = ctx_count
+
+    // === HEAD 0: Q projection ===
+    let q_base = curr_proto_b * embed_dim
+    let mut Q_proj_g0 = []
+    let mut q_norm_sq_g0 = 0.0
+    let mut qd = 0.0
+    while qd < head_dim
+      let mut qs = 0.0
+      let mut qii = 0.0
+      while qii < embed_dim
+        qs = qs + peL1[q_base + qii] * W_Q_0[qii * head_dim + qd]
+        qii = qii + 1.0
+      end
+      push(Q_proj_g0, qs)
+      q_norm_sq_g0 = q_norm_sq_g0 + qs * qs
+      qd = qd + 1.0
+    end
+    let q_inv_g0 = 1.0 / sqrt(q_norm_sq_g0 + 0.00001)
+    qd = 0.0
+    while qd < head_dim
+      Q_proj_g0[qd] = Q_proj_g0[qd] * q_inv_g0
+      qd = qd + 1.0
+    end
+
+    // HEAD 0: K projections + cosine scores
+    let mut max_a_0 = -100.0
+    let mut ci_a = 0.0
+    while ci_a < ctx_len
+      let k_proto = context_window[ci_a]
+      let k_base = k_proto * embed_dim
+      let mut dot_val = 0.0
+      let mut k_norm_sq = 0.0
+      let mut dd = 0.0
+      while dd < head_dim
+        let mut ks = 0.0
+        let mut kj = 0.0
+        while kj < embed_dim
+          ks = ks + peL1[k_base + kj] * W_K_0[kj * head_dim + dd]
+          kj = kj + 1.0
+        end
+        dot_val = dot_val + Q_proj_g0[dd] * ks
+        k_norm_sq = k_norm_sq + ks * ks
+        dd = dd + 1.0
+      end
+      let k_norm = sqrt(k_norm_sq + 0.00001)
+      dot_val = dot_val / k_norm
+      attn_raw_0[ci_a] = dot_val
+      if dot_val > max_a_0
+        max_a_0 = dot_val
+      end
+      ci_a = ci_a + 1.0
+    end
+
+    // HEAD 0: Softmax
+    let mut attn_exp_sum_g0 = 0.0
+    ci_a = 0.0
+    while ci_a < ctx_len
+      let ae = exp((attn_raw_0[ci_a] - max_a_0) / attn_temp)
+      attn_weights_0[ci_a] = ae
+      attn_exp_sum_g0 = attn_exp_sum_g0 + ae
+      ci_a = ci_a + 1.0
+    end
+    ci_a = 0.0
+    while ci_a < ctx_len
+      attn_weights_0[ci_a] = attn_weights_0[ci_a] / attn_exp_sum_g0
+      ci_a = ci_a + 1.0
+    end
+
+    // === HEAD 1: Q projection ===
+    let mut Q_proj_g1 = []
+    let mut q_norm_sq_g1 = 0.0
+    qd = 0.0
+    while qd < head_dim
+      let mut qs = 0.0
+      let mut qii = 0.0
+      while qii < embed_dim
+        qs = qs + peL1[q_base + qii] * W_Q_1[qii * head_dim + qd]
+        qii = qii + 1.0
+      end
+      push(Q_proj_g1, qs)
+      q_norm_sq_g1 = q_norm_sq_g1 + qs * qs
+      qd = qd + 1.0
+    end
+    let q_inv_g1 = 1.0 / sqrt(q_norm_sq_g1 + 0.00001)
+    qd = 0.0
+    while qd < head_dim
+      Q_proj_g1[qd] = Q_proj_g1[qd] * q_inv_g1
+      qd = qd + 1.0
+    end
+
+    // HEAD 1: K projections + cosine scores
+    let mut max_a_1 = -100.0
+    ci_a = 0.0
+    while ci_a < ctx_len
+      let k_proto = context_window[ci_a]
+      let k_base = k_proto * embed_dim
+      let mut dot_val = 0.0
+      let mut k_norm_sq = 0.0
+      let mut dd = 0.0
+      while dd < head_dim
+        let mut ks = 0.0
+        let mut kj = 0.0
+        while kj < embed_dim
+          ks = ks + peL1[k_base + kj] * W_K_1[kj * head_dim + dd]
+          kj = kj + 1.0
+        end
+        dot_val = dot_val + Q_proj_g1[dd] * ks
+        k_norm_sq = k_norm_sq + ks * ks
+        dd = dd + 1.0
+      end
+      let k_norm = sqrt(k_norm_sq + 0.00001)
+      dot_val = dot_val / k_norm
+      attn_raw_1[ci_a] = dot_val
+      if dot_val > max_a_1
+        max_a_1 = dot_val
+      end
+      ci_a = ci_a + 1.0
+    end
+
+    // HEAD 1: Softmax
+    let mut attn_exp_sum_g1 = 0.0
+    ci_a = 0.0
+    while ci_a < ctx_len
+      let ae = exp((attn_raw_1[ci_a] - max_a_1) / attn_temp)
+      attn_weights_1[ci_a] = ae
+      attn_exp_sum_g1 = attn_exp_sum_g1 + ae
+      ci_a = ci_a + 1.0
+    end
+    ci_a = 0.0
+    while ci_a < ctx_len
+      attn_weights_1[ci_a] = attn_weights_1[ci_a] / attn_exp_sum_g1
+      ci_a = ci_a + 1.0
+    end
+
+    // === Combine heads: average attention + per-head entropy + divergence ===
+    let mut step_ent_0 = 0.0
+    let mut step_ent_1 = 0.0
+    let mut js_div = 0.0
+    ci_a = 0.0
+    while ci_a < ctx_len
+      attn_combined[ci_a] = 0.5 * attn_weights_0[ci_a] + 0.5 * attn_weights_1[ci_a]
+      let aw0 = attn_weights_0[ci_a]
+      if aw0 > 0.0001
+        step_ent_0 = step_ent_0 - aw0 * log(aw0)
+      end
+      let aw1 = attn_weights_1[ci_a]
+      if aw1 > 0.0001
+        step_ent_1 = step_ent_1 - aw1 * log(aw1)
+      end
+      // Jensen-Shannon divergence
+      let m = attn_combined[ci_a]
+      if m > 0.0001
+        if aw0 > 0.0001
+          js_div = js_div + 0.5 * aw0 * log(aw0 / m)
+        end
+        if aw1 > 0.0001
+          js_div = js_div + 0.5 * aw1 * log(aw1 / m)
+        end
+      end
+      ci_a = ci_a + 1.0
+    end
+    attn_entropy_sum_0 = attn_entropy_sum_0 + step_ent_0
+    attn_entropy_sum_1 = attn_entropy_sum_1 + step_ent_1
+    attn_entropy_count = attn_entropy_count + 1.0
+    head_div_sum = head_div_sum + js_div
+    head_div_count = head_div_count + 1.0
+
+    // Positional weights
+    let mut pos_sum = 0.0
+    ci_a = 0.0
+    while ci_a < ctx_len
+      let dist = ctx_len - 1.0 - ci_a
+      let pw = exp(0.0 - decay_rate * dist)
+      pos_weights[ci_a] = pw
+      pos_sum = pos_sum + pw
+      ci_a = ci_a + 1.0
+    end
+    ci_a = 0.0
+    while ci_a < ctx_len
+      pos_weights[ci_a] = pos_weights[ci_a] / pos_sum
+      ci_a = ci_a + 1.0
+    end
+
+    // Hybrid blend: 0.5 * multi-head_attention + 0.5 * positional
+    let mut weight_sum = 0.0
+    let mut ci_b = 0.0
+    while ci_b < ctx_len
+      let cw = 0.5 * attn_combined[ci_b] + 0.5 * pos_weights[ci_b]
+      let ctx_proto = context_window[ci_b]
+      let ctx_base = ctx_proto * pcL1
+      let ctx_row_sum = row_sums[ctx_proto]
+      if ctx_row_sum > 0.5
+        let mut bj = 0.0
+        while bj < pcL1
+          blended[bj] = blended[bj] + cw * (cur_table[ctx_base + bj] / ctx_row_sum)
+          bj = bj + 1.0
+        end
+      end
+      weight_sum = weight_sum + cw
+      ci_b = ci_b + 1.0
+    end
+
+    if weight_sum > 0.001
+      let mut ni = 0.0
+      while ni < pcL1
+        blended[ni] = blended[ni] / weight_sum
+        ni = ni + 1.0
+      end
+    end
+
+    // === FFN modulation in generation ===
+    let mut gen_ctx = []
+    let mut gcd = 0.0
+    while gcd < embed_dim
+      let mut gcr = 0.0
+      let mut gci = 0.0
+      while gci < ctx_len
+        gcr = gcr + attn_combined[gci] * peL1[context_window[gci] * embed_dim + gcd]
+        gci = gci + 1.0
+      end
+      push(gen_ctx, gcr)
+      gcd = gcd + 1.0
+    end
+    let mut gen_fh = []
+    let mut ghi = 0.0
+    while ghi < ffn_hidden
+      let mut ghs = b1_ffn[ghi]
+      let mut ghj = 0.0
+      while ghj < embed_dim
+        ghs = ghs + gen_ctx[ghj] * W1_ffn[ghj * ffn_hidden + ghi]
+        ghj = ghj + 1.0
+      end
+      if ghs < 0.0
+        ghs = 0.0
+      end
+      push(gen_fh, ghs)
+      ghi = ghi + 1.0
+    end
+    let mut gen_fo = []
+    let mut gfo = 0.0
+    while gfo < embed_dim
+      let mut gfs = b2_ffn[gfo]
+      let mut gfj = 0.0
+      while gfj < ffn_hidden
+        gfs = gfs + gen_fh[gfj] * W2_ffn[gfj * embed_dim + gfo]
+        gfj = gfj + 1.0
+      end
+      push(gen_fo, gfs)
+      gfo = gfo + 1.0
+    end
+    let mut gen_ffn_max = -100.0
+    let mut gen_ffn_log = []
+    let mut gfli = 0.0
+    while gfli < pcL1
+      let mut gfdot = 0.0
+      let mut gfd = 0.0
+      while gfd < embed_dim
+        gfdot = gfdot + gen_fo[gfd] * peL1[gfli * embed_dim + gfd]
+        gfd = gfd + 1.0
+      end
+      push(gen_ffn_log, gfdot)
+      if gfdot > gen_ffn_max
+        gen_ffn_max = gfdot
+      end
+      gfli = gfli + 1.0
+    end
+    let mut gen_ffn_es = 0.0
+    let mut gen_ffn_pr = []
+    gfli = 0.0
+    while gfli < pcL1
+      let gfe = exp(gen_ffn_log[gfli] - gen_ffn_max)
+      push(gen_ffn_pr, gfe)
+      gen_ffn_es = gen_ffn_es + gfe
+      gfli = gfli + 1.0
+    end
+    gfli = 0.0
+    while gfli < pcL1
+      gen_ffn_pr[gfli] = gen_ffn_pr[gfli] / gen_ffn_es
+      gfli = gfli + 1.0
+    end
+    // Mix FFN into blended distribution
+    let mut gmi = 0.0
+    while gmi < pcL1
+      blended[gmi] = (1.0 - ffn_mix) * blended[gmi] + ffn_mix * gen_ffn_pr[gmi]
+      gmi = gmi + 1.0
+    end
+
+    // ── Stage 2: TRANSITION DISTRIBUTION ──
+    let trans_base = curr_proto_b * pcL1
+    let trans_row_sum = row_sums[curr_proto_b]
+    let mut mod_sum = 0.0
+    let mut mi = 0.0
+    while mi < pcL1
+      let mut trans_prob = 0.0
+      if trans_row_sum > 0.5
+        trans_prob = cur_table[trans_base + mi] / trans_row_sum
+      end
+      let mod_val = trans_prob * (1.0 + context_strength * blended[mi])
+      modulated[mi] = mod_val
+      mod_sum = mod_sum + mod_val
+      mi = mi + 1.0
+    end
+
+    // ── Stage 3: SAMPLE NEXT PROTO ──
+    let mut chosen_proto = 0.0
+    let mut sampling_sum = 0.0
+    if mod_sum > 0.0001
+      let mut max_mod = 0.0
+      let mut mmi = 0.0
+      while mmi < pcL1
+        if modulated[mmi] > max_mod
+          max_mod = modulated[mmi]
+        end
+        mmi = mmi + 1.0
+      end
+      mmi = 0.0
+      while mmi < pcL1
+        let e = exp((modulated[mmi] - max_mod) / 0.4)
+        exp_mod[mmi] = e
+        sampling_sum = sampling_sum + e
+        mmi = mmi + 1.0
+      end
+      let r = random() * sampling_sum
+      let mut cum = 0.0
+      mmi = 0.0
+      while mmi < pcL1
+        cum = cum + exp_mod[mmi]
+        if cum >= r
+          chosen_proto = mmi
+          mmi = pcL1
+        end
+        mmi = mmi + 1.0
+      end
+    else
+      chosen_proto = markov1_sample(cur_table, curr_proto_b, pcL1, 0.4)
+    end
+
+    // ── Stage 4: SOFT ACTIVATION ──
+    let mut act_sum = 0.0
+    let mut ai = 0.0
+    while ai < pcL1
+      activation[ai] = 0.0
+      mod_copy[ai] = modulated[ai]
+      ai = ai + 1.0
+    end
+
+    let mut topk_count = 0.0
+    let mut tki = 0.0
+    while tki < top_k
+      let mut best_val = -1.0
+      let mut best_idx = 0.0
+      let mut tkj = 0.0
+      while tkj < pcL1
+        if mod_copy[tkj] > best_val
+          best_val = mod_copy[tkj]
+          best_idx = tkj
+        end
+        tkj = tkj + 1.0
+      end
+      if best_val > 0.0001
+        let mut boost = best_val
+        if best_idx == chosen_proto
+          boost = best_val * 3.0
+        end
+        activation[best_idx] = boost
+        act_sum = act_sum + boost
+        mod_copy[best_idx] = -1.0
+        topk_count = topk_count + 1.0
+      end
+      tki = tki + 1.0
+    end
+
+    if act_sum > 0.0001
+      let mut nai = 0.0
+      while nai < pcL1
+        if activation[nai] > 0.0
+          activation[nai] = activation[nai] / act_sum
+        end
+        nai = nai + 1.0
+      end
+    else
+      activation[chosen_proto] = 1.0
+    end
+
+    // ── Stage 5: SAMPLE WORD ──
+    let word = sample_word_soft(activation, pcL1, rv_words_e, rv_freqs_e, rv_offsets_e, 0.55)
+    push(gen_words, word)
+
+    // ── Stage 6: SURPRISE FEEDBACK + context update ──
+    let mut chosen_prob = 0.0
+    if sampling_sum > 0.0001
+      chosen_prob = exp_mod[chosen_proto] / sampling_sum
+    end
+
+    let mut surprisal = 7.0
+    if chosen_prob > 0.001
+      surprisal = 0.0 - log(chosen_prob)
+    end
+    total_surprise = total_surprise + surprisal
+
+    let raw_surprise = 1.0 - chosen_prob
+    proto_surprise_sum[chosen_proto] = proto_surprise_sum[chosen_proto] + raw_surprise
+    proto_surprise_count[chosen_proto] = proto_surprise_count[chosen_proto] + 1.0
+
+    if raw_surprise > 0.7
+      context_strength = context_strength * 0.7
+      if context_strength < 0.3
+        context_strength = 0.3
+      end
+    elif raw_surprise < 0.3
+      context_strength = context_strength * 1.3
+      if context_strength > 3.0
+        context_strength = 3.0
+      end
+    end
+
+    let gt_idx = curr_proto_b * pcL1 + chosen_proto
+    gen_trans[gt_idx] = gen_trans[gt_idx] + 1.0
+
+    // Update context window
+    if ctx_count < context_max
+      context_window[ctx_count] = chosen_proto
+      ctx_count = ctx_count + 1.0
+    else
+      let mut shift_i = 0.0
+      while shift_i < context_max - 1.0
+        context_window[shift_i] = context_window[shift_i + 1.0]
+        shift_i = shift_i + 1.0
+      end
+      context_window[context_max - 1.0] = chosen_proto
+    end
+    curr_proto_b = chosen_proto
+
+    gb = gb + 1.0
+  end
+
+  // ────────────────────────────────────────────────────────────────
+  // Step 2: Evaluate this epoch
+  // ────────────────────────────────────────────────────────────────
+
+  // Average surprise
+  let avg_surprise = total_surprise / gen_count
+  push(epoch_avg_surprise, avg_surprise)
+
+  // Per-head attention entropy
+  let mut epoch_ae_0 = 0.0
+  let mut epoch_ae_1 = 0.0
+  if attn_entropy_count > 0.5
+    epoch_ae_0 = attn_entropy_sum_0 / attn_entropy_count
+    epoch_ae_1 = attn_entropy_sum_1 / attn_entropy_count
+  end
+  let epoch_ae = (epoch_ae_0 + epoch_ae_1) / 2.0
+  push(epoch_attn_entropy, epoch_ae)
+  push(epoch_attn_entropy_0, epoch_ae_0)
+  push(epoch_attn_entropy_1, epoch_ae_1)
+
+  // Head divergence (JS divergence)
+  let mut epoch_hd = 0.0
+  if head_div_count > 0.5
+    epoch_hd = head_div_sum / head_div_count
+  end
+  push(epoch_head_divergence, epoch_hd)
+
+  // Bigram coherence
+  let mut e_bigram_match = 0.0
+  let mut e_bigram_total = 0.0
+  let mut ebi = 1.0
+  while ebi < gen_count
+    let bg_e = gen_words[ebi - 1.0] + " " + gen_words[ebi]
+    e_bigram_total = e_bigram_total + 1.0
+    if map_has(bigram_set, bg_e) > 0.0
+      e_bigram_match = e_bigram_match + 1.0
+    end
+    ebi = ebi + 1.0
+  end
+  let mut e_coherence = 0.0
+  if e_bigram_total > 0.0
+    e_coherence = (e_bigram_match / e_bigram_total) * 100.0
+  end
+  push(epoch_coherence, e_coherence)
+
+  // Diversity
+  let mut e_unique_map = map()
+  let mut e_unique_count = 0.0
+  let mut dui = 0.0
+  while dui < gen_count
+    let dw = gen_words[dui]
+    if map_has(e_unique_map, dw) == 0.0
+      map_set(e_unique_map, dw, 1.0)
+      e_unique_count = e_unique_count + 1.0
+    end
+    dui = dui + 1.0
+  end
+  push(epoch_diversity, e_unique_count)
+
+  // Perplexity on ch12
+  let mut log_prob_sum = 0.0
+  let mut ppl_count = 0.0
+  let mut tsi = test_start_idx + 1.0
+  while tsi < test_end_idx
+    let prev_p = proto_ids[tsi - 1.0]
+    let curr_p = proto_ids[tsi]
+    let rs = row_sums[prev_p]
+    let count_val = cur_table[prev_p * pcL1 + curr_p]
+    let prob = (count_val + 1.0) / (rs + pcL1)
+    log_prob_sum = log_prob_sum + log(prob)
+    ppl_count = ppl_count + 1.0
+    tsi = tsi + 1.0
+  end
+  let mut e_ppl = 999.0
+  if ppl_count > 0.0
+    e_ppl = exp(0.0 - log_prob_sum / ppl_count)
+  end
+  push(epoch_ppl, e_ppl)
+
+  // Print epoch summary
+  let avg_r = floor(avg_surprise * 1000.0) / 1000.0
+  let coh_r = floor(e_coherence * 10.0) / 10.0
+  let div_int = int(e_unique_count)
+  let ppl_r = floor(e_ppl * 100.0) / 100.0
+  let drift_int = int(drift_count)
+  let ae_r = floor(epoch_ae * 1000.0) / 1000.0
+  let hd_r = floor(epoch_hd * 10000.0) / 10000.0
+  print("    Surprise: {avg_r}  Coherence: {coh_r}%  Diversity: {div_int}  PPL: {ppl_r}  Drift: {drift_int}  AttnH: {ae_r}  HeadDiv: {hd_r}")
+
+  // Print text preview
+  let mut gen_text = ""
+  let mut gti = 0.0
+  while gti < gen_count
+    if gti > 0.0
+      gen_text = gen_text + " "
+    end
+    gen_text = gen_text + gen_words[gti]
+    gti = gti + 1.0
+  end
+  let gen_preview = substr(gen_text, 0.0, 120.0)
+  print("    Output: {gen_preview}...")
+
+  let t_ep_end = time()
+  let ep_ms = int((t_ep_end - t_ep_start) * 1000.0)
+  print("    Time: {ep_ms} ms")
+
+  epoch = epoch + 1.0
+end
+
+let t_epoch_end = time()
+let epoch_total_ms = int((t_epoch_end - t_epoch_start) * 1000.0)
+print("")
+print("  Total epoch time: {epoch_total_ms} ms")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 6: Epoch Comparison + Multi-Head Analysis
+// ══════════════════════════════════════════════════════════════════════
+print("--- Phase 6: Epoch Comparison + Multi-Head Analysis ---")
+print("  Epoch | Surprise | Coherence | Diversity | PPL     | Drifted | AttnEnt | H0_Ent | H1_Ent | JS_Div")
+print("  ------|----------|-----------|-----------|---------|---------|---------|--------|--------|-------")
+
+let mut tbl_e = 0.0
+while tbl_e < num_epochs
+  let tbl_int = int(tbl_e)
+  let s_r = floor(epoch_avg_surprise[tbl_e] * 1000.0) / 1000.0
+  let c_r = floor(epoch_coherence[tbl_e] * 10.0) / 10.0
+  let d_int = int(epoch_diversity[tbl_e])
+  let p_r = floor(epoch_ppl[tbl_e] * 100.0) / 100.0
+  let dr_int = int(epoch_drift_count[tbl_e])
+  let a_r = floor(epoch_attn_entropy[tbl_e] * 1000.0) / 1000.0
+  let a0_r = floor(epoch_attn_entropy_0[tbl_e] * 1000.0) / 1000.0
+  let a1_r = floor(epoch_attn_entropy_1[tbl_e] * 1000.0) / 1000.0
+  let hd_r = floor(epoch_head_divergence[tbl_e] * 10000.0) / 10000.0
+  print("  {tbl_int}     | {s_r}    | {c_r}%     | {d_int}        | {p_r}   | {dr_int}      | {a_r}   | {a0_r}  | {a1_r}  | {hd_r}")
+  tbl_e = tbl_e + 1.0
+end
+print("")
+
+// Training loss curve (per-pass, two-stage curriculum)
+print("  Training loss curve (two-stage curriculum):")
+let mut pli = 0.0
+while pli < num_train_passes
+  let pli_int = int(pli)
+  let pl_r = floor(pass_losses[pli] * 1000.0) / 1000.0
+  let mut pl_stage = "B:blend"
+  if pli < num_pretrain_passes
+    pl_stage = "A:ffn"
+  end
+  print("    Pass {pli_int} [{pl_stage}]: {pl_r}")
+  pli = pli + 1.0
+end
+print("")
+
+// Deterministic evaluation loss
+print("  Deterministic eval loss (fixed {actual_eval_size} positions):")
+print("    Pre-training:  {pre_loss_r}")
+print("    Post-training: {post_loss_r}")
+let eval_delta_r = floor((pre_train_loss - post_train_loss) * 1000.0) / 1000.0
+print("    Improvement:   {eval_delta_r}")
+print("")
+
+// Compute positional entropy reference (full 20-position window)
+let mut pos_ref_sum = 0.0
+let mut pri = 0.0
+while pri < context_max
+  let dist = context_max - 1.0 - pri
+  let pw = exp(0.0 - 0.15 * dist)
+  pos_weights[pri] = pw
+  pos_ref_sum = pos_ref_sum + pw
+  pri = pri + 1.0
+end
+let mut pos_ref_ent = 0.0
+pri = 0.0
+while pri < context_max
+  let pw_n = pos_weights[pri] / pos_ref_sum
+  if pw_n > 0.0001
+    pos_ref_ent = pos_ref_ent - pw_n * log(pw_n)
+  end
+  pri = pri + 1.0
+end
+
+let pos_ent_r = floor(pos_ref_ent * 1000.0) / 1000.0
+let last_e = num_epochs - 1.0
+let last_attn_ent = epoch_attn_entropy[last_e]
+let last_ae_r = floor(last_attn_ent * 1000.0) / 1000.0
+print("  Positional entropy (reference, 20 positions): {pos_ent_r}")
+print("  Final epoch attention entropy (avg heads): {last_ae_r}")
+if last_attn_ent < pos_ref_ent
+  print("  -> Multi-head attention is MORE selective than positional decay")
+else
+  print("  -> Attention entropy not yet below positional (may need more training)")
+end
+print("")
+
+// Per-head analysis
+let h0_final = epoch_attn_entropy_0[last_e]
+let h1_final = epoch_attn_entropy_1[last_e]
+let h0_r = floor(h0_final * 1000.0) / 1000.0
+let h1_r = floor(h1_final * 1000.0) / 1000.0
+let hd_final = epoch_head_divergence[last_e]
+let hd_final_r = floor(hd_final * 10000.0) / 10000.0
+print("  Head 0 entropy: {h0_r}")
+print("  Head 1 entropy: {h1_r}")
+print("  Head divergence (JS): {hd_final_r}")
+if hd_final > 0.001
+  print("  -> Heads are specializing (divergence > 0.001)")
+else
+  print("  -> Heads are similar (divergence <= 0.001)")
+end
+print("")
+
+// W_Q/W_K statistics for all 4 matrices
+let mut wq0_sum = 0.0
+let mut wq0_sq = 0.0
+let mut wsi = 0.0
+while wsi < wh_size
+  wq0_sum = wq0_sum + W_Q_0[wsi]
+  wq0_sq = wq0_sq + W_Q_0[wsi] * W_Q_0[wsi]
+  wsi = wsi + 1.0
+end
+let wq0_mean = wq0_sum / wh_size
+let wq0_var = wq0_sq / wh_size - wq0_mean * wq0_mean
+let mut wq0_std = 0.0
+if wq0_var > 0.0
+  wq0_std = sqrt(wq0_var)
+end
+let wq0_mean_r = floor(wq0_mean * 10000.0) / 10000.0
+let wq0_std_r = floor(wq0_std * 10000.0) / 10000.0
+print("  W_Q_0 stats: mean={wq0_mean_r}, std={wq0_std_r}")
+
+let mut wk0_sum = 0.0
+let mut wk0_sq = 0.0
+wsi = 0.0
+while wsi < wh_size
+  wk0_sum = wk0_sum + W_K_0[wsi]
+  wk0_sq = wk0_sq + W_K_0[wsi] * W_K_0[wsi]
+  wsi = wsi + 1.0
+end
+let wk0_mean = wk0_sum / wh_size
+let wk0_var = wk0_sq / wh_size - wk0_mean * wk0_mean
+let mut wk0_std = 0.0
+if wk0_var > 0.0
+  wk0_std = sqrt(wk0_var)
+end
+let wk0_mean_r = floor(wk0_mean * 10000.0) / 10000.0
+let wk0_std_r = floor(wk0_std * 10000.0) / 10000.0
+print("  W_K_0 stats: mean={wk0_mean_r}, std={wk0_std_r}")
+
+let mut wq1_sum = 0.0
+let mut wq1_sq = 0.0
+wsi = 0.0
+while wsi < wh_size
+  wq1_sum = wq1_sum + W_Q_1[wsi]
+  wq1_sq = wq1_sq + W_Q_1[wsi] * W_Q_1[wsi]
+  wsi = wsi + 1.0
+end
+let wq1_mean = wq1_sum / wh_size
+let wq1_var = wq1_sq / wh_size - wq1_mean * wq1_mean
+let mut wq1_std = 0.0
+if wq1_var > 0.0
+  wq1_std = sqrt(wq1_var)
+end
+let wq1_mean_r = floor(wq1_mean * 10000.0) / 10000.0
+let wq1_std_r = floor(wq1_std * 10000.0) / 10000.0
+print("  W_Q_1 stats: mean={wq1_mean_r}, std={wq1_std_r}")
+
+let mut wk1_sum = 0.0
+let mut wk1_sq = 0.0
+wsi = 0.0
+while wsi < wh_size
+  wk1_sum = wk1_sum + W_K_1[wsi]
+  wk1_sq = wk1_sq + W_K_1[wsi] * W_K_1[wsi]
+  wsi = wsi + 1.0
+end
+let wk1_mean = wk1_sum / wh_size
+let wk1_var = wk1_sq / wh_size - wk1_mean * wk1_mean
+let mut wk1_std = 0.0
+if wk1_var > 0.0
+  wk1_std = sqrt(wk1_var)
+end
+let wk1_mean_r = floor(wk1_mean * 10000.0) / 10000.0
+let wk1_std_r = floor(wk1_std * 10000.0) / 10000.0
+print("  W_K_1 stats: mean={wk1_mean_r}, std={wk1_std_r}")
+
+// FFN weight statistics
+let mut w1f_sum = 0.0
+let mut w1f_sq = 0.0
+wsi = 0.0
+while wsi < ffn_w1_size
+  w1f_sum = w1f_sum + W1_ffn[wsi]
+  w1f_sq = w1f_sq + W1_ffn[wsi] * W1_ffn[wsi]
+  wsi = wsi + 1.0
+end
+let w1f_mean = w1f_sum / ffn_w1_size
+let w1f_var = w1f_sq / ffn_w1_size - w1f_mean * w1f_mean
+let mut w1f_std = 0.0
+if w1f_var > 0.0
+  w1f_std = sqrt(w1f_var)
+end
+let w1f_mean_r = floor(w1f_mean * 10000.0) / 10000.0
+let w1f_std_r = floor(w1f_std * 10000.0) / 10000.0
+print("  W1_ffn stats: mean={w1f_mean_r}, std={w1f_std_r}")
+
+let mut w2f_sum = 0.0
+let mut w2f_sq = 0.0
+wsi = 0.0
+while wsi < ffn_w2_size
+  w2f_sum = w2f_sum + W2_ffn[wsi]
+  w2f_sq = w2f_sq + W2_ffn[wsi] * W2_ffn[wsi]
+  wsi = wsi + 1.0
+end
+let w2f_mean = w2f_sum / ffn_w2_size
+let w2f_var = w2f_sq / ffn_w2_size - w2f_mean * w2f_mean
+let mut w2f_std = 0.0
+if w2f_var > 0.0
+  w2f_std = sqrt(w2f_var)
+end
+let w2f_mean_r = floor(w2f_mean * 10000.0) / 10000.0
+let w2f_std_r = floor(w2f_std * 10000.0) / 10000.0
+print("  W2_ffn stats: mean={w2f_mean_r}, std={w2f_std_r}")
+print("")
+
+// Vocab coverage (static — doesn't change with epochs)
+let mut test_unique = map()
+let mut test_found = 0.0
+let mut test_total_unique = 0.0
+let mut tui = test_start_idx
+while tui < test_end_idx
+  let tw = all_words[tui]
+  if map_has(test_unique, tw) == 0.0
+    map_set(test_unique, tw, 1.0)
+    test_total_unique = test_total_unique + 1.0
+    if map_has(vocab_map, tw) > 0.0
+      let vid_t = map_get(vocab_map, tw)
+      if word_freq[vid_t] > 0.0
+        test_found = test_found + 1.0
+      end
+    end
+  end
+  tui = tui + 1.0
+end
+let mut vocab_coverage = 0.0
+if test_total_unique > 0.0
+  vocab_coverage = (test_found / test_total_unique) * 100.0
+end
+let coverage_r = floor(vocab_coverage * 10.0) / 10.0
+let test_total_int = int(test_total_unique)
+let test_found_int = int(test_found)
+print("  Vocab coverage: {coverage_r}% ({test_found_int}/{test_total_int} unique ch12 words)")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 7: PASS/FAIL (8 criteria)
+// ══════════════════════════════════════════════════════════════════════
+print("=== PASS/FAIL ===")
+let mut npass = 0.0
+let mut nfail = 0.0
+
+let final_ppl = epoch_ppl[last_e]
+let final_coherence = epoch_coherence[last_e]
+let final_diversity = epoch_diversity[last_e]
+let epoch1_coherence = epoch_coherence[1]
+
+// Test 1: Final perplexity < 50
+let final_ppl_r = floor(final_ppl * 100.0) / 100.0
+if final_ppl < 50.0
+  print("PASS [1/8]: Final perplexity {final_ppl_r} < 50")
+  npass = npass + 1.0
+else
+  print("FAIL [1/8]: Final perplexity {final_ppl_r} >= 50")
+  nfail = nfail + 1.0
+end
+
+// Test 2: Vocab coverage > 80%
+if vocab_coverage > 80.0
+  print("PASS [2/8]: Vocab coverage {coverage_r}% > 80%")
+  npass = npass + 1.0
+else
+  print("FAIL [2/8]: Vocab coverage {coverage_r}% <= 80%")
+  nfail = nfail + 1.0
+end
+
+// Test 3: Final coherence > 10%
+let final_coh_r = floor(final_coherence * 10.0) / 10.0
+if final_coherence > 10.0
+  print("PASS [3/8]: Final coherence {final_coh_r}% > 10%")
+  npass = npass + 1.0
+else
+  print("FAIL [3/8]: Final coherence {final_coh_r}% <= 10%")
+  nfail = nfail + 1.0
+end
+
+// Test 4: Final diversity > 30 unique / 200
+let final_div_int = int(final_diversity)
+if final_diversity > 30.0
+  print("PASS [4/8]: Final diversity {final_div_int} > 30")
+  npass = npass + 1.0
+else
+  print("FAIL [4/8]: Final diversity {final_div_int} <= 30")
+  nfail = nfail + 1.0
+end
+
+// Test 5: Training loss decrease — backprop proof (deterministic eval set)
+if post_train_loss < pre_train_loss
+  print("PASS [5/8]: Training loss decrease {pre_loss_r} -> {post_loss_r} (deterministic)")
+  npass = npass + 1.0
+else
+  print("FAIL [5/8]: Training loss did not decrease {pre_loss_r} -> {post_loss_r} (deterministic)")
+  nfail = nfail + 1.0
+end
+
+// Test 6: Coherence stability — epoch 3 within 80% of epoch 1 (stochastic tolerance)
+let coh_e1_r = floor(epoch1_coherence * 10.0) / 10.0
+let coh_threshold_6 = epoch1_coherence * 0.8
+if final_coherence >= coh_threshold_6
+  print("PASS [6/8]: Coherence stable {final_coh_r}% >= 80% of {coh_e1_r}%")
+  npass = npass + 1.0
+else
+  print("FAIL [6/8]: Coherence degraded {final_coh_r}% < 80% of {coh_e1_r}%")
+  nfail = nfail + 1.0
+end
+
+// Test 7: Attention selectivity — avg attn entropy < positional entropy
+if last_attn_ent < pos_ref_ent
+  print("PASS [7/8]: Attention selectivity {last_ae_r} < {pos_ent_r}")
+  npass = npass + 1.0
+else
+  print("FAIL [7/8]: Attention selectivity {last_ae_r} >= {pos_ent_r}")
+  nfail = nfail + 1.0
+end
+
+// Test 8: Pipeline completed
+print("PASS [8/8]: Pipeline completed")
+npass = npass + 1.0
+
+let npass_int = int(npass)
+let nfail_int = int(nfail)
+print("")
+print("Result: {npass_int}/8 passed, {nfail_int}/8 failed")
+if nfail < 0.5
+  print("OVERALL: PASS ({npass_int}/8)")
+else
+  print("OVERALL: FAIL ({npass_int}/8)")
+end
+print("")
+print("--- Phase 23 complete: Two-Stage Curriculum Training (1584 params) ---")

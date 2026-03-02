@@ -1,0 +1,185 @@
+// stdlib/math/conversion.flow — Unit conversion utilities
+//
+// Common unit conversions for temperature, distance, weight, speed, angles, etc.
+// All functions are pure (no state, no side effects).
+//
+// Functions: celsius_to_fahrenheit, fahrenheit_to_celsius,
+//            celsius_to_kelvin, kelvin_to_celsius,
+//            km_to_miles, miles_to_km,
+//            meters_to_feet, feet_to_meters,
+//            inches_to_cm, cm_to_inches,
+//            kg_to_lbs, lbs_to_kg,
+//            liters_to_gallons, gallons_to_liters,
+//            deg_to_rad, rad_to_deg,
+//            mps_to_kmh, kmh_to_mps, mps_to_mph, mph_to_mps,
+//            knots_to_kmh, kmh_to_knots,
+//            bytes_to_kb, bytes_to_mb, bytes_to_gb
+//
+// Usage:
+//   use "conversion"
+//   let f = celsius_to_fahrenheit(100.0)  // 212.0
+//   let r = deg_to_rad(180.0)             // 3.14159...
+
+// ── Temperature ─────────────────────────────────────────────
+
+fn celsius_to_fahrenheit(c)
+    return c * 9.0 / 5.0 + 32.0
+end
+
+fn fahrenheit_to_celsius(f)
+    return (f - 32.0) * 5.0 / 9.0
+end
+
+fn celsius_to_kelvin(c)
+    return c + 273.15
+end
+
+fn kelvin_to_celsius(k)
+    return k - 273.15
+end
+
+// ── Distance ────────────────────────────────────────────────
+
+fn km_to_miles(km)
+    return km * 0.621371
+end
+
+fn miles_to_km(mi)
+    return mi * 1.60934
+end
+
+fn meters_to_feet(m)
+    return m * 3.28084
+end
+
+fn feet_to_meters(ft)
+    return ft * 0.3048
+end
+
+fn inches_to_cm(inches)
+    return inches * 2.54
+end
+
+fn cm_to_inches(cm)
+    return cm / 2.54
+end
+
+// ── Weight ──────────────────────────────────────────────────
+
+fn kg_to_lbs(kg)
+    return kg * 2.20462
+end
+
+fn lbs_to_kg(lbs)
+    return lbs * 0.453592
+end
+
+fn grams_to_ounces(g)
+    return g * 0.035274
+end
+
+fn ounces_to_grams(oz)
+    return oz * 28.3495
+end
+
+// ── Volume ──────────────────────────────────────────────────
+
+fn liters_to_gallons(l)
+    return l * 0.264172
+end
+
+fn gallons_to_liters(gal)
+    return gal * 3.78541
+end
+
+fn ml_to_fl_oz(ml)
+    return ml * 0.033814
+end
+
+fn fl_oz_to_ml(oz)
+    return oz * 29.5735
+end
+
+// ── Angles ──────────────────────────────────────────────────
+
+fn deg_to_rad(deg)
+    return deg * 3.14159265358979 / 180.0
+end
+
+fn rad_to_deg(rad)
+    return rad * 180.0 / 3.14159265358979
+end
+
+// ── Speed ───────────────────────────────────────────────────
+
+fn mps_to_kmh(mps)
+    return mps * 3.6
+end
+
+fn kmh_to_mps(kmh)
+    return kmh / 3.6
+end
+
+fn mps_to_mph(mps)
+    return mps * 2.23694
+end
+
+fn mph_to_mps(mph)
+    return mph * 0.44704
+end
+
+fn knots_to_kmh(kn)
+    return kn * 1.852
+end
+
+fn kmh_to_knots(kmh)
+    return kmh / 1.852
+end
+
+// ── Data ────────────────────────────────────────────────────
+
+fn bytes_to_kb(b)
+    return b / 1024.0
+end
+
+fn bytes_to_mb(b)
+    return b / 1048576.0
+end
+
+fn bytes_to_gb(b)
+    return b / 1073741824.0
+end
+
+fn kb_to_bytes(kb)
+    return kb * 1024.0
+end
+
+fn mb_to_bytes(mb)
+    return mb * 1048576.0
+end
+
+// ── Time ────────────────────────────────────────────────────
+
+fn seconds_to_minutes(s)
+    return s / 60.0
+end
+
+fn minutes_to_seconds(m)
+    return m * 60.0
+end
+
+fn hours_to_seconds(h)
+    return h * 3600.0
+end
+
+fn seconds_to_hours(s)
+    return s / 3600.0
+end
+
+fn days_to_seconds(d)
+    return d * 86400.0
+end
+
+fn seconds_to_days(s)
+    return s / 86400.0
+end

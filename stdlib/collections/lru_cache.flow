@@ -1,0 +1,208 @@
+// stdlib/collections/lru_cache.flow — Least Recently Used Cache
+//
+// O(1) get and put using map for lookup + order tracking via timestamp counter.
+// When capacity is exceeded, the least recently used entry is evicted.
+//
+// Internal structure (map):
+//   __cap: capacity
+//   __size: current size
+//   __counter: access counter (increments on every get/put)
+//   v_{key}: cached value
+//   t_{key}: last access timestamp
+//   __keys: comma-separated list of all keys
+//
+// Functions: lru_create, lru_get, lru_put, lru_has, lru_remove,
+//            lru_size, lru_capacity, lru_clear, lru_keys
+//
+// Usage:
+//   use "lru_cache"
+//   let mut cache = lru_create(3.0)   // capacity 3
+//   lru_put(cache, "a", 1.0)
+//   lru_put(cache, "b", 2.0)
+//   lru_put(cache, "c", 3.0)
+//   let val = lru_get(cache, "a")     // 1.0 (marks "a" as recent)
+//   lru_put(cache, "d", 4.0)          // evicts "b" (least recent)
+
+fn lru_create(capacity)
+    let mut cache = map()
+    map_set(cache, "__cap", str(capacity))
+    map_set(cache, "__size", "0")
+    map_set(cache, "__counter", "0")
+    map_set(cache, "__keys", "")
+    return cache
+end
+
+fn _lru_next_counter(cache)
+    let c = float(map_get(cache, "__counter")) + 1.0
+    map_set(cache, "__counter", str(c))
+    return c
+end
+
+fn _lru_find_lru_key(cache)
+    // Find the key with the lowest access timestamp.
+    let keys_str = map_get(cache, "__keys")
+    if len(keys_str) == 0.0
+        return ""
+    end
+    let keys = split(keys_str, ",")
+    let n = len(keys)
+    let mut min_time = 999999999.0
+    let mut min_key = ""
+    let mut i = 0.0
+    while i < n
+        let key = keys[i]
+        let tkey = "t_" + key
+        if map_has(cache, tkey)
+            let t = float(map_get(cache, tkey))
+            if t < min_time
+                min_time = t
+                min_key = key
+            end
+        end
+        i = i + 1.0
+    end
+    return min_key
+end
+
+fn _lru_remove_key_from_list(cache, key)
+    // Remove a key from the __keys list.
+    let keys_str = map_get(cache, "__keys")
+    let keys = split(keys_str, ",")
+    let n = len(keys)
+    let mut new_keys = ""
+    let mut i = 0.0
+    while i < n
+        if keys[i] != key
+            if len(new_keys) > 0.0
+                new_keys = new_keys + "," + keys[i]
+            else
+                new_keys = keys[i]
+            end
+        end
+        i = i + 1.0
+    end
+    map_set(cache, "__keys", new_keys)
+    return 0.0
+end
+
+fn lru_put(cache, key, value)
+    // Insert or update a key-value pair.
+    let vkey = "v_" + key
+    let tkey = "t_" + key
+
+    if map_has(cache, vkey)
+        // Update existing key
+        map_set(cache, vkey, str(value))
+        map_set(cache, tkey, str(_lru_next_counter(cache)))
+        return 0.0
+    end
+
+    // Check if at capacity — evict LRU
+    let size = float(map_get(cache, "__size"))
+    let cap = float(map_get(cache, "__cap"))
+    if size >= cap
+        let lru_key = _lru_find_lru_key(cache)
+        if len(lru_key) > 0.0
+            map_remove(cache, "v_" + lru_key)
+            map_remove(cache, "t_" + lru_key)
+            _lru_remove_key_from_list(cache, lru_key)
+            map_set(cache, "__size", str(size - 1.0))
+        end
+    end
+
+    // Insert new key
+    map_set(cache, vkey, str(value))
+    map_set(cache, tkey, str(_lru_next_counter(cache)))
+
+    // Add to keys list
+    let keys_str = map_get(cache, "__keys")
+    if len(keys_str) > 0.0
+        map_set(cache, "__keys", keys_str + "," + key)
+    else
+        map_set(cache, "__keys", key)
+    end
+
+    let new_size = float(map_get(cache, "__size")) + 1.0
+    map_set(cache, "__size", str(new_size))
+    return 0.0
+end
+
+fn lru_get(cache, key)
+    // Get value for key. Returns "" if not found.
+    // Marks key as recently used.
+    let vkey = "v_" + key
+    if map_has(cache, vkey)
+        let tkey = "t_" + key
+        map_set(cache, tkey, str(_lru_next_counter(cache)))
+        return float(map_get(cache, vkey))
+    end
+    return -1.0
+end
+
+fn lru_get_str(cache, key)
+    // Get value as string. Returns "" if not found.
+    let vkey = "v_" + key
+    if map_has(cache, vkey)
+        let tkey = "t_" + key
+        map_set(cache, tkey, str(_lru_next_counter(cache)))
+        return map_get(cache, vkey)
+    end
+    return ""
+end
+
+fn lru_has(cache, key)
+    let vkey = "v_" + key
+    if map_has(cache, vkey)
+        return 1.0
+    end
+    return 0.0
+end
+
+fn lru_remove(cache, key)
+    // Explicitly remove a key.
+    let vkey = "v_" + key
+    if map_has(cache, vkey)
+        map_remove(cache, vkey)
+        map_remove(cache, "t_" + key)
+        _lru_remove_key_from_list(cache, key)
+        let size = float(map_get(cache, "__size")) - 1.0
+        map_set(cache, "__size", str(size))
+    end
+    return 0.0
+end
+
+fn lru_size(cache)
+    return float(map_get(cache, "__size"))
+end
+
+fn lru_capacity(cache)
+    return float(map_get(cache, "__cap"))
+end
+
+fn lru_clear(cache)
+    // Remove all entries.
+    let keys_str = map_get(cache, "__keys")
+    if len(keys_str) > 0.0
+        let keys = split(keys_str, ",")
+        let n = len(keys)
+        let mut i = 0.0
+        while i < n
+            map_remove(cache, "v_" + keys[i])
+            map_remove(cache, "t_" + keys[i])
+            i = i + 1.0
+        end
+    end
+    map_set(cache, "__keys", "")
+    map_set(cache, "__size", "0")
+    return 0.0
+end
+
+fn lru_keys(cache)
+    // Get all cached keys as array.
+    let keys_str = map_get(cache, "__keys")
+    if len(keys_str) == 0.0
+        let mut empty = []
+        return empty
+    end
+    return split(keys_str, ",")
+end

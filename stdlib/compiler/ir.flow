@@ -108,6 +108,7 @@ let IR_OP_SHR = 89.0
 let IR_OP_BITCOUNT = 90.0
 let IR_OP_NOT = 91.0
 let IR_OP_BUF_ATOMIC_AND = 92.0
+let IR_OP_BIT_XOR = 93.0
 let IR_OP_UCONVERT = 110.0       // OpUConvert (uint width conversion: u32↔u64)
 
 // Type tags
@@ -640,9 +641,34 @@ fn ir_bitcount(block, a)
   return _ir_add_inst(block, IR_OP_BITCOUNT, IR_TYPE_UINT, a, 0.0)
 end
 
+// Bitwise XOR: a ^ b → uint
+fn ir_bit_xor(block, a, b)
+  return _ir_add_inst(block, IR_OP_BIT_XOR, IR_TYPE_UINT, a, b)
+end
+
 // Bitwise NOT: ~a → uint
 fn ir_not(block, a)
   return _ir_add_inst(block, IR_OP_NOT, IR_TYPE_UINT, a, 0.0)
+end
+
+// ── Integer bitwise aliases (ir_i* naming convention) ──
+fn ir_iand(block, a, b)
+  return ir_bit_and(block, a, b)
+end
+fn ir_ior(block, a, b)
+  return ir_bit_or(block, a, b)
+end
+fn ir_ixor(block, a, b)
+  return ir_bit_xor(block, a, b)
+end
+fn ir_ishl(block, a, bits)
+  return ir_shl(block, a, bits)
+end
+fn ir_ishr(block, a, bits)
+  return ir_shr(block, a, bits)
+end
+fn ir_popcount(block, a)
+  return ir_bitcount(block, a)
 end
 
 // ===================== BUFFER ACCESS (Phase 117) =====================
@@ -857,6 +883,7 @@ let SPIRV_OP_IEQUAL = 170.0
 let SPIRV_OP_SHR_LOGICAL = 194.0
 let SPIRV_OP_SHL_LOGICAL = 196.0
 let SPIRV_OP_BITWISE_OR = 197.0
+let SPIRV_OP_BITWISE_XOR = 198.0
 let SPIRV_OP_BITWISE_AND = 199.0
 let SPIRV_OP_NOT = 200.0
 let SPIRV_OP_BITCOUNT = 205.0
@@ -2330,6 +2357,12 @@ fn _ir_emit_block_insts(block_idx, inst_spirv_id, bb_spirv_id)
         emit_word(inst_spirv_id[ir_inst_arg2[i]])
       elif op == IR_OP_BIT_OR
         emit_op(5.0, SPIRV_OP_BITWISE_OR)
+        emit_word(typ_id)
+        emit_word(sid)
+        emit_word(inst_spirv_id[ir_inst_arg1[i]])
+        emit_word(inst_spirv_id[ir_inst_arg2[i]])
+      elif op == IR_OP_BIT_XOR
+        emit_op(5.0, SPIRV_OP_BITWISE_XOR)
         emit_word(typ_id)
         emit_word(sid)
         emit_word(inst_spirv_id[ir_inst_arg1[i]])

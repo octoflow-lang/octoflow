@@ -1,0 +1,144 @@
+// test_heap.flow — Tests for stdlib/collections/heap.flow
+use "heap"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic operations ──────────────────────────────────────
+
+fn test_basic()
+    let mut h = heap_create()
+    check("empty", heap_is_empty(h) == 1.0)
+    heap_push(h, 5.0)
+    heap_push(h, 3.0)
+    heap_push(h, 7.0)
+    heap_push(h, 1.0)
+    check("size 4", heap_size(h) == 4.0)
+    check("peek min", heap_peek(h) == 1.0)
+    check("pop 1", heap_pop(h) == 1.0)
+    check("pop 3", heap_pop(h) == 3.0)
+    check("pop 5", heap_pop(h) == 5.0)
+    check("pop 7", heap_pop(h) == 7.0)
+    check("empty after", heap_is_empty(h) == 1.0)
+    return 0.0
+end
+
+// ── Heapify ───────────────────────────────────────────────
+
+fn test_heapify()
+    let mut arr = [5.0, 3.0, 8.0, 1.0, 2.0]
+    heapify(arr)
+    check("heapify min", arr[0] == 1.0)
+    return 0.0
+end
+
+// ── Heapsort ──────────────────────────────────────────────
+
+fn test_heapsort()
+    let mut arr = [5.0, 2.0, 8.0, 1.0, 9.0, 3.0]
+    heapsort(arr)
+    check("hsort[0]", arr[0] == 1.0)
+    check("hsort[1]", arr[1] == 2.0)
+    check("hsort[2]", arr[2] == 3.0)
+    check("hsort[5]", arr[5] == 9.0)
+    return 0.0
+end
+
+// ── N smallest / largest ──────────────────────────────────
+
+fn test_nsmallest()
+    let mut arr = [10.0, 5.0, 8.0, 1.0, 3.0, 7.0]
+    let small = heap_nsmallest(arr, 3.0)
+    check("nsmall len", len(small) == 3.0)
+    check("nsmall[0]", small[0] == 1.0)
+    check("nsmall[1]", small[1] == 3.0)
+    check("nsmall[2]", small[2] == 5.0)
+    return 0.0
+end
+
+fn test_nlargest()
+    let mut arr = [10.0, 5.0, 8.0, 1.0, 3.0, 7.0]
+    let large = heap_nlargest(arr, 3.0)
+    check("nlarge len", len(large) == 3.0)
+    check("nlarge[0]", large[0] == 10.0)
+    check("nlarge[1]", large[1] == 8.0)
+    check("nlarge[2]", large[2] == 7.0)
+    return 0.0
+end
+
+// ── Merge ─────────────────────────────────────────────────
+
+fn test_merge()
+    let mut h1 = heap_create()
+    heap_push(h1, 1.0)
+    heap_push(h1, 5.0)
+    let mut h2 = heap_create()
+    heap_push(h2, 2.0)
+    heap_push(h2, 3.0)
+    let mut merged = heap_merge(h1, h2)
+    check("merge size", heap_size(merged) == 4.0)
+    check("merge min", heap_peek(merged) == 1.0)
+    return 0.0
+end
+
+// ── Replace ───────────────────────────────────────────────
+
+fn test_replace()
+    let mut h = heap_create()
+    heap_push(h, 1.0)
+    heap_push(h, 5.0)
+    heap_push(h, 3.0)
+    let old = heap_replace(h, 2.0)
+    check("replace old", old == 1.0)
+    check("replace new min", heap_peek(h) == 2.0)
+    return 0.0
+end
+
+// ── Contains ──────────────────────────────────────────────
+
+fn test_contains()
+    let mut h = heap_create()
+    heap_push(h, 10.0)
+    heap_push(h, 20.0)
+    heap_push(h, 30.0)
+    check("contains 20", heap_contains(h, 20.0) == 1.0)
+    check("not contains 15", heap_contains(h, 15.0) == 0.0)
+    return 0.0
+end
+
+// ── Sorted array ──────────────────────────────────────────
+
+fn test_sorted_array()
+    let mut h = heap_create()
+    heap_push(h, 5.0)
+    heap_push(h, 1.0)
+    heap_push(h, 3.0)
+    heap_push(h, 2.0)
+    heap_push(h, 4.0)
+    let sorted = heap_to_sorted_array(h)
+    check("sorted len", len(sorted) == 5.0)
+    check("sorted[0]", sorted[0] == 1.0)
+    check("sorted[4]", sorted[4] == 5.0)
+    return 0.0
+end
+
+// ── Run all ───────────────────────────────────────────────
+
+test_basic()
+test_heapify()
+test_heapsort()
+test_nsmallest()
+test_nlargest()
+test_merge()
+test_replace()
+test_contains()
+test_sorted_array()
+print("")
+print("All heap tests passed (9 tests)")

@@ -1,0 +1,161 @@
+// stdlib/search/persist.flow — OctoPress Index Persistence
+//
+// Save/load search indices using OctoPress compression.
+// CPU only touches disk I/O — minimal CPU, as per Loom mantra.
+//
+// TF matrix (n_docs x vocab_size floats) is delta-compressed.
+// For 500 files x 2000 terms = 1M floats = 4MB raw → ~1-2MB compressed.
+//
+// Usage:
+//   use "persist"
+//   octosearch_save_index(_os_tf_matrix, _os_doc_lengths, _os_idf, n_docs, vocab_size, path)
+//   octosearch_load_index_arrays(path, out_tf, out_dl, out_idf, out_meta)
+
+fn octosearch_save_index(tf_matrix, doc_lengths, idf_vals, n_docs, vocab_size, path)
+    // Save index arrays to OctoPress .ocp files
+    // Saves 3 compressed arrays + 1 metadata array
+
+    octopress_init(256.0)
+
+    // TF matrix — delta compress (numerical, sparse, great delta ratio)
+    if len(tf_matrix) > 0.0
+        let tf_comp = octopress_encode(tf_matrix, 1.0)
+        octopress_save(tf_comp, path + ".tf.ocp")
+    end
+
+    // Doc lengths
+    if len(doc_lengths) > 0.0
+        let dl_comp = octopress_encode(doc_lengths, 1.0)
+        octopress_save(dl_comp, path + ".dl.ocp")
+    end
+
+    // IDF values
+    if len(idf_vals) > 0.0
+        let idf_comp = octopress_encode(idf_vals, 1.0)
+        octopress_save(idf_comp, path + ".idf.ocp")
+    end
+
+    // Metadata: [n_docs, vocab_size]
+    let mut meta = [n_docs, vocab_size]
+    let meta_comp = octopress_encode(meta, 0.0)
+    octopress_save(meta_comp, path + ".meta.ocp")
+
+    print("OctoSearch: Index saved ({n_docs} docs, {vocab_size} terms)")
+    return 0.0
+end
+
+fn octosearch_load_index_arrays(path, out_tf, out_dl, out_idf, out_meta)
+    // Load compressed index from .ocp files into output arrays
+    // out_meta receives [n_docs, vocab_size]
+    // Returns: n_docs (or 0.0 on failure)
+
+    octopress_init(256.0)
+
+    // Check if index exists
+    if file_exists(path + ".meta.ocp") < 0.5
+        print("OctoSearch: No saved index at {path}")
+        return 0.0
+    end
+
+    // Load metadata
+    let meta_comp = octopress_load(path + ".meta.ocp")
+    let meta = octopress_decode(meta_comp)
+    let n_docs = meta[0]
+    let vocab_size = meta[1]
+    push(out_meta, n_docs)
+    push(out_meta, vocab_size)
+
+    // Load TF matrix
+    let tf_comp = octopress_load(path + ".tf.ocp")
+    let tf_data = octopress_decode(tf_comp)
+    extend(out_tf, tf_data)
+
+    // Load doc lengths
+    let dl_comp = octopress_load(path + ".dl.ocp")
+    let dl_data = octopress_decode(dl_comp)
+    extend(out_dl, dl_data)
+
+    // Load IDF
+    let idf_comp = octopress_load(path + ".idf.ocp")
+    let idf_data = octopress_decode(idf_comp)
+    extend(out_idf, idf_data)
+
+    print("OctoSearch: Index loaded from disk ({n_docs} docs, {vocab_size} terms)")
+    return n_docs
+end
+
+fn octosearch_save_paths(doc_paths, path)
+    // Save doc paths as newline-delimited text
+    let mut content = ""
+    let mut i = 0.0
+    while i < len(doc_paths)
+        if i > 0.0
+            content = content + "\n"
+        end
+        content = content + doc_paths[i]
+        i = i + 1.0
+    end
+    write_file(path + ".paths.txt", content)
+    return 0.0
+end
+
+fn octosearch_load_paths(path, out_paths)
+    // Load doc paths from newline-delimited text
+    if file_exists(path + ".paths.txt") < 0.5
+        return 0.0
+    end
+    let content = read_file(path + ".paths.txt")
+    let lines = split(content, "\n")
+    let mut i = 0.0
+    while i < len(lines)
+        if len(lines[i]) > 0.0
+            push(out_paths, lines[i])
+        end
+        i = i + 1.0
+    end
+    return len(out_paths)
+end
+
+fn octosearch_save_vocab(vocab_words, path)
+    // Save vocab word list — line N = word with term_id N
+    // Avoids map_keys comma-splitting issues
+    let mut content = ""
+    let mut i = 0.0
+    while i < len(vocab_words)
+        if i > 0.0
+            content = content + "\n"
+        end
+        content = content + vocab_words[i]
+        i = i + 1.0
+    end
+    write_file(path + ".vocab.txt", content)
+    return 0.0
+end
+
+fn octosearch_load_vocab(path, out_vocab, out_words)
+    // Load vocab word list and rebuild word→id map
+    // out_vocab: map (word → term_id)
+    // out_words: array (term_id → word)
+    if file_exists(path + ".vocab.txt") < 0.5
+        return 0.0
+    end
+    let content = read_file(path + ".vocab.txt")
+    let lines = split(content, "\n")
+    let mut count = 0.0
+    let mut i = 0.0
+    while i < len(lines)
+        let word = lines[i]
+        if len(word) > 0.0
+            map_set(out_vocab, word, count)
+            push(out_words, word)
+            count = count + 1.0
+        end
+        i = i + 1.0
+    end
+    return count
+end
+
+fn octosearch_index_exists(path)
+    // Check if a saved index exists at path
+    return file_exists(path + ".meta.ocp")
+end

@@ -1,0 +1,382 @@
+// test_audio_player.flow — Tests for stdlib/media/audio_player.flow
+use "audio_player"
+use "pcm"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Helper: make a simple PCM buffer ─────────────────────
+
+fn make_pcm(n_samples, sr)
+    // Create a PCM buffer with ascending sample values
+    let buf = pcm_create(sr, n_samples / sr, 1.0)
+    let samples = pcm_samples(buf)
+    let mut i = 0.0
+    while i < n_samples && i < len(samples)
+        samples[i] = i / n_samples  // 0.0 to ~1.0
+        i = i + 1.0
+    end
+    return buf
+end
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn test_create()
+    let pcm = make_pcm(1000.0, 44100.0)
+    let p = ap_create(pcm)
+    check("create id", p >= 0.0)
+    check("create state", ap_state(p) == AP_STOPPED)
+    check("create vol", ap_get_volume(p) == 1.0)
+    check("create loop", ap_get_loop(p) == 0.0)
+    check("create speed", ap_get_speed(p) == 1.0)
+    check("create pos", ap_position(p) == 0.0)
+    check("create count", ap_count() >= 1.0)
+    return 0.0
+end
+
+fn test_destroy()
+    let pcm = make_pcm(100.0, 44100.0)
+    let p = ap_create(pcm)
+    let before = ap_count()
+    let r = ap_destroy(p)
+    check("destroy ok", r == 0.0)
+    check("destroy count", ap_count() == before - 1.0)
+    check("destroy state", ap_state(p) == AP_STOPPED)
+    // Double destroy safe
+    let r2 = ap_destroy(p)
+    check("destroy twice", r2 == -1.0)
+    return 0.0
+end
+
+// ── Transport ────────────────────────────────────────────
+
+fn test_transport()
+    let pcm = make_pcm(1000.0, 44100.0)
+    let p = ap_create(pcm)
+
+    // Play
+    ap_play(p)
+    check("play state", ap_is_playing(p) == 1.0)
+    check("not paused", ap_is_paused(p) == 0.0)
+    check("not stopped", ap_is_stopped(p) == 0.0)
+
+    // Pause
+    ap_pause(p)
+    check("pause state", ap_is_paused(p) == 1.0)
+    check("pause not play", ap_is_playing(p) == 0.0)
+
+    // Resume
+    ap_play(p)
+    check("resume", ap_is_playing(p) == 1.0)
+
+    // Stop
+    ap_stop(p)
+    check("stop state", ap_is_stopped(p) == 1.0)
+    check("stop pos reset", ap_position(p) == 0.0)
+
+    // Toggle
+    ap_toggle(p)
+    check("toggle to play", ap_is_playing(p) == 1.0)
+    ap_toggle(p)
+    check("toggle to pause", ap_is_paused(p) == 1.0)
+
+    return 0.0
+end
+
+// ── Seek ─────────────────────────────────────────────────
+
+fn test_seek()
+    let pcm = make_pcm(10000.0, 44100.0)
+    let p = ap_create(pcm)
+
+    ap_seek(p, 5000.0)
+    check("seek sample", ap_position(p) == 5000.0)
+
+    ap_seek_percent(p, 0.5)
+    check("seek pct", approx(ap_position_percent(p), 0.5) == 1.0)
+
+    // Seek past end clamped
+    ap_seek(p, 999999.0)
+    check("seek clamp hi", ap_position(p) <= 10000.0)
+
+    // Seek negative clamped
+    ap_seek(p, -100.0)
+    check("seek clamp lo", ap_position(p) == 0.0)
+
+    // Seek seconds
+    ap_seek_seconds(p, 0.0)
+    check("seek sec 0", ap_position(p) == 0.0)
+
+    return 0.0
+end
+
+// ── Volume ───────────────────────────────────────────────
+
+fn test_volume()
+    let pcm = make_pcm(100.0, 44100.0)
+    let p = ap_create(pcm)
+
+    ap_set_volume(p, 0.5)
+    check("vol set", approx(ap_get_volume(p), 0.5) == 1.0)
+
+    // Clamp high
+    ap_set_volume(p, 5.0)
+    check("vol clamp hi", ap_get_volume(p) == 1.0)
+
+    // Clamp low
+    ap_set_volume(p, -1.0)
+    check("vol clamp lo", ap_get_volume(p) == 0.0)
+
+    return 0.0
+end
+
+// ── Speed ────────────────────────────────────────────────
+
+fn test_speed()
+    let pcm = make_pcm(100.0, 44100.0)
+    let p = ap_create(pcm)
+
+    ap_set_speed(p, 2.0)
+    check("speed set", ap_get_speed(p) == 2.0)
+
+    // Clamp
+    ap_set_speed(p, 0.0)
+    check("speed clamp lo", ap_get_speed(p) == 0.1)
+
+    ap_set_speed(p, 100.0)
+    check("speed clamp hi", ap_get_speed(p) == 10.0)
+
+    return 0.0
+end
+
+// ── Loop ─────────────────────────────────────────────────
+
+fn test_loop()
+    let pcm = make_pcm(100.0, 44100.0)
+    let p = ap_create(pcm)
+
+    ap_set_loop(p, 1.0)
+    check("loop on", ap_get_loop(p) == 1.0)
+
+    ap_set_loop(p, 0.0)
+    check("loop off", ap_get_loop(p) == 0.0)
+
+    return 0.0
+end
+
+// ── Advance ──────────────────────────────────────────────
+
+fn test_advance()
+    let pcm = make_pcm(100.0, 44100.0)
+    let p = ap_create(pcm)
+
+    // Advance while stopped → no movement
+    let a1 = ap_advance(p, 10.0)
+    check("adv stopped", a1 == 0.0)
+
+    // Play and advance
+    ap_play(p)
+    let a2 = ap_advance(p, 10.0)
+    check("adv play", a2 > 0.0)
+    check("adv pos", ap_position(p) == 10.0)
+
+    // Advance to end (no loop) → stops
+    ap_seek(p, 95.0)
+    ap_play(p)
+    let a3 = ap_advance(p, 10.0)
+    check("adv to end", ap_is_stopped(p) == 1.0)
+
+    return 0.0
+end
+
+// ── Advance with loop ────────────────────────────────────
+
+fn test_advance_loop()
+    let pcm = make_pcm(100.0, 44100.0)
+    let p = ap_create(pcm)
+    ap_set_loop(p, 1.0)
+
+    ap_play(p)
+    ap_seek(p, 95.0)
+    ap_advance(p, 10.0)
+    // Should have wrapped around, still playing
+    check("loop wrap", ap_is_playing(p) == 1.0)
+    check("loop pos", ap_position(p) < 95.0)
+
+    return 0.0
+end
+
+// ── Region playback ──────────────────────────────────────
+
+fn test_region()
+    let pcm = make_pcm(1000.0, 44100.0)
+    let p = ap_create(pcm)
+
+    ap_set_region(p, 200.0, 500.0)
+    ap_play(p)
+    ap_seek(p, 200.0)
+    ap_advance(p, 100.0)
+    check("region pos", ap_position(p) == 300.0)
+
+    // Advance past region end → stop
+    ap_seek(p, 498.0)
+    ap_advance(p, 10.0)
+    check("region end stop", ap_is_stopped(p) == 1.0)
+
+    // Clear region
+    ap_clear_region(p)
+    ap_play(p)
+    ap_seek(p, 0.0)
+    ap_advance(p, 600.0)
+    check("clear region", ap_position(p) == 600.0)
+
+    return 0.0
+end
+
+// ── Render ───────────────────────────────────────────────
+
+fn test_render()
+    let pcm = make_pcm(100.0, 44100.0)
+    let p = ap_create(pcm)
+
+    // Render while stopped → 0
+    let mut out = []
+    let r1 = ap_render(p, out, 10.0)
+    check("render stopped", r1 == 0.0)
+    check("render empty", len(out) == 0.0)
+
+    // Play and render
+    ap_play(p)
+    let r2 = ap_render(p, out, 10.0)
+    check("render play", r2 == 10.0)
+    check("render len", len(out) == 10.0)
+
+    return 0.0
+end
+
+// ── Render with volume ───────────────────────────────────
+
+fn test_render_volume()
+    let pcm = make_pcm(100.0, 44100.0)
+    let p = ap_create(pcm)
+    ap_set_volume(p, 0.5)
+    ap_play(p)
+
+    let mut out = []
+    ap_render(p, out, 5.0)
+    // Samples should be attenuated
+    check("vol render", len(out) == 5.0)
+
+    return 0.0
+end
+
+// ── Duration / Remaining ─────────────────────────────────
+
+fn test_duration()
+    let pcm = make_pcm(44100.0, 44100.0)
+    let p = ap_create(pcm)
+
+    check("dur 1s", approx(ap_duration(p), 1.0) == 1.0)
+    check("remain 1s", approx(ap_remaining(p), 1.0) == 1.0)
+
+    ap_seek_seconds(p, 0.5)
+    check("remain half", approx(ap_remaining(p), 0.5) == 1.0)
+
+    return 0.0
+end
+
+// ── PCM swap ─────────────────────────────────────────────
+
+fn test_swap()
+    let pcm1 = make_pcm(100.0, 44100.0)
+    let pcm2 = make_pcm(200.0, 44100.0)
+    let p = ap_create(pcm1)
+    ap_play(p)
+    ap_advance(p, 50.0)
+
+    ap_set_pcm(p, pcm2)
+    check("swap stopped", ap_is_stopped(p) == 1.0)
+    check("swap pos 0", ap_position(p) == 0.0)
+
+    return 0.0
+end
+
+// ── Stop all ─────────────────────────────────────────────
+
+fn test_stop_all()
+    let pcm = make_pcm(100.0, 44100.0)
+    let p1 = ap_create(pcm)
+    let p2 = ap_create(pcm)
+    ap_play(p1)
+    ap_play(p2)
+
+    ap_stop_all()
+    check("stop all 1", ap_is_stopped(p1) == 1.0)
+    check("stop all 2", ap_is_stopped(p2) == 1.0)
+
+    return 0.0
+end
+
+// ── Edge cases ───────────────────────────────────────────
+
+fn test_edges()
+    // Invalid IDs
+    check("bad play", ap_play(-1.0) == -1.0)
+    check("bad pause", ap_pause(999.0) == -1.0)
+    check("bad stop", ap_stop(-1.0) == -1.0)
+    check("bad seek", ap_seek(-1.0, 0.0) == -1.0)
+    check("bad vol", ap_set_volume(-1.0, 0.5) == -1.0)
+    check("bad state", ap_state(-1.0) == AP_STOPPED)
+    check("bad pos", ap_position(-1.0) == 0.0)
+    check("bad dur", ap_duration(-1.0) == 0.0)
+    check("bad destroy", ap_destroy(-1.0) == -1.0)
+
+    // Advance 0 samples
+    let pcm = make_pcm(100.0, 44100.0)
+    let p = ap_create(pcm)
+    ap_play(p)
+    let a = ap_advance(p, 0.0)
+    check("adv zero", a == 0.0)
+
+    // Pause when not playing → no effect
+    ap_stop(p)
+    ap_pause(p)
+    check("pause stopped", ap_is_stopped(p) == 1.0)
+
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────────
+
+test_create()
+test_destroy()
+test_transport()
+test_seek()
+test_volume()
+test_speed()
+test_loop()
+test_advance()
+test_advance_loop()
+test_region()
+test_render()
+test_render_volume()
+test_duration()
+test_swap()
+test_stop_all()
+test_edges()
+print("")
+print("All audio_player tests passed (16 tests)")

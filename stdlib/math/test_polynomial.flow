@@ -1,0 +1,171 @@
+// test_polynomial.flow — Tests for stdlib/math/polynomial.flow
+use "polynomial"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Eval ──────────────────────────────────────────────────────
+
+fn test_eval()
+    let mut p = [1.0, 2.0, 3.0]  // 1 + 2x + 3x²
+    check("eval at 0", poly_eval(p, 0.0) == 1.0)
+    check("eval at 1", poly_eval(p, 1.0) == 6.0)
+    check("eval at 2", poly_eval(p, 2.0) == 17.0)  // 1 + 4 + 12
+    check("eval at -1", poly_eval(p, -1.0) == 2.0)   // 1 - 2 + 3
+    return 0.0
+end
+
+// ── Degree ────────────────────────────────────────────────────
+
+fn test_degree()
+    check("degree 2", poly_degree([1.0, 2.0, 3.0]) == 2.0)
+    check("degree 0", poly_degree([5.0]) == 0.0)
+    check("degree trailing zero", poly_degree([1.0, 2.0, 0.0]) == 1.0)
+    return 0.0
+end
+
+// ── Add / Sub ─────────────────────────────────────────────────
+
+fn test_add()
+    let mut a = [1.0, 2.0, 3.0]     // 1 + 2x + 3x²
+    let mut b = [4.0, 5.0]           // 4 + 5x
+    let c = poly_add(a, b)
+    check("add const", c[0] == 5.0)
+    check("add x", c[1] == 7.0)
+    check("add x2", c[2] == 3.0)
+    return 0.0
+end
+
+fn test_sub()
+    let mut a = [5.0, 3.0, 1.0]
+    let mut b = [2.0, 1.0, 1.0]
+    let c = poly_sub(a, b)
+    check("sub const", c[0] == 3.0)
+    check("sub x", c[1] == 2.0)
+    check("sub x2", c[2] == 0.0)
+    return 0.0
+end
+
+// ── Scale ─────────────────────────────────────────────────────
+
+fn test_scale()
+    let mut p = [1.0, 2.0, 3.0]
+    let s = poly_scale(p, 2.0)
+    check("scale 0", s[0] == 2.0)
+    check("scale 1", s[1] == 4.0)
+    check("scale 2", s[2] == 6.0)
+    return 0.0
+end
+
+// ── Multiply ──────────────────────────────────────────────────
+
+fn test_mul()
+    let mut a = [1.0, 1.0]          // 1 + x
+    let mut b = [1.0, 1.0]          // 1 + x
+    let c = poly_mul(a, b)          // 1 + 2x + x²
+    check("mul const", c[0] == 1.0)
+    check("mul x", c[1] == 2.0)
+    check("mul x2", c[2] == 1.0)
+    check("mul len", len(c) == 3.0)
+    return 0.0
+end
+
+fn test_mul_complex()
+    let mut a = [1.0, 2.0]          // 1 + 2x
+    let mut b = [3.0, 4.0, 5.0]    // 3 + 4x + 5x²
+    let c = poly_mul(a, b)          // 3 + 10x + 13x² + 10x³
+    check("mul complex", c[0] == 3.0 && c[1] == 10.0 && c[2] == 13.0 && c[3] == 10.0)
+    return 0.0
+end
+
+// ── Derivative ────────────────────────────────────────────────
+
+fn test_derivative()
+    let mut p = [1.0, 2.0, 3.0, 4.0]  // 1 + 2x + 3x² + 4x³
+    let d = poly_derivative(p)          // 2 + 6x + 12x²
+    check("deriv const", d[0] == 2.0)
+    check("deriv x", d[1] == 6.0)
+    check("deriv x2", d[2] == 12.0)
+    return 0.0
+end
+
+// ── Integral ──────────────────────────────────────────────────
+
+fn test_integral()
+    let mut p = [2.0, 6.0, 12.0]   // 2 + 6x + 12x²
+    let integ = poly_integral(p)     // 0 + 2x + 3x² + 4x³
+    check("integ const", integ[0] == 0.0)
+    check("integ x", integ[1] == 2.0)
+    check("integ x2", integ[2] == 3.0)
+    check("integ x3", integ[3] == 4.0)
+    return 0.0
+end
+
+// ── Quadratic Roots ───────────────────────────────────────────
+
+fn test_roots_quadratic()
+    // x² - 5x + 6 = 0 → roots 2, 3
+    let mut p = [6.0, -5.0, 1.0]
+    let roots = poly_roots_quadratic(p)
+    check("roots count", len(roots) == 2.0)
+    check("roots values", approx(roots[0], 2.0) == 1.0 && approx(roots[1], 3.0) == 1.0)
+    return 0.0
+end
+
+fn test_roots_double()
+    // x² - 4x + 4 = 0 → root 2 (double)
+    let mut p = [4.0, -4.0, 1.0]
+    let roots = poly_roots_quadratic(p)
+    check("double root", len(roots) == 1.0 && approx(roots[0], 2.0) == 1.0)
+    return 0.0
+end
+
+fn test_roots_no_real()
+    // x² + 1 = 0 → no real roots
+    let mut p = [1.0, 0.0, 1.0]
+    let roots = poly_roots_quadratic(p)
+    check("no real roots", len(roots) == 0.0)
+    return 0.0
+end
+
+// ── Trim ──────────────────────────────────────────────────────
+
+fn test_trim()
+    let mut p = [1.0, 2.0, 0.0, 0.0]
+    let t = poly_trim(p)
+    check("trim len", len(t) == 2.0)
+    check("trim vals", t[0] == 1.0 && t[1] == 2.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_eval()
+test_degree()
+test_add()
+test_sub()
+test_scale()
+test_mul()
+test_mul_complex()
+test_derivative()
+test_integral()
+test_roots_quadratic()
+test_roots_double()
+test_roots_no_real()
+test_trim()
+print("")
+print("All polynomial tests passed (13 tests)")

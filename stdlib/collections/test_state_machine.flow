@@ -1,0 +1,131 @@
+// test_state_machine.flow — Tests for stdlib/collections/state_machine.flow
+use "state_machine"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic FSM ───────────────────────────────────────────────────
+
+fn test_fsm_create()
+    let mut fsm = fsm_create("idle")
+    check("fsm initial state", fsm_current(fsm) == "idle")
+    return 0.0
+end
+
+fn test_fsm_transition()
+    let mut fsm = fsm_create("idle")
+    fsm_add_state(fsm, "running")
+    fsm_add_transition(fsm, "idle", "start", "running", "begin")
+    let action = fsm_step(fsm, "start")
+    check("fsm transition action", action == "begin")
+    check("fsm new state", fsm_current(fsm) == "running")
+    return 0.0
+end
+
+fn test_fsm_invalid_input()
+    let mut fsm = fsm_create("idle")
+    fsm_add_transition(fsm, "idle", "start", "running", "begin")
+    let action = fsm_step(fsm, "stop")
+    check("fsm invalid input", action == "")
+    check("fsm stays", fsm_current(fsm) == "idle")
+    return 0.0
+end
+
+fn test_fsm_can_step()
+    let mut fsm = fsm_create("idle")
+    fsm_add_transition(fsm, "idle", "start", "running", "go")
+    check("can_step valid", fsm_can_step(fsm, "start") == 1.0)
+    check("can_step invalid", fsm_can_step(fsm, "stop") == 0.0)
+    return 0.0
+end
+
+fn test_fsm_reset()
+    let mut fsm = fsm_create("idle")
+    fsm_add_transition(fsm, "idle", "go", "running", "")
+    fsm_step(fsm, "go")
+    check("fsm moved", fsm_current(fsm) == "running")
+    fsm_reset(fsm)
+    check("fsm reset", fsm_current(fsm) == "idle")
+    return 0.0
+end
+
+// ── Accepting States ────────────────────────────────────────────
+
+fn test_fsm_accepting()
+    let mut fsm = fsm_create("start")
+    fsm_add_state(fsm, "end")
+    fsm_set_accepting(fsm, "end")
+    fsm_add_transition(fsm, "start", "done", "end", "finish")
+    check("not accepting initially", fsm_is_accepting(fsm) == 0.0)
+    fsm_step(fsm, "done")
+    check("accepting after transition", fsm_is_accepting(fsm) == 1.0)
+    return 0.0
+end
+
+// ── Multi-step ──────────────────────────────────────────────────
+
+fn test_fsm_traffic_light()
+    let mut fsm = fsm_create("red")
+    fsm_add_state(fsm, "green")
+    fsm_add_state(fsm, "yellow")
+    fsm_add_transition(fsm, "red", "timer", "green", "go")
+    fsm_add_transition(fsm, "green", "timer", "yellow", "caution")
+    fsm_add_transition(fsm, "yellow", "timer", "red", "stop")
+
+    check("traffic start", fsm_current(fsm) == "red")
+    let a1 = fsm_step(fsm, "timer")
+    check("traffic r->g", fsm_current(fsm) == "green" && a1 == "go")
+    let a2 = fsm_step(fsm, "timer")
+    check("traffic g->y", fsm_current(fsm) == "yellow" && a2 == "caution")
+    let a3 = fsm_step(fsm, "timer")
+    check("traffic y->r", fsm_current(fsm) == "red" && a3 == "stop")
+    return 0.0
+end
+
+// ── Run Sequence ────────────────────────────────────────────────
+
+fn test_fsm_run_sequence()
+    let mut fsm = fsm_create("locked")
+    fsm_add_state(fsm, "unlocked")
+    fsm_add_transition(fsm, "locked", "coin", "unlocked", "unlock_gate")
+    fsm_add_transition(fsm, "unlocked", "push", "locked", "allow_entry")
+    fsm_add_transition(fsm, "locked", "push", "locked", "blocked")
+    fsm_add_transition(fsm, "unlocked", "coin", "unlocked", "return_coin")
+
+    let actions = fsm_run_sequence(fsm, "push,coin,push")
+    check("sequence actions", actions == "blocked,unlock_gate,allow_entry")
+    check("sequence final", fsm_current(fsm) == "locked")
+    return 0.0
+end
+
+// ── States List ─────────────────────────────────────────────────
+
+fn test_fsm_states()
+    let mut fsm = fsm_create("a")
+    fsm_add_state(fsm, "b")
+    fsm_add_state(fsm, "c")
+    let states = fsm_states(fsm)
+    check("states list", contains(states, "a") && contains(states, "b") && contains(states, "c"))
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_fsm_create()
+test_fsm_transition()
+test_fsm_invalid_input()
+test_fsm_can_step()
+test_fsm_reset()
+test_fsm_accepting()
+test_fsm_traffic_light()
+test_fsm_run_sequence()
+test_fsm_states()
+print("")
+print("All state machine tests passed (9 tests)")

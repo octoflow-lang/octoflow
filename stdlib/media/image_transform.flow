@@ -1,0 +1,425 @@
+// stdlib/media/image_transform.flow — Image geometric transforms
+//
+// Resize, rotate, flip, and affine transform images.
+// Images stored as 3 flat arrays (r, g, b) of w*h floats (0-255).
+// Pixel at (x, y) = index y * width + x.
+//
+// Functions: img_resize_nearest, img_resize_bilinear, img_rotate_90,
+//            img_rotate_180, img_rotate_270, img_rotate,
+//            img_scale, img_translate, img_shear
+//
+// Usage:
+//   use "image_transform"
+//   let mut dr = []  let mut dg = []  let mut db = []
+//   img_resize_bilinear(sr, sg, sb, 100.0, 100.0, dr, dg, db, 50.0, 50.0)
+
+let _IT_PI = 3.14159265358979
+
+// ── Resize (nearest neighbor) ──────────────────────────
+
+fn img_resize_nearest(src_r, src_g, src_b, src_w, src_h, dst_r, dst_g, dst_b, dst_w, dst_h)
+    // Resize image using nearest-neighbor sampling.
+    // Clears and fills dst arrays. Returns pixel count.
+    if src_w <= 0.0 || src_h <= 0.0 || dst_w <= 0.0 || dst_h <= 0.0
+        return 0.0
+    end
+    let src_len = len(src_r)
+    if src_len < src_w * src_h
+        return 0.0
+    end
+    // Clear destination
+    while len(dst_r) > 0.0
+        pop(dst_r)
+    end
+    while len(dst_g) > 0.0
+        pop(dst_g)
+    end
+    while len(dst_b) > 0.0
+        pop(dst_b)
+    end
+    let x_ratio = src_w / dst_w
+    let y_ratio = src_h / dst_h
+    let mut y = 0.0
+    while y < dst_h
+        let src_y = floor(y * y_ratio)
+        let mut sy = src_y
+        if sy >= src_h
+            sy = src_h - 1.0
+        end
+        let mut x = 0.0
+        while x < dst_w
+            let src_x = floor(x * x_ratio)
+            let mut sx = src_x
+            if sx >= src_w
+                sx = src_w - 1.0
+            end
+            let idx = int(sy * src_w + sx)
+            push(dst_r, src_r[idx])
+            push(dst_g, src_g[idx])
+            push(dst_b, src_b[idx])
+            x = x + 1.0
+        end
+        y = y + 1.0
+    end
+    return dst_w * dst_h
+end
+
+// ── Resize (bilinear interpolation) ────────────────────
+
+fn img_resize_bilinear(src_r, src_g, src_b, src_w, src_h, dst_r, dst_g, dst_b, dst_w, dst_h)
+    // Resize image using bilinear interpolation.
+    // Smoother than nearest-neighbor. Returns pixel count.
+    if src_w <= 0.0 || src_h <= 0.0 || dst_w <= 0.0 || dst_h <= 0.0
+        return 0.0
+    end
+    let src_len = len(src_r)
+    if src_len < src_w * src_h
+        return 0.0
+    end
+    // Clear destination
+    while len(dst_r) > 0.0
+        pop(dst_r)
+    end
+    while len(dst_g) > 0.0
+        pop(dst_g)
+    end
+    while len(dst_b) > 0.0
+        pop(dst_b)
+    end
+    let x_ratio = (src_w - 1.0) / dst_w
+    let y_ratio = (src_h - 1.0) / dst_h
+    let mut y = 0.0
+    while y < dst_h
+        let fy = y * y_ratio
+        let y0 = floor(fy)
+        let y1_raw = y0 + 1.0
+        let mut y1 = y1_raw
+        if y1 >= src_h
+            y1 = src_h - 1.0
+        end
+        let wy = fy - y0
+        let mut x = 0.0
+        while x < dst_w
+            let fx = x * x_ratio
+            let x0 = floor(fx)
+            let x1_raw = x0 + 1.0
+            let mut x1 = x1_raw
+            if x1 >= src_w
+                x1 = src_w - 1.0
+            end
+            let wx = fx - x0
+            // Four corners
+            let i00 = int(y0 * src_w + x0)
+            let i10 = int(y0 * src_w + x1)
+            let i01 = int(y1 * src_w + x0)
+            let i11 = int(y1 * src_w + x1)
+            // Bilinear for R
+            let r00 = src_r[i00]
+            let r10 = src_r[i10]
+            let r01 = src_r[i01]
+            let r11 = src_r[i11]
+            let r_top = r00 + (r10 - r00) * wx
+            let r_bot = r01 + (r11 - r01) * wx
+            push(dst_r, r_top + (r_bot - r_top) * wy)
+            // Bilinear for G
+            let g00 = src_g[i00]
+            let g10 = src_g[i10]
+            let g01 = src_g[i01]
+            let g11 = src_g[i11]
+            let g_top = g00 + (g10 - g00) * wx
+            let g_bot = g01 + (g11 - g01) * wx
+            push(dst_g, g_top + (g_bot - g_top) * wy)
+            // Bilinear for B
+            let b00 = src_b[i00]
+            let b10 = src_b[i10]
+            let b01 = src_b[i01]
+            let b11 = src_b[i11]
+            let b_top = b00 + (b10 - b00) * wx
+            let b_bot = b01 + (b11 - b01) * wx
+            push(dst_b, b_top + (b_bot - b_top) * wy)
+            x = x + 1.0
+        end
+        y = y + 1.0
+    end
+    return dst_w * dst_h
+end
+
+// ── Rotation (90/180/270) ──────────────────────────────
+
+fn img_rotate_90(src_r, src_g, src_b, w, h, dst_r, dst_g, dst_b)
+    // Rotate 90° clockwise. Output dimensions: h × w.
+    // Returns new width (which is h).
+    if w <= 0.0 || h <= 0.0
+        return 0.0
+    end
+    let src_len = len(src_r)
+    if src_len < w * h
+        return 0.0
+    end
+    while len(dst_r) > 0.0
+        pop(dst_r)
+    end
+    while len(dst_g) > 0.0
+        pop(dst_g)
+    end
+    while len(dst_b) > 0.0
+        pop(dst_b)
+    end
+    // New image: width=h, height=w
+    // dst(x,y) = src(y, h-1-x)
+    let new_w = h
+    let new_h = w
+    let mut y = 0.0
+    while y < new_h
+        let mut x = 0.0
+        while x < new_w
+            let sx = y
+            let sy = h - 1.0 - x
+            let idx = int(sy * w + sx)
+            push(dst_r, src_r[idx])
+            push(dst_g, src_g[idx])
+            push(dst_b, src_b[idx])
+            x = x + 1.0
+        end
+        y = y + 1.0
+    end
+    return new_w
+end
+
+fn img_rotate_180(src_r, src_g, src_b, w, h, dst_r, dst_g, dst_b)
+    // Rotate 180°. Output dimensions unchanged.
+    if w <= 0.0 || h <= 0.0
+        return 0.0
+    end
+    let src_len = len(src_r)
+    if src_len < w * h
+        return 0.0
+    end
+    while len(dst_r) > 0.0
+        pop(dst_r)
+    end
+    while len(dst_g) > 0.0
+        pop(dst_g)
+    end
+    while len(dst_b) > 0.0
+        pop(dst_b)
+    end
+    let mut y = 0.0
+    while y < h
+        let mut x = 0.0
+        while x < w
+            let idx = int((h - 1.0 - y) * w + (w - 1.0 - x))
+            push(dst_r, src_r[idx])
+            push(dst_g, src_g[idx])
+            push(dst_b, src_b[idx])
+            x = x + 1.0
+        end
+        y = y + 1.0
+    end
+    return w
+end
+
+fn img_rotate_270(src_r, src_g, src_b, w, h, dst_r, dst_g, dst_b)
+    // Rotate 270° clockwise (= 90° counter-clockwise). Output: h × w.
+    if w <= 0.0 || h <= 0.0
+        return 0.0
+    end
+    let src_len = len(src_r)
+    if src_len < w * h
+        return 0.0
+    end
+    while len(dst_r) > 0.0
+        pop(dst_r)
+    end
+    while len(dst_g) > 0.0
+        pop(dst_g)
+    end
+    while len(dst_b) > 0.0
+        pop(dst_b)
+    end
+    let new_w = h
+    let new_h = w
+    // dst(x,y) = src(w-1-y, x)
+    let mut y = 0.0
+    while y < new_h
+        let mut x = 0.0
+        while x < new_w
+            let sx = w - 1.0 - y
+            let sy = x
+            let idx = int(sy * w + sx)
+            push(dst_r, src_r[idx])
+            push(dst_g, src_g[idx])
+            push(dst_b, src_b[idx])
+            x = x + 1.0
+        end
+        y = y + 1.0
+    end
+    return new_w
+end
+
+// ── Arbitrary rotation ─────────────────────────────────
+
+fn img_rotate(src_r, src_g, src_b, w, h, dst_r, dst_g, dst_b, angle_deg, bg_r, bg_g, bg_b)
+    // Rotate by arbitrary angle (degrees, clockwise).
+    // Background color fills uncovered pixels.
+    // Output same dimensions as input. Returns pixel count.
+    if w <= 0.0 || h <= 0.0
+        return 0.0
+    end
+    let src_len = len(src_r)
+    if src_len < w * h
+        return 0.0
+    end
+    while len(dst_r) > 0.0
+        pop(dst_r)
+    end
+    while len(dst_g) > 0.0
+        pop(dst_g)
+    end
+    while len(dst_b) > 0.0
+        pop(dst_b)
+    end
+    let rad = angle_deg * _IT_PI / 180.0
+    let cos_a = cos(rad)
+    let sin_a = sin(rad)
+    let cx = w / 2.0
+    let cy = h / 2.0
+    let mut y = 0.0
+    while y < h
+        let mut x = 0.0
+        while x < w
+            // Inverse rotation to find source pixel
+            let dx = x - cx
+            let dy = y - cy
+            let sx = cos_a * dx + sin_a * dy + cx
+            let sy = (0.0 - sin_a) * dx + cos_a * dy + cy
+            if sx >= 0.0 && sx < w - 0.5 && sy >= 0.0 && sy < h - 0.5
+                // Bilinear sample
+                let x0 = floor(sx)
+                let y0 = floor(sy)
+                let mut x1 = x0 + 1.0
+                let mut y1 = y0 + 1.0
+                if x1 >= w
+                    x1 = w - 1.0
+                end
+                if y1 >= h
+                    y1 = h - 1.0
+                end
+                let fx = sx - x0
+                let fy = sy - y0
+                let i00 = int(y0 * w + x0)
+                let i10 = int(y0 * w + x1)
+                let i01 = int(y1 * w + x0)
+                let i11 = int(y1 * w + x1)
+                let rt = src_r[i00] + (src_r[i10] - src_r[i00]) * fx
+                let rb = src_r[i01] + (src_r[i11] - src_r[i01]) * fx
+                push(dst_r, rt + (rb - rt) * fy)
+                let gt = src_g[i00] + (src_g[i10] - src_g[i00]) * fx
+                let gb = src_g[i01] + (src_g[i11] - src_g[i01]) * fx
+                push(dst_g, gt + (gb - gt) * fy)
+                let bt = src_b[i00] + (src_b[i10] - src_b[i00]) * fx
+                let bb = src_b[i01] + (src_b[i11] - src_b[i01]) * fx
+                push(dst_b, bt + (bb - bt) * fy)
+            else
+                push(dst_r, bg_r)
+                push(dst_g, bg_g)
+                push(dst_b, bg_b)
+            end
+            x = x + 1.0
+        end
+        y = y + 1.0
+    end
+    return w * h
+end
+
+// ── Scale (centered) ───────────────────────────────────
+
+fn img_scale(src_r, src_g, src_b, w, h, dst_r, dst_g, dst_b, scale_x, scale_y, bg_r, bg_g, bg_b)
+    // Scale image around center. Output same dimensions.
+    // scale > 1 = zoom in, < 1 = zoom out. Background fills margins.
+    if w <= 0.0 || h <= 0.0
+        return 0.0
+    end
+    if scale_x <= 0.0 || scale_y <= 0.0
+        return 0.0
+    end
+    let src_len = len(src_r)
+    if src_len < w * h
+        return 0.0
+    end
+    while len(dst_r) > 0.0
+        pop(dst_r)
+    end
+    while len(dst_g) > 0.0
+        pop(dst_g)
+    end
+    while len(dst_b) > 0.0
+        pop(dst_b)
+    end
+    let cx = w / 2.0
+    let cy = h / 2.0
+    let mut y = 0.0
+    while y < h
+        let mut x = 0.0
+        while x < w
+            let sx = (x - cx) / scale_x + cx
+            let sy = (y - cy) / scale_y + cy
+            if sx >= 0.0 && sx < w && sy >= 0.0 && sy < h
+                let idx = int(floor(sy) * w + floor(sx))
+                push(dst_r, src_r[idx])
+                push(dst_g, src_g[idx])
+                push(dst_b, src_b[idx])
+            else
+                push(dst_r, bg_r)
+                push(dst_g, bg_g)
+                push(dst_b, bg_b)
+            end
+            x = x + 1.0
+        end
+        y = y + 1.0
+    end
+    return w * h
+end
+
+// ── Translate (shift) ──────────────────────────────────
+
+fn img_translate(src_r, src_g, src_b, w, h, dst_r, dst_g, dst_b, dx, dy, bg_r, bg_g, bg_b)
+    // Shift image by (dx, dy) pixels. Background fills exposed area.
+    if w <= 0.0 || h <= 0.0
+        return 0.0
+    end
+    let src_len = len(src_r)
+    if src_len < w * h
+        return 0.0
+    end
+    while len(dst_r) > 0.0
+        pop(dst_r)
+    end
+    while len(dst_g) > 0.0
+        pop(dst_g)
+    end
+    while len(dst_b) > 0.0
+        pop(dst_b)
+    end
+    let mut y = 0.0
+    while y < h
+        let mut x = 0.0
+        while x < w
+            let sx = x - dx
+            let sy = y - dy
+            if sx >= 0.0 && sx < w && sy >= 0.0 && sy < h
+                let idx = int(floor(sy) * w + floor(sx))
+                push(dst_r, src_r[idx])
+                push(dst_g, src_g[idx])
+                push(dst_b, src_b[idx])
+            else
+                push(dst_r, bg_r)
+                push(dst_g, bg_g)
+                push(dst_b, bg_b)
+            end
+            x = x + 1.0
+        end
+        y = y + 1.0
+    end
+    return w * h
+end

@@ -1,0 +1,161 @@
+// test_geometry.flow — Tests for stdlib/math/geometry.flow
+use "geometry"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Distance ────────────────────────────────────────────────
+
+fn test_distance()
+    check("dist origin", approx(geo_distance(0.0, 0.0, 3.0, 4.0), 5.0) == 1.0)
+    check("dist same", geo_distance(1.0, 1.0, 1.0, 1.0) == 0.0)
+    return 0.0
+end
+
+// ── Cross product ───────────────────────────────────────────
+
+fn test_cross()
+    check("cross perp", geo_cross_2d(1.0, 0.0, 0.0, 1.0) == 1.0)
+    check("cross parallel", geo_cross_2d(1.0, 0.0, 2.0, 0.0) == 0.0)
+    return 0.0
+end
+
+// ── Point to line distance ──────────────────────────────────
+
+fn test_point_to_line()
+    // Distance from (0,1) to line through (0,0)-(1,0) = 1.0
+    check("pt_to_line", approx(geo_point_to_line_dist(0.0, 1.0, 0.0, 0.0, 1.0, 0.0), 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Line intersection ───────────────────────────────────────
+
+fn test_line_intersect()
+    // Lines: (0,0)-(2,2) and (0,2)-(2,0) intersect at (1,1)
+    let r = geo_line_intersect(0.0, 0.0, 2.0, 2.0, 0.0, 2.0, 2.0, 0.0)
+    check("line_int found", r[2] == 1.0)
+    check("line_int x", approx(r[0], 1.0) == 1.0)
+    check("line_int y", approx(r[1], 1.0) == 1.0)
+    return 0.0
+end
+
+fn test_line_parallel()
+    // Parallel lines: (0,0)-(1,0) and (0,1)-(1,1)
+    let r = geo_line_intersect(0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+    check("parallel", r[2] == 0.0)
+    return 0.0
+end
+
+// ── Segment intersection ────────────────────────────────────
+
+fn test_segments()
+    check("seg cross", geo_segments_intersect(0.0, 0.0, 2.0, 2.0, 0.0, 2.0, 2.0, 0.0) == 1.0)
+    check("seg no cross", geo_segments_intersect(0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0) == 0.0)
+    return 0.0
+end
+
+// ── Triangle area ───────────────────────────────────────────
+
+fn test_triangle_area()
+    // Right triangle: (0,0), (1,0), (0,1) → area = 0.5
+    let mut pts = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+    check("tri area", approx(geo_triangle_area(pts, 0.0, 1.0, 2.0), 0.5) == 1.0)
+    return 0.0
+end
+
+// ── Polygon area ────────────────────────────────────────────
+
+fn test_polygon_area()
+    // Unit square: (0,0), (1,0), (1,1), (0,1) → area = 1.0
+    let mut pts = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]
+    check("poly area square", approx(geo_polygon_area(pts, 4.0), 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Polygon centroid ────────────────────────────────────────
+
+fn test_polygon_centroid()
+    let mut pts = [0.0, 0.0, 2.0, 0.0, 2.0, 2.0, 0.0, 2.0]
+    let c = geo_polygon_centroid(pts, 4.0)
+    check("centroid x", approx(c[0], 1.0) == 1.0)
+    check("centroid y", approx(c[1], 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Polygon perimeter ───────────────────────────────────────
+
+fn test_polygon_perimeter()
+    let mut pts = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]
+    check("perimeter", approx(geo_polygon_perimeter(pts, 4.0), 4.0) == 1.0)
+    return 0.0
+end
+
+// ── Point in polygon ────────────────────────────────────────
+
+fn test_point_in_polygon()
+    let mut pts = [0.0, 0.0, 4.0, 0.0, 4.0, 4.0, 0.0, 4.0]
+    check("pip inside", geo_point_in_polygon(2.0, 2.0, pts, 4.0) == 1.0)
+    check("pip outside", geo_point_in_polygon(5.0, 5.0, pts, 4.0) == 0.0)
+    return 0.0
+end
+
+// ── Circle ──────────────────────────────────────────────────
+
+fn test_circle()
+    check("circle area", approx(geo_circle_area(1.0), 3.14159) == 1.0)
+    check("circle circum", approx(geo_circle_circumference(1.0), 6.2831) == 1.0)
+    return 0.0
+end
+
+// ── AABB ────────────────────────────────────────────────────
+
+fn test_aabb()
+    check("aabb overlap", geo_aabb_overlap(0.0, 0.0, 2.0, 2.0, 1.0, 1.0, 2.0, 2.0) == 1.0)
+    check("aabb no overlap", geo_aabb_overlap(0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 1.0, 1.0) == 0.0)
+    return 0.0
+end
+
+// ── Convex hull ─────────────────────────────────────────────
+
+fn test_convex_hull()
+    // 5 points, 4 on corners of unit square + 1 inside
+    let mut pts = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.5, 0.5]
+    let hull = geo_convex_hull(pts, 5.0)
+    // Hull should have 4 points (the square corners)
+    let hull_n = len(hull) / 2.0
+    check("hull 4 pts", hull_n == 4.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_distance()
+test_cross()
+test_point_to_line()
+test_line_intersect()
+test_line_parallel()
+test_segments()
+test_triangle_area()
+test_polygon_area()
+test_polygon_centroid()
+test_polygon_perimeter()
+test_point_in_polygon()
+test_circle()
+test_aabb()
+test_convex_hull()
+print("")
+print("All geometry tests passed (14 tests)")

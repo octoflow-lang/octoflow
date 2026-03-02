@@ -2,10 +2,10 @@
 //
 // Controls: Arrow keys to move, R to regenerate, +/- to change fill ratio
 
-use "game/game"
-use "game/input"
-use "game/tilemap"
-use "game/procgen"
+use "../stdlib/game/game"
+use "../stdlib/game/input"
+use "../stdlib/game/tilemap"
+use "../stdlib/game/procgen"
 
 // [0]=player_x, [1]=player_y, [2]=fill_ratio, [3]=dirty, [4]=tile_size
 let mut _cg = [5.0, 5.0, 0.45, 1.0, 12.0]

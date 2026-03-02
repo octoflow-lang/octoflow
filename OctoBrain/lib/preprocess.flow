@@ -1,0 +1,60 @@
+// OctoBrain Preprocessing Module
+// Auto-centering preprocessor with EMA running mean.
+// Eliminates manual mean-centering for NLP and positive-only features.
+
+use "vecmath"
+
+// ── auto_center ─────────────────────────────────────────────────
+// Center data by subtracting running mean (EMA, alpha=0.01).
+//
+// running_mean: mutable array — starts empty, grows to dim on first call
+// running_count: mutable single-element array [0.0] — observation counter
+// data: input observation array [dim]
+//
+// On first call: initializes running_mean from data, returns zero vector.
+// On subsequent calls: updates running_mean via EMA, returns (data - running_mean).
+//
+// Usage:
+//   let mut center_mean = []
+//   let mut center_count = [0.0]
+//   let centered = auto_center(data, center_mean, center_count)
+fn auto_center(data, running_mean, running_count)
+  let dim = len(data)
+  let count = running_count[0]
+  let alpha = 0.01
+
+  if count < 0.5
+    // First call: initialize running_mean from data, return zeros
+    let mut i = 0.0
+    while i < dim
+      push(running_mean, data[i])
+      i = i + 1.0
+    end
+    running_count[0] = 1.0
+    return vec_zeros(dim)
+  end
+
+  // Update running mean via EMA: mean = (1 - alpha) * mean + alpha * data
+  let mut i = 0.0
+  while i < dim
+    running_mean[i] = (1.0 - alpha) * running_mean[i] + alpha * data[i]
+    i = i + 1.0
+  end
+  running_count[0] = count + 1.0
+
+  // Return centered data: data - running_mean
+  return vec_subtract(data, running_mean, dim)
+end
+
+// ── center_reset ────────────────────────────────────────────────
+// Reset centering state (clear mean, reset count).
+fn center_reset(running_mean, running_count)
+  let n = len(running_mean)
+  let mut i = 0.0
+  while i < n
+    pop(running_mean)
+    i = i + 1.0
+  end
+  running_count[0] = 0.0
+  return 0.0
+end

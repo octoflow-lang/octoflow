@@ -1,0 +1,187 @@
+// test_hash_set.flow — Tests for stdlib/collections/hash_set.flow
+use "hash_set"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic operations ────────────────────────────────────────
+
+fn test_create()
+    let mut s = set_create()
+    check("create empty", set_is_empty(s) == 1.0)
+    check("create size", set_size(s) == 0.0)
+    return 0.0
+end
+
+fn test_add_has()
+    let mut s = set_create()
+    set_add(s, 1.0)
+    set_add(s, 2.0)
+    set_add(s, 3.0)
+    check("has 1", set_has(s, 1.0) == 1.0)
+    check("has 2", set_has(s, 2.0) == 1.0)
+    check("not has 4", set_has(s, 4.0) == 0.0)
+    check("size 3", set_size(s) == 3.0)
+    return 0.0
+end
+
+fn test_no_duplicates()
+    let mut s = set_create()
+    set_add(s, 5.0)
+    set_add(s, 5.0)
+    set_add(s, 5.0)
+    check("no dup", set_size(s) == 1.0)
+    return 0.0
+end
+
+fn test_remove()
+    let mut s = set_create()
+    set_add(s, 10.0)
+    set_add(s, 20.0)
+    set_remove(s, 10.0)
+    check("remove size", set_size(s) == 1.0)
+    check("remove gone", set_has(s, 10.0) == 0.0)
+    check("remove kept", set_has(s, 20.0) == 1.0)
+    return 0.0
+end
+
+fn test_to_array()
+    let mut s = set_create()
+    set_add(s, 3.0)
+    set_add(s, 1.0)
+    set_add(s, 2.0)
+    let arr = set_to_array(s)
+    check("to_array len", len(arr) == 3.0)
+    return 0.0
+end
+
+fn test_from_array()
+    let mut data = [1.0, 2.0, 3.0, 2.0, 1.0]
+    let mut s = set_from_array(data)
+    check("from_array unique", set_size(s) == 3.0)
+    return 0.0
+end
+
+// ── Set operations ──────────────────────────────────────────
+
+fn test_union()
+    let mut a = set_create()
+    set_add(a, 1.0)
+    set_add(a, 2.0)
+    let mut b = set_create()
+    set_add(b, 2.0)
+    set_add(b, 3.0)
+    let mut u = set_union(a, b)
+    check("union size", set_size(u) == 3.0)
+    check("union has 1", set_has(u, 1.0) == 1.0)
+    check("union has 3", set_has(u, 3.0) == 1.0)
+    return 0.0
+end
+
+fn test_intersection()
+    let mut a = set_create()
+    set_add(a, 1.0)
+    set_add(a, 2.0)
+    set_add(a, 3.0)
+    let mut b = set_create()
+    set_add(b, 2.0)
+    set_add(b, 3.0)
+    set_add(b, 4.0)
+    let mut inter = set_intersection(a, b)
+    check("inter size", set_size(inter) == 2.0)
+    check("inter has 2", set_has(inter, 2.0) == 1.0)
+    check("inter no 1", set_has(inter, 1.0) == 0.0)
+    return 0.0
+end
+
+fn test_difference()
+    let mut a = set_create()
+    set_add(a, 1.0)
+    set_add(a, 2.0)
+    set_add(a, 3.0)
+    let mut b = set_create()
+    set_add(b, 2.0)
+    let mut diff = set_difference(a, b)
+    check("diff size", set_size(diff) == 2.0)
+    check("diff has 1", set_has(diff, 1.0) == 1.0)
+    check("diff no 2", set_has(diff, 2.0) == 0.0)
+    return 0.0
+end
+
+fn test_symmetric_diff()
+    let mut a = set_create()
+    set_add(a, 1.0)
+    set_add(a, 2.0)
+    let mut b = set_create()
+    set_add(b, 2.0)
+    set_add(b, 3.0)
+    let mut sd = set_symmetric_difference(a, b)
+    check("sym_diff size", set_size(sd) == 2.0)
+    check("sym_diff has 1", set_has(sd, 1.0) == 1.0)
+    check("sym_diff has 3", set_has(sd, 3.0) == 1.0)
+    check("sym_diff no 2", set_has(sd, 2.0) == 0.0)
+    return 0.0
+end
+
+fn test_subset()
+    let mut a = set_create()
+    set_add(a, 1.0)
+    set_add(a, 2.0)
+    let mut b = set_create()
+    set_add(b, 1.0)
+    set_add(b, 2.0)
+    set_add(b, 3.0)
+    check("subset yes", set_is_subset(a, b) == 1.0)
+    check("subset no", set_is_subset(b, a) == 0.0)
+    check("superset", set_is_superset(b, a) == 1.0)
+    return 0.0
+end
+
+fn test_equals()
+    let mut a = set_create()
+    set_add(a, 1.0)
+    set_add(a, 2.0)
+    let mut b = set_create()
+    set_add(b, 2.0)
+    set_add(b, 1.0)
+    check("equals yes", set_equals(a, b) == 1.0)
+    set_add(b, 3.0)
+    check("equals no", set_equals(a, b) == 0.0)
+    return 0.0
+end
+
+// ── Clear ───────────────────────────────────────────────────
+
+fn test_clear()
+    let mut s = set_create()
+    set_add(s, 1.0)
+    set_add(s, 2.0)
+    set_clear(s)
+    check("clear empty", set_is_empty(s) == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_create()
+test_add_has()
+test_no_duplicates()
+test_remove()
+test_to_array()
+test_from_array()
+test_union()
+test_intersection()
+test_difference()
+test_symmetric_diff()
+test_subset()
+test_equals()
+test_clear()
+print("")
+print("All hash_set tests passed (13 tests)")

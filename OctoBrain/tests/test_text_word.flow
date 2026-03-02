@@ -1,0 +1,152 @@
+// OctoBrain Word-Level Text Processing Tests
+// Tests for lib/text_word.flow — 7 tests.
+
+use "../lib/text_word"
+
+// ── Helper: approximate equality ──────────────────────────────
+fn approx_eq(x, y, tol)
+  let mut diff = x - y
+  if diff < 0.0
+    diff = diff * -1.0
+  end
+  if diff < tol
+    return 1.0
+  end
+  return 0.0
+end
+
+print("=== Word-Level Text Processing Tests ===")
+print("")
+
+// ══════════════════════════════════════════════════════════════
+// Test 1: word_split("the cat sat") → 3 words, first = "the"
+// ══════════════════════════════════════════════════════════════
+
+let words1 = word_split("the cat sat")
+let w1_len = len(words1)
+let w1_first = words1[0]
+
+if approx_eq(w1_len, 3.0, 0.001) && w1_first == "the"
+  print("PASS test1: word_split('the cat sat') → 3 words, first = 'the'")
+else
+  print("FAIL test1: expected 3 words with first='the', got {w1_len} words, first='{w1_first}'")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 2: word_split("hello") → 1 word
+// ══════════════════════════════════════════════════════════════
+
+let words2 = word_split("hello")
+let w2_len = len(words2)
+let w2_first = words2[0]
+
+if approx_eq(w2_len, 1.0, 0.001) && w2_first == "hello"
+  print("PASS test2: word_split('hello') → 1 word = 'hello'")
+else
+  print("FAIL test2: expected 1 word 'hello', got {w2_len} words, first='{w2_first}'")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 3: word_vocab_build from ["the", "cat", "the"] → vocab_size=2
+// ══════════════════════════════════════════════════════════════
+
+let mut vwords = []
+push(vwords, "the")
+push(vwords, "cat")
+push(vwords, "the")
+let vocab3 = word_vocab_build(vwords)
+let vs3 = map_get(vocab3, "vocab_size")
+let the_id = map_get(vocab3, "the")
+let cat_id = map_get(vocab3, "cat")
+
+if approx_eq(vs3, 2.0, 0.001) && approx_eq(the_id, 0.0, 0.001) && approx_eq(cat_id, 1.0, 0.001)
+  print("PASS test3: vocab_build → vocab_size=2, 'the'→0, 'cat'→1")
+else
+  print("FAIL test3: vs={vs3}, the_id={the_id}, cat_id={cat_id}")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 4: word_encode_hash("the", 8) → array of length 8, non-zero
+// ══════════════════════════════════════════════════════════════
+
+let enc4 = word_encode_hash("the", 8.0)
+let enc4_len = len(enc4)
+let mut enc4_sum = 0.0
+let mut ei4 = 0.0
+while ei4 < enc4_len
+  enc4_sum = enc4_sum + enc4[ei4]
+  ei4 = ei4 + 1.0
+end
+
+if approx_eq(enc4_len, 8.0, 0.001) && enc4_sum > 0.0
+  let enc4_sum_int = int(enc4_sum)
+  print("PASS test4: word_encode_hash('the', 8) → 8 elements, sum={enc4_sum_int}")
+else
+  print("FAIL test4: expected 8 elements with non-zero sum, got len={enc4_len}, sum={enc4_sum}")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 5: word_encode_hash("the", 8) deterministic (same on repeat)
+// ══════════════════════════════════════════════════════════════
+
+let enc5 = word_encode_hash("the", 8.0)
+let mut match5 = 1.0
+let mut ei5 = 0.0
+while ei5 < 8.0
+  if approx_eq(enc4[ei5], enc5[ei5], 0.001) == 0.0
+    match5 = 0.0
+  end
+  ei5 = ei5 + 1.0
+end
+
+if approx_eq(match5, 1.0, 0.001)
+  print("PASS test5: word_encode_hash('the', 8) deterministic — same result twice")
+else
+  print("FAIL test5: encoding not deterministic")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 6: Different words get different encodings
+// ══════════════════════════════════════════════════════════════
+
+let enc_cat = word_encode_hash("cat", 8.0)
+let enc_dog = word_encode_hash("dog", 8.0)
+let mut diff6 = 0.0
+let mut ei6 = 0.0
+while ei6 < 8.0
+  let mut d6 = enc_cat[ei6] - enc_dog[ei6]
+  if d6 < 0.0
+    d6 = d6 * -1.0
+  end
+  diff6 = diff6 + d6
+  ei6 = ei6 + 1.0
+end
+
+if diff6 > 0.5
+  print("PASS test6: 'cat' ≠ 'dog' encoding (L1 diff = {diff6:.2})")
+else
+  print("FAIL test6: 'cat' and 'dog' too similar (L1 diff = {diff6:.2})")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 7: word_bigram_vector("the", "cat", 8) → array of length 16
+// ══════════════════════════════════════════════════════════════
+
+let bigram7 = word_bigram_vector("the", "cat", 8.0)
+let bg7_len = len(bigram7)
+let mut bg7_sum = 0.0
+let mut ei7 = 0.0
+while ei7 < bg7_len
+  bg7_sum = bg7_sum + bigram7[ei7]
+  ei7 = ei7 + 1.0
+end
+
+if approx_eq(bg7_len, 16.0, 0.001) && bg7_sum > 0.0
+  let bg7_sum_int = int(bg7_sum)
+  print("PASS test7: word_bigram_vector('the','cat',8) → 16 elements, sum={bg7_sum_int}")
+else
+  print("FAIL test7: expected 16 elements with non-zero sum, got len={bg7_len}, sum={bg7_sum}")
+end
+
+print("")
+print("--- text_word tests complete ---")

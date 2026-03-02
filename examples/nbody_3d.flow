@@ -1,0 +1,181 @@
+// nbody_3d.flow — N-Body 3D Ray Traced Showcase
+//
+// 2 Main Looms (compute + render) + Support Loom (CPU orchestration).
+// 4096 particles, 800x600, 120 FPS target. O(N) spatial hash gravity.
+//
+// Run: octoflow run examples/nbody_3d.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../stdlib/loom/emit/game/emit_nbody_raytrace"
+use "../stdlib/loom/emit/game/emit_spatial_hash"
+use "../stdlib/loom/emit/game/emit_spatial_count"
+use "../stdlib/loom/emit/game/emit_spatial_scatter"
+use "../stdlib/loom/emit/game/emit_spatial_gravity"
+
+let N = 4096.0
+let W = 800.0
+let H = 600.0
+let DT = 0.001
+let SOFTENING2 = 0.01
+let RADIUS = 0.015
+let GRID = 32.0
+let GRID3 = 32768.0
+
+// ── Emit SPIR-V kernels ──
+let _e1 = emit_nbody_raytrace("nbody_raytrace.spv")
+let _e2 = emit_spatial_hash("spatial_hash.spv")
+let _e3 = emit_spatial_count("spatial_count.spv")
+let _e4 = emit_spatial_scatter("spatial_scatter.spv")
+let _e5 = emit_spatial_gravity("spatial_gravity.spv")
+loom_prefetch("nbody_raytrace.spv")
+loom_prefetch("spatial_hash.spv")
+loom_prefetch("spatial_count.spv")
+loom_prefetch("spatial_scatter.spv")
+loom_prefetch("spatial_gravity.spv")
+
+// ── Boot VMs ──
+// Compute VM globals layout:
+//   [0..N*4)                       positions     (16,384)
+//   [N*4..N*8)                     velocities    (16,384)
+//   [N*8..N*9)                     cell_ids      (4,096)
+//   [N*9..N*9+G³)                  counts        (32,768)
+//   [N*9+G³..N*9+2G³+1)           offsets       (32,769)
+//   [N*9+2G³+1..N*9+2G³+1+N*4)   sorted_pos    (16,384)
+//   [+N*4..+N*8)                   sorted_vel    (16,384)
+//   [+N*8..+N*9)                   sorted_orig   (4,096)
+let compute_vm = loom_boot(1.0, 4.0, 150000.0)
+let render_vm = loom_boot(1.0, 4.0, W * H * 3.0 + N * 4.0)
+
+// ── Initialize particles — galaxy disk ──
+let mut init_pos = []
+let mut init_vel = []
+let mut i = 0.0
+while i < N
+  let angle = random() * 6.283
+  let r = 0.2 + random() * 0.8
+  let mass = 0.5 + random() * 1.5
+  push(init_pos, cos(angle) * r)
+  push(init_pos, sin(angle) * r)
+  push(init_pos, (random() - 0.5) * 0.1)
+  push(init_pos, mass)
+  let speed = sqrt(mass / r) * 0.5
+  push(init_vel, 0.0 - sin(angle) * speed)
+  push(init_vel, cos(angle) * speed)
+  push(init_vel, 0.0)
+  push(init_vel, 0.0)
+  i = i + 1.0
+end
+loom_write(compute_vm, 0.0, init_pos)
+loom_write(compute_vm, N * 4.0, init_vel)
+
+// ── Pre-allocate zeros buffer for clearing counts ──
+let mut zeros = []
+let mut zi = 0.0
+while zi < GRID3
+  push(zeros, 0.0)
+  zi = zi + 1.0
+end
+
+// ── Open window ──
+let _w = window_open(W, H, "N-Body 3D — 4096 particles — Loom Engine")
+
+// ── Camera ──
+let mut cam_x = 0.0
+let mut cam_y = 0.0
+let mut cam_z = 3.0
+
+// ── Buffer offsets ──
+let OFF_CELLIDS = N * 8.0
+let OFF_COUNTS = N * 9.0
+let OFF_OFFSETS = N * 9.0 + GRID3
+let OFF_SORTED = N * 9.0 + 2.0 * GRID3 + 1.0
+
+// ── Frame loop ──
+let mut frame = 0.0
+let mut t0 = now_ms()
+
+while window_poll() >= 0.0
+  // ═══ Spatial Hash Grid (5 dispatches) ═══
+
+  // 1. Clear counts buffer
+  loom_write(compute_vm, OFF_COUNTS, zeros)
+
+  // 2. Hash particles to cells
+  loom_dispatch(compute_vm, "spatial_hash.spv", [N, GRID], ceil(N / 256.0))
+
+  // 3. Count particles per cell (atomic)
+  // cell_ids are at OFF_CELLIDS in globals, count kernel reads from binding 0 = cell_ids region
+  // Need separate dispatch: hash kernel writes cell_ids, count kernel reads them
+  let hash_prog = loom_build(compute_vm)
+  loom_launch(hash_prog)
+  loom_wait(hash_prog)
+
+  // Count kernel needs cell_ids from globals — they're written by hash kernel
+  // Read cell_ids and write to a separate buffer for the count kernel
+  // Actually, the spatial_count kernel reads from binding 0 (cell_ids at OFF_CELLIDS)
+  // and atomically increments binding 1 (counts at OFF_COUNTS).
+  // These all share the same globals buffer, so indexing must match.
+
+  // 4. CPU prefix sum (Support Loom)
+  let counts = loom_read(compute_vm, 0.0, OFF_COUNTS, GRID3)
+  let mut offsets = []
+  let mut s = 0.0
+  let mut ci = 0.0
+  while ci < GRID3
+    push(offsets, s)
+    s = s + counts[ci]
+    ci = ci + 1.0
+  end
+  push(offsets, s)
+  loom_write(compute_vm, OFF_OFFSETS, offsets)
+
+  // 5. Scatter particles to sorted array + O(N) gravity
+  // Reset offsets for scatter (it atomically increments them)
+  let mut offsets_copy = []
+  let mut oi = 0.0
+  while oi < GRID3 + 1.0
+    push(offsets_copy, offsets[oi])
+    oi = oi + 1.0
+  end
+  loom_write(compute_vm, OFF_OFFSETS, offsets_copy)
+
+  loom_dispatch(compute_vm, "spatial_scatter.spv", [N, GRID], ceil(N / 256.0))
+  let scatter_prog = loom_build(compute_vm)
+  loom_launch(scatter_prog)
+  loom_wait(scatter_prog)
+
+  // Re-write clean offsets (scatter consumed them via atomic)
+  loom_write(compute_vm, OFF_OFFSETS, offsets)
+
+  loom_dispatch(compute_vm, "spatial_gravity.spv", [N, GRID, DT, SOFTENING2], ceil(N / 256.0))
+  let gravity_prog = loom_build(compute_vm)
+  loom_launch(gravity_prog)
+  loom_wait(gravity_prog)
+
+  loom_free(hash_prog)
+  loom_free(scatter_prog)
+  loom_free(gravity_prog)
+
+  // ═══ Transfer positions to render VM ═══
+  let positions = loom_read(compute_vm, 0.0, 0.0, N * 4.0)
+  loom_write(render_vm, W * H * 3.0, positions)
+
+  // ═══ Ray trace render ═══
+  loom_dispatch(render_vm, "nbody_raytrace.spv", [N, W, H, cam_x, cam_y, cam_z, RADIUS], ceil(W * H / 256.0))
+  let render_prog = loom_build(render_vm)
+  loom_launch(render_prog)
+  loom_wait(render_prog)
+  loom_present(render_vm, W * H)
+  loom_free(render_prog)
+
+  // ═══ FPS counter ═══
+  frame = frame + 1.0
+  if frame % 60.0 == 0.0
+    let elapsed = now_ms() - t0
+    let fps = 60000.0 / elapsed
+    print("FPS: {fps}")
+    t0 = now_ms()
+  end
+end
+
+loom_shutdown(compute_vm)
+loom_shutdown(render_vm)

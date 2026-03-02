@@ -1,6 +1,6 @@
 // OctoFlow GPU Showcase — Galaxy Collision
 // Two proto-galaxies merge under GPU-computed N² gravity
-// Run:  octoflow run --allow-net examples/showcase.flow
+// Run:  octoflow run examples/showcase.flow
 // Exit: Ctrl+C
 
 // ═══ Configuration ═══════════════════════════════════════════
@@ -87,19 +87,9 @@ let team_a = gpu_fill(0.0, HALF)
 let team_b = gpu_fill(1.0, HALF)
 let team = gpu_concat(team_a, team_b)
 
-// ═══ HTTP Live View (Phase 83c) ═══════════════════════════════
-let srv = http_listen(8080)
-
-// Build HTML page — single quotes only (no escape sequences in .flow strings)
-let html_hd = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>OctoFlow — Galaxy Collision</title>"
-let html_st = "<style>*{margin:0;padding:0;background:#0a0a12}body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh}"
-let html_s2 = "h1{color:#00c8b4;font:24px monospace;margin-bottom:8px}canvas{image-rendering:pixelated;border:1px solid #333}</style></head>"
-let html_bd = "<body><h1>OctoFlow GPU Showcase</h1><canvas id='c' width='1000' height='700'></canvas>"
-let html_js = "<script>var c=document.getElementById('c'),x=c.getContext('2d');x.imageSmoothingEnabled=false;"
-let html_j2 = "function f(){fetch('/frame').then(r=>r.blob()).then(b=>{var i=new Image();i.onload=function(){"
-let html_j3 = "x.drawImage(i,0,0,1000,700)};i.src=URL.createObjectURL(b)}).catch(()=>{});"
-let html_j4 = "setTimeout(f,80)}f()</script></body></html>"
-let html = html_hd + html_st + html_s2 + html_bd + html_js + html_j2 + html_j3 + html_j4
+// ═══ HTTP Live View (optional — requires --allow-net) ═════════
+// To enable browser HD view: octoflow run showcase.flow --allow-net
+let mut srv = -1.0
 
 // ═══ Terminal setup ═════════════════════════════════════════
 let esc = chr(27)
@@ -124,10 +114,6 @@ print("{title}")
 let rule = c_dim + "  ────────────────────────────────────────────" + reset
 print("{rule}")
 let c_link = esc + "[38;2;100;200;255m"
-let srv_line = c_info + "  Also serving at: " + c_link + "http://localhost:8080" + c_info + " — Open in browser for HD view" + reset
-if srv >= 0
-    print("{srv_line}")
-end
 
 // ═══ Simulation loop ════════════════════════════════════════
 let mut frame = 0
@@ -297,26 +283,6 @@ while frame < 99999
     let goto8 = esc + "[8;1H"
     print("{goto8}")
     term_image(W, H, r_buf, g_buf, b_buf)
-
-    // ─── HTTP Live View: serve frames to browser ──────────
-    if srv >= 0
-        let client = http_accept_nonblock(srv)
-        if client >= 0
-            let req_path = http_path(client)
-            let mut served = 0
-            if req_path == "/"
-                http_respond_html(client, 200, html)
-                served = 1
-            end
-            if req_path == "/frame"
-                http_respond_image(client, 200, W, H, r_buf, g_buf, b_buf)
-                served = 1
-            end
-            if served == 0
-                http_respond(client, 404, "Not Found")
-            end
-        end
-    end
 
     prev_ms = now_ms() - t_start
     frame = frame + 1

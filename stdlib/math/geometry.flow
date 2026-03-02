@@ -1,0 +1,320 @@
+// stdlib/math/geometry.flow — 2D computational geometry
+//
+// Higher-level geometric algorithms beyond vec2 primitives.
+// Points are [x, y] pairs within flat arrays.
+//
+// Functions: geo_distance, geo_cross_2d, geo_point_to_line_dist,
+//            geo_line_intersect, geo_segments_intersect,
+//            geo_convex_hull, geo_polygon_area, geo_polygon_centroid,
+//            geo_polygon_perimeter, geo_point_in_polygon,
+//            geo_circle_area, geo_circle_circumference,
+//            geo_triangle_area, geo_aabb_overlap
+//
+// Usage:
+//   use "geometry"
+//   // Points as flat array: [x0, y0, x1, y1, ...]
+//   let mut pts = [0.0, 0.0, 1.0, 0.0, 0.5, 1.0]
+//   let area = geo_triangle_area(pts, 0.0, 1.0, 2.0) // 0.5
+
+fn geo_distance(x1, y1, x2, y2)
+    let dx = x2 - x1
+    let dy = y2 - y1
+    return sqrt(dx * dx + dy * dy)
+end
+
+fn geo_cross_2d(ax, ay, bx, by)
+    // 2D cross product (z-component of 3D cross): a × b.
+    return ax * by - ay * bx
+end
+
+fn geo_point_to_line_dist(px, py, x1, y1, x2, y2)
+    // Distance from point (px,py) to line through (x1,y1)-(x2,y2).
+    let dx = x2 - x1
+    let dy = y2 - y1
+    let len_sq = dx * dx + dy * dy
+    if len_sq < 0.0001
+        return geo_distance(px, py, x1, y1)
+    end
+    let area2 = abs((py - y1) * dx - (px - x1) * dy)
+    return area2 / sqrt(len_sq)
+end
+
+fn geo_line_intersect(x1, y1, x2, y2, x3, y3, x4, y4)
+    // Find intersection of lines (x1,y1)-(x2,y2) and (x3,y3)-(x4,y4).
+    // Returns [ix, iy, 1.0] if they intersect, [0.0, 0.0, 0.0] if parallel.
+    let d1x = x2 - x1
+    let d1y = y2 - y1
+    let d2x = x4 - x3
+    let d2y = y4 - y3
+
+    let denom = d1x * d2y - d1y * d2x
+    if abs(denom) < 0.0001
+        let mut r = [0.0, 0.0, 0.0]
+        return r
+    end
+
+    let t = ((x3 - x1) * d2y - (y3 - y1) * d2x) / denom
+    let ix = x1 + t * d1x
+    let iy = y1 + t * d1y
+    let mut r = [ix, iy, 1.0]
+    return r
+end
+
+fn geo_segments_intersect(x1, y1, x2, y2, x3, y3, x4, y4)
+    // Check if line segments (x1,y1)-(x2,y2) and (x3,y3)-(x4,y4) intersect.
+    // Returns 1.0 if they cross, 0.0 otherwise.
+    let d1 = geo_cross_2d(x3 - x1, y3 - y1, x2 - x1, y2 - y1)
+    let d2 = geo_cross_2d(x4 - x1, y4 - y1, x2 - x1, y2 - y1)
+    let d3 = geo_cross_2d(x1 - x3, y1 - y3, x4 - x3, y4 - y3)
+    let d4 = geo_cross_2d(x2 - x3, y2 - y3, x4 - x3, y4 - y3)
+
+    if d1 * d2 < 0.0 && d3 * d4 < 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn geo_triangle_area(pts, i, j, k)
+    // Area of triangle formed by points i, j, k in flat array pts.
+    // Points at pts[i*2], pts[i*2+1], etc.
+    let x1 = pts[i * 2.0]
+    let y1 = pts[i * 2.0 + 1.0]
+    let x2 = pts[j * 2.0]
+    let y2 = pts[j * 2.0 + 1.0]
+    let x3 = pts[k * 2.0]
+    let y3 = pts[k * 2.0 + 1.0]
+    return abs((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1)) * 0.5
+end
+
+fn geo_polygon_area(pts, n)
+    // Signed area of polygon with n points in flat array pts.
+    // Points: [x0, y0, x1, y1, ...]. Uses Shoelace formula.
+    if n < 3.0
+        return 0.0
+    end
+    let mut area = 0.0
+    let mut i = 0.0
+    while i < n
+        let j = (i + 1.0) - floor((i + 1.0) / n) * n
+        let x1 = pts[i * 2.0]
+        let y1 = pts[i * 2.0 + 1.0]
+        let x2 = pts[j * 2.0]
+        let y2 = pts[j * 2.0 + 1.0]
+        area = area + x1 * y2 - x2 * y1
+        i = i + 1.0
+    end
+    return abs(area) * 0.5
+end
+
+fn geo_polygon_centroid(pts, n)
+    // Centroid of polygon. Returns [cx, cy].
+    if n == 0.0
+        let mut r = [0.0, 0.0]
+        return r
+    end
+    let mut cx = 0.0
+    let mut cy = 0.0
+    let mut i = 0.0
+    while i < n
+        cx = cx + pts[i * 2.0]
+        cy = cy + pts[i * 2.0 + 1.0]
+        i = i + 1.0
+    end
+    let mut r = [cx / n, cy / n]
+    return r
+end
+
+fn geo_polygon_perimeter(pts, n)
+    // Perimeter of polygon with n points.
+    if n < 2.0
+        return 0.0
+    end
+    let mut peri = 0.0
+    let mut i = 0.0
+    while i < n
+        let j = (i + 1.0) - floor((i + 1.0) / n) * n
+        let dx = pts[j * 2.0] - pts[i * 2.0]
+        let dy = pts[j * 2.0 + 1.0] - pts[i * 2.0 + 1.0]
+        peri = peri + sqrt(dx * dx + dy * dy)
+        i = i + 1.0
+    end
+    return peri
+end
+
+fn geo_point_in_polygon(px, py, pts, n)
+    // Ray-casting algorithm: count crossings to determine inside/outside.
+    // Returns 1.0 if inside, 0.0 if outside.
+    if n < 3.0
+        return 0.0
+    end
+
+    let mut inside = 0.0
+    let mut i = 0.0
+    let mut j = n - 1.0
+    while i < n
+        let xi = pts[i * 2.0]
+        let yi = pts[i * 2.0 + 1.0]
+        let xj = pts[j * 2.0]
+        let yj = pts[j * 2.0 + 1.0]
+
+        if (yi > py) != (yj > py)
+            let slope = (xj - xi) * (py - yi) / (yj - yi) + xi
+            if px < slope
+                if inside == 0.0
+                    inside = 1.0
+                else
+                    inside = 0.0
+                end
+            end
+        end
+        j = i
+        i = i + 1.0
+    end
+    return inside
+end
+
+fn geo_convex_hull(pts, n)
+    // Convex hull using Andrew's monotone chain algorithm.
+    // Returns flat array of hull points [x0, y0, x1, y1, ...].
+    // Input: pts is flat [x0,y0,...], n = number of points.
+    if n <= 2.0
+        let mut result = []
+        let mut i = 0.0
+        while i < n * 2.0
+            push(result, pts[i])
+            i = i + 1.0
+        end
+        return result
+    end
+
+    // Sort points by x (then y) — insertion sort on pairs
+    let mut sorted = []
+    let mut i = 0.0
+    while i < n
+        push(sorted, pts[i * 2.0])
+        push(sorted, pts[i * 2.0 + 1.0])
+        i = i + 1.0
+    end
+
+    i = 1.0
+    while i < n
+        let kx = sorted[i * 2.0]
+        let ky = sorted[i * 2.0 + 1.0]
+        let mut j = i - 1.0
+        while j >= 0.0 && (sorted[j * 2.0] > kx || (sorted[j * 2.0] == kx && sorted[j * 2.0 + 1.0] > ky))
+            sorted[(j + 1.0) * 2.0] = sorted[j * 2.0]
+            sorted[(j + 1.0) * 2.0 + 1.0] = sorted[j * 2.0 + 1.0]
+            j = j - 1.0
+        end
+        sorted[(j + 1.0) * 2.0] = kx
+        sorted[(j + 1.0) * 2.0 + 1.0] = ky
+        i = i + 1.0
+    end
+
+    // Build lower hull
+    let mut hull = []   // flat [x, y, x, y, ...]
+    let mut hull_size = 0.0
+
+    i = 0.0
+    while i < n
+        let px = sorted[i * 2.0]
+        let py = sorted[i * 2.0 + 1.0]
+        while hull_size >= 2.0
+            let ax = hull[(hull_size - 2.0) * 2.0]
+            let ay = hull[(hull_size - 2.0) * 2.0 + 1.0]
+            let bx = hull[(hull_size - 1.0) * 2.0]
+            let by = hull[(hull_size - 1.0) * 2.0 + 1.0]
+            let cross = geo_cross_2d(bx - ax, by - ay, px - ax, py - ay)
+            if cross <= 0.0
+                hull_size = hull_size - 1.0
+            else
+                // Break out of while — use flag trick
+                hull_size = hull_size  // no-op, will exit via cross check
+                // Actually just break the condition
+                let mut break_flag = 1.0
+                hull_size = hull_size + break_flag - break_flag
+                // Force exit: set hull_size temporarily
+            end
+            if cross > 0.0
+                hull_size = hull_size  // exit inner while via condition
+                i = i  // no-op
+                // We need a cleaner way to break
+            end
+            if cross > 0.0
+                break
+            end
+        end
+        // Push point
+        if hull_size * 2.0 < len(hull)
+            hull[hull_size * 2.0] = px
+            hull[hull_size * 2.0 + 1.0] = py
+        else
+            push(hull, px)
+            push(hull, py)
+        end
+        hull_size = hull_size + 1.0
+        i = i + 1.0
+    end
+
+    // Build upper hull
+    let lower_size = hull_size
+    i = n - 2.0
+    while i >= 0.0
+        let px = sorted[i * 2.0]
+        let py = sorted[i * 2.0 + 1.0]
+        while hull_size > lower_size
+            let ax = hull[(hull_size - 2.0) * 2.0]
+            let ay = hull[(hull_size - 2.0) * 2.0 + 1.0]
+            let bx = hull[(hull_size - 1.0) * 2.0]
+            let by = hull[(hull_size - 1.0) * 2.0 + 1.0]
+            let cross = geo_cross_2d(bx - ax, by - ay, px - ax, py - ay)
+            if cross <= 0.0
+                hull_size = hull_size - 1.0
+            else
+                break
+            end
+        end
+        if hull_size * 2.0 < len(hull)
+            hull[hull_size * 2.0] = px
+            hull[hull_size * 2.0 + 1.0] = py
+        else
+            push(hull, px)
+            push(hull, py)
+        end
+        hull_size = hull_size + 1.0
+        i = i - 1.0
+    end
+
+    // Remove last point (duplicate of first)
+    hull_size = hull_size - 1.0
+
+    // Trim result
+    let mut result = []
+    i = 0.0
+    while i < hull_size
+        push(result, hull[i * 2.0])
+        push(result, hull[i * 2.0 + 1.0])
+        i = i + 1.0
+    end
+    return result
+end
+
+fn geo_circle_area(radius)
+    return 3.14159265358979 * radius * radius
+end
+
+fn geo_circle_circumference(radius)
+    return 2.0 * 3.14159265358979 * radius
+end
+
+fn geo_aabb_overlap(x1, y1, w1, h1, x2, y2, w2, h2)
+    // Check if two axis-aligned bounding boxes overlap.
+    // (x,y) is top-left corner. Returns 1.0 if overlapping.
+    if x1 + w1 <= x2 || x2 + w2 <= x1
+        return 0.0
+    end
+    if y1 + h1 <= y2 || y2 + h2 <= y1
+        return 0.0
+    end
+    return 1.0
+end

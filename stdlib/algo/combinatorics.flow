@@ -1,0 +1,317 @@
+// stdlib/algo/combinatorics.flow — Combinatorial generation and counting
+//
+// Functions for generating permutations, combinations, and computing
+// combinatorial numbers. All use flat arrays.
+//
+// Functions: comb_factorial, comb_binomial, comb_catalan,
+//            comb_pascal_row, comb_next_permutation,
+//            comb_permutations, comb_combinations,
+//            comb_subsets, comb_derangements,
+//            comb_stirling_second, comb_bell
+//
+// Usage:
+//   use "combinatorics"
+//   let b = comb_binomial(5.0, 2.0)       // 10.0
+//   let perms = comb_permutations(3.0)     // [1,2,3, 1,3,2, 2,1,3, ...]
+//   let cat = comb_catalan(4.0)            // 14.0
+
+fn comb_factorial(n)
+    if n <= 1.0
+        return 1.0
+    end
+    let mut result = 1.0
+    let mut i = 2.0
+    while i <= n
+        result = result * i
+        i = i + 1.0
+    end
+    return result
+end
+
+fn comb_binomial(n, k)
+    // C(n, k) = n! / (k! * (n-k)!)
+    // Computed iteratively to avoid overflow.
+    if k < 0.0 || k > n
+        return 0.0
+    end
+    let mut ck = k
+    if ck > n - ck
+        ck = n - ck
+    end
+    let mut result = 1.0
+    let mut i = 0.0
+    while i < ck
+        result = result * (n - i) / (i + 1.0)
+        i = i + 1.0
+    end
+    return floor(result + 0.5)
+end
+
+fn comb_catalan(n)
+    // n-th Catalan number: C(2n, n) / (n + 1).
+    if n < 0.0
+        return 0.0
+    end
+    return comb_binomial(2.0 * n, n) / (n + 1.0)
+end
+
+fn comb_pascal_row(n)
+    // Return n-th row of Pascal's triangle as an array.
+    // Row 0 = [1], Row 1 = [1,1], Row 2 = [1,2,1], etc.
+    let mut row = [1.0]
+    let mut i = 1.0
+    while i <= n
+        let mut new_row = [1.0]
+        let mut j = 1.0
+        while j < i
+            push(new_row, row[j - 1.0] + row[j])
+            j = j + 1.0
+        end
+        push(new_row, 1.0)
+        row = new_row
+        i = i + 1.0
+    end
+    return row
+end
+
+fn comb_next_permutation(arr)
+    // Transform array into next lexicographic permutation in-place.
+    // Returns 1.0 if next permutation exists, 0.0 if wrapped to first.
+    let n = len(arr)
+    if n <= 1.0
+        return 0.0
+    end
+
+    // Find largest i such that arr[i] < arr[i+1]
+    let mut i = n - 2.0
+    while i >= 0.0 && arr[i] >= arr[i + 1.0]
+        i = i - 1.0
+    end
+
+    if i < 0.0
+        // Reverse entire array (wrap to first permutation)
+        let mut lo = 0.0
+        let mut hi = n - 1.0
+        while lo < hi
+            let tmp = arr[lo]
+            arr[lo] = arr[hi]
+            arr[hi] = tmp
+            lo = lo + 1.0
+            hi = hi - 1.0
+        end
+        return 0.0
+    end
+
+    // Find largest j > i such that arr[j] > arr[i]
+    let mut j = n - 1.0
+    while arr[j] <= arr[i]
+        j = j - 1.0
+    end
+
+    // Swap arr[i] and arr[j]
+    let tmp = arr[i]
+    arr[i] = arr[j]
+    arr[j] = tmp
+
+    // Reverse arr[i+1..n-1]
+    let mut lo = i + 1.0
+    let mut hi = n - 1.0
+    while lo < hi
+        let t = arr[lo]
+        arr[lo] = arr[hi]
+        arr[hi] = t
+        lo = lo + 1.0
+        hi = hi - 1.0
+    end
+    return 1.0
+end
+
+fn comb_permutations(n)
+    // Generate all permutations of [1, 2, ..., n].
+    // Returns flat array: [p1_1, p1_2, ..., p1_n, p2_1, ...].
+    // Total elements: n! * n.
+    let mut perm = []
+    let mut i = 1.0
+    while i <= n
+        push(perm, i)
+        i = i + 1.0
+    end
+
+    let total = comb_factorial(n)
+    let mut result = []
+
+    // Copy first permutation
+    i = 0.0
+    while i < n
+        push(result, perm[i])
+        i = i + 1.0
+    end
+
+    let mut count = 1.0
+    while count < total
+        comb_next_permutation(perm)
+        i = 0.0
+        while i < n
+            push(result, perm[i])
+            i = i + 1.0
+        end
+        count = count + 1.0
+    end
+    return result
+end
+
+fn comb_combinations(n, k)
+    // Generate all C(n,k) combinations of [1, ..., n].
+    // Returns flat array: [c1_1, ..., c1_k, c2_1, ...].
+    // Uses iterative next-combination algorithm.
+    if k > n || k < 0.0
+        let mut empty = []
+        return empty
+    end
+
+    let mut combo = []
+    let mut i = 0.0
+    while i < k
+        push(combo, i + 1.0)
+        i = i + 1.0
+    end
+
+    let total = comb_binomial(n, k)
+    let mut result = []
+
+    let mut count = 0.0
+    while count < total
+        // Copy current combination
+        i = 0.0
+        while i < k
+            push(result, combo[i])
+            i = i + 1.0
+        end
+
+        // Generate next combination
+        let mut j = k - 1.0
+        while j >= 0.0 && combo[j] == n - k + j + 1.0
+            j = j - 1.0
+        end
+        if j >= 0.0
+            combo[j] = combo[j] + 1.0
+            let mut m = j + 1.0
+            while m < k
+                combo[m] = combo[j] + (m - j)
+                m = m + 1.0
+            end
+        end
+        count = count + 1.0
+    end
+    return result
+end
+
+fn comb_subsets(n)
+    // Generate all 2^n subsets of [1, ..., n].
+    // Returns flat array of variable-length subsets separated by -1.0 sentinel.
+    // E.g., n=2: [-1.0, 1.0, -1.0, 2.0, -1.0, 1.0, 2.0, -1.0]
+    let total = 1.0
+    let mut power = total
+    let mut p = 0.0
+    while p < n
+        power = power * 2.0
+        p = p + 1.0
+    end
+
+    let mut result = []
+    let mut mask = 0.0
+    while mask < power
+        push(result, -1.0)  // separator
+        let mut bit = 0.0
+        let mut m = mask
+        while bit < n
+            // Check if bit-th position is set using modular arithmetic
+            let two_power = 1.0
+            let mut bp = 0.0
+            while bp < bit
+                two_power = two_power * 2.0
+                bp = bp + 1.0
+            end
+            let div = floor(m / two_power)
+            if div - floor(div / 2.0) * 2.0 >= 0.5
+                push(result, bit + 1.0)
+            end
+            bit = bit + 1.0
+        end
+        mask = mask + 1.0
+    end
+    return result
+end
+
+fn comb_derangements(n)
+    // Count derangements (permutations with no fixed points).
+    // D(n) = (n-1) * (D(n-1) + D(n-2)).
+    if n == 0.0
+        return 1.0
+    end
+    if n == 1.0
+        return 0.0
+    end
+    let mut prev2 = 1.0  // D(0)
+    let mut prev1 = 0.0  // D(1)
+    let mut i = 2.0
+    while i <= n
+        let current = (i - 1.0) * (prev1 + prev2)
+        prev2 = prev1
+        prev1 = current
+        i = i + 1.0
+    end
+    return prev1
+end
+
+fn comb_stirling_second(n, k)
+    // Stirling number of the second kind: S(n, k).
+    // Number of ways to partition n elements into k non-empty subsets.
+    if k == 0.0 && n == 0.0
+        return 1.0
+    end
+    if k == 0.0 || k > n
+        return 0.0
+    end
+    if k == 1.0 || k == n
+        return 1.0
+    end
+
+    // Use DP table
+    let cols = k + 1.0
+    let rows = n + 1.0
+    let total = rows * cols
+    let mut dp = []
+    let mut idx = 0.0
+    while idx < total
+        push(dp, 0.0)
+        idx = idx + 1.0
+    end
+
+    dp[0] = 1.0  // S(0,0) = 1
+
+    let mut i = 1.0
+    while i <= n
+        let mut j = 1.0
+        while j <= k && j <= i
+            dp[i * cols + j] = j * dp[(i - 1.0) * cols + j] + dp[(i - 1.0) * cols + (j - 1.0)]
+            j = j + 1.0
+        end
+        i = i + 1.0
+    end
+    return dp[n * cols + k]
+end
+
+fn comb_bell(n)
+    // Bell number: B(n) = sum of S(n, k) for k = 0..n.
+    if n == 0.0
+        return 1.0
+    end
+    let mut sum = 0.0
+    let mut k = 0.0
+    while k <= n
+        sum = sum + comb_stirling_second(n, k)
+        k = k + 1.0
+    end
+    return sum
+end

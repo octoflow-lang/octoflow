@@ -1,0 +1,110 @@
+// test_string_format.flow — Tests for stdlib/string/string_format.flow
+use "string_format"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Padding ─────────────────────────────────────────────────
+
+fn test_pad_left()
+    check("pad_left", pad_left("42", 5.0, "0") == "00042")
+    check("pad_left noop", pad_left("hello", 3.0, " ") == "hello")
+    return 0.0
+end
+
+fn test_pad_right()
+    check("pad_right", pad_right("hi", 5.0, ".") == "hi...")
+    return 0.0
+end
+
+fn test_center()
+    check("center", center("hi", 6.0, " ") == "  hi  ")
+    check("center odd", len(center("a", 4.0, "-")) == 4.0)
+    return 0.0
+end
+
+// ── Truncate ────────────────────────────────────────────────
+
+fn test_truncate()
+    check("truncate long", truncate("Hello World", 8.0, "...") == "Hello...")
+    check("truncate short", truncate("Hi", 8.0, "...") == "Hi")
+    return 0.0
+end
+
+// ── Reverse ─────────────────────────────────────────────────
+
+fn test_reverse()
+    check("reverse", reverse_string("hello") == "olleh")
+    check("reverse empty", reverse_string("") == "")
+    check("reverse single", reverse_string("a") == "a")
+    return 0.0
+end
+
+// ── Title case ──────────────────────────────────────────────
+
+fn test_title_case()
+    check("title", to_title_case("hello world") == "Hello World")
+    check("title upper", to_title_case("HELLO WORLD") == "Hello World")
+    return 0.0
+end
+
+// ── Character tests ─────────────────────────────────────────
+
+fn test_is_numeric()
+    check("numeric yes", is_numeric_str("12345") == 1.0)
+    check("numeric no", is_numeric_str("12a45") == 0.0)
+    check("numeric empty", is_numeric_str("") == 0.0)
+    return 0.0
+end
+
+fn test_is_alpha()
+    check("alpha yes", is_alpha_str("hello") == 1.0)
+    check("alpha no", is_alpha_str("hello123") == 0.0)
+    return 0.0
+end
+
+fn test_is_alphanum()
+    check("alnum yes", is_alphanumeric_str("hello123") == 1.0)
+    check("alnum no", is_alphanumeric_str("hello!") == 0.0)
+    return 0.0
+end
+
+// ── Count char ──────────────────────────────────────────────
+
+fn test_count_char()
+    check("count a", count_char("banana", "a") == 3.0)
+    check("count none", count_char("hello", "z") == 0.0)
+    return 0.0
+end
+
+// ── Trim ────────────────────────────────────────────────────
+
+fn test_trim()
+    check("trim_left", trim_left("000abc", "0") == "abc")
+    check("trim_right", trim_right("abc...", ".") == "abc")
+    check("trim_both", trim_both("**hello**", "*") == "hello")
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_pad_left()
+test_pad_right()
+test_center()
+test_truncate()
+test_reverse()
+test_title_case()
+test_is_numeric()
+test_is_alpha()
+test_is_alphanum()
+test_count_char()
+test_trim()
+print("")
+print("All string_format tests passed (11 tests)")

@@ -1,0 +1,127 @@
+// OctoBrain High-Dimensional Benchmark
+// Tests brain performance at 16D, 32D, 64D, and 128D input dimensions.
+// Phase 2 only tested up to 4D — this validates scaling behavior.
+//
+// Signal: D-dimensional harmonic — data[i] = sin(t * (i+1) * 0.3)
+// This creates a smooth manifold in D dimensions.
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\high_dim.flow"
+
+use "../lib/octobrain"
+
+// ── Helper: run a full benchmark at a given dimension ──────────────
+// Creates a fresh brain + all 16 external arrays internally,
+// feeds num_obs observations, prints milestones, returns final proto_count.
+fn run_dim_test(dim, num_obs)
+  let dim_int = int(dim)
+  let num_obs_int = int(num_obs)
+  print("--- {dim_int}D benchmark ({num_obs_int} observations) ---")
+
+  // Create fresh brain + all 16 external arrays
+  let mut brain = octobrain_new(2.0)
+  let mut p_state = proto_new()
+  let mut p_embs = []
+  let mut p_mc = []
+  let mut e_state = embed_new()
+  let mut W_embed = []
+  let mut obs_buffer = []
+  let mut edge_state = edges_new()
+  let mut en = []
+  let mut ea = []
+  let mut eo = []
+  let mut ep = []
+  let mut ew = []
+  let mut eact = []
+  let mut window = []
+  let mut W_score = []
+
+  // Start timing
+  let t_start = time()
+
+  // Feed observations
+  let mut step = 0.0
+  while step < num_obs
+    // Generate D-dimensional harmonic signal
+    let t = step * 0.1
+    let mut data = []
+    let mut i = 0.0
+    while i < dim
+      let val = sin(t * (i + 1.0) * 0.3)
+      push(data, val)
+      i = i + 1.0
+    end
+
+    // Observe
+    let dummy = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, data)
+
+    // Print milestones at step 200, 500, final
+    let is_milestone = step == 199.0 || step == 499.0 || step == 999.0
+    let is_final = step == num_obs - 1.0
+    if is_milestone || is_final
+      let stats = octobrain_stats(brain, p_state, edge_state)
+      let pc = map_get(stats, "proto_count")
+      let ec = map_get(stats, "edge_count")
+      let tc = map_get(stats, "transition_count")
+      let report_step = step + 1.0
+      let rs_int = int(report_step)
+      print("  Step {rs_int}: protos={pc}, edges={ec}, transitions={tc}")
+    end
+
+    step = step + 1.0
+  end
+
+  // End timing
+  let t_end = time()
+  let elapsed = t_end - t_start
+  let per_obs = elapsed / num_obs
+
+  print("  Time: {elapsed:.2}s total, {per_obs:.4}s/obs")
+
+  // Final stats
+  let final_stats = octobrain_stats(brain, p_state, edge_state)
+  let final_pc = map_get(final_stats, "proto_count")
+  let final_ec = map_get(final_stats, "edge_count")
+
+  // PASS/FAIL checks
+  // Threshold scales with dimension — high-D harmonic signals carve more
+  // manifold regions. Proto count should stay sub-linear: < dim * 5.
+  let proto_limit = dim * 5.0
+  let pl_int = int(proto_limit)
+  if final_pc < proto_limit
+    print("  PASS: proto_count={final_pc} (manageable at {dim_int}D, limit={pl_int})")
+  else
+    print("  FAIL: proto_count={final_pc} (too many at {dim_int}D, limit={pl_int})")
+  end
+
+  if final_ec > 0.0
+    print("  PASS: edges learned ({final_ec})")
+  else
+    print("  FAIL: no edges learned at {dim_int}D")
+  end
+
+  print("")
+
+  return final_pc
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Main benchmark
+// ══════════════════════════════════════════════════════════════════
+
+print("=== OctoBrain High-Dimensional Benchmark ===")
+print("")
+
+let pc_16 = run_dim_test(16.0, 500.0)
+let pc_32 = run_dim_test(32.0, 300.0)
+let pc_64 = run_dim_test(64.0, 200.0)
+let pc_128 = run_dim_test(128.0, 200.0)
+
+// ── Summary ────────────────────────────────────────────────────────
+let pc16_int = int(pc_16)
+let pc32_int = int(pc_32)
+let pc64_int = int(pc_64)
+let pc128_int = int(pc_128)
+
+print("=== Summary ===")
+print("16D: {pc16_int} protos  32D: {pc32_int} protos  64D: {pc64_int} protos  128D: {pc128_int} protos")
+print("--- high-dimensional benchmark complete ---")

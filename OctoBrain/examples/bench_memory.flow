@@ -1,0 +1,368 @@
+// OctoBrain Sequence Memory (Regime Revisit) Benchmark
+// Tests whether the brain remembers a regime after an intervening different regime.
+//
+// Regime A: sine wave, sin(t * 0.5), window size 4
+// Regime B: cosine wave, cos(t * 0.3), window size 4
+//
+// Protocol (single brain, continuous online learning):
+//   Phase 1: 200 obs of Regime A (learning)         — accuracy on last 100
+//   Phase 2: 200 obs of Regime B (learning new)      — accuracy on last 100
+//   Phase 3: 200 obs of Regime A again (revisit)     — accuracy on last 100
+//   Phase 4: 200 obs of Regime B again (revisit)     — accuracy on last 100
+//
+// For each phase: feed windows, record proto sequence, build second-order Markov
+// table from that phase's data, evaluate prediction on last 100 positions.
+//
+// Key metric — memory retention ratio:
+//   Phase 3 accuracy / Phase 1 accuracy >= 0.8
+//   Phase 4 accuracy / Phase 2 accuracy >= 0.8
+//   New protos in Phase 3 <= 2
+//   New protos in Phase 4 <= 2
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\bench_memory.flow" --max-iters 20000000
+
+use "../lib/octobrain"
+use "../lib/sequence"
+
+print("=== OctoBrain Sequence Memory (Regime Revisit) Benchmark ===")
+print("")
+
+// ── Configuration ──────────────────────────────────────────────
+let win_size = 4.0
+let phase_len = 200.0
+let eval_start = 100.0
+
+// ── Create single brain + external arrays for all 4 phases ────
+let mut brain = octobrain_new(2.0)
+let mut p_state = proto_new()
+let mut p_embs = []
+let mut p_mc = []
+let mut e_state = embed_new()
+let mut W_embed = []
+let mut obs_buffer = []
+let mut edge_state = edges_new()
+let mut en = []
+let mut ea = []
+let mut eo = []
+let mut ep = []
+let mut ew = []
+let mut eact = []
+let mut ctx_window = []
+let mut W_score = []
+
+// ── Helper: generate a signal window ──────────────────────────
+// For Regime A: 4 consecutive sin((phase_start + step + k) * 0.5)
+// For Regime B: 4 consecutive cos((phase_start + step + k) * 0.3)
+// regime_type: 0.0 = Regime A (sine), 1.0 = Regime B (cosine)
+// global_offset: starting t for this phase
+// step: observation index within phase
+
+// =====================================================================
+// Phase 1: 200 obs of Regime A (learning)
+// =====================================================================
+print("--- Phase 1: Regime A (sine, learning) ---")
+
+let mut seq1 = []
+let mut pc_before_p1 = map_get(p_state, "proto_count")
+let mut step1 = 0.0
+while step1 < phase_len
+  // Generate window: sin((step1 + k) * 0.5) for k = 0..3
+  let mut data1 = []
+  let t1_0 = (step1 + 0.0) * 0.5
+  let t1_1 = (step1 + 1.0) * 0.5
+  let t1_2 = (step1 + 2.0) * 0.5
+  let t1_3 = (step1 + 3.0) * 0.5
+  push(data1, sin(t1_0))
+  push(data1, sin(t1_1))
+  push(data1, sin(t1_2))
+  push(data1, sin(t1_3))
+
+  let _obs1 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, ctx_window, W_score, data1)
+  let pid1 = map_get(p_state, "last_match_id")
+  push(seq1, pid1)
+  step1 = step1 + 1.0
+end
+
+let stats1 = octobrain_stats(brain, p_state, edge_state)
+let pc1 = map_get(stats1, "proto_count")
+let tc1 = map_get(stats1, "transition_count")
+print("Phase 1 complete: protos={pc1}, transitions={tc1}")
+
+// Build second-order Markov table from Phase 1 proto sequence
+let seq1_len = len(seq1)
+let table1 = markov2_build(seq1, seq1_len, pc1)
+
+// Evaluate prediction accuracy on last 100 observations of Phase 1
+let mut correct1 = 0.0
+let mut total1 = 0.0
+let mut ei1 = eval_start
+while ei1 < seq1_len
+  if ei1 >= 2.0
+    let prev1 = seq1[ei1 - 2.0]
+    let curr1 = seq1[ei1 - 1.0]
+    let actual1 = seq1[ei1]
+    let pred1 = markov2_predict(table1, prev1, curr1, pc1)
+    if pred1 == actual1
+      correct1 = correct1 + 1.0
+    end
+    total1 = total1 + 1.0
+  end
+  ei1 = ei1 + 1.0
+end
+
+let acc1 = correct1 / total1
+let pct1 = floor(acc1 * 1000.0) / 10.0
+print("Phase 1 prediction: {correct1}/{total1} = {pct1}%")
+print("")
+
+// =====================================================================
+// Phase 2: 200 obs of Regime B (learning new regime)
+// =====================================================================
+print("--- Phase 2: Regime B (cosine, learning) ---")
+
+let pc_before_p2 = map_get(p_state, "proto_count")
+let mut seq2 = []
+let mut step2 = 0.0
+while step2 < phase_len
+  // Generate window: cos((step2 + k) * 0.3) for k = 0..3
+  let mut data2 = []
+  let t2_0 = (step2 + 0.0) * 0.3
+  let t2_1 = (step2 + 1.0) * 0.3
+  let t2_2 = (step2 + 2.0) * 0.3
+  let t2_3 = (step2 + 3.0) * 0.3
+  push(data2, cos(t2_0))
+  push(data2, cos(t2_1))
+  push(data2, cos(t2_2))
+  push(data2, cos(t2_3))
+
+  let _obs2 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, ctx_window, W_score, data2)
+  let pid2 = map_get(p_state, "last_match_id")
+  push(seq2, pid2)
+  step2 = step2 + 1.0
+end
+
+let stats2 = octobrain_stats(brain, p_state, edge_state)
+let pc2 = map_get(stats2, "proto_count")
+let tc2 = map_get(stats2, "transition_count")
+print("Phase 2 complete: protos={pc2}, transitions={tc2}")
+
+// Build second-order Markov table from Phase 2 proto sequence
+let seq2_len = len(seq2)
+let table2 = markov2_build(seq2, seq2_len, pc2)
+
+// Evaluate prediction accuracy on last 100 observations of Phase 2
+let mut correct2 = 0.0
+let mut total2 = 0.0
+let mut ei2 = eval_start
+while ei2 < seq2_len
+  if ei2 >= 2.0
+    let prev2 = seq2[ei2 - 2.0]
+    let curr2 = seq2[ei2 - 1.0]
+    let actual2 = seq2[ei2]
+    let pred2 = markov2_predict(table2, prev2, curr2, pc2)
+    if pred2 == actual2
+      correct2 = correct2 + 1.0
+    end
+    total2 = total2 + 1.0
+  end
+  ei2 = ei2 + 1.0
+end
+
+let acc2 = correct2 / total2
+let pct2 = floor(acc2 * 1000.0) / 10.0
+print("Phase 2 prediction: {correct2}/{total2} = {pct2}%")
+print("")
+
+// =====================================================================
+// Phase 3: 200 obs of Regime A again (revisit)
+// =====================================================================
+print("--- Phase 3: Regime A (sine, revisit) ---")
+
+let pc_before_p3 = map_get(p_state, "proto_count")
+let mut seq3 = []
+let mut step3 = 0.0
+while step3 < phase_len
+  // Same signal as Phase 1: sin((step3 + k) * 0.5) for k = 0..3
+  let mut data3 = []
+  let t3_0 = (step3 + 0.0) * 0.5
+  let t3_1 = (step3 + 1.0) * 0.5
+  let t3_2 = (step3 + 2.0) * 0.5
+  let t3_3 = (step3 + 3.0) * 0.5
+  push(data3, sin(t3_0))
+  push(data3, sin(t3_1))
+  push(data3, sin(t3_2))
+  push(data3, sin(t3_3))
+
+  let _obs3 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, ctx_window, W_score, data3)
+  let pid3 = map_get(p_state, "last_match_id")
+  push(seq3, pid3)
+  step3 = step3 + 1.0
+end
+
+let stats3 = octobrain_stats(brain, p_state, edge_state)
+let pc3 = map_get(stats3, "proto_count")
+let tc3 = map_get(stats3, "transition_count")
+let new_protos_p3 = pc3 - pc_before_p3
+print("Phase 3 complete: protos={pc3}, transitions={tc3}, new_protos={new_protos_p3}")
+
+// Build second-order Markov table from Phase 3 proto sequence
+let seq3_len = len(seq3)
+let table3 = markov2_build(seq3, seq3_len, pc3)
+
+// Evaluate prediction accuracy on last 100 observations of Phase 3
+let mut correct3 = 0.0
+let mut total3 = 0.0
+let mut ei3 = eval_start
+while ei3 < seq3_len
+  if ei3 >= 2.0
+    let prev3 = seq3[ei3 - 2.0]
+    let curr3 = seq3[ei3 - 1.0]
+    let actual3 = seq3[ei3]
+    let pred3 = markov2_predict(table3, prev3, curr3, pc3)
+    if pred3 == actual3
+      correct3 = correct3 + 1.0
+    end
+    total3 = total3 + 1.0
+  end
+  ei3 = ei3 + 1.0
+end
+
+let acc3 = correct3 / total3
+let pct3 = floor(acc3 * 1000.0) / 10.0
+print("Phase 3 prediction: {correct3}/{total3} = {pct3}%")
+print("")
+
+// =====================================================================
+// Phase 4: 200 obs of Regime B again (revisit)
+// =====================================================================
+print("--- Phase 4: Regime B (cosine, revisit) ---")
+
+let pc_before_p4 = map_get(p_state, "proto_count")
+let mut seq4 = []
+let mut step4 = 0.0
+while step4 < phase_len
+  // Same signal as Phase 2: cos((step4 + k) * 0.3) for k = 0..3
+  let mut data4 = []
+  let t4_0 = (step4 + 0.0) * 0.3
+  let t4_1 = (step4 + 1.0) * 0.3
+  let t4_2 = (step4 + 2.0) * 0.3
+  let t4_3 = (step4 + 3.0) * 0.3
+  push(data4, cos(t4_0))
+  push(data4, cos(t4_1))
+  push(data4, cos(t4_2))
+  push(data4, cos(t4_3))
+
+  let _obs4 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, ctx_window, W_score, data4)
+  let pid4 = map_get(p_state, "last_match_id")
+  push(seq4, pid4)
+  step4 = step4 + 1.0
+end
+
+let stats4 = octobrain_stats(brain, p_state, edge_state)
+let pc4 = map_get(stats4, "proto_count")
+let tc4 = map_get(stats4, "transition_count")
+let new_protos_p4 = pc4 - pc_before_p4
+print("Phase 4 complete: protos={pc4}, transitions={tc4}, new_protos={new_protos_p4}")
+
+// Build second-order Markov table from Phase 4 proto sequence
+let seq4_len = len(seq4)
+let table4 = markov2_build(seq4, seq4_len, pc4)
+
+// Evaluate prediction accuracy on last 100 observations of Phase 4
+let mut correct4 = 0.0
+let mut total4 = 0.0
+let mut ei4 = eval_start
+while ei4 < seq4_len
+  if ei4 >= 2.0
+    let prev4 = seq4[ei4 - 2.0]
+    let curr4 = seq4[ei4 - 1.0]
+    let actual4 = seq4[ei4]
+    let pred4 = markov2_predict(table4, prev4, curr4, pc4)
+    if pred4 == actual4
+      correct4 = correct4 + 1.0
+    end
+    total4 = total4 + 1.0
+  end
+  ei4 = ei4 + 1.0
+end
+
+let acc4 = correct4 / total4
+let pct4 = floor(acc4 * 1000.0) / 10.0
+print("Phase 4 prediction: {correct4}/{total4} = {pct4}%")
+print("")
+
+// =====================================================================
+// Results & PASS/FAIL
+// =====================================================================
+print("=== Sequence Memory Benchmark Results ===")
+print("")
+
+print("Prediction accuracies:")
+print("  Phase 1 (Regime A, first):   {pct1}%")
+print("  Phase 2 (Regime B, first):   {pct2}%")
+print("  Phase 3 (Regime A, revisit): {pct3}%")
+print("  Phase 4 (Regime B, revisit): {pct4}%")
+print("")
+
+// Memory retention ratios
+let mut retention_A = 0.0
+if acc1 > 0.0
+  retention_A = acc3 / acc1
+end
+let mut retention_B = 0.0
+if acc2 > 0.0
+  retention_B = acc4 / acc2
+end
+let ret_A_pct = floor(retention_A * 1000.0) / 10.0
+let ret_B_pct = floor(retention_B * 1000.0) / 10.0
+
+print("Memory retention ratios:")
+print("  Regime A: Phase3/Phase1 = {ret_A_pct}% (threshold: 80%)")
+print("  Regime B: Phase4/Phase2 = {ret_B_pct}% (threshold: 80%)")
+print("")
+
+print("Proto growth on revisit:")
+print("  Phase 3 new protos: {new_protos_p3} (threshold: <= 2)")
+print("  Phase 4 new protos: {new_protos_p4} (threshold: <= 2)")
+print("")
+
+// ── PASS/FAIL checks ──────────────────────────────────────────
+let mut pass_count = 0.0
+let mut test_count = 4.0
+
+// Check 1: Phase 3 accuracy >= Phase 1 accuracy * 0.8
+if retention_A >= 0.8
+  print("PASS retention_A: {ret_A_pct}% >= 80%")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL retention_A: {ret_A_pct}% < 80%")
+end
+
+// Check 2: New protos in Phase 3 <= 2
+if new_protos_p3 <= 2.0
+  print("PASS new_protos_p3: {new_protos_p3} <= 2")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL new_protos_p3: {new_protos_p3} > 2")
+end
+
+// Check 3: Phase 4 accuracy >= Phase 2 accuracy * 0.8
+if retention_B >= 0.8
+  print("PASS retention_B: {ret_B_pct}% >= 80%")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL retention_B: {ret_B_pct}% < 80%")
+end
+
+// Check 4: New protos in Phase 4 <= 2
+if new_protos_p4 <= 2.0
+  print("PASS new_protos_p4: {new_protos_p4} <= 2")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL new_protos_p4: {new_protos_p4} > 2")
+end
+
+print("")
+print("Result: {pass_count}/{test_count} checks passed")
+print("")
+print("--- sequence memory benchmark complete ---")

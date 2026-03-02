@@ -1,0 +1,164 @@
+// stdlib/collections/union_find.flow — Disjoint Set / Union-Find
+//
+// Efficient union-find with path compression and union by rank.
+// Uses flat arrays for parent[] and rank[]. Elements are integers 0..n-1.
+//
+// Internal structure:
+//   uf[0] = n (number of elements)
+//   uf[1] = num_sets (number of disjoint sets)
+//   uf[2..n+1] = parent array (parent of element i at uf[2+i])
+//   uf[n+2..2n+1] = rank array (rank of element i at uf[n+2+i])
+//
+// Functions: uf_create, uf_find, uf_union, uf_connected,
+//            uf_size, uf_count, uf_set_size, uf_sets
+//
+// Usage:
+//   use "union_find"
+//   let mut uf = uf_create(10.0)     // 10 elements: 0..9
+//   uf_union(uf, 0.0, 1.0)           // merge sets of 0 and 1
+//   uf_union(uf, 2.0, 3.0)
+//   uf_union(uf, 1.0, 3.0)           // now {0,1,2,3} are connected
+//   uf_connected(uf, 0.0, 3.0)       // 1.0
+
+fn uf_create(n)
+    // Create union-find with n elements (0..n-1).
+    // Layout: [n, num_sets, parent0..parentN-1, rank0..rankN-1]
+    let mut uf = []
+    push(uf, n)
+    push(uf, n)  // initially n disjoint sets
+
+    // Parent array: each element is its own parent
+    let mut i = 0.0
+    while i < n
+        push(uf, i)
+        i = i + 1.0
+    end
+
+    // Rank array: all zeros
+    i = 0.0
+    while i < n
+        push(uf, 0.0)
+        i = i + 1.0
+    end
+
+    return uf
+end
+
+fn uf_find(uf, x)
+    // Find root of element x with path compression.
+    let n = uf[0]
+    let base = 2.0
+
+    // Walk up to root
+    let mut curr = x
+    while uf[base + curr] != curr
+        curr = uf[base + curr]
+    end
+    let root = curr
+
+    // Path compression: point all nodes on path directly to root
+    curr = x
+    while curr != root
+        let next = uf[base + curr]
+        uf[base + curr] = root
+        curr = next
+    end
+
+    return root
+end
+
+fn uf_union(uf, x, y)
+    // Merge sets containing x and y. Returns 1.0 if merged, 0.0 if already same set.
+    let rx = uf_find(uf, x)
+    let ry = uf_find(uf, y)
+
+    if rx == ry
+        return 0.0
+    end
+
+    let n = uf[0]
+    let rank_base = 2.0 + n
+
+    // Union by rank
+    let rank_x = uf[rank_base + rx]
+    let rank_y = uf[rank_base + ry]
+
+    if rank_x < rank_y
+        uf[2.0 + rx] = ry
+    elif rank_x > rank_y
+        uf[2.0 + ry] = rx
+    else
+        uf[2.0 + ry] = rx
+        uf[rank_base + rx] = rank_x + 1.0
+    end
+
+    // Decrease set count
+    uf[1] = uf[1] - 1.0
+    return 1.0
+end
+
+fn uf_connected(uf, x, y)
+    // Check if x and y are in the same set. Returns 1.0 or 0.0.
+    if uf_find(uf, x) == uf_find(uf, y)
+        return 1.0
+    end
+    return 0.0
+end
+
+fn uf_size(uf)
+    // Total number of elements.
+    return uf[0]
+end
+
+fn uf_count(uf)
+    // Number of disjoint sets.
+    return uf[1]
+end
+
+fn uf_set_size(uf, x)
+    // Count elements in the set containing x.
+    let n = uf[0]
+    let root = uf_find(uf, x)
+    let mut count = 0.0
+    let mut i = 0.0
+    while i < n
+        if uf_find(uf, i) == root
+            count = count + 1.0
+        end
+        i = i + 1.0
+    end
+    return count
+end
+
+fn uf_sets(uf)
+    // Return all sets as a flat array: [set_id, elem, set_id, elem, ...]
+    // Each pair is (root, element). Group by root to get sets.
+    let n = uf[0]
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        let root = uf_find(uf, i)
+        push(result, root)
+        push(result, i)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn uf_roots(uf)
+    // Return unique roots as array.
+    let n = uf[0]
+    let mut roots = []
+    let mut seen = map()
+    let mut i = 0.0
+    while i < n
+        let root = uf_find(uf, i)
+        let key = str(root)
+        if !map_has(seen, key)
+            map_set(seen, key, "1")
+            push(roots, root)
+        end
+        i = i + 1.0
+    end
+    return roots
+end

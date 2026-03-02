@@ -1,0 +1,14 @@
+# YouTube Search — search and extract video results
+# Usage: octoview run examples/youtube-search.ova --headed
+
+navigate https://www.youtube.com
+sleep 2000
+type "input#search" rust programming tutorial
+press Enter
+sleep 3000
+scroll
+sleep 1000
+extract a#video-title
+save youtube-results.txt
+screenshot youtube-search.png
+print YouTube search complete

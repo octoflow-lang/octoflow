@@ -1,0 +1,315 @@
+// loom_view.flow — LoomView v0.1 Entry Point
+//
+// ASE-Powered Adaptive Visualization for OctoFlow.
+// One import, one function call → instant GPU-accelerated visualization.
+//
+// Auto Mode:
+//   use "viz/loom_view"
+//   viz_show([1.0, 4.0, 2.0, 8.0, 5.0, 7.0])
+//
+// Explicit Mode:
+//   viz_line(data)
+//   viz_bar(data)
+//   viz_heat(data, 40, 30)
+//   viz_scatter(xy_data)
+//
+// Simulation Mode:
+//   viz_sim("Heat", init_fn, step_fn, render_fn)
+//
+// Recipe Mode:
+//   viz_recipe("heat")
+
+use "viz_data"
+use "viz_config"
+use "viz_render"
+use "viz_window"
+use "viz_palette"
+
+// === Auto Mode: one-liner ===
+
+fn viz_show(data)
+  // Fingerprint data → pick best viz → auto-configure → render
+  let n = len(data)
+  if n == 0.0
+    print("viz_show: empty data, nothing to display")
+    return 0.0
+  end
+
+  let viz_type = viz_best(data)
+  let config = viz_auto_config(data, viz_type)
+  let type_name = viz_type_name(viz_type)
+
+  print("LoomView: auto-selected {type_name} for {n} data points")
+
+  let _cvs = viz_window_open("LoomView - " + type_name, 900.0, 600.0)
+  let _r = viz_window_update(data, viz_type, config)
+  let _l = viz_window_loop(0)
+  return 1.0
+end
+
+// === Explicit Mode ===
+
+fn viz_line(data)
+  // Explicit line chart
+  let n = len(data)
+  if n < 2.0
+    print("viz_line: need at least 2 data points")
+    return 0.0
+  end
+
+  let config = viz_auto_config(data, VIZ_LINE)
+  let _cvs = viz_window_open("LoomView - Line", 900.0, 600.0)
+  let _r = viz_window_update(data, VIZ_LINE, config)
+  let _l = viz_window_loop(0)
+  return 1.0
+end
+
+fn viz_bar(data)
+  // Explicit bar chart
+  let n = len(data)
+  if n == 0.0
+    print("viz_bar: empty data")
+    return 0.0
+  end
+
+  let config = viz_auto_config(data, VIZ_BAR)
+  let _cvs = viz_window_open("LoomView - Bar", 900.0, 600.0)
+  let _r = viz_window_update(data, VIZ_BAR, config)
+  let _l = viz_window_loop(0)
+  return 1.0
+end
+
+fn viz_scatter(xy_data)
+  // Explicit scatter plot — data is [x0,y0, x1,y1, ...]
+  let n = len(xy_data)
+  if n < 4.0
+    print("viz_scatter: need at least 2 points (4 values)")
+    return 0.0
+  end
+  if floor(n / 2.0) * 2.0 != n
+    print("viz_scatter: data length must be even (x,y pairs)")
+    return 0.0
+  end
+
+  let config = viz_auto_config(xy_data, VIZ_SCATTER)
+  let _cvs = viz_window_open("LoomView - Scatter", 900.0, 600.0)
+  let _r = viz_window_update(xy_data, VIZ_SCATTER, config)
+  let _l = viz_window_loop(0)
+  return 1.0
+end
+
+fn viz_heat(data, w, h)
+  // Explicit heatmap — data is w*h flat array
+  let n = len(data)
+  if n == 0.0
+    print("viz_heat: empty data")
+    return 0.0
+  end
+  // Guard: dimensions must be positive
+  if w <= 0.0 || h <= 0.0
+    print("viz_heat: width and height must be positive")
+    return 0.0
+  end
+  // Guard: data length should match w*h (warn but don't fail)
+  if n < w * h
+    print("viz_heat: warning — data length {n} < {w} * {h}, will show partial")
+  end
+
+  let mut config = viz_auto_config(data, VIZ_HEATMAP)
+  // Override grid dimensions with explicit values
+  config[5] = w
+  config[6] = h
+
+  let _cvs = viz_window_open("LoomView - Heatmap", 900.0, 600.0)
+  viz_window_transport()
+  let _r = viz_window_update(data, VIZ_HEATMAP, config)
+  let _l = viz_window_loop(0)
+  return 1.0
+end
+
+fn viz_histogram(data, bins)
+  // Explicit histogram
+  let n = len(data)
+  if n == 0.0
+    print("viz_histogram: empty data")
+    return 0.0
+  end
+
+  let mut b = bins
+  if b <= 0.0
+    b = 10.0
+  end
+
+  let mut config = viz_auto_config(data, VIZ_HISTOGRAM)
+  config[7] = b
+
+  let _cvs = viz_window_open("LoomView - Histogram", 900.0, 600.0)
+  let _r = viz_window_update(data, VIZ_HISTOGRAM, config)
+  let _l = viz_window_loop(0)
+  return 1.0
+end
+
+fn viz_pie(data)
+  // Explicit pie chart
+  let n = len(data)
+  if n == 0.0
+    print("viz_pie: empty data")
+    return 0.0
+  end
+
+  let config = viz_auto_config(data, VIZ_PIE)
+  let _cvs = viz_window_open("LoomView - Pie", 900.0, 600.0)
+  let _r = viz_window_update(data, VIZ_PIE, config)
+  let _l = viz_window_loop(0)
+  return 1.0
+end
+
+fn viz_grid(data, w, h)
+  // Explicit grid visualization
+  let n = len(data)
+  if n == 0.0
+    print("viz_grid: empty data")
+    return 0.0
+  end
+  if w <= 0.0 || h <= 0.0
+    print("viz_grid: width and height must be positive")
+    return 0.0
+  end
+
+  let mut config = viz_auto_config(data, VIZ_GRID)
+  config[5] = w
+  config[6] = h
+
+  let _cvs = viz_window_open("LoomView - Grid", 900.0, 600.0)
+  let _r = viz_window_update(data, VIZ_GRID, config)
+  let _l = viz_window_loop(0)
+  return 1.0
+end
+
+fn viz_genome(data)
+  // Explicit genome sequence visualization
+  let n = len(data)
+  if n == 0.0
+    print("viz_genome: empty data")
+    return 0.0
+  end
+
+  let config = viz_auto_config(data, VIZ_GENOME)
+  let _cvs = viz_window_open("LoomView - Genome", 900.0, 600.0)
+  let _r = viz_window_update(data, VIZ_GENOME, config)
+  let _l = viz_window_loop(0)
+  return 1.0
+end
+
+// === Simulation Mode ===
+
+fn viz_sim(title, w, h, init_data, step_fn, viz_type)
+  // Simulation with transport controls
+  // init_data: initial state array
+  // step_fn: function(state, dt) → new state (called when playing/stepping)
+  // viz_type: visualization type to use for rendering
+  let n = len(init_data)
+  if n == 0.0
+    print("viz_sim: empty initial data")
+    return 0.0
+  end
+  // Guard: valid title
+  let mut sim_title = title
+  if len(title) == 0.0
+    sim_title = "LoomView Simulation"
+  end
+  let mut sim_w = w
+  if w <= 0.0
+    sim_w = 900.0
+  end
+  let mut sim_h = h
+  if h <= 0.0
+    sim_h = 600.0
+  end
+
+  let config = viz_auto_config(init_data, viz_type)
+  let _cvs = viz_window_open(sim_title, sim_w, sim_h)
+  viz_window_transport()
+
+  // Initial render
+  let _r = viz_window_update(init_data, viz_type, config)
+
+  // Simulation loop
+  let mut state = init_data
+  while gui_running() == 1.0
+    gui_update()
+
+    // Check transport
+    let playing = viz_window_is_playing()
+    let speed = viz_window_speed()
+
+    if playing == 1.0
+      let dt = speed * 0.016  // ~60fps base timestep
+      state = step_fn(state, dt)
+      viz_window_set_step(viz_window_step() + 1.0)
+      let _r2 = viz_window_update(state, viz_type, config)
+    end
+  end
+
+  return state
+end
+
+// === Recipe Mode ===
+
+fn viz_recipe(name)
+  // Load and run a recipe by name
+  if name == "heat"
+    print("LoomView: loading heat diffusion recipe")
+    print("  Use: use \"viz/recipes/recipe_heat\"")
+    print("       recipe_heat_run(40, 30)")
+    return 1.0
+  elif name == "wave"
+    print("LoomView: loading wave propagation recipe")
+    print("  Use: use \"viz/recipes/recipe_wave\"")
+    print("       recipe_wave_run(40, 30)")
+    return 1.0
+  elif name == "nbody"
+    print("LoomView: loading N-body simulation recipe")
+    print("  Use: use \"viz/recipes/recipe_nbody\"")
+    print("       recipe_nbody_run(50)")
+    return 1.0
+  end
+  print("viz_recipe: unknown recipe '{name}'")
+  print("  Available: heat, wave, nbody")
+  return 0.0
+end
+
+// === Utility ===
+
+fn viz_describe(data)
+  // Print a human-readable fingerprint summary
+  let n = len(data)
+  if n == 0.0
+    print("viz_describe: empty data")
+    return 0.0
+  end
+
+  let fp = viz_fingerprint(data)
+  let best = viz_best(data)
+  let scores = viz_score(fp)
+
+  print("=== LoomView Data Summary ===")
+  print("  Length:     {fp[0]}")
+  print("  Range:      [{fp[1]}, {fp[2]}]")
+  print("  Mean:       {fp[3]}")
+  print("  Std Dev:    {fp[4]}")
+  print("  Skewness:   {fp[5]}")
+  print("  Sparsity:   {fp[6]}")
+  print("  Monotonic:  {fp[10]}")
+  print("  Entropy:    {fp[11]}")
+  print("  Integer:    {fp[12]}")
+  print("  Binary:     {fp[13]}")
+  print("  Bounded01:  {fp[14]}")
+  print("  UniqueRatio:{fp[15]}")
+  print("")
+  print("  Best viz: {viz_type_name(best)}")
+  print("  Scores: line={scores[0]} scatter={scores[1]} bar={scores[2]} heat={scores[3]}")
+  print("          hist={scores[4]} pie={scores[5]} spark={scores[6]}")
+
+  return best
+end

@@ -1,0 +1,164 @@
+// OctoBrain Near-Threshold Discrimination Benchmark
+// Tests the cosine similarity threshold (0.85) with dense and sparse clusters.
+//
+//   1. Dense clusters — 3 centers with pairwise cosine ~0.90 (above threshold)
+//      Brain should merge them into few protos (<=3).
+//   2. Sparse clusters — 3 orthogonal centers with pairwise cosine = 0.0
+//      Brain should discover exactly 3 protos.
+//
+// Each sub-test uses its own brain instance with 300 observations.
+
+use "../lib/octobrain"
+
+print("=== OctoBrain Near-Threshold Discrimination Benchmark ===")
+print("")
+
+// ─────────────────────────────────────────────────────────────────
+// Sub-test 1: Dense Clusters (cosine ~0.90)
+// ─────────────────────────────────────────────────────────────────
+print("--- Sub-test 1: Dense Clusters (cosine ~0.90) ---")
+
+// Three cluster centers with ~26 degree angular separation:
+//   Center A: [1.0, 0.0, 0.0]
+//   Center B: [cos(0.45), sin(0.45), 0.0]  (cosine to A ~ 0.90)
+//   Center C: [cos(0.45), 0.0, sin(0.45)]  (cosine to A ~ 0.90)
+let ca_x = 1.0
+let ca_y = 0.0
+let ca_z = 0.0
+let cb_x = cos(0.45)
+let cb_y = sin(0.45)
+let cb_z = 0.0
+let cc_x = cos(0.45)
+let cc_y = 0.0
+let cc_z = sin(0.45)
+
+let mut brain1 = octobrain_new(2.0)
+let mut p_state1 = proto_new()
+let mut p_embs1 = []
+let mut p_mc1 = []
+let mut e_state1 = embed_new()
+let mut W_embed1 = []
+let mut obs_buffer1 = []
+let mut edge_state1 = edges_new()
+let mut en1 = []
+let mut ea1 = []
+let mut eo1 = []
+let mut ep1 = []
+let mut ew1 = []
+let mut eact1 = []
+let mut window1 = []
+let mut W_score1 = []
+
+// Feed 300 observations cycling through A, B, C with tiny noise
+let mut step1 = 0.0
+while step1 < 300.0
+  // Determine which cluster: 0=A, 1=B, 2=C
+  let cluster = step1 - floor(step1 / 3.0) * 3.0
+
+  // Generate noise in [-0.01, 0.01]
+  let n1 = random() * 0.02 - 0.01
+  let n2 = random() * 0.02 - 0.01
+  let n3 = random() * 0.02 - 0.01
+
+  let mut data1 = []
+  if cluster < 1.0
+    // Cluster A
+    push(data1, ca_x + n1)
+    push(data1, ca_y + n2)
+    push(data1, ca_z + n3)
+  elif cluster < 2.0
+    // Cluster B
+    push(data1, cb_x + n1)
+    push(data1, cb_y + n2)
+    push(data1, cb_z + n3)
+  else
+    // Cluster C
+    push(data1, cc_x + n1)
+    push(data1, cc_y + n2)
+    push(data1, cc_z + n3)
+  end
+
+  let dummy1 = octobrain_observe(brain1, p_state1, p_embs1, p_mc1, e_state1, W_embed1, obs_buffer1, edge_state1, en1, ea1, eo1, ep1, ew1, eact1, window1, W_score1, data1)
+  step1 = step1 + 1.0
+end
+
+let stats1 = octobrain_stats(brain1, p_state1, edge_state1)
+let d_pc = map_get(stats1, "proto_count")
+let d_ec = map_get(stats1, "edge_count")
+let d_tc = map_get(stats1, "transition_count")
+
+print("Fed 300 observations from 3 clusters with pairwise cosine ~0.90")
+print("Final: protos={d_pc}, edges={d_ec}, transitions={d_tc}")
+if d_pc <= 3.0
+  print("PASS: proto_count {d_pc} (expected <= 3 due to merging above threshold)")
+else
+  print("FAIL: proto_count {d_pc} (expected <= 3 due to merging above threshold)")
+end
+print("")
+
+// ─────────────────────────────────────────────────────────────────
+// Sub-test 2: Sparse Clusters (cosine = 0.0)
+// ─────────────────────────────────────────────────────────────────
+print("--- Sub-test 2: Sparse Clusters (cosine = 0.0) ---")
+
+// Three orthogonal centers: [1,0,0], [0,1,0], [0,0,1]
+// Pairwise cosine = 0.0, well below threshold of 0.85.
+// Brain should create exactly 3 protos.
+
+let mut brain2 = octobrain_new(2.0)
+let mut p_state2 = proto_new()
+let mut p_embs2 = []
+let mut p_mc2 = []
+let mut e_state2 = embed_new()
+let mut W_embed2 = []
+let mut obs_buffer2 = []
+let mut edge_state2 = edges_new()
+let mut en2 = []
+let mut ea2 = []
+let mut eo2 = []
+let mut ep2 = []
+let mut ew2 = []
+let mut eact2 = []
+let mut window2 = []
+let mut W_score2 = []
+
+// Feed 300 observations cycling through the 3 orthogonal clusters
+let mut step2 = 0.0
+while step2 < 300.0
+  // Determine which cluster: 0=[1,0,0], 1=[0,1,0], 2=[0,0,1]
+  let cluster2 = step2 - floor(step2 / 3.0) * 3.0
+
+  let mut data2 = []
+  if cluster2 < 1.0
+    push(data2, 1.0)
+    push(data2, 0.0)
+    push(data2, 0.0)
+  elif cluster2 < 2.0
+    push(data2, 0.0)
+    push(data2, 1.0)
+    push(data2, 0.0)
+  else
+    push(data2, 0.0)
+    push(data2, 0.0)
+    push(data2, 1.0)
+  end
+
+  let dummy2 = octobrain_observe(brain2, p_state2, p_embs2, p_mc2, e_state2, W_embed2, obs_buffer2, edge_state2, en2, ea2, eo2, ep2, ew2, eact2, window2, W_score2, data2)
+  step2 = step2 + 1.0
+end
+
+let stats2 = octobrain_stats(brain2, p_state2, edge_state2)
+let s_pc = map_get(stats2, "proto_count")
+let s_ec = map_get(stats2, "edge_count")
+let s_tc = map_get(stats2, "transition_count")
+
+print("Fed 300 observations from 3 orthogonal clusters")
+print("Final: protos={s_pc}, edges={s_ec}, transitions={s_tc}")
+if s_pc == 3.0
+  print("PASS: proto_count {s_pc} (expected 3 for well-separated clusters)")
+else
+  print("FAIL: proto_count {s_pc} (expected 3 for well-separated clusters)")
+end
+print("")
+
+print("--- near-threshold benchmark complete ---")

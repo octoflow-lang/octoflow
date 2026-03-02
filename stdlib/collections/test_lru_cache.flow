@@ -1,0 +1,151 @@
+// test_lru_cache.flow — Tests for stdlib/collections/lru_cache.flow
+use "lru_cache"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic Operations ────────────────────────────────────────────
+
+fn test_lru_create()
+    let mut c = lru_create(3.0)
+    check("lru create size 0", lru_size(c) == 0.0)
+    check("lru create cap 3", lru_capacity(c) == 3.0)
+    return 0.0
+end
+
+fn test_lru_put_get()
+    let mut c = lru_create(5.0)
+    lru_put(c, "x", 42.0)
+    check("lru put/get", lru_get(c, "x") == 42.0)
+    check("lru size 1", lru_size(c) == 1.0)
+    return 0.0
+end
+
+fn test_lru_has()
+    let mut c = lru_create(5.0)
+    lru_put(c, "a", 1.0)
+    check("lru has yes", lru_has(c, "a") == 1.0)
+    check("lru has no", lru_has(c, "b") == 0.0)
+    return 0.0
+end
+
+fn test_lru_update()
+    let mut c = lru_create(5.0)
+    lru_put(c, "a", 1.0)
+    lru_put(c, "a", 99.0)
+    check("lru update", lru_get(c, "a") == 99.0)
+    check("lru update no dup", lru_size(c) == 1.0)
+    return 0.0
+end
+
+fn test_lru_miss()
+    let mut c = lru_create(5.0)
+    check("lru miss", lru_get(c, "missing") == -1.0)
+    return 0.0
+end
+
+// ── Eviction ────────────────────────────────────────────────────
+
+fn test_lru_eviction()
+    let mut c = lru_create(3.0)
+    lru_put(c, "a", 1.0)
+    lru_put(c, "b", 2.0)
+    lru_put(c, "c", 3.0)
+    check("lru full size", lru_size(c) == 3.0)
+
+    // Adding d should evict a (least recently used)
+    lru_put(c, "d", 4.0)
+    check("lru evict size", lru_size(c) == 3.0)
+    check("lru a evicted", lru_has(c, "a") == 0.0)
+    check("lru d present", lru_get(c, "d") == 4.0)
+    return 0.0
+end
+
+fn test_lru_access_updates_order()
+    let mut c = lru_create(3.0)
+    lru_put(c, "a", 1.0)
+    lru_put(c, "b", 2.0)
+    lru_put(c, "c", 3.0)
+
+    // Access a — now b is LRU
+    let _v = lru_get(c, "a")
+
+    // Adding d should evict b (now LRU)
+    lru_put(c, "d", 4.0)
+    check("lru access order: b evicted", lru_has(c, "b") == 0.0)
+    check("lru access order: a kept", lru_has(c, "a") == 1.0)
+    return 0.0
+end
+
+fn test_lru_put_updates_order()
+    let mut c = lru_create(3.0)
+    lru_put(c, "a", 1.0)
+    lru_put(c, "b", 2.0)
+    lru_put(c, "c", 3.0)
+
+    // Update a — now b is LRU
+    lru_put(c, "a", 10.0)
+
+    // Adding d should evict b
+    lru_put(c, "d", 4.0)
+    check("lru put order: b evicted", lru_has(c, "b") == 0.0)
+    check("lru put order: a updated", lru_get(c, "a") == 10.0)
+    return 0.0
+end
+
+// ── Remove / Clear ──────────────────────────────────────────────
+
+fn test_lru_remove()
+    let mut c = lru_create(5.0)
+    lru_put(c, "a", 1.0)
+    lru_put(c, "b", 2.0)
+    lru_remove(c, "a")
+    check("lru remove", lru_has(c, "a") == 0.0)
+    check("lru remove size", lru_size(c) == 1.0)
+    return 0.0
+end
+
+fn test_lru_clear()
+    let mut c = lru_create(5.0)
+    lru_put(c, "a", 1.0)
+    lru_put(c, "b", 2.0)
+    lru_put(c, "c", 3.0)
+    lru_clear(c)
+    check("lru clear size", lru_size(c) == 0.0)
+    check("lru clear empty", lru_has(c, "a") == 0.0)
+    return 0.0
+end
+
+// ── Keys ────────────────────────────────────────────────────────
+
+fn test_lru_keys()
+    let mut c = lru_create(5.0)
+    lru_put(c, "x", 1.0)
+    lru_put(c, "y", 2.0)
+    let keys = lru_keys(c)
+    check("lru keys count", len(keys) == 2.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_lru_create()
+test_lru_put_get()
+test_lru_has()
+test_lru_update()
+test_lru_miss()
+test_lru_eviction()
+test_lru_access_updates_order()
+test_lru_put_updates_order()
+test_lru_remove()
+test_lru_clear()
+test_lru_keys()
+print("")
+print("All LRU cache tests passed (11 tests)")

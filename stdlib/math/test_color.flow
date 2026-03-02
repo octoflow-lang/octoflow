@@ -1,0 +1,249 @@
+// test_color.flow — Tests for stdlib/math/color.flow
+use "color"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 1.5
+        return 1.0
+    end
+    return 0.0
+end
+
+fn approx_fine(a, b)
+    if abs(a - b) < 0.02
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Construction ────────────────────────────────────────────────
+
+fn test_rgb()
+    let mut c = rgb(255.0, 128.0, 0.0)
+    check("rgb r", c[0] == 255.0)
+    check("rgb g", c[1] == 128.0)
+    check("rgb b", c[2] == 0.0)
+    return 0.0
+end
+
+fn test_rgba()
+    let mut c = rgba(255.0, 0.0, 128.0, 200.0)
+    check("rgba r", c[0] == 255.0)
+    check("rgba g", c[1] == 0.0)
+    check("rgba b", c[2] == 128.0)
+    check("rgba a", c[3] == 200.0)
+    return 0.0
+end
+
+// ── Hex Conversion ──────────────────────────────────────────────
+
+fn test_rgb_to_hex()
+    let mut red = rgb(255.0, 0.0, 0.0)
+    check("hex red", rgb_to_hex(red) == "ff0000")
+    let mut white = rgb(255.0, 255.0, 255.0)
+    check("hex white", rgb_to_hex(white) == "ffffff")
+    let mut black = rgb(0.0, 0.0, 0.0)
+    check("hex black", rgb_to_hex(black) == "000000")
+    let mut orange = rgb(255.0, 128.0, 0.0)
+    check("hex orange", rgb_to_hex(orange) == "ff8000")
+    return 0.0
+end
+
+fn test_hex_to_rgb()
+    let mut c = hex_to_rgb("ff0000")
+    check("hex_to_rgb r", c[0] == 255.0)
+    check("hex_to_rgb g", c[1] == 0.0)
+    check("hex_to_rgb b", c[2] == 0.0)
+    let mut c2 = hex_to_rgb("#00ff80")
+    check("hex_to_rgb hash r", c2[0] == 0.0)
+    check("hex_to_rgb hash g", c2[1] == 255.0)
+    check("hex_to_rgb hash b", c2[2] == 128.0)
+    return 0.0
+end
+
+fn test_hex_roundtrip()
+    let mut orig = rgb(64.0, 128.0, 192.0)
+    let hex = rgb_to_hex(orig)
+    let mut back = hex_to_rgb(hex)
+    check("hex roundtrip r", back[0] == 64.0)
+    check("hex roundtrip g", back[1] == 128.0)
+    check("hex roundtrip b", back[2] == 192.0)
+    return 0.0
+end
+
+// ── HSL Conversion ──────────────────────────────────────────────
+
+fn test_rgb_to_hsl_red()
+    let mut red = rgb(255.0, 0.0, 0.0)
+    let mut hsl = rgb_to_hsl(red)
+    check("hsl red h", approx_fine(hsl[0], 0.0) == 1.0)
+    check("hsl red s", approx_fine(hsl[1], 1.0) == 1.0)
+    check("hsl red l", approx_fine(hsl[2], 0.5) == 1.0)
+    return 0.0
+end
+
+fn test_rgb_to_hsl_gray()
+    let mut gray = rgb(128.0, 128.0, 128.0)
+    let mut hsl = rgb_to_hsl(gray)
+    check("hsl gray h", hsl[0] == 0.0)
+    check("hsl gray s", hsl[1] == 0.0)
+    return 0.0
+end
+
+fn test_hsl_roundtrip()
+    let mut orig = rgb(100.0, 150.0, 200.0)
+    let mut hsl = rgb_to_hsl(orig)
+    let mut back = hsl_to_rgb(hsl)
+    check("hsl roundtrip r", approx(back[0], 100.0) == 1.0)
+    check("hsl roundtrip g", approx(back[1], 150.0) == 1.0)
+    check("hsl roundtrip b", approx(back[2], 200.0) == 1.0)
+    return 0.0
+end
+
+// ── Color Operations ────────────────────────────────────────────
+
+fn test_color_lerp()
+    let mut black = rgb(0.0, 0.0, 0.0)
+    let mut white = rgb(255.0, 255.0, 255.0)
+    let mut mid = color_lerp(black, white, 0.5)
+    check("lerp mid r", approx(mid[0], 127.0) == 1.0)
+    check("lerp mid g", approx(mid[1], 127.0) == 1.0)
+    let mut start = color_lerp(black, white, 0.0)
+    check("lerp t=0", start[0] == 0.0)
+    let mut end_c = color_lerp(black, white, 1.0)
+    check("lerp t=1", end_c[0] == 255.0)
+    return 0.0
+end
+
+fn test_color_blend()
+    let mut a = rgb(200.0, 100.0, 0.0)
+    let mut b = rgb(0.0, 100.0, 200.0)
+    let mut c = color_blend(a, b)
+    check("blend r", c[0] == 100.0)
+    check("blend g", c[1] == 100.0)
+    check("blend b", c[2] == 100.0)
+    return 0.0
+end
+
+fn test_color_brighten()
+    let mut c = rgb(100.0, 100.0, 100.0)
+    let mut b = color_brighten(c, 50.0)
+    check("brighten r", b[0] == 150.0)
+    check("brighten g", b[1] == 150.0)
+    // Clamping
+    let mut bright = color_brighten(c, 200.0)
+    check("brighten clamp", bright[0] == 255.0)
+    return 0.0
+end
+
+fn test_color_darken()
+    let mut c = rgb(100.0, 100.0, 100.0)
+    let mut d = color_darken(c, 50.0)
+    check("darken r", d[0] == 50.0)
+    // Clamping at 0
+    let mut dark = color_darken(c, 200.0)
+    check("darken clamp", dark[0] == 0.0)
+    return 0.0
+end
+
+fn test_color_invert()
+    let mut c = rgb(255.0, 0.0, 128.0)
+    let mut inv = color_invert(c)
+    check("invert r", inv[0] == 0.0)
+    check("invert g", inv[1] == 255.0)
+    check("invert b", inv[2] == 127.0)
+    return 0.0
+end
+
+fn test_color_grayscale()
+    let mut c = rgb(255.0, 0.0, 0.0)
+    let mut g = color_grayscale(c)
+    // 255 * 0.299 = 76.245 → floor = 76
+    check("gray red", approx(g[0], 76.0) == 1.0)
+    check("gray uniform", g[0] == g[1] && g[1] == g[2])
+    return 0.0
+end
+
+fn test_color_distance()
+    let mut a = rgb(0.0, 0.0, 0.0)
+    let mut b = rgb(255.0, 255.0, 255.0)
+    let d = color_distance(a, b)
+    // sqrt(255^2 * 3) = 255 * sqrt(3) ≈ 441.67
+    check("distance max", approx_fine(d / 441.67, 1.0) == 1.0)
+    let d0 = color_distance(a, a)
+    check("distance same", d0 == 0.0)
+    return 0.0
+end
+
+// ── Predefined Colors ───────────────────────────────────────────
+
+fn test_predefined()
+    let mut w = color_white()
+    check("white", w[0] == 255.0 && w[1] == 255.0 && w[2] == 255.0)
+    let mut b = color_black()
+    check("black", b[0] == 0.0 && b[1] == 0.0 && b[2] == 0.0)
+    let mut r = color_red()
+    check("red", r[0] == 255.0 && r[1] == 0.0 && r[2] == 0.0)
+    let mut g = color_green()
+    check("green", g[0] == 0.0 && g[1] == 255.0 && g[2] == 0.0)
+    let mut bl = color_blue()
+    check("blue", bl[0] == 0.0 && bl[1] == 0.0 && bl[2] == 255.0)
+    let mut y = color_yellow()
+    check("yellow", y[0] == 255.0 && y[1] == 255.0 && y[2] == 0.0)
+    let mut c = color_cyan()
+    check("cyan", c[0] == 0.0 && c[1] == 255.0 && c[2] == 255.0)
+    let mut m = color_magenta()
+    check("magenta", m[0] == 255.0 && m[1] == 0.0 && m[2] == 255.0)
+    return 0.0
+end
+
+// ── Gradient ────────────────────────────────────────────────────
+
+fn test_gradient()
+    let mut black = rgb(0.0, 0.0, 0.0)
+    let mut white = rgb(255.0, 255.0, 255.0)
+    let mut g = color_gradient(black, white, 3.0)
+    // 3 stops × 3 channels = 9 values
+    check("gradient len", len(g) == 9.0)
+    // First stop = black
+    check("gradient start", g[0] == 0.0 && g[1] == 0.0 && g[2] == 0.0)
+    // Last stop = white
+    check("gradient end", g[6] == 255.0 && g[7] == 255.0 && g[8] == 255.0)
+    // Mid stop ≈ 127
+    check("gradient mid", approx(g[3], 127.0) == 1.0)
+    // Edge case: 1 step
+    let mut g1 = color_gradient(black, white, 1.0)
+    check("gradient 1 step", len(g1) == 3.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_rgb()
+test_rgba()
+test_rgb_to_hex()
+test_hex_to_rgb()
+test_hex_roundtrip()
+test_rgb_to_hsl_red()
+test_rgb_to_hsl_gray()
+test_hsl_roundtrip()
+test_color_lerp()
+test_color_blend()
+test_color_brighten()
+test_color_darken()
+test_color_invert()
+test_color_grayscale()
+test_color_distance()
+test_predefined()
+test_gradient()
+print("")
+print("All color tests passed (17 tests)")

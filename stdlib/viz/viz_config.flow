@@ -1,0 +1,245 @@
+// viz_config.flow — Auto-Configuration from Data Fingerprint
+//
+// Generates a config array for viz_render based on data + viz type.
+// Config layout: [x_min, x_max, y_min, y_max, palette_id, grid_w, grid_h, n_bins, padding, show_grid]
+//
+// Usage:
+//   use "viz/viz_config"
+//   let config = viz_auto_config(data, VIZ_LINE)
+
+use "viz_data"
+use "viz_palette"
+
+fn _vc_min(arr)
+  let n = len(arr)
+  if n == 0.0
+    return 0.0
+  end
+  let mut m = arr[0]
+  let mut i = 1.0
+  while i < n
+    if arr[int(i)] < m
+      m = arr[int(i)]
+    end
+    i = i + 1.0
+  end
+  return m
+end
+
+fn _vc_max(arr)
+  let n = len(arr)
+  if n == 0.0
+    return 0.0
+  end
+  let mut m = arr[0]
+  let mut i = 1.0
+  while i < n
+    if arr[int(i)] > m
+      m = arr[int(i)]
+    end
+    i = i + 1.0
+  end
+  return m
+end
+
+fn _vc_abs(x)
+  if x < 0.0
+    return 0.0 - x
+  end
+  return x
+end
+
+fn _vc_log2(x)
+  if x <= 0.0
+    return 0.0
+  end
+  let mut result = 0.0
+  let mut val = x
+  while val >= 2.0
+    val = val / 2.0
+    result = result + 1.0
+  end
+  result = result + (val - 1.0)
+  return result
+end
+
+fn viz_auto_config(data, viz_type)
+  // Generate auto-config array for the given data + viz type
+  // Config: [x_min, x_max, y_min, y_max, palette_id, grid_w, grid_h, n_bins, padding, show_grid]
+  let mut config = [0.0, 1.0, 0.0, 1.0, 1.0, 10.0, 10.0, 10.0, 30.0, 1.0]
+
+  let n = len(data)
+  if n == 0.0
+    return config
+  end
+
+  // Compute fingerprint for palette auto-selection
+  let fp = viz_fingerprint(data)
+  let pal_id = viz_palette_auto(fp)
+  config[4] = pal_id
+
+  // Default padding
+  config[8] = 30.0
+  config[9] = 1.0
+
+  if viz_type == VIZ_LINE || viz_type == VIZ_SPARKLINE
+    // X range: 0 to N-1
+    config[0] = 0.0
+    config[1] = n - 1.0
+    if config[1] <= 0.0
+      config[1] = 1.0
+    end
+    // Y range: data min/max with 10% padding
+    let y_min = _vc_min(data)
+    let y_max = _vc_max(data)
+    let y_range = y_max - y_min
+    let mut y_pad = y_range * 0.1
+    if y_pad == 0.0
+      y_pad = 1.0
+    end
+    config[2] = y_min - y_pad
+    config[3] = y_max + y_pad
+
+  elif viz_type == VIZ_BAR
+    config[0] = 0.0
+    config[1] = n
+    let y_min = _vc_min(data)
+    let y_max = _vc_max(data)
+    config[2] = 0.0
+    if y_min < 0.0
+      config[2] = y_min * 1.1
+    end
+    config[3] = y_max * 1.1
+    if config[3] <= 0.0
+      config[3] = 1.0
+    end
+
+  elif viz_type == VIZ_HEATMAP
+    // Auto-detect grid dimensions from sqrt(N)
+    let sqrt_n = floor(sqrt(n))
+    if sqrt_n <= 0.0
+      config[5] = 1.0
+      config[6] = n
+    else
+      // Try to find best factorization near sqrt
+      let mut best_w = sqrt_n
+      let mut best_h = floor(n / sqrt_n)
+      // Prefer exact fit
+      if best_w * best_h != n
+        // Try wider
+        let mut w = sqrt_n + 1.0
+        while w <= n
+          let h = n / w
+          if floor(h) == h
+            best_w = w
+            best_h = h
+            w = n + 1.0
+          end
+          w = w + 1.0
+          // Don't search too far
+          if w > sqrt_n + 10.0
+            w = n + 1.0
+          end
+        end
+      end
+      config[5] = best_w
+      config[6] = best_h
+    end
+
+  elif viz_type == VIZ_SCATTER || viz_type == VIZ_PARTICLES
+    // Data is [x0,y0,x1,y1,...] — find x/y ranges
+    let n_pts = floor(n / 2.0)
+    if n_pts > 0.0
+      let mut x_min = data[0]
+      let mut x_max = data[0]
+      let mut y_min = data[1]
+      let mut y_max = data[1]
+      let mut i = 0.0
+      while i < n_pts
+        let px = data[int(i * 2.0)]
+        let py = data[int(i * 2.0 + 1.0)]
+        if px < x_min
+          x_min = px
+        end
+        if px > x_max
+          x_max = px
+        end
+        if py < y_min
+          y_min = py
+        end
+        if py > y_max
+          y_max = py
+        end
+        i = i + 1.0
+      end
+      let x_range = x_max - x_min
+      let y_range = y_max - y_min
+      let mut x_pad = x_range * 0.1
+      let mut y_pad = y_range * 0.1
+      if x_pad == 0.0
+        x_pad = 1.0
+      end
+      if y_pad == 0.0
+        y_pad = 1.0
+      end
+      config[0] = x_min - x_pad
+      config[1] = x_max + x_pad
+      config[2] = y_min - y_pad
+      config[3] = y_max + y_pad
+    end
+
+  elif viz_type == VIZ_HISTOGRAM
+    // Auto-pick bin count: Sturges' rule: ceil(1 + 3.322 * log2(N))
+    let mut bins = 1.0 + 3.322 * _vc_log2(n)
+    bins = floor(bins) + 1.0
+    if bins < 5.0
+      bins = 5.0
+    end
+    if bins > 50.0
+      bins = 50.0
+    end
+    config[7] = bins
+
+  elif viz_type == VIZ_PIE
+    // No special config needed, padding only
+    config[8] = 20.0
+
+  elif viz_type == VIZ_GRID
+    // Auto grid dimensions
+    let sqrt_n = floor(sqrt(n))
+    if sqrt_n <= 0.0
+      config[5] = 1.0
+      config[6] = n
+    else
+      config[5] = sqrt_n
+      config[6] = floor(n / sqrt_n)
+      // Handle remainder
+      if config[5] * config[6] < n
+        config[6] = config[6] + 1.0
+      end
+    end
+
+  elif viz_type == VIZ_GENOME
+    config[8] = 10.0
+  end
+
+  return config
+end
+
+fn viz_config_set(config, key, value)
+  // Set a config value by index (with bounds check)
+  let idx = int(key)
+  if idx >= 0.0 && idx < len(config)
+    config[idx] = value
+  end
+  return config
+end
+
+fn viz_config_get(config, key)
+  // Get a config value by index (with bounds check)
+  let idx = int(key)
+  if idx >= 0.0 && idx < len(config)
+    return config[idx]
+  end
+  return 0.0
+end

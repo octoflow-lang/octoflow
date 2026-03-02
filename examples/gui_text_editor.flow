@@ -5,9 +5,9 @@
 //
 // Run: octoflow run gui_text_editor.flow
 
-use "gui/gui"
-use "gui/layout"
-use "gui/theme"
+use "../stdlib/gui/gui"
+use "../stdlib/gui/layout"
+use "../stdlib/gui/theme"
 
 gui_init(700, 500, "OctoFlow Text Editor")
 

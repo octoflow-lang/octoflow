@@ -1,0 +1,138 @@
+// viz_controls.flow — Widget Wrappers for Visualization Controls
+//
+// Provides high-level control widgets for common viz parameters:
+// range sliders, palette selector, speed control, step counter.
+//
+// Usage:
+//   use "viz/viz_controls"
+//   let rng = viz_ctrl_range(layout_id, "Y Range", 0.0, 100.0)
+//   let pal = viz_ctrl_palette(layout_id, PAL_VIRIDIS)
+
+use "../gui/layout"
+use "../gui/widgets"
+use "viz_palette"
+
+// === Range Control: min/max slider pair ===
+
+fn viz_ctrl_range(lay_id, label, min_v, max_v)
+  // Returns [slider_min_id, slider_max_id]
+  // Guard: valid range
+  let mut lo = min_v
+  let mut hi = max_v
+  if lo >= hi
+    hi = lo + 1.0
+  end
+
+  let _lbl = vstack_label(lay_id, label)
+  let s_min = vstack_slider(lay_id, 160.0, lo, hi, lo)
+  let s_max = vstack_slider(lay_id, 160.0, lo, hi, hi)
+  return [s_min, s_max]
+end
+
+fn viz_ctrl_range_get(ids)
+  // Get current [min, max] from a range control
+  // Guard: valid ids array
+  if len(ids) < 2.0
+    return [0.0, 1.0]
+  end
+  let lo = gui_slider_value(int(ids[0]))
+  let hi = gui_slider_value(int(ids[1]))
+  if lo > hi
+    return [hi, lo]
+  end
+  return [lo, hi]
+end
+
+// === Palette Selector ===
+
+fn viz_ctrl_palette(lay_id, current_id)
+  // Dropdown with palette options
+  // Returns dropdown widget ID
+  let _lbl = vstack_label(lay_id, "Palette")
+  let dd = vstack_dropdown(lay_id, 160.0)
+
+  // Add palette options
+  let _a1 = gui_dropdown_add(dd, "Viridis")
+  let _a2 = gui_dropdown_add(dd, "Plasma")
+  let _a3 = gui_dropdown_add(dd, "Inferno")
+  let _a4 = gui_dropdown_add(dd, "Coolwarm")
+  let _a5 = gui_dropdown_add(dd, "Grayscale")
+
+  // Default selection is 0 (Viridis) — dropdown auto-selects first item
+  return dd
+end
+
+fn viz_ctrl_palette_get(dd_id)
+  // Get selected palette ID from dropdown (1-indexed: 1=viridis, 2=plasma, etc.)
+  let sel = gui_dropdown_selected(dd_id)
+  if sel < 0.0
+    return PAL_VIRIDIS
+  end
+  return sel + 1.0
+end
+
+// === Speed Control ===
+
+fn viz_ctrl_speed(lay_id, default_speed)
+  // Speed slider 0.1x to 10x
+  let mut spd = default_speed
+  if spd < 0.1
+    spd = 0.1
+  end
+  if spd > 10.0
+    spd = 10.0
+  end
+  let _lbl = vstack_label(lay_id, "Speed")
+  let sid = vstack_slider(lay_id, 160.0, 0.1, 10.0, spd)
+  return sid
+end
+
+fn viz_ctrl_speed_get(sid)
+  let v = gui_slider_value(int(sid))
+  if v < 0.1
+    return 0.1
+  end
+  if v > 10.0
+    return 10.0
+  end
+  return v
+end
+
+// === Step Counter ===
+
+fn viz_ctrl_step_counter(lay_id)
+  // Step counter label — call viz_ctrl_step_update to refresh
+  let lbl = vstack_label(lay_id, "Step: 0")
+  return lbl
+end
+
+fn viz_ctrl_step_update(lbl_id, step, max_step)
+  // Update step counter text
+  let mut s = step
+  if s < 0.0
+    s = 0.0
+  end
+  let mut ms = max_step
+  if ms < 0.0
+    ms = 0.0
+  end
+  if ms > 0.0
+    gui_set_text(lbl_id, "Step: " + str(floor(s)) + " / " + str(floor(ms)))
+  else
+    gui_set_text(lbl_id, "Step: " + str(floor(s)))
+  end
+  return 1.0
+end
+
+// === Toggle Control ===
+
+fn viz_ctrl_toggle(lay_id, label)
+  // Checkbox toggle, returns widget ID
+  let cid = vstack_checkbox(lay_id, label)
+  return cid
+end
+
+fn viz_ctrl_toggle_get(cid)
+  // Get toggle state (0 or 1)
+  return gui_checked(int(cid))
+end

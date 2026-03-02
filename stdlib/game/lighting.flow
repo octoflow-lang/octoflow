@@ -223,6 +223,6 @@ fn light_apply()
     return 0.0
   end
   loom_run(prog)
-  vm_present(_lt_cfg[5], _lt_cfg[6])
+  loom_present(_lt_cfg[5], _lt_cfg[6])
   return 1.0
 end

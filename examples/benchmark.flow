@@ -1,0 +1,27 @@
+// OctoFlow GPU Performance Benchmark
+// Measures GPU-accelerated pipeline: 1M floats -> scale-shift -> sum-reduce
+//
+// Run: flowgpu-cli run examples/benchmark.flow
+//
+// What this measures:
+//   1. Stream tap (file I/O): read 1M floats from CSV
+//   2. GPU map: multiply(2.0) -- scale
+//   3. GPU map: add(1.0)      -- shift
+//   4. GPU reduce: sum(result) -- reduction
+//
+// GPU handles steps 2-4 via Vulkan compute shaders (SPIR-V).
+
+let t0 = now_ms()
+
+stream data = tap("test_data/bench_1m.csv")
+stream scaled = data |> multiply(2.0)
+stream shifted = scaled |> add(1.0)
+let result = sum(shifted)
+
+let t1 = now_ms()
+let elapsed_ms = t1 - t0
+
+print("=== OctoFlow GPU Benchmark ===")
+print("Operation : 1M float scale-shift-sum (Vulkan GPU)")
+print("Result    : {result:.2}")
+print("Time      : {elapsed_ms:.1} ms")

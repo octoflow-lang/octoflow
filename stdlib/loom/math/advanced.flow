@@ -11,10 +11,10 @@ fn gpu_softmax(arr)
     // Numerical stability: subtract max
     let max_val = gpu_max(arr)
 
-    let shifted = []
-    let i = 0.0
+    let mut shifted = []
+    let mut i = 0.0
     while i < n
-        append(shifted, arr[i] - max_val)
+        push(shifted, arr[i] - max_val)
         i = i + 1.0
     end
 
@@ -25,14 +25,15 @@ fn gpu_softmax(arr)
     let sum_exp = gpu_sum(exp_vals)
 
     // Normalize
-    let result = []
-    let i = 0.0
+    let mut result = []
+    let mut i = 0.0
     while i < n
-        append(result, exp_vals[i] / sum_exp)
+        push(result, exp_vals[i] / sum_exp)
         i = i + 1.0
     end
 
     return result
+end
 
 // Sigmoid: 1 / (1 + exp(-x))
 fn gpu_sigmoid(arr)
@@ -44,6 +45,7 @@ fn gpu_sigmoid(arr)
 
     let result = gpu_run(spv_path, arr, len(arr))
     return result
+end
 
 // ReLU: max(0, x)
 fn gpu_relu(arr)
@@ -55,6 +57,7 @@ fn gpu_relu(arr)
 
     let result = gpu_run(spv_path, arr, len(arr))
     return result
+end
 
 // Tanh: (exp(2x) - 1) / (exp(2x) + 1)
 fn gpu_tanh(arr)
@@ -66,6 +69,7 @@ fn gpu_tanh(arr)
 
     let result = gpu_run(spv_path, arr, len(arr))
     return result
+end
 
 // Log-sum-exp: numerically stable log(sum(exp(x)))
 fn gpu_log_sum_exp(arr)
@@ -77,10 +81,10 @@ fn gpu_log_sum_exp(arr)
     // Subtract max for stability
     let max_val = gpu_max(arr)
 
-    let shifted = []
-    let i = 0.0
+    let mut shifted = []
+    let mut i = 0.0
     while i < n
-        append(shifted, arr[i] - max_val)
+        push(shifted, arr[i] - max_val)
         i = i + 1.0
     end
 
@@ -88,6 +92,7 @@ fn gpu_log_sum_exp(arr)
     let sum_exp = gpu_sum(exp_vals)
 
     return max_val + log(sum_exp)
+end
 
 // Euclidean distance between two vectors
 fn gpu_euclidean_distance(vec1, vec2)
@@ -105,6 +110,7 @@ fn gpu_euclidean_distance(vec1, vec2)
     let sum_sq = gpu_sum(sq)
 
     return sqrt(sum_sq)
+end
 
 // Cosine similarity: dot(v1,v2) / (norm(v1) * norm(v2))
 fn gpu_cosine_similarity(vec1, vec2)
@@ -120,22 +126,28 @@ fn gpu_cosine_similarity(vec1, vec2)
     let norm1 = gpu_l2_norm(vec1)
     let norm2 = gpu_l2_norm(vec2)
 
-    if norm1 == 0.0 or norm2 == 0.0
+    if norm1 == 0.0
+        return 0.0
+    end
+    if norm2 == 0.0
         return 0.0
     end
 
     return dot / (norm1 * norm2)
+end
 
 // L1 norm: sum(|x|)
 fn gpu_l1_norm(vec)
     let abs_vec = gpu_abs_run(vec)
     return gpu_sum(abs_vec)
+end
 
 // L2 norm: sqrt(sum(x^2))
 fn gpu_l2_norm(vec)
     let sq = gpu_mul_run(vec, vec)
     let sum_sq = gpu_sum(sq)
     return sqrt(sum_sq)
+end
 
 // Pairwise distances matrix
 fn gpu_pairwise_distances(points, n_points, n_dims)
@@ -151,6 +163,7 @@ fn gpu_pairwise_distances(points, n_points, n_dims)
     let total = n_points * n_points
     let result = gpu_run(spv_path, points, total, n_points, n_dims)
     return result
+end
 
 // ===== SPIR-V Emitters =====
 
@@ -210,6 +223,7 @@ fn sigmoid_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/sigmoid.spv")
+end
 
 fn relu_emit()
     use "spirv_emit.flow"
@@ -266,6 +280,7 @@ fn relu_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/relu.spv")
+end
 
 fn tanh_emit()
     use "spirv_emit.flow"
@@ -327,6 +342,7 @@ fn tanh_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/tanh.spv")
+end
 
 fn pairwise_dist_emit()
     use "spirv_emit.flow"
@@ -378,3 +394,4 @@ fn pairwise_dist_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/pairwise_dist.spv")
+end

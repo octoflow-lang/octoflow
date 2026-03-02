@@ -1,0 +1,672 @@
+// test_eval_stress.flow — Comprehensive eval stress tests (Phase B2)
+// Run: octoflow run tests/audit/test_eval_stress.flow
+//
+// Tests 150+ language features: expressions, functions, arrays, strings,
+// control flow, maps, math builtins, higher-order fns, edge cases.
+
+// counters[0]=pass, counters[1]=fail — arrays propagate back from functions
+let mut counters = [0.0, 0.0]
+
+fn check(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+fn check_near(counters, label, got, expected, tol)
+  let d = abs(got - expected)
+  if d < tol
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL: {label} — got {got}, expected {expected}")
+  return 0.0
+end
+
+print("=== EVAL STRESS TESTS ===")
+print(" ")
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 1. Arithmetic & Operator Precedence ---")
+
+let _c = check(counters, "2+3", 2.0 + 3.0, 5.0)
+let _c = check(counters, "10-7", 10.0 - 7.0, 3.0)
+let _c = check(counters, "4*5", 4.0 * 5.0, 20.0)
+let _c = check(counters, "15/3", 15.0 / 3.0, 5.0)
+let _c = check(counters, "2+3*4 (prec)", 2.0 + 3.0 * 4.0, 14.0)
+let _c = check(counters, "10-2*3 (prec)", 10.0 - 2.0 * 3.0, 4.0)
+let _c = check(counters, "(2+3)*4", (2.0 + 3.0) * 4.0, 20.0)
+let _c = check(counters, "1+2+3+4", 1.0 + 2.0 + 3.0 + 4.0, 10.0)
+let _c = check(counters, "-5 negation", -5.0, -5.0)
+let dn = 0.0 - (-3.0)
+let _c = check(counters, "double neg", dn, 3.0)
+let a_x = 10.0
+let a_y = 3.0
+let _c = check(counters, "var arith", a_x * a_y + 1.0, 31.0)
+let _c = check(counters, "div result", 7.0 / 2.0, 3.5)
+let _c = check(counters, "large mul", 1000.0 * 1000.0, 1000000.0)
+let _c = check(counters, "zero mul", 999.0 * 0.0, 0.0)
+let _c = check(counters, "div by 1", 42.0 / 1.0, 42.0)
+
+// Bitwise operations
+let _c = check(counters, "bit_and", bit_and(12.0, 10.0), 8.0)
+let _c = check(counters, "bit_or", bit_or(12.0, 10.0), 14.0)
+let _c = check(counters, "bit_xor", bit_xor(12.0, 10.0), 6.0)
+let _c = check(counters, "shl", 1.0 << 3.0, 8.0)
+let _c = check(counters, "shr", 16.0 >> 2.0, 4.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 2. Comparison & Boolean Logic ---")
+
+let _c = check(counters, "3<5", if 3.0 < 5.0 then 1.0 else 0.0, 1.0)
+let _c = check(counters, "5>3", if 5.0 > 3.0 then 1.0 else 0.0, 1.0)
+let _c = check(counters, "3<=3", if 3.0 <= 3.0 then 1.0 else 0.0, 1.0)
+let _c = check(counters, "3>=3", if 3.0 >= 3.0 then 1.0 else 0.0, 1.0)
+let _c = check(counters, "3==3", if 3.0 == 3.0 then 1.0 else 0.0, 1.0)
+let _c = check(counters, "3!=4", if 3.0 != 4.0 then 1.0 else 0.0, 1.0)
+let _c = check(counters, "true&&true", if true && true then 1.0 else 0.0, 1.0)
+let _c = check(counters, "true&&false", if true && false then 1.0 else 0.0, 0.0)
+let _c = check(counters, "false||true", if false || true then 1.0 else 0.0, 1.0)
+let _c = check(counters, "false||false", if false || false then 1.0 else 0.0, 0.0)
+let _c = check(counters, "compound &&", if 1.0 < 2.0 && 3.0 < 4.0 then 1.0 else 0.0, 1.0)
+let _c = check(counters, "compound ||", if 1.0 > 2.0 || 3.0 < 4.0 then 1.0 else 0.0, 1.0)
+let _c = check(counters, "neg compare", if -3.0 < -1.0 then 1.0 else 0.0, 1.0)
+// f32 precision: 0.1+0.2 may equal 0.3 in f32 (rounds to same)
+let sum_01_02 = 0.1 + 0.2
+let near_03 = abs(sum_01_02 - 0.3)
+let _c = check(counters, "f32 near", if near_03 < 0.001 then 1.0 else 0.0, 1.0)
+let _c = check(counters, "bool literal t", if true then 1.0 else 0.0, 1.0)
+let _c = check(counters, "bool literal f", if false then 1.0 else 0.0, 0.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 3. String Operations ---")
+
+let s1 = "hello"
+let s2 = "world"
+let s3 = s1 + " " + s2
+let _c = check(counters, "str concat", s3, "hello world")
+let _c = check(counters, "str len", len(s1), 5.0)
+let _c = check(counters, "contains yes", if contains(s3, "llo w") then 1.0 else 0.0, 1.0)
+let _c = check(counters, "contains no", if contains(s1, "xyz") then 1.0 else 0.0, 0.0)
+let _c = check(counters, "starts_with", if starts_with(s1, "hel") then 1.0 else 0.0, 1.0)
+let _c = check(counters, "ends_with", if ends_with(s2, "rld") then 1.0 else 0.0, 1.0)
+let _c = check(counters, "char_at 0", char_at(s1, 0.0), "h")
+let _c = check(counters, "char_at last", char_at(s1, 4.0), "o")
+let _c = check(counters, "ord/chr round", chr(ord("A")), "A")
+let _c = check(counters, "ord A", ord("A"), 65.0)
+let _c = check(counters, "ord 0", ord("0"), 48.0)
+
+let sr = replace(s1, "ello", "appy")
+let _c = check(counters, "replace", sr, "happy")
+
+let _c = check(counters, "trim", trim("  hi  "), "hi")
+let _c = check(counters, "to_upper", to_upper("abc"), "ABC")
+let _c = check(counters, "to_lower", to_lower("XYZ"), "xyz")
+
+let parts = split("a,b,c", ",")
+let _c = check(counters, "split len", len(parts), 3.0)
+let _c = check(counters, "split[0]", parts[0], "a")
+let _c = check(counters, "split[2]", parts[2], "c")
+
+let snum = str(42.0)
+let _c = check(counters, "str(42)", snum, "42")
+let _c = check(counters, "float(str)", float("3.14"), 3.14)
+
+let sub1 = substr(s1, 1.0, 3.0)
+let _c = check(counters, "substr", sub1, "ell")
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 4. Array Operations ---")
+
+let mut arr1 = [1.0, 2.0, 3.0, 4.0, 5.0]
+let _c = check(counters, "arr len", len(arr1), 5.0)
+let _c = check(counters, "arr[0]", arr1[0], 1.0)
+let _c = check(counters, "arr[4]", arr1[4], 5.0)
+
+arr1[2] = 99.0
+let _c = check(counters, "arr assign", arr1[2], 99.0)
+
+push(arr1, 6.0)
+let _c = check(counters, "push len", len(arr1), 6.0)
+let _c = check(counters, "push val", arr1[5], 6.0)
+
+let popped = pop(arr1)
+let _c = check(counters, "pop val", popped, 6.0)
+let _c = check(counters, "pop len", len(arr1), 5.0)
+
+let mut arr2 = []
+let _c = check(counters, "empty arr len", len(arr2), 0.0)
+push(arr2, 10.0)
+push(arr2, 20.0)
+push(arr2, 30.0)
+let _c = check(counters, "built arr", arr2[1], 20.0)
+
+// Array of strings
+let mut sarr = ["alpha", "beta", "gamma"]
+let _c = check(counters, "str arr[0]", sarr[0], "alpha")
+let _c = check(counters, "str arr[2]", sarr[2], "gamma")
+let _c = check(counters, "str arr len", len(sarr), 3.0)
+
+// Variable index
+let idx = 2.0
+let _c = check(counters, "var index", arr1[idx], 99.0)
+
+// Nested index (index from expression)
+let mut idxarr = [0.0, 1.0, 2.0]
+let _c = check(counters, "nested idx", arr1[idxarr[1]], 2.0)
+
+// sort_by (key fn), reverse, unique
+let mut unsorted = [3.0, 1.0, 4.0, 1.0, 5.0]
+let s_sorted = sort_by(unsorted, fn(x) x end)
+let _c = check(counters, "sort_by[0]a", s_sorted[0], 1.0)
+let _c = check(counters, "sort_by[4]a", s_sorted[4], 5.0)
+
+let u_arr = unique(unsorted)
+let _c = check(counters, "unique len", len(u_arr), 4.0)
+
+let mut rev_in = [1.0, 2.0, 3.0]
+let rev_out = reverse(rev_in)
+let _c = check(counters, "reverse[0]", rev_out[0], 3.0)
+let _c = check(counters, "reverse[2]", rev_out[2], 1.0)
+
+// find
+let fi = find(arr1, 99.0)
+let _c = check(counters, "find found", fi, 2.0)
+let fi2 = find(arr1, 777.0)
+let _c = check(counters, "find miss", fi2, -1.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 5. Function Patterns ---")
+
+fn add_nums(a, b)
+  return a + b
+end
+
+fn multiply(a, b)
+  return a * b
+end
+
+fn factorial(n)
+  if n <= 1.0
+    return 1.0
+  end
+  let prev = factorial(n - 1.0)
+  return n * prev
+end
+
+fn fib(n)
+  if n <= 1.0
+    return n
+  end
+  let a = fib(n - 1.0)
+  let b = fib(n - 2.0)
+  return a + b
+end
+
+fn max_of_three(a, b, c)
+  if a >= b && a >= c
+    return a
+  end
+  if b >= c
+    return b
+  end
+  return c
+end
+
+fn str_repeat(s, n)
+  let mut result = " "
+  result = " "
+  let mut i = 0.0
+  while i < n
+    if i == 0.0
+      result = s
+    else
+      result = result + s
+    end
+    i = i + 1.0
+  end
+  return result
+end
+
+fn count_positives(arr)
+  let mut count = 0.0
+  for item in arr
+    if item > 0.0
+      count = count + 1.0
+    end
+  end
+  return count
+end
+
+let _c = check(counters, "fn add", add_nums(3.0, 4.0), 7.0)
+let _c = check(counters, "fn multiply", multiply(6.0, 7.0), 42.0)
+let _c = check(counters, "factorial 5", factorial(5.0), 120.0)
+let _c = check(counters, "factorial 0", factorial(0.0), 1.0)
+let _c = check(counters, "fib 0", fib(0.0), 0.0)
+let _c = check(counters, "fib 1", fib(1.0), 1.0)
+let _c = check(counters, "fib 10", fib(10.0), 55.0)
+let _c = check(counters, "max3 first", max_of_three(9.0, 3.0, 5.0), 9.0)
+let _c = check(counters, "max3 second", max_of_three(1.0, 8.0, 5.0), 8.0)
+let _c = check(counters, "max3 third", max_of_three(1.0, 3.0, 7.0), 7.0)
+let _c = check(counters, "str_repeat", str_repeat("ab", 3.0), "ababab")
+
+let mut pos_arr = [-1.0, 2.0, -3.0, 4.0, 0.0]
+let _c = check(counters, "count_pos", count_positives(pos_arr), 2.0)
+
+// Nested function calls
+let _c = check(counters, "nested fn", add_nums(multiply(2.0, 3.0), 4.0), 10.0)
+
+// Function as expression
+let expr_r = add_nums(1.0, 2.0) * 3.0
+let _c = check(counters, "fn expr", expr_r, 9.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 6. Control Flow ---")
+
+// if/elif/else
+let mut cf_r = 0.0
+let cf_val = 42.0
+if cf_val < 10.0
+  cf_r = 1.0
+elif cf_val < 50.0
+  cf_r = 2.0
+else
+  cf_r = 3.0
+end
+let _c = check(counters, "elif branch", cf_r, 2.0)
+
+// while loop
+let mut wsum = 0.0
+let mut wi = 1.0
+while wi <= 10.0
+  wsum = wsum + wi
+  wi = wi + 1.0
+end
+let _c = check(counters, "while sum 1-10", wsum, 55.0)
+
+// while with break
+let mut wb = 0.0
+let mut wbi = 0.0
+while true
+  if wbi >= 5.0
+    break
+  end
+  wb = wb + wbi
+  wbi = wbi + 1.0
+end
+let _c = check(counters, "while break", wb, 10.0)
+
+// while with continue
+let mut wc = 0.0
+let mut wci = 0.0
+while wci < 10.0
+  wci = wci + 1.0
+  // skip even numbers
+  let half = floor(wci / 2.0) * 2.0
+  if half == wci
+    continue
+  end
+  wc = wc + wci
+end
+let _c = check(counters, "while continue", wc, 25.0)
+
+// for-each loop
+let mut fe_sum = 0.0
+let mut fe_arr = [10.0, 20.0, 30.0]
+for item in fe_arr
+  fe_sum = fe_sum + item
+end
+let _c = check(counters, "for-each sum", fe_sum, 60.0)
+
+// for-range loop
+let mut fr_sum = 0.0
+for i in range(1.0, 6.0)
+  fr_sum = fr_sum + i
+end
+let _c = check(counters, "for-range sum", fr_sum, 15.0)
+
+// for-range with break
+let mut frb = 0.0
+for i in range(0.0, 100.0)
+  if i >= 5.0
+    break
+  end
+  frb = frb + i
+end
+let _c = check(counters, "for-range break", frb, 10.0)
+
+// Nested loops
+let mut nl = 0.0
+for i in range(0.0, 3.0)
+  for j in range(0.0, 3.0)
+    nl = nl + 1.0
+  end
+end
+let _c = check(counters, "nested loops", nl, 9.0)
+
+// Nested if in loop
+let mut nif = 0.0
+for i in range(0.0, 10.0)
+  if i < 3.0
+    nif = nif + 1.0
+  elif i < 6.0
+    nif = nif + 2.0
+  else
+    nif = nif + 3.0
+  end
+end
+let _c = check(counters, "nested if-loop", nif, 21.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 7. Map Operations ---")
+
+let mut m1 = map()
+map_set(m1, "name", "Alice")
+map_set(m1, "age", 30.0)
+
+let _c = check(counters, "map_get str", map_get(m1, "name"), "Alice")
+let _c = check(counters, "map_get num", map_get(m1, "age"), 30.0)
+let _c = check(counters, "map_has yes", if map_has(m1, "name") then 1.0 else 0.0, 1.0)
+let _c = check(counters, "map_has no", if map_has(m1, "xyz") then 1.0 else 0.0, 0.0)
+
+// Overwrite
+map_set(m1, "age", 31.0)
+let _c = check(counters, "map overwrite", map_get(m1, "age"), 31.0)
+
+// Map in function
+fn map_sum_vals(m)
+  let a = map_get(m, "x")
+  let b = map_get(m, "y")
+  return a + b
+end
+
+let mut m2 = map()
+map_set(m2, "x", 10.0)
+map_set(m2, "y", 20.0)
+let _c = check(counters, "fn with map", map_sum_vals(m2), 30.0)
+
+// Map with computed keys
+let mut m3 = map()
+for i in range(0.0, 5.0)
+  let key = "k" + str(i)
+  map_set(m3, key, i * 10.0)
+end
+let _c = check(counters, "computed key", map_get(m3, "k3"), 30.0)
+
+// map_keys returns comma-separated string of keys
+let mk = map_keys(m1)
+let _c = check(counters, "map_keys has", if contains(mk, "name") && contains(mk, "age") then 1.0 else 0.0, 1.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 8. Math Builtins ---")
+
+let _c = check(counters, "abs pos", abs(5.0), 5.0)
+let _c = check(counters, "abs neg", abs(-5.0), 5.0)
+let _c = check(counters, "abs zero", abs(0.0), 0.0)
+let _c = check(counters, "floor 1.7", floor(1.7), 1.0)
+let _c = check(counters, "floor -1.3", floor(-1.3), -2.0)
+let _c = check(counters, "ceil 1.1", ceil(1.1), 2.0)
+let _c = check(counters, "ceil -1.9", ceil(-1.9), -1.0)
+let _c = check(counters, "round 1.4", round(1.4), 1.0)
+let _c = check(counters, "round 1.6", round(1.6), 2.0)
+let _c = check_near(counters, "sqrt 9", sqrt(9.0), 3.0, 0.001)
+let _c = check_near(counters, "sqrt 2", sqrt(2.0), 1.41421, 0.001)
+let _c = check_near(counters, "pow 2^10", pow(2.0, 10.0), 1024.0, 0.1)
+let _c = check_near(counters, "pow 0.5", pow(4.0, 0.5), 2.0, 0.001)
+let _c = check_near(counters, "log(1)", log(1.0), 0.0, 0.001)
+let _c = check_near(counters, "exp(0)", exp(0.0), 1.0, 0.001)
+let _c = check_near(counters, "exp(ln(5))", exp(log(5.0)), 5.0, 0.01)
+let _c = check_near(counters, "sin(0)", sin(0.0), 0.0, 0.001)
+let _c = check_near(counters, "cos(0)", cos(0.0), 1.0, 0.001)
+let min_r = if 3.0 < 7.0 then 3.0 else 7.0
+let _c = check(counters, "min 2val", min_r, 3.0)
+let max_r = if 3.0 > 7.0 then 3.0 else 7.0
+let _c = check(counters, "max 2val", max_r, 7.0)
+let min_n = if -5.0 < -3.0 then -5.0 else -3.0
+let _c = check(counters, "min neg", min_n, -5.0)
+let max_n = if -5.0 > -3.0 then -5.0 else -3.0
+let _c = check(counters, "max neg", max_n, -3.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 9. Higher-Order Functions ---")
+
+// filter
+let mut ho_arr = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+let evens = filter(ho_arr, fn(x) x > 3.0 end)
+let _c = check(counters, "filter len", len(evens), 3.0)
+let _c = check(counters, "filter[0]", evens[0], 4.0)
+
+// map_each
+let doubled = map_each(ho_arr, fn(x) x * 2.0 end)
+let _c = check(counters, "map_each[0]", doubled[0], 2.0)
+let _c = check(counters, "map_each[5]", doubled[5], 12.0)
+
+// reduce
+let rsum = reduce(ho_arr, 0.0, fn(acc, x) acc + x end)
+let _c = check(counters, "reduce sum", rsum, 21.0)
+
+let rprod = reduce(ho_arr, 1.0, fn(acc, x) acc * x end)
+let _c = check(counters, "reduce prod", rprod, 720.0)
+
+// sort_by (key fn)
+let mut unsort2 = [5.0, 2.0, 8.0, 1.0, 9.0]
+let sb = sort_by(unsort2, fn(x) x end)
+let _c = check(counters, "sort_by[0]", sb[0], 1.0)
+let _c = check(counters, "sort_by[4]", sb[4], 9.0)
+
+// sort_by descending (negate key)
+let sbd = sort_by(unsort2, fn(x) 0.0 - x end)
+let _c = check(counters, "sort_by desc", sbd[0], 9.0)
+
+// chained: filter then reduce (must extract to variable — no nesting)
+let filtered = filter(ho_arr, fn(x) x >= 4.0 end)
+let big_sum = reduce(filtered, 0.0, fn(acc, x) acc + x end)
+let _c = check(counters, "filter+reduce", big_sum, 15.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 10. Edge Cases & Stress ---")
+
+// Very long string
+let mut long_s = "x"
+for i in range(0.0, 10.0)
+  long_s = long_s + long_s
+end
+let _c = check(counters, "long str len", len(long_s), 1024.0)
+
+// Deep recursion (ackermann-lite, bounded)
+fn ack_lite(m, n)
+  if m == 0.0
+    return n + 1.0
+  end
+  if n == 0.0
+    return ack_lite(m - 1.0, 1.0)
+  end
+  let inner = ack_lite(m, n - 1.0)
+  return ack_lite(m - 1.0, inner)
+end
+let _c = check(counters, "ack(2,3)", ack_lite(2.0, 3.0), 9.0)
+
+// Array building in loop
+let mut built = []
+for i in range(0.0, 100.0)
+  push(built, i * i)
+end
+let _c = check(counters, "built arr len", len(built), 100.0)
+let _c = check(counters, "built arr[10]", built[10], 100.0)
+let _c = check(counters, "built arr[99]", built[99], 9801.0)
+
+// String building in loop
+let mut sbuilt = "["
+for i in range(0.0, 5.0)
+  if i > 0.0
+    sbuilt = sbuilt + ","
+  end
+  sbuilt = sbuilt + str(i)
+end
+sbuilt = sbuilt + "]"
+let _c = check(counters, "str build", sbuilt, "[0,1,2,3,4]")
+
+// Mutual state through arrays
+let mut state = [0.0, 0.0]
+fn inc_state(s)
+  s[0] = s[0] + 1.0
+  return s[0]
+end
+let _r = inc_state(state)
+let _r = inc_state(state)
+let _r = inc_state(state)
+let _c = check(counters, "arr state", state[0], 3.0)
+
+// Scope isolation
+let mut outer = 100.0
+fn shadow_test(x)
+  let outer = x * 2.0
+  return outer
+end
+let st_r = shadow_test(5.0)
+let _c = check(counters, "shadow fn", st_r, 10.0)
+let _c = check(counters, "outer intact", outer, 100.0)
+
+// Division edge
+let big_div = 1.0 / 3.0
+let _c = check_near(counters, "1/3 precision", big_div, 0.3333, 0.001)
+
+// Negative array index math
+let mut narr = [10.0, 20.0, 30.0, 40.0, 50.0]
+let last_idx = len(narr) - 1.0
+let _c = check(counters, "computed last", narr[last_idx], 50.0)
+
+// Chain of assignments
+let mut ch = 1.0
+ch = ch + 1.0
+ch = ch * 2.0
+ch = ch + 3.0
+ch = ch * ch
+let _c = check(counters, "chain assign", ch, 49.0)
+
+// Regex basics
+let _c = check(counters, "is_match yes", if is_match("hello123", "[0-9]+") then 1.0 else 0.0, 1.0)
+let _c = check(counters, "is_match no", if is_match("hello", "^[0-9]+$") then 1.0 else 0.0, 0.0)
+
+// Type conversion roundtrip
+let num_val = 3.14
+let str_val = str(num_val)
+let back_val = float(str_val)
+let _c = check_near(counters, "float roundtrip", back_val, 3.14, 0.001)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+print("--- 11. Complex Patterns ---")
+
+// FizzBuzz-style logic (no modulo, use floor trick)
+fn is_divisible(n, d)
+  let q = floor(n / d)
+  let rem = n - q * d
+  if rem == 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+let _c = check(counters, "div 15/3", is_divisible(15.0, 3.0), 1.0)
+let _c = check(counters, "div 15/5", is_divisible(15.0, 5.0), 1.0)
+let _c = check(counters, "div 7/3", is_divisible(7.0, 3.0), 0.0)
+
+// Count fizzbuzz hits
+let mut fb_count = 0.0
+for i in range(1.0, 16.0)
+  let d3 = is_divisible(i, 3.0)
+  let d5 = is_divisible(i, 5.0)
+  if d3 == 1.0 && d5 == 1.0
+    fb_count = fb_count + 1.0
+  end
+end
+let _c = check(counters, "fizzbuzz 15", fb_count, 1.0)
+
+// Binary search pattern
+fn binary_search(arr, target)
+  let mut lo = 0.0
+  let mut hi = len(arr) - 1.0
+  while lo <= hi
+    let mid = floor((lo + hi) / 2.0)
+    if arr[mid] == target
+      return mid
+    elif arr[mid] < target
+      lo = mid + 1.0
+    else
+      hi = mid - 1.0
+    end
+  end
+  return -1.0
+end
+
+let mut bs_arr = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0]
+let _c = check(counters, "bsearch found", binary_search(bs_arr, 7.0), 3.0)
+let _c = check(counters, "bsearch first", binary_search(bs_arr, 1.0), 0.0)
+let _c = check(counters, "bsearch last", binary_search(bs_arr, 15.0), 7.0)
+let _c = check(counters, "bsearch miss", binary_search(bs_arr, 6.0), -1.0)
+
+// Bubble sort (in-place via array mutation)
+fn bubble_sort(arr)
+  let n = len(arr)
+  for i in range(0.0, n)
+    let top = n - i - 1.0
+    for j in range(0.0, top)
+      let j1 = j + 1.0
+      if arr[j] > arr[j1]
+        let tmp = arr[j]
+        arr[j] = arr[j1]
+        arr[j1] = tmp
+      end
+    end
+  end
+  return 0.0
+end
+
+let mut bs_in = [5.0, 3.0, 8.0, 1.0, 9.0, 2.0, 7.0, 4.0, 6.0]
+let _r = bubble_sort(bs_in)
+let _c = check(counters, "bsort[0]", bs_in[0], 1.0)
+let _c = check(counters, "bsort[4]", bs_in[4], 5.0)
+let _c = check(counters, "bsort[8]", bs_in[8], 9.0)
+
+// Matrix operations via flat arrays
+fn mat_get(m, cols, r, c)
+  return m[r * cols + c]
+end
+
+fn mat_mul_2x2(a, b)
+  let mut result = [0.0, 0.0, 0.0, 0.0]
+  // result[0] = a[0]*b[0] + a[1]*b[2]
+  result[0] = a[0] * b[0] + a[1] * b[2]
+  result[1] = a[0] * b[1] + a[1] * b[3]
+  result[2] = a[2] * b[0] + a[3] * b[2]
+  result[3] = a[2] * b[1] + a[3] * b[3]
+  return result
+end
+
+let mut ma = [1.0, 2.0, 3.0, 4.0]
+let mut mb = [5.0, 6.0, 7.0, 8.0]
+let mc = mat_mul_2x2(ma, mb)
+let _c = check(counters, "mat[0,0]", mc[0], 19.0)
+let _c = check(counters, "mat[0,1]", mc[1], 22.0)
+let _c = check(counters, "mat[1,0]", mc[2], 43.0)
+let _c = check(counters, "mat[1,1]", mc[3], 50.0)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SUMMARY
+let pass = counters[0]
+let fail = counters[1]
+let total = pass + fail
+print(" ")
+print("=== EVAL STRESS TEST SUMMARY ===")
+print("  pass: {pass}/{total}")
+print("  fail: {fail}")
+if fail == 0.0
+  print("  ALL PASS")
+else
+  print("  FAILURES DETECTED")
+end

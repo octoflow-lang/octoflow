@@ -2,20 +2,17 @@
 //
 // "65536 elements. 136 dispatches. Fully sorted. 0 CPU comparisons."
 //
-// Bitonic merge sort network: O(log²N) dispatches of compare-and-swap.
+// Bitonic merge sort network: O(log^2 N) dispatches of compare-and-swap.
 // Each dispatch: every thread XORs its index with substep to find partner,
 // compares, and swaps if needed. Alternating ascending/descending halves
 // merge into a fully sorted array.
 //
 // Run: octoflow run examples/gpu_bitonic_sort.flow --allow-ffi --allow-read
 
-use "../stdlib/loom/ops/runtime"
-
 let N = 65536.0
 
-rt_init()
-
-let pipe_sort = rt_load_pipeline("tests/gpu_shaders/36_bitonic_sort.spv", 1.0, 12.0)
+let vm = loom_boot(1.0, 1.0, N)
+loom_prefetch("tests/gpu_shaders/36_bitonic_sort.spv")
 
 // ── Input: reverse sorted [65536, 65535, ..., 2, 1] ────────────────
 let mut input = []
@@ -24,9 +21,7 @@ while i < N
   push(input, N - i)
   i = i + 1.0
 end
-
-let buf = rt_create_buffer(N * 4.0)
-rt_upload(buf, input)
+vm_write_register(vm, 0.0, 0.0, input)
 
 let n_wgs = int((N + 255.0) / 256.0)
 
@@ -38,13 +33,10 @@ let mut k = 2.0
 while k <= N
   let mut j = k / 2.0
   while j >= 1.0
-    rt_chain_begin(1.0, 1.0)
-    let mut pc = [k, j, N]
-    rt_chain_push_constants(pipe_sort, pc)
-    let mut bufs = [buf]
-    rt_chain_dispatch(pipe_sort, bufs, n_wgs)
-    rt_chain_end()
-    rt_chain_submit_wait()
+    loom_dispatch(vm, "tests/gpu_shaders/36_bitonic_sort.spv", [k, j, N], n_wgs)
+    let prog = loom_build(vm)
+    loom_run(prog)
+    loom_free(prog)
     dispatches = dispatches + 1.0
     j = j / 2.0
   end
@@ -55,15 +47,14 @@ let t1 = time()
 let total_ms = (t1 - t0) * 1000.0
 
 // ── Verify ─────────────────────────────────────────────────────────
-rt_download(buf, N)
+let result = loom_read(vm, 0.0, 0.0, N)
 
 let mut pass = 1.0
 
-// Check first, last, and boundaries
-let v0 = rt_result[0]
-let v1 = rt_result[1]
-let vmid = rt_result[32767]
-let vlast = rt_result[int(N - 1.0)]
+let v0 = result[0]
+let v1 = result[1]
+let vmid = result[32767]
+let vlast = result[int(N - 1.0)]
 
 if v0 != 1.0
   print("FAIL: result[0] = {v0}, expected 1")
@@ -82,7 +73,7 @@ end
 let mut spot_pass = 1.0
 let mut i = 0.0
 while i < N
-  let got = rt_result[int(i)]
+  let got = result[int(i)]
   let exp = i + 1.0
   if got != exp
     spot_pass = 0.0
@@ -117,4 +108,4 @@ else
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm)

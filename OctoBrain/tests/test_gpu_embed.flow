@@ -1,0 +1,257 @@
+// OctoBrain GPU Embedding Projection Tests
+// Tests for lib/gpu_embed.flow — uses PASS/FAIL print pattern.
+// 6 tests: identity passthrough, known weights, normalization,
+// GPU vs CPU consistency, 1D edge case, large scale 64D->32D.
+//
+// Run with:
+//   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run OctoBrain/tests/test_gpu_embed.flow --allow-ffi --allow-read
+
+use "../lib/gpu_embed"
+use "../lib/embed"
+use "../lib/vecmath"
+
+// ── Helper: approximate equality ──────────────────────────────
+fn approx_eq(a, b, tol)
+  let mut diff = a - b
+  if diff < 0.0
+    diff = diff * -1.0
+  end
+  if diff < tol
+    return 1.0
+  end
+  return 0.0
+end
+
+// Initialize GPU
+let _init = gpu_embed_init()
+
+// ══════════════════════════════════════════════════════════════
+// Test 1: GPU embed matches CPU embed for identity matrix (passthrough)
+// Identity 3x3 matrix. Project [3, 4, 0] -> normalize -> [0.6, 0.8, 0.0].
+// ══════════════════════════════════════════════════════════════
+
+let W1 = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+let raw1 = [3.0, 4.0, 0.0]
+let gpu_proj1 = gpu_embed_project(W1, raw1, 3.0, 3.0)
+let p1_0 = gpu_proj1[0]
+let p1_1 = gpu_proj1[1]
+let p1_2 = gpu_proj1[2]
+if approx_eq(p1_0, 0.6, 0.01) && approx_eq(p1_1, 0.8, 0.01) && approx_eq(p1_2, 0.0, 0.01)
+  print("PASS test1: GPU identity projection = [0.6, 0.8, 0.0]")
+else
+  print("FAIL test1: expected [0.6, 0.8, 0.0], got [{p1_0}, {p1_1}, {p1_2}]")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 2: GPU embed matches CPU embed for non-identity matrix
+// 10D -> 5D with known weights. Compare GPU vs CPU within tolerance.
+// Build a weight matrix where W[r][c] = (r + 1) * (c + 1) * 0.1
+// ══════════════════════════════════════════════════════════════
+
+let input_dim2 = 10.0
+let embed_dim2 = 5.0
+let mut W2 = []
+let mut r2 = 0.0
+while r2 < input_dim2
+  let mut c2 = 0.0
+  while c2 < embed_dim2
+    push(W2, (r2 + 1.0) * (c2 + 1.0) * 0.1)
+    c2 = c2 + 1.0
+  end
+  r2 = r2 + 1.0
+end
+
+// Raw data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+let raw2 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+
+// CPU reference
+let cpu_proj2 = embed_project(W2, raw2, input_dim2, embed_dim2)
+
+// GPU projection
+let gpu_proj2 = gpu_embed_project(W2, raw2, input_dim2, embed_dim2)
+
+let mut t2_pass = 1.0
+let mut t2_first_fail = -1.0
+let mut t2_fail_gpu = 0.0
+let mut t2_fail_cpu = 0.0
+let mut t2i = 0.0
+while t2i < embed_dim2
+  if approx_eq(gpu_proj2[t2i], cpu_proj2[t2i], 0.001) == 0.0
+    if t2_first_fail < 0.0
+      t2_first_fail = t2i
+      t2_fail_gpu = gpu_proj2[t2i]
+      t2_fail_cpu = cpu_proj2[t2i]
+    end
+    t2_pass = 0.0
+  end
+  t2i = t2i + 1.0
+end
+
+if t2_pass > 0.5
+  print("PASS test2: GPU 10D->5D matches CPU (tol=0.001)")
+else
+  print("FAIL test2: GPU/CPU mismatch at dim {t2_first_fail}: gpu={t2_fail_gpu} cpu={t2_fail_cpu}")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 3: GPU embed result is normalized (unit length within tolerance)
+// Use the 10D -> 5D projection from test 2.
+// ══════════════════════════════════════════════════════════════
+
+let norm3 = vec_norm(gpu_proj2, embed_dim2)
+if approx_eq(norm3, 1.0, 0.01)
+  print("PASS test3: GPU projection is normalized (norm={norm3:.4})")
+else
+  print("FAIL test3: expected norm~1.0, got {norm3}")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 4: GPU vs CPU consistency within tolerance (1e-3) for varied matrix
+// 16D -> 8D with sin-based deterministic weights.
+// ══════════════════════════════════════════════════════════════
+
+let input_dim4 = 16.0
+let embed_dim4 = 8.0
+let mut W4 = []
+let mut r4 = 0.0
+while r4 < input_dim4
+  let mut c4 = 0.0
+  while c4 < embed_dim4
+    push(W4, sin((r4 + 1.0) * (c4 + 1.0) * 0.3))
+    c4 = c4 + 1.0
+  end
+  r4 = r4 + 1.0
+end
+
+// Raw data: sin-based pattern
+let mut raw4 = []
+let mut ri4 = 0.0
+while ri4 < input_dim4
+  push(raw4, sin(ri4 * 0.5 + 1.0))
+  ri4 = ri4 + 1.0
+end
+
+// CPU reference (force CPU by temporarily checking GPU_EMBED_READY)
+// We use embed_project which falls back to CPU since dims=128 >= 64 but GPU is ready,
+// so embed_project will use GPU path too. Instead, compute CPU manually.
+let mut cpu_result4 = []
+let mut c4b = 0.0
+while c4b < embed_dim4
+  let mut sum4 = 0.0
+  let mut r4b = 0.0
+  while r4b < input_dim4
+    sum4 = sum4 + raw4[r4b] * W4[r4b * embed_dim4 + c4b]
+    r4b = r4b + 1.0
+  end
+  push(cpu_result4, sum4)
+  c4b = c4b + 1.0
+end
+let cpu_proj4 = normalize(cpu_result4, embed_dim4)
+
+// GPU projection
+let gpu_proj4 = gpu_embed_project(W4, raw4, input_dim4, embed_dim4)
+
+let mut t4_pass = 1.0
+let mut t4_first_fail = -1.0
+let mut t4_fail_gpu = 0.0
+let mut t4_fail_cpu = 0.0
+let mut t4i = 0.0
+while t4i < embed_dim4
+  if approx_eq(gpu_proj4[t4i], cpu_proj4[t4i], 0.001) == 0.0
+    if t4_first_fail < 0.0
+      t4_first_fail = t4i
+      t4_fail_gpu = gpu_proj4[t4i]
+      t4_fail_cpu = cpu_proj4[t4i]
+    end
+    t4_pass = 0.0
+  end
+  t4i = t4i + 1.0
+end
+
+if t4_pass > 0.5
+  print("PASS test4: GPU vs CPU consistency 16D->8D (tol=0.001)")
+else
+  print("FAIL test4: GPU/CPU mismatch at dim {t4_first_fail}: gpu={t4_fail_gpu} cpu={t4_fail_cpu}")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 5: Edge case — 1D -> 1D (trivial, CPU fallback)
+// ops = 1 * 1 = 1 < 64, so CPU fallback is used.
+// W = [2.0], raw = [3.0]. Project: 2*3 = 6 -> normalize -> [1.0].
+// ══════════════════════════════════════════════════════════════
+
+let W5 = [2.0]
+let raw5 = [3.0]
+let proj5 = gpu_embed_project(W5, raw5, 1.0, 1.0)
+let p5_0 = proj5[0]
+if approx_eq(p5_0, 1.0, 0.01)
+  print("PASS test5: 1D->1D CPU fallback = [1.0] (normalized)")
+else
+  print("FAIL test5: expected [1.0], got [{p5_0}]")
+end
+
+// ══════════════════════════════════════════════════════════════
+// Test 6: Large scale — 64D -> 32D (GPU path exercised)
+// ops = 64 * 32 = 2048 >> 64, so GPU path is used.
+// Build deterministic weights and data, verify norm~1.0 and
+// result length = 32.
+// ══════════════════════════════════════════════════════════════
+
+let input_dim6 = 64.0
+let embed_dim6 = 32.0
+let mut W6 = []
+let mut r6 = 0.0
+while r6 < input_dim6
+  let mut c6 = 0.0
+  while c6 < embed_dim6
+    push(W6, sin((r6 * 32.0 + c6 + 1.0) * 0.01))
+    c6 = c6 + 1.0
+  end
+  r6 = r6 + 1.0
+end
+
+let mut raw6 = []
+let mut ri6 = 0.0
+while ri6 < input_dim6
+  push(raw6, sin(ri6 * 0.1 + 0.5))
+  ri6 = ri6 + 1.0
+end
+
+let gpu_proj6 = gpu_embed_project(W6, raw6, input_dim6, embed_dim6)
+let proj6_len = len(gpu_proj6)
+let norm6 = vec_norm(gpu_proj6, embed_dim6)
+
+// Also compute CPU reference and check consistency
+let mut cpu_result6 = []
+let mut c6b = 0.0
+while c6b < embed_dim6
+  let mut sum6 = 0.0
+  let mut r6b = 0.0
+  while r6b < input_dim6
+    sum6 = sum6 + raw6[r6b] * W6[r6b * embed_dim6 + c6b]
+    r6b = r6b + 1.0
+  end
+  push(cpu_result6, sum6)
+  c6b = c6b + 1.0
+end
+let cpu_proj6 = normalize(cpu_result6, embed_dim6)
+
+let mut t6_pass = 1.0
+let mut t6i = 0.0
+while t6i < embed_dim6
+  if approx_eq(gpu_proj6[t6i], cpu_proj6[t6i], 0.001) == 0.0
+    t6_pass = 0.0
+  end
+  t6i = t6i + 1.0
+end
+
+if approx_eq(proj6_len, 32.0, 0.001) && approx_eq(norm6, 1.0, 0.01) && t6_pass > 0.5
+  print("PASS test6: 64D->32D GPU path — len=32, norm={norm6:.4}, matches CPU")
+else
+  print("FAIL test6: len={proj6_len} norm={norm6} cpu_match={t6_pass}")
+end
+
+// Cleanup GPU
+let _cleanup = gpu_embed_cleanup()
+
+print("--- gpu embed tests complete ---")

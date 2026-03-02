@@ -1,0 +1,252 @@
+// stdlib/math/bitwise.flow — Bitwise operations via arithmetic simulation
+//
+// OctoFlow uses f64 for all values. These functions simulate unsigned 32-bit
+// bitwise operations using floor/modulo arithmetic. Suitable for hash functions,
+// protocol handling, and binary algorithms.
+//
+// Functions: bit_and, bit_or, bit_xor, bit_not, bit_shl, bit_shr,
+//            bit_get, bit_set, bit_clear, bit_toggle, bit_count,
+//            to_binary, from_binary, to_hex, from_hex
+//
+// Limitation: Operates on unsigned 32-bit range [0, 4294967295].
+// Values are truncated to integers. Results are exact for 32-bit operations.
+//
+// Usage:
+//   use "bitwise"
+//   let result = bit_and(0xFF00, 0x0FF0)  // → 0x0F00 = 3840
+//   let shifted = bit_shl(1.0, 8.0)       // → 256
+
+// ── Internal: Powers of 2 table ─────────────────────────────────
+
+fn _pow2(n)
+    // 2^n for n in [0, 31]
+    let mut result = 1.0
+    let mut i = 0.0
+    while i < n
+        result = result * 2.0
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Core Bitwise Operations ─────────────────────────────────────
+
+fn bit_and(a, b)
+    // Bitwise AND of 32-bit unsigned integers.
+    let mut x = floor(abs(a))
+    let mut y = floor(abs(b))
+    let mut result = 0.0
+    let mut bit = 0.0
+    while bit < 32.0
+        let p = _pow2(bit)
+        let xa = floor(x / p)
+        let xb = xa - floor(xa / 2.0) * 2.0
+        let ya = floor(y / p)
+        let yb = ya - floor(ya / 2.0) * 2.0
+        if xb > 0.5 && yb > 0.5
+            result = result + p
+        end
+        bit = bit + 1.0
+    end
+    return result
+end
+
+fn bit_or(a, b)
+    // Bitwise OR of 32-bit unsigned integers.
+    let mut x = floor(abs(a))
+    let mut y = floor(abs(b))
+    let mut result = 0.0
+    let mut bit = 0.0
+    while bit < 32.0
+        let p = _pow2(bit)
+        let xa = floor(x / p)
+        let xb = xa - floor(xa / 2.0) * 2.0
+        let ya = floor(y / p)
+        let yb = ya - floor(ya / 2.0) * 2.0
+        if xb > 0.5 || yb > 0.5
+            result = result + p
+        end
+        bit = bit + 1.0
+    end
+    return result
+end
+
+fn bit_xor(a, b)
+    // Bitwise XOR of 32-bit unsigned integers.
+    let mut x = floor(abs(a))
+    let mut y = floor(abs(b))
+    let mut result = 0.0
+    let mut bit = 0.0
+    while bit < 32.0
+        let p = _pow2(bit)
+        let xa = floor(x / p)
+        let xb = xa - floor(xa / 2.0) * 2.0
+        let ya = floor(y / p)
+        let yb = ya - floor(ya / 2.0) * 2.0
+        // XOR: exactly one bit set
+        let sum = xb + yb
+        let is_one = sum - floor(sum / 2.0) * 2.0
+        if is_one > 0.5
+            result = result + p
+        end
+        bit = bit + 1.0
+    end
+    return result
+end
+
+fn bit_not(a)
+    // Bitwise NOT (32-bit). Flips all 32 bits.
+    return bit_xor(a, 4294967295.0)
+end
+
+fn bit_shl(a, n)
+    // Left shift by n bits. Truncates to 32 bits.
+    let mut x = floor(abs(a))
+    let shift = _pow2(n)
+    x = x * shift
+    // Truncate to 32 bits
+    let max32 = 4294967296.0
+    x = x - floor(x / max32) * max32
+    return x
+end
+
+fn bit_shr(a, n)
+    // Right shift by n bits (logical, unsigned).
+    let mut x = floor(abs(a))
+    let shift = _pow2(n)
+    return floor(x / shift)
+end
+
+// ── Bit Manipulation ────────────────────────────────────────────
+
+fn bit_get(val, bit_pos)
+    // Get bit at position bit_pos (0 = LSB). Returns 0.0 or 1.0.
+    let p = _pow2(bit_pos)
+    let shifted = floor(val / p)
+    return shifted - floor(shifted / 2.0) * 2.0
+end
+
+fn bit_set(val, bit_pos)
+    // Set bit at position bit_pos to 1.
+    return bit_or(val, _pow2(bit_pos))
+end
+
+fn bit_clear(val, bit_pos)
+    // Clear bit at position bit_pos to 0.
+    return bit_and(val, bit_not(_pow2(bit_pos)))
+end
+
+fn bit_toggle(val, bit_pos)
+    // Toggle bit at position bit_pos.
+    return bit_xor(val, _pow2(bit_pos))
+end
+
+fn bit_count(val)
+    // Count number of set bits (popcount/Hamming weight).
+    let mut x = floor(abs(val))
+    let mut count = 0.0
+    while x > 0.5
+        let rem = x - floor(x / 2.0) * 2.0
+        if rem > 0.5
+            count = count + 1.0
+        end
+        x = floor(x / 2.0)
+    end
+    return count
+end
+
+// ── Rotation ────────────────────────────────────────────────────
+
+fn bit_rotl(val, n, width)
+    // Left rotation by n bits within width-bit field.
+    let mask = _pow2(width) - 1.0
+    let v = bit_and(val, mask)
+    let left = bit_and(bit_shl(v, n), mask)
+    let right = bit_shr(v, width - n)
+    return bit_or(left, right)
+end
+
+fn bit_rotr(val, n, width)
+    // Right rotation by n bits within width-bit field.
+    return bit_rotl(val, width - n, width)
+end
+
+// ── Conversion ──────────────────────────────────────────────────
+
+fn to_binary(val)
+    // Convert number to binary string (e.g., 10 → "1010").
+    let mut x = floor(abs(val))
+    if x < 0.5
+        return "0"
+    end
+    let mut result = ""
+    while x > 0.5
+        let rem = x - floor(x / 2.0) * 2.0
+        if rem > 0.5
+            result = "1" + result
+        else
+            result = "0" + result
+        end
+        x = floor(x / 2.0)
+    end
+    return result
+end
+
+fn from_binary(s)
+    // Convert binary string to number (e.g., "1010" → 10.0).
+    let n = len(s)
+    let mut result = 0.0
+    let mut i = 0.0
+    while i < n
+        result = result * 2.0
+        if char_at(s, i) == "1"
+            result = result + 1.0
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn to_hex(val)
+    // Convert number to hexadecimal string (e.g., 255 → "ff").
+    let hex_chars = "0123456789abcdef"
+    let mut x = floor(abs(val))
+    if x < 0.5
+        return "0"
+    end
+    let mut result = ""
+    while x > 0.5
+        let rem = x - floor(x / 16.0) * 16.0
+        result = char_at(hex_chars, rem) + result
+        x = floor(x / 16.0)
+    end
+    return result
+end
+
+fn from_hex(s)
+    // Convert hexadecimal string to number (e.g., "ff" → 255.0).
+    let n = len(s)
+    let mut result = 0.0
+    let mut i = 0.0
+    while i < n
+        result = result * 16.0
+        let c = to_lower(char_at(s, i))
+        let code = ord(c)
+        if code >= 48.0 && code <= 57.0
+            result = result + code - 48.0
+        elif code >= 97.0 && code <= 102.0
+            result = result + code - 87.0
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn to_hex_padded(val, width)
+    // Convert to hex with zero-padding to width characters.
+    let mut h = to_hex(val)
+    while len(h) < width
+        h = "0" + h
+    end
+    return h
+end

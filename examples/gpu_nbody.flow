@@ -4,29 +4,23 @@
 //
 // All-pairs gravitational N-body with shared-memory tiling.
 // Each thread computes total force on one particle from all 4096 others.
-// Leapfrog integration. Double-buffered state.
+// Leapfrog integration. Uses pre-compiled 27_nbody.spv kernel.
 //
 // Run: octoflow run examples/gpu_nbody.flow --allow-ffi --allow-read
-
-use "../stdlib/loom/ops/runtime"
 
 let N = 4096.0
 let STEPS = 100.0
 let DT = 0.0001
 let SOFT = 0.1
 
-rt_init()
-
-// 3 push constants: n_particles, dt, softening = 12 bytes
-let pipe_nbody = rt_load_pipeline("tests/gpu_shaders/27_nbody.spv", 2.0, 12.0)
+// Boot Loom VM: 1 instance, 2 registers (input + output), N*4 floats
+let vm = loom_boot(1.0, 2.0, N * 4.0)
+loom_prefetch("tests/gpu_shaders/27_nbody.spv")
 
 // ── Initialize particles in a disk ───────────────────────────────────
-// Deterministic pseudo-random placement using modular arithmetic
 let mut state = []
 let mut i = 0.0
 while i < N
-  // Position: scatter in a [-10, 10] × [-10, 10] box
-  // Using simple hash: (i*7 + 13) mod 97 / 97 * range
   let hx = i * 7.0 + 13.0
   let hx2 = hx - floor(hx / 97.0) * 97.0
   let x = (hx2 / 97.0 - 0.5) * 20.0
@@ -35,7 +29,6 @@ while i < N
   let hy2 = hy - floor(hy / 89.0) * 89.0
   let y = (hy2 / 89.0 - 0.5) * 20.0
 
-  // Initial velocity: slight circular motion
   let r = sqrt(x * x + y * y + 0.01)
   let vx = y / r * 0.5
   let vy = 0.0 - x / r * 0.5
@@ -47,19 +40,17 @@ while i < N
   i = i + 1.0
 end
 
-// Double buffer for ping-pong
-let buf_a = rt_create_buffer(N * 4.0 * 4.0)
-let buf_b = rt_create_buffer(N * 4.0 * 4.0)
-rt_upload(buf_a, state)
+// Upload initial state to register 0 (binding 0 = input)
+vm_write_register(vm, 0.0, 0.0, state)
 
-// Zero buffer B
+// Zero register 1 (binding 1 = output)
 let mut zeros = []
 let mut i = 0.0
 while i < N * 4.0
   push(zeros, 0.0)
   i = i + 1.0
 end
-rt_upload(buf_b, zeros)
+vm_write_register(vm, 0.0, 1.0, zeros)
 
 // ── Record initial center of mass ────────────────────────────────────
 let mut cx0 = 0.0
@@ -79,23 +70,15 @@ let t0 = time()
 
 let mut step = 0.0
 while step < STEPS
-  // Alternate A→B and B→A
-  let even = step - floor(step / 2.0) * 2.0
+  // Dispatch: kernel reads binding 0, writes binding 1
+  loom_dispatch(vm, "tests/gpu_shaders/27_nbody.spv", [N, DT, SOFT], WGS)
+  let prog = loom_build(vm)
+  loom_run(prog)
+  loom_free(prog)
 
-  rt_chain_begin(1.0, 2.0)
-  let mut pc = [N, DT, SOFT]
-  rt_chain_push_constants(pipe_nbody, pc)
-
-  if even == 0.0
-    let mut bufs = [buf_a, buf_b]
-    rt_chain_dispatch(pipe_nbody, bufs, WGS)
-  else
-    let mut bufs = [buf_b, buf_a]
-    rt_chain_dispatch(pipe_nbody, bufs, WGS)
-  end
-
-  rt_chain_end()
-  rt_chain_submit_wait()
+  // Swap: read output (register 1), write back to input (register 0)
+  let result = loom_read(vm, 0.0, 1.0, N * 4.0)
+  vm_write_register(vm, 0.0, 0.0, result)
 
   step = step + 1.0
 end
@@ -104,21 +87,14 @@ let t1 = time()
 let total_ms = (t1 - t0) * 1000.0
 
 // ── Download final state ─────────────────────────────────────────────
-// After 100 steps (even), result is in buf_b (if STEPS is even) or buf_a
-let even_steps = STEPS - floor(STEPS / 2.0) * 2.0
-if even_steps == 0.0
-  rt_download(buf_a, N * 4.0)
-else
-  rt_download(buf_b, N * 4.0)
-end
+let final_state = loom_read(vm, 0.0, 0.0, N * 4.0)
 
-// Compute final center of mass
 let mut cx1 = 0.0
 let mut cy1 = 0.0
 let mut i = 0.0
 while i < N
-  cx1 = cx1 + rt_result[int(i * 4.0)]
-  cy1 = cy1 + rt_result[int(i * 4.0 + 1.0)]
+  cx1 = cx1 + final_state[int(i * 4.0)]
+  cy1 = cy1 + final_state[int(i * 4.0 + 1.0)]
   i = i + 1.0
 end
 cx1 = cx1 / N
@@ -127,20 +103,18 @@ cy1 = cy1 / N
 let com_drift_x = abs(cx1 - cx0)
 let com_drift_y = abs(cy1 - cy0)
 
-// Sample a few particles
-let p0_x = rt_result[0]
-let p0_y = rt_result[1]
-let p100_x = rt_result[400]
-let p100_y = rt_result[401]
-let p1000_x = rt_result[4000]
-let p1000_y = rt_result[4001]
+let p0_x = final_state[0]
+let p0_y = final_state[1]
+let p100_x = final_state[400]
+let p100_y = final_state[401]
+let p1000_x = final_state[4000]
+let p1000_y = final_state[4001]
 
-// Check particles didn't explode (all within reasonable bounds)
 let mut bounded = 1.0
 let mut i = 0.0
 while i < N
-  let x = rt_result[int(i * 4.0)]
-  let y = rt_result[int(i * 4.0 + 1.0)]
+  let x = final_state[int(i * 4.0)]
+  let y = final_state[int(i * 4.0 + 1.0)]
   if abs(x) > 1000.0
     bounded = 0.0
   end
@@ -161,7 +135,6 @@ print("  Timesteps: {STEPS}")
 print("  dt: {DT}")
 print("  Softening: {SOFT}")
 print("  Dispatches: {STEPS} (1 per step)")
-print("  Submissions: {STEPS}")
 print("  CPU force calculations: 0")
 print("  Total time: {total_ms} ms")
 print("  Interactions: {interactions}")
@@ -193,4 +166,4 @@ else
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm)

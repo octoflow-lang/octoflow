@@ -1,0 +1,172 @@
+// test_debug_draw.flow — Tests for stdlib/game/debug_draw.flow
+use "debug_draw"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic draw ───────────────────────────────────────
+
+fn test_line()
+    let _c = dd_clear()
+    let id = dd_line(10.0, 20.0, 30.0, 40.0, 255.0, 0.0, 0.0, 3.0)
+    check("line count", dd_count() == 1.0)
+    check("line type", dd_type(id) == DD_LINE)
+    check("line x1", dd_x1(id) == 10.0)
+    check("line y1", dd_y1(id) == 20.0)
+    check("line x2", dd_x2(id) == 30.0)
+    check("line y2", dd_y2(id) == 40.0)
+    check("line r", dd_r(id) == 255.0)
+    check("line life", dd_life(id) == 3.0)
+    return 0.0
+end
+
+// ── Shapes ───────────────────────────────────────────
+
+fn test_shapes()
+    let _c = dd_clear()
+    let _r = dd_rect(5.0, 10.0, 100.0, 50.0, 0.0, 255.0, 0.0, 2.0)
+    let _ci = dd_circle(50.0, 50.0, 25.0, 0.0, 0.0, 255.0, 1.0)
+    let _p = dd_point(75.0, 75.0, 255.0, 255.0, 0.0, 1.0)
+    let _cr = dd_cross(100.0, 100.0, 10.0, 255.0, 0.0, 255.0, 1.0)
+    let _a = dd_arrow(0.0, 0.0, 50.0, 50.0, 128.0, 128.0, 128.0, 1.0)
+    check("shapes count", dd_count() == 5.0)
+    check("rect type", dd_type(0.0) == DD_RECT)
+    check("circle type", dd_type(1.0) == DD_CIRCLE)
+    check("point type", dd_type(2.0) == DD_POINT)
+    check("cross type", dd_type(3.0) == DD_CROSS)
+    check("arrow type", dd_type(4.0) == DD_ARROW)
+    return 0.0
+end
+
+// ── Lifetime expiry ──────────────────────────────────
+
+fn test_expiry()
+    let _c = dd_clear()
+    let _a = dd_line(0.0, 0.0, 10.0, 10.0, 255.0, 0.0, 0.0, 2.0)
+    let _b = dd_line(0.0, 0.0, 20.0, 20.0, 0.0, 255.0, 0.0, 1.0)
+    check("expiry before", dd_count() == 2.0)
+    // Frame 1: both alive (lifetimes become 1 and 0)
+    let _u1 = dd_update()
+    check("expiry frame1", dd_count() == 1.0)
+    // Frame 2: first has lifetime 0 now
+    let _u2 = dd_update()
+    check("expiry frame2", dd_count() == 0.0)
+    return 0.0
+end
+
+// ── Toggle ───────────────────────────────────────────
+
+fn test_toggle()
+    let _c = dd_clear()
+    check("toggle on", dd_enabled() == 1.0)
+    let _a = dd_line(0.0, 0.0, 10.0, 10.0, 255.0, 0.0, 0.0, 1.0)
+    check("toggle draw1", dd_count() == 1.0)
+    // Disable
+    let _c2 = dd_clear()
+    let _t = dd_toggle()
+    check("toggle off", dd_enabled() == 0.0)
+    let _b = dd_line(0.0, 0.0, 10.0, 10.0, 255.0, 0.0, 0.0, 1.0)
+    check("toggle no draw", dd_count() == 0.0)
+    // Re-enable
+    let _t2 = dd_toggle()
+    check("toggle re-on", dd_enabled() == 1.0)
+    return 0.0
+end
+
+// ── Clear ────────────────────────────────────────────
+
+fn test_clear()
+    let _c = dd_clear()
+    let _a = dd_line(0.0, 0.0, 10.0, 10.0, 255.0, 0.0, 0.0, 5.0)
+    let _b = dd_rect(0.0, 0.0, 10.0, 10.0, 0.0, 255.0, 0.0, 5.0)
+    check("clear before", dd_count() == 2.0)
+    let _cl = dd_clear()
+    check("clear after", dd_count() == 0.0)
+    return 0.0
+end
+
+// ── Convenience ──────────────────────────────────────
+
+fn test_convenience()
+    let _c = dd_clear()
+    let _a = dd_line_red(0.0, 0.0, 10.0, 10.0, 1.0)
+    let _b = dd_line_green(0.0, 0.0, 10.0, 10.0, 1.0)
+    let _d = dd_line_blue(0.0, 0.0, 10.0, 10.0, 1.0)
+    check("conv count", dd_count() == 3.0)
+    check("conv red r", dd_r(0.0) == 255.0)
+    check("conv green g", dd_g(1.0) == 255.0)
+    check("conv blue b", dd_b(2.0) == 255.0)
+    return 0.0
+end
+
+// ── Debug shapes ─────────────────────────────────────
+
+fn test_debug_shapes()
+    let _c = dd_clear()
+    let _a = dd_aabb(10.0, 20.0, 30.0, 40.0, 1.0)
+    check("aabb type", dd_type(0.0) == DD_RECT)
+    check("aabb green", dd_g(0.0) == 255.0)
+    let _c2 = dd_clear()
+    let _v = dd_velocity(50.0, 50.0, 10.0, 5.0, 2.0, 1.0)
+    check("vel type", dd_type(0.0) == DD_ARROW)
+    check("vel x2", dd_x2(0.0) == 70.0)
+    check("vel y2", dd_y2(0.0) == 60.0)
+    return 0.0
+end
+
+// ── Path ─────────────────────────────────────────────
+
+fn test_path()
+    let _c = dd_clear()
+    let mut pts = [0.0, 0.0, 10.0, 10.0, 20.0, 0.0]
+    let n = dd_path(pts, 3.0, 255.0, 0.0, 0.0, 1.0)
+    check("path segments", n == 2.0)
+    check("path count", dd_count() == 2.0)
+    return 0.0
+end
+
+// ── Grid ─────────────────────────────────────────────
+
+fn test_grid()
+    let _c = dd_clear()
+    let n = dd_grid(0.0, 0.0, 100.0, 100.0, 50.0, 128.0, 128.0, 128.0, 1.0)
+    // 3 vertical (0, 50, 100) + 3 horizontal (0, 50, 100) = 6
+    check("grid lines", n == 6.0)
+    check("grid count", dd_count() == 6.0)
+    return 0.0
+end
+
+// ── Bounds check ─────────────────────────────────────
+
+fn test_bounds()
+    let _c = dd_clear()
+    check("get oob", dd_get(-1.0, 0.0) == 0.0)
+    check("get oob2", dd_get(100.0, 0.0) == 0.0)
+    check("get bad field", dd_get(0.0, 99.0) == 0.0)
+    // Minimum lifetime guard
+    let _a = dd_line(0.0, 0.0, 10.0, 10.0, 0.0, 0.0, 0.0, 0.0)
+    check("min life", dd_life(0.0) == 1.0)
+    return 0.0
+end
+
+// ── Run all ──────────────────────────────────────────
+
+test_line()
+test_shapes()
+test_expiry()
+test_toggle()
+test_clear()
+test_convenience()
+test_debug_shapes()
+test_path()
+test_grid()
+test_bounds()
+print("")
+print("All debug_draw tests passed (10 tests)")

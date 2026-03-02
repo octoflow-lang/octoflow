@@ -1,0 +1,76 @@
+// emit_spatial_hash.flow — Hash particles to grid cells
+//
+// 1 thread = 1 particle. Maps position to a 3D grid cell index.
+// World space [-1, 1] → grid [0, GRID-1].
+//
+// Push constants (2 floats):
+//   pc[0] = N (particle count)
+//   pc[1] = GRID_SIZE (cells per axis, e.g. 32)
+//
+// Buffer layout (binding 0):
+//   [0..N*4)    = positions (x, y, z, mass) — READ
+//   [N*4..N*5)  = cell_ids[N] — WRITE (float-encoded uint)
+//
+// Dispatch: loom_dispatch(vm, "spatial_hash.spv", [N, GRID], ceil(N/256))
+
+use "../../../compiler/ir"
+
+fn emit_spatial_hash(out_path)
+  ir_new()
+
+  let entry = ir_block("entry")
+
+  let c0f = ir_const_f(entry, 0.0)
+  let c1f = ir_const_f(entry, 1.0)
+  let c2f = ir_const_f(entry, 2.0)
+  let c_half = ir_const_f(entry, 0.5)
+  let c0u = ir_const_u(entry, 0)
+  let c1u = ir_const_u(entry, 1)
+  let c2u = ir_const_u(entry, 2)
+  let c4u = ir_const_u(entry, 4)
+
+  let pc_n = ir_push_const(entry, 0.0)
+  let pc_grid = ir_push_const(entry, 1.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, pc_n)
+
+  let main_m = ir_block("main_merge")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_bounds, work, main_m)
+
+  // Load position
+  let i4 = ir_imul(work, gid, c4u)
+  let px = ir_load_input_at(work, 0.0, i4)
+  let py = ir_load_input_at(work, 0.0, ir_iadd(work, i4, c1u))
+  let pz = ir_load_input_at(work, 0.0, ir_iadd(work, i4, c2u))
+
+  // Map [-1, 1] → [0, GRID-1]: cell = clamp(floor((pos + 1) * GRID / 2), 0, GRID-1)
+  let grid_half = ir_fdiv(work, pc_grid, c2f)
+  let grid_m1 = ir_fsub(work, pc_grid, c1f)
+
+  let cx_raw = ir_floor(work, ir_fmul(work, ir_fadd(work, px, c1f), grid_half))
+  let cy_raw = ir_floor(work, ir_fmul(work, ir_fadd(work, py, c1f), grid_half))
+  let cz_raw = ir_floor(work, ir_fmul(work, ir_fadd(work, pz, c1f), grid_half))
+
+  // Clamp to [0, GRID-1]
+  let cx = ir_fmin(work, ir_fmax(work, cx_raw, c0f), grid_m1)
+  let cy = ir_fmin(work, ir_fmax(work, cy_raw, c0f), grid_m1)
+  let cz = ir_fmin(work, ir_fmax(work, cz_raw, c0f), grid_m1)
+
+  // Linear index: cx + cy * GRID + cz * GRID * GRID
+  let cell_id = ir_fadd(work, ir_fadd(work, cx, ir_fmul(work, cy, pc_grid)), ir_fmul(work, cz, ir_fmul(work, pc_grid, pc_grid)))
+
+  // Store at cell_ids[gid] = offset N*4 + gid
+  let n_u = ir_ftou(work, pc_n)
+  let cell_off = ir_iadd(work, ir_imul(work, n_u, c4u), gid)
+  ir_store_output_at(work, cell_off, cell_id)
+
+  ir_term_branch(work, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

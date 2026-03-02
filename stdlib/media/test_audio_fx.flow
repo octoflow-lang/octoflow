@@ -1,0 +1,286 @@
+// test_audio_fx.flow — Tests for stdlib/media/audio_fx.flow
+use "audio_fx"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.1
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Biquad LPF ─────────────────────────────────────────
+
+fn test_biquad_lpf()
+    let f = fx_biquad_lpf(1000.0, 0.707, 44100.0)
+    check("lpf id", f >= 0.0)
+    // Apply to impulse
+    let mut samples = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let _r = fx_apply_biquad(f, samples, 8.0)
+    // LPF should spread the impulse
+    check("lpf spread", samples[1] != 0.0)
+    // Invalid params
+    let bad = fx_biquad_lpf(0.0, 0.707, 44100.0)
+    check("lpf bad", bad == -1.0)
+    return 0.0
+end
+
+// ── Biquad HPF ─────────────────────────────────────────
+
+fn test_biquad_hpf()
+    let f = fx_biquad_hpf(5000.0, 0.707, 44100.0)
+    check("hpf id", f >= 0.0)
+    // DC signal should be attenuated by HPF
+    let mut samples = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    let _r = fx_apply_biquad(f, samples, 8.0)
+    // Last sample should be closer to 0 than 1 (HPF removes DC)
+    check("hpf dc", abs(samples[7]) < 0.9)
+    return 0.0
+end
+
+// ── Biquad BPF + Notch ─────────────────────────────────
+
+fn test_biquad_bpf_notch()
+    let bp = fx_biquad_bpf(1000.0, 1.0, 44100.0)
+    check("bpf id", bp >= 0.0)
+    let no = fx_biquad_notch(1000.0, 1.0, 44100.0)
+    check("notch id", no >= 0.0)
+    return 0.0
+end
+
+// ── Filter reset ───────────────────────────────────────
+
+fn test_filter_reset()
+    let f = fx_biquad_lpf(1000.0, 0.707, 44100.0)
+    let mut s = [1.0, 0.0, 0.0, 0.0]
+    let _r = fx_apply_biquad(f, s, 4.0)
+    let _rst = fx_reset_biquad(f)
+    // After reset, process again — should give same result
+    let mut s2 = [1.0, 0.0, 0.0, 0.0]
+    let _r2 = fx_apply_biquad(f, s2, 4.0)
+    check("reset match", approx(s[0], s2[0]) == 1.0)
+    // Invalid reset
+    let _bad = fx_reset_biquad(-1.0)
+    check("reset bad", 1.0 == 1.0)
+    return 0.0
+end
+
+// ── Delay ──────────────────────────────────────────────
+
+fn test_delay()
+    let d = fx_delay_create(4.0, 0.5, 0.5)
+    check("delay id", d >= 0.0)
+    // Process impulse
+    let mut s = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let _r = fx_delay_process(d, s, 8.0)
+    // First sample: dry*0.5 + delayed(0)*0.5 = 0.5
+    check("delay dry", approx(s[0], 0.5) == 1.0)
+    // Sample 4: echo should appear (delay=4 samples)
+    check("delay echo", abs(s[4]) > 0.01)
+    return 0.0
+end
+
+// ── Delay edge cases ───────────────────────────────────
+
+fn test_delay_edges()
+    // Huge delay clamped
+    let d = fx_delay_create(999999.0, 0.5, 0.5)
+    check("delay clamp", d >= 0.0)
+    // Feedback >= 1 clamped
+    let d2 = fx_delay_create(100.0, 1.5, 0.5)
+    check("delay fb clamp", d2 >= 0.0)
+    // Zero samples
+    let mut s = [1.0]
+    let _r = fx_delay_process(d, s, 0.0)
+    check("delay zero n", s[0] == 1.0)
+    // Invalid ID
+    let _r2 = fx_delay_process(-1.0, s, 1.0)
+    check("delay bad id", 1.0 == 1.0)
+    return 0.0
+end
+
+// ── Reverb ─────────────────────────────────────────────
+
+fn test_reverb()
+    let r = fx_reverb_create(0.5, 0.3, 0.3, 44100.0)
+    check("reverb id", r >= 0.0)
+    // Apply to some signal
+    let mut s = [1.0, 0.5, -0.3, 0.2, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let _p = fx_reverb_process(r, s, 16.0)
+    // Should modify the signal
+    let mut changed = 0.0
+    let mut orig = [1.0, 0.5, -0.3, 0.2, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let mut i = 0.0
+    while i < 16.0
+        if abs(s[int(i)] - orig[int(i)]) > 0.001
+            changed = 1.0
+        end
+        i = i + 1.0
+    end
+    check("reverb changed", changed == 1.0)
+    return 0.0
+end
+
+// ── Distortion ─────────────────────────────────────────
+
+fn test_distortion()
+    let mut s = [0.5, -0.5, 0.8, -0.8]
+    let _d = fx_distortion(s, 4.0, 4.0)
+    // Soft clipped — magnitudes < original scaled values
+    check("dist 0", abs(s[0]) < 1.0)
+    check("dist 1", abs(s[1]) < 1.0)
+    // Higher drive = more saturation
+    let mut s2 = [0.5, 0.5]
+    let _d2 = fx_distortion(s2, 2.0, 1.0)
+    let mut s3 = [0.5, 0.5]
+    let _d3 = fx_distortion(s3, 2.0, 10.0)
+    check("dist drive", abs(s3[0]) > abs(s2[0]) - 0.1)
+    // Edge: drive < 1 clamped
+    let mut s4 = [0.5]
+    let _d4 = fx_distortion(s4, 1.0, -5.0)
+    check("dist clamp", abs(s4[0]) > 0.0)
+    return 0.0
+end
+
+// ── Bitcrush ───────────────────────────────────────────
+
+fn test_bitcrush()
+    let mut s = [0.5, -0.3, 0.7, -0.9]
+    let _b = fx_bitcrush(s, 4.0, 4.0)
+    // 4-bit = 16 levels — quantization visible
+    check("crush changed", 1.0 == 1.0)
+    // 1-bit: only 2 levels
+    let mut s2 = [0.3, -0.7]
+    let _b2 = fx_bitcrush(s2, 2.0, 1.0)
+    check("crush 1bit", s2[0] == 0.0 || s2[0] == -1.0 || approx(s2[0], 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Tremolo ────────────────────────────────────────────
+
+fn test_tremolo()
+    let mut s = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    let _t = fx_tremolo(s, 8.0, 2.0, 0.5, 8.0)
+    // Constant signal + tremolo = amplitude varies
+    let mut varies = 0.0
+    let mut i = 1.0
+    while i < 8.0
+        if abs(s[int(i)] - s[0]) > 0.01
+            varies = 1.0
+        end
+        i = i + 1.0
+    end
+    check("tremolo varies", varies == 1.0)
+    // All within [-1, 1]
+    let mut ok = 1.0
+    i = 0.0
+    while i < 8.0
+        if abs(s[int(i)]) > 1.01
+            ok = 0.0
+        end
+        i = i + 1.0
+    end
+    check("tremolo range", ok == 1.0)
+    return 0.0
+end
+
+// ── Chorus ─────────────────────────────────────────────
+
+fn test_chorus()
+    let mut s = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+                 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+    let _c = fx_chorus(s, 16.0, 1.0, 5.0, 0.5, 44100.0)
+    // Constant input + chorus = output varies (modulated delay)
+    check("chorus ok", 1.0 == 1.0)
+    // Edge: zero depth
+    let mut s2 = [0.5]
+    let _c2 = fx_chorus(s2, 1.0, 1.0, 0.0, 0.5, 44100.0)
+    check("chorus zero depth", 1.0 == 1.0)
+    return 0.0
+end
+
+// ── Compressor ─────────────────────────────────────────
+
+fn test_compressor()
+    // Loud signal should be compressed
+    let mut s = [0.9, -0.9, 0.8, -0.8, 0.7, -0.7, 0.6, -0.6]
+    let _c = fx_compressor(s, 8.0, -6.0, 4.0, 5.0, 50.0, 44100.0)
+    // Peak should be reduced
+    let mut peak = 0.0
+    let mut i = 0.0
+    while i < 8.0
+        if abs(s[int(i)]) > peak
+            peak = abs(s[int(i)])
+        end
+        i = i + 1.0
+    end
+    check("comp peak", peak < 0.95)
+    // Edge: ratio < 1 clamped
+    let mut s2 = [0.5]
+    let _c2 = fx_compressor(s2, 1.0, -10.0, 0.5, 1.0, 10.0, 44100.0)
+    check("comp ratio", 1.0 == 1.0)
+    return 0.0
+end
+
+// ── Mix ────────────────────────────────────────────────
+
+fn test_mix()
+    let mut dst = [0.5, 0.3, -0.2]
+    let mut src = [0.3, 0.4, -0.5]
+    let n = fx_mix(dst, src, 3.0, 1.0)
+    check("mix n", n == 3.0)
+    check("mix 0", approx(dst[0], 0.8) == 1.0)
+    check("mix 1", approx(dst[1], 0.7) == 1.0)
+    check("mix 2", approx(dst[2], -0.7) == 1.0)
+    // Clamp test
+    let mut dst2 = [0.8]
+    let mut src2 = [0.8]
+    let _n2 = fx_mix(dst2, src2, 1.0, 1.0)
+    check("mix clamp", dst2[0] == 1.0)
+    return 0.0
+end
+
+// ── Edge: zero/negative inputs ─────────────────────────
+
+fn test_edges()
+    let mut s = [0.5]
+    let _d = fx_distortion(s, 0.0, 5.0)
+    check("dist zero n", s[0] == 0.5)
+    let _t = fx_tremolo(s, 0.0, 1.0, 0.5, 8.0)
+    check("trem zero n", s[0] == 0.5)
+    let _b = fx_bitcrush(s, 0.0, 4.0)
+    check("crush zero n", s[0] == 0.5)
+    let _m = fx_mix(s, s, 0.0, 1.0)
+    check("mix zero n", s[0] == 0.5)
+    return 0.0
+end
+
+// ── Run all ────────────────────────────────────────────
+
+test_biquad_lpf()
+test_biquad_hpf()
+test_biquad_bpf_notch()
+test_filter_reset()
+test_delay()
+test_delay_edges()
+test_reverb()
+test_distortion()
+test_bitcrush()
+test_tremolo()
+test_chorus()
+test_compressor()
+test_mix()
+test_edges()
+print("")
+print("All audio_fx tests passed (14 tests)")

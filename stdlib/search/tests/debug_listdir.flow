@@ -1,0 +1,10 @@
+let items = list_dir("C:/OctoFlow/stdlib")
+let mut i = 0.0
+while i < len(items)
+    let item = items[i]
+    let path = "C:/OctoFlow/stdlib/" + item
+    let isdir = is_dir(path)
+    print("{item} dir={isdir}")
+    i = i + 1.0
+end
+print("total entries: {i}")

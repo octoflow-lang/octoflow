@@ -1,0 +1,213 @@
+// emit_nbody_gravity.flow — N-body gravity GPU kernel emitter
+//
+// All-pairs gravity with shared-memory tiling + leapfrog integration.
+// 1 thread = 1 particle. Workgroup size = 256.
+//
+// Push constants (3 floats):
+//   pc[0] = N (particle count)
+//   pc[1] = dt (timestep)
+//   pc[2] = softening² (prevents singularity)
+//
+// Buffer layout (binding 0, globals):
+//   [0..N*4)     = positions (x, y, z, mass) × N
+//   [N*4..N*8)   = velocities (vx, vy, vz, 0) × N
+//
+// Dispatch: loom_dispatch(vm, "nbody_gravity.spv", [N, dt, softening²], ceil(N/256))
+
+use "../../../compiler/ir"
+
+fn emit_nbody_gravity(out_path)
+  ir_new()
+  ir_shared_size = 1024.0  // 256 threads × 4 floats (x, y, z, mass)
+
+  let entry = ir_block("entry")
+
+  // ── Constants ──
+  let c0f = ir_const_f(entry, 0.0)
+  let c1f = ir_const_f(entry, 1.0)
+  let c4f = ir_const_f(entry, 4.0)
+  let c256f = ir_const_f(entry, 256.0)
+  let c0u = ir_const_u(entry, 0)
+  let c1u = ir_const_u(entry, 1)
+  let c2u = ir_const_u(entry, 2)
+  let c3u = ir_const_u(entry, 3)
+  let c4u = ir_const_u(entry, 4)
+  let c256u = ir_const_u(entry, 256)
+
+  // ── Push constants ──
+  let pc_n = ir_push_const(entry, 0.0)
+  let pc_dt = ir_push_const(entry, 1.0)
+  let pc_soft2 = ir_push_const(entry, 2.0)
+
+  // ── Thread ID + bounds check ──
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, pc_n)
+
+  let main_m = ir_block("main_merge")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_bounds, work, main_m)
+
+  // ── Load my particle position + velocity ──
+  let local_id = ir_load_local_id(work)
+  let gid4 = ir_imul(work, gid, c4u)
+  let pos_x = ir_load_input_at(work, 0.0, gid4)
+  let pos_y = ir_load_input_at(work, 0.0, ir_iadd(work, gid4, c1u))
+  let pos_z = ir_load_input_at(work, 0.0, ir_iadd(work, gid4, c2u))
+  let mass_i = ir_load_input_at(work, 0.0, ir_iadd(work, gid4, c3u))
+
+  let n_u = ir_ftou(work, pc_n)
+  let vel_base = ir_imul(work, n_u, c4u)
+  let vel_off = ir_iadd(work, vel_base, gid4)
+  let vel_x = ir_load_input_at(work, 0.0, vel_off)
+  let vel_y = ir_load_input_at(work, 0.0, ir_iadd(work, vel_off, c1u))
+  let vel_z = ir_load_input_at(work, 0.0, ir_iadd(work, vel_off, c2u))
+
+  // ── Tile count: ceil(N / 256) ──
+  let tiles_f = ir_fdiv(work, ir_fadd(work, pc_n, ir_const_f(work, 255.0)), c256f)
+  let num_tiles = ir_floor(work, tiles_f)
+
+  // ── Outer loop: tiles ──
+  let th = ir_block("tile_hdr")
+  let tb = ir_block("tile_body")
+  let tc = ir_block("tile_cont")
+  let tm = ir_block("tile_merge")
+
+  ir_term_branch(work, th)
+  ir_loop_merge(th, tm, tc)
+
+  let phi_tile = ir_phi(th, IR_TYPE_FLOAT)
+  let phi_ax = ir_phi(th, IR_TYPE_FLOAT)
+  let phi_ay = ir_phi(th, IR_TYPE_FLOAT)
+  let phi_az = ir_phi(th, IR_TYPE_FLOAT)
+
+  let tile_cond = ir_folt(th, phi_tile, num_tiles)
+  ir_term_cond_branch(th, tile_cond, tb, tm)
+
+  // ── Load tile into shared memory ──
+  // shared[local_id * 4 + 0..3] = positions[tile*256 + local_id]
+  let tile_base_f = ir_fmul(tb, phi_tile, c256f)
+  let src_idx_f = ir_fadd(tb, tile_base_f, ir_utof(tb, local_id))
+  let src_idx_u = ir_ftou(tb, src_idx_f)
+  let src_off = ir_imul(tb, src_idx_u, c4u)
+  let shared_off = ir_imul(tb, local_id, c4u)
+
+  // Bounds check for partial final tile
+  let src_in = ir_folt(tb, src_idx_f, pc_n)
+  let ld_x = ir_select(tb, IR_TYPE_FLOAT, src_in, ir_load_input_at(tb, 0.0, src_off), c0f)
+  let ld_y = ir_select(tb, IR_TYPE_FLOAT, src_in, ir_load_input_at(tb, 0.0, ir_iadd(tb, src_off, c1u)), c0f)
+  let ld_z = ir_select(tb, IR_TYPE_FLOAT, src_in, ir_load_input_at(tb, 0.0, ir_iadd(tb, src_off, c2u)), c0f)
+  let ld_m = ir_select(tb, IR_TYPE_FLOAT, src_in, ir_load_input_at(tb, 0.0, ir_iadd(tb, src_off, c3u)), c0f)
+
+  ir_shared_store(tb, shared_off, ld_x)
+  ir_shared_store(tb, ir_iadd(tb, shared_off, c1u), ld_y)
+  ir_shared_store(tb, ir_iadd(tb, shared_off, c2u), ld_z)
+  ir_shared_store(tb, ir_iadd(tb, shared_off, c3u), ld_m)
+
+  ir_barrier(tb)
+
+  // ── Inner loop: 256 particles in tile ──
+  let jh = ir_block("j_hdr")
+  let jb = ir_block("j_body")
+  let jc = ir_block("j_cont")
+  let jm = ir_block("j_merge")
+
+  ir_term_branch(tb, jh)
+  ir_loop_merge(jh, jm, jc)
+
+  let phi_j = ir_phi(jh, IR_TYPE_FLOAT)
+  let phi_jax = ir_phi(jh, IR_TYPE_FLOAT)
+  let phi_jay = ir_phi(jh, IR_TYPE_FLOAT)
+  let phi_jaz = ir_phi(jh, IR_TYPE_FLOAT)
+
+  // Inner condition: j < 256 AND tile*256+j < N
+  let j_lt_256 = ir_folt(jh, phi_j, c256f)
+  let global_j = ir_fadd(jh, tile_base_f, phi_j)
+  let j_lt_n = ir_folt(jh, global_j, pc_n)
+  let j_cond = ir_land(jh, j_lt_256, j_lt_n)
+  ir_term_cond_branch(jh, j_cond, jb, jm)
+
+  // ── Accumulate gravity from shared memory ──
+  let ju = ir_ftou(jb, phi_j)
+  let j4 = ir_imul(jb, ju, c4u)
+  let sj_x = ir_shared_load(jb, j4)
+  let sj_y = ir_shared_load(jb, ir_iadd(jb, j4, c1u))
+  let sj_z = ir_shared_load(jb, ir_iadd(jb, j4, c2u))
+  let sj_m = ir_shared_load(jb, ir_iadd(jb, j4, c3u))
+
+  let dx = ir_fsub(jb, sj_x, pos_x)
+  let dy = ir_fsub(jb, sj_y, pos_y)
+  let dz = ir_fsub(jb, sj_z, pos_z)
+
+  // dist² = dx² + dy² + dz² + softening²
+  let dist2 = ir_fadd(jb, ir_fadd(jb, ir_fadd(jb, ir_fmul(jb, dx, dx), ir_fmul(jb, dy, dy)), ir_fmul(jb, dz, dz)), pc_soft2)
+  // inv_dist³ = 1.0 / (dist² * sqrt(dist²))
+  let dist = ir_sqrt(jb, dist2)
+  let dist3 = ir_fmul(jb, dist2, dist)
+  let inv_dist3 = ir_fdiv(jb, c1f, dist3)
+  let force = ir_fmul(jb, sj_m, inv_dist3)
+
+  let new_jax = ir_fadd(jb, phi_jax, ir_fmul(jb, dx, force))
+  let new_jay = ir_fadd(jb, phi_jay, ir_fmul(jb, dy, force))
+  let new_jaz = ir_fadd(jb, phi_jaz, ir_fmul(jb, dz, force))
+
+  ir_term_branch(jb, jc)
+
+  // Inner continue
+  let j_next = ir_fadd(jc, phi_j, c1f)
+  ir_term_branch(jc, jh)
+
+  // Wire inner phi
+  ir_phi_add(phi_j, c0f, tb)
+  ir_phi_add(phi_j, j_next, jc)
+  ir_phi_add(phi_jax, phi_ax, tb)
+  ir_phi_add(phi_jax, new_jax, jc)
+  ir_phi_add(phi_jay, phi_ay, tb)
+  ir_phi_add(phi_jay, new_jay, jc)
+  ir_phi_add(phi_jaz, phi_az, tb)
+  ir_phi_add(phi_jaz, new_jaz, jc)
+
+  // ── After inner loop: barrier before next tile ──
+  ir_barrier(jm)
+  ir_term_branch(jm, tc)
+
+  // Outer continue
+  let tile_next = ir_fadd(tc, phi_tile, c1f)
+  ir_term_branch(tc, th)
+
+  // Wire outer phi
+  ir_phi_add(phi_tile, c0f, work)
+  ir_phi_add(phi_tile, tile_next, tc)
+  ir_phi_add(phi_ax, c0f, work)
+  ir_phi_add(phi_ax, phi_jax, tc)
+  ir_phi_add(phi_ay, c0f, work)
+  ir_phi_add(phi_ay, phi_jay, tc)
+  ir_phi_add(phi_az, c0f, work)
+  ir_phi_add(phi_az, phi_jaz, tc)
+
+  // ── Leapfrog integration ──
+  let new_vx = ir_fadd(tm, vel_x, ir_fmul(tm, phi_ax, pc_dt))
+  let new_vy = ir_fadd(tm, vel_y, ir_fmul(tm, phi_ay, pc_dt))
+  let new_vz = ir_fadd(tm, vel_z, ir_fmul(tm, phi_az, pc_dt))
+  let new_px = ir_fadd(tm, pos_x, ir_fmul(tm, new_vx, pc_dt))
+  let new_py = ir_fadd(tm, pos_y, ir_fmul(tm, new_vy, pc_dt))
+  let new_pz = ir_fadd(tm, pos_z, ir_fmul(tm, new_vz, pc_dt))
+
+  // ── Write back positions ──
+  ir_store_output_at(tm, gid4, new_px)
+  ir_store_output_at(tm, ir_iadd(tm, gid4, c1u), new_py)
+  ir_store_output_at(tm, ir_iadd(tm, gid4, c2u), new_pz)
+  ir_store_output_at(tm, ir_iadd(tm, gid4, c3u), mass_i)
+
+  // ── Write back velocities ──
+  ir_store_output_at(tm, vel_off, new_vx)
+  ir_store_output_at(tm, ir_iadd(tm, vel_off, c1u), new_vy)
+  ir_store_output_at(tm, ir_iadd(tm, vel_off, c2u), new_vz)
+
+  ir_term_branch(tm, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

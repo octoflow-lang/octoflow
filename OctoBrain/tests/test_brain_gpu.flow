@@ -1,0 +1,153 @@
+// OctoBrain GPU Integration Tests
+// Tests for octobrain.flow GPU acceleration — full brain API with GPU enabled.
+// 6 tests: GPU init, observe, recall, stats, cleanup, post-cleanup.
+// Uses PASS/FAIL print pattern.
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run tests/test_brain_gpu.flow --allow-ffi
+
+use "../lib/octobrain"
+
+// ── Helper: approximate equality ──────────────────────────────────
+fn approx_eq(x, y, tol)
+  let mut diff = x - y
+  if diff < 0.0
+    diff = diff * -1.0
+  end
+  if diff < tol
+    return 1.0
+  end
+  return 0.0
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 1: GPU initialization
+// Create brain, init GPU, verify gpu_enabled = 1.0
+// ══════════════════════════════════════════════════════════════════
+
+let mut brain = octobrain_new(2.0)
+let gpu_result = octobrain_init_gpu(brain)
+let t1_gpu = map_get(brain, "gpu_enabled")
+
+if approx_eq(t1_gpu, 1.0, 0.001) && approx_eq(gpu_result, 1.0, 0.001)
+  print("PASS test1: GPU initialization — gpu_enabled=1, init returned 1")
+else
+  print("FAIL test1: expected gpu_enabled=1 init=1, got gpu_enabled={t1_gpu} init={gpu_result}")
+end
+
+// ── Create all external arrays (same pattern as test_brain.flow) ──
+let mut p_state = proto_new()
+let mut p_embs = []
+let mut p_mc = []
+
+let mut e_state = embed_new()
+let mut W_embed = []
+let mut obs_buffer = []
+
+let mut edge_state = edges_new()
+let mut en = []
+let mut ea = []
+let mut eo = []
+let mut ep = []
+let mut ew = []
+let mut eact = []
+
+let mut window = []
+let mut W_score = []
+
+// ══════════════════════════════════════════════════════════════════
+// Test 2: Basic observations with GPU brain
+// Feed 3 data points: [1,0,0], [0.95,0.1,0.05], [0,0,1]
+// Verify proto_count=2 (same as CPU test — GPU brain with small
+// proto_count falls back to CPU path, ensuring identical results)
+// ══════════════════════════════════════════════════════════════════
+
+let data1 = [1.0, 0.0, 0.0]
+let d1 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, data1)
+
+let data2 = [0.95, 0.1, 0.05]
+let d2 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, data2)
+
+let data3 = [0.0, 0.0, 1.0]
+let d3 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, data3)
+
+let t2_pc = map_get(p_state, "proto_count")
+if approx_eq(t2_pc, 2.0, 0.001)
+  print("PASS test2: observations with GPU brain — proto_count=2 (matches CPU behavior)")
+else
+  print("FAIL test2: expected proto_count=2, got {t2_pc}")
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 3: Recall works with GPU brain
+// After 3 observations, recall should return 2 action scores.
+// Verify array length = action_count and scores are non-zero.
+// ══════════════════════════════════════════════════════════════════
+
+let scores3 = octobrain_recall(brain, p_state, p_embs, edge_state, en, ea, eo, ep, window, W_score)
+let t3_len = len(scores3)
+let mut t3_nonzero = 0.0
+let mut si = 0.0
+while si < t3_len
+  let sv = scores3[si]
+  if sv > 0.0001 || sv < -0.0001
+    t3_nonzero = t3_nonzero + 1.0
+  end
+  si = si + 1.0
+end
+
+if approx_eq(t3_len, 2.0, 0.001) && t3_nonzero > 0.0
+  let s0 = scores3[0]
+  let s1 = scores3[1]
+  print("PASS test3: recall with GPU brain — 2 scores [{s0:.4}, {s1:.4}], non-zero count={t3_nonzero}")
+else
+  print("FAIL test3: expected 2 non-zero scores, got len={t3_len} nonzero={t3_nonzero}")
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 4: Stats include gpu_enabled
+// octobrain_stats should report gpu_enabled=1.0 while GPU is active.
+// ══════════════════════════════════════════════════════════════════
+
+let stats4 = octobrain_stats(brain, p_state, edge_state)
+let t4_gpu = map_get(stats4, "gpu_enabled")
+let t4_pc = map_get(stats4, "proto_count")
+let t4_obs = map_get(stats4, "obs_count")
+
+if approx_eq(t4_gpu, 1.0, 0.001) && approx_eq(t4_pc, 2.0, 0.001) && approx_eq(t4_obs, 3.0, 0.001)
+  print("PASS test4: stats include gpu_enabled=1 (protos={t4_pc}, obs={t4_obs})")
+else
+  print("FAIL test4: expected gpu=1 pc=2 obs=3, got gpu={t4_gpu} pc={t4_pc} obs={t4_obs}")
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 5: GPU cleanup
+// After cleanup, gpu_enabled should be 0.0.
+// ══════════════════════════════════════════════════════════════════
+
+let cleanup_result = octobrain_cleanup_gpu(brain)
+let t5_gpu = map_get(brain, "gpu_enabled")
+
+if approx_eq(t5_gpu, 0.0, 0.001) && approx_eq(cleanup_result, 0.0, 0.001)
+  print("PASS test5: GPU cleanup — gpu_enabled=0 after cleanup")
+else
+  print("FAIL test5: expected gpu_enabled=0, got {t5_gpu}")
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 6: Brain continues after GPU cleanup
+// Feed one more data point — brain should still work on CPU path.
+// No crash, observe returns 0.0.
+// ══════════════════════════════════════════════════════════════════
+
+let data4 = [0.5, 0.5, 0.0]
+let d4 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, data4)
+
+if approx_eq(d4, 0.0, 0.001)
+  let t6_pc = map_get(p_state, "proto_count")
+  let t6_obs = map_get(brain, "obs_count")
+  print("PASS test6: brain continues after GPU cleanup — observe returned 0, protos={t6_pc}, obs={t6_obs}")
+else
+  print("FAIL test6: expected observe to return 0.0, got {d4}")
+end
+
+print("--- brain GPU integration tests complete ---")

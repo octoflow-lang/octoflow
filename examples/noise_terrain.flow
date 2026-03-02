@@ -6,9 +6,9 @@
 // Controls: Arrow keys to scroll, +/- to change scale, R to regenerate,
 //           O to add octaves, S to change seed
 
-use "game/game"
-use "game/input"
-use "game/noise"
+use "../stdlib/game/game"
+use "../stdlib/game/input"
+use "../stdlib/game/noise"
 
 // [0]=scale, [1]=octaves, [2]=seed, [3]=dirty, [4]=scroll_x, [5]=scroll_y
 let mut _nt = [40.0, 4.0, 42.0, 1.0, 0.0, 0.0]

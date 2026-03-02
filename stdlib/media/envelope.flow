@@ -1,0 +1,241 @@
+// stdlib/media/envelope.flow — ADSR envelope generator
+//
+// Attack-Decay-Sustain-Release envelopes for audio synthesis.
+// Envelopes shape amplitude over time: silence → peak → sustain → silence.
+//
+// Envelope storage: parallel arrays, index = envelope ID.
+// Phases: 0=idle, 1=attack, 2=decay, 3=sustain, 4=release, 5=done
+//
+// Functions: env_create, env_value_at, env_apply, env_apply_note,
+//            env_trigger, env_release, env_update, env_value,
+//            env_done, env_reset
+//
+// Usage:
+//   use "envelope"
+//   let e = env_create(0.01, 0.1, 0.7, 0.3)  // fast attack, short decay
+//   // Per sample:
+//   env_trigger(e)
+//   let val = env_update(e, dt)
+
+// Phase constants
+let ENV_IDLE = 0.0
+let ENV_ATTACK = 1.0
+let ENV_DECAY = 2.0
+let ENV_SUSTAIN = 3.0
+let ENV_RELEASE = 4.0
+let ENV_DONE = 5.0
+
+// Storage
+let mut _env_attack = []
+let mut _env_decay = []
+let mut _env_sustain = []
+let mut _env_release = []
+let mut _env_phase = []
+let mut _env_time = []
+let mut _env_value = []
+let mut _env_release_start = []
+
+// ── Core API ─────────────────────────────────────────
+
+fn env_create(attack, decay, sustain_level, release)
+    // Create ADSR envelope. Returns envelope ID.
+    // attack: seconds to rise from 0 to 1
+    // decay: seconds to fall from 1 to sustain_level
+    // sustain_level: amplitude during sustain [0, 1]
+    // release: seconds to fall from sustain to 0
+    let id = len(_env_attack)
+    let mut a = attack
+    if a < 0.001
+        a = 0.001
+    end
+    push(_env_attack, a)
+    let mut d = decay
+    if d < 0.001
+        d = 0.001
+    end
+    push(_env_decay, d)
+    let mut s = sustain_level
+    if s < 0.0
+        s = 0.0
+    end
+    if s > 1.0
+        s = 1.0
+    end
+    push(_env_sustain, s)
+    let mut r = release
+    if r < 0.001
+        r = 0.001
+    end
+    push(_env_release, r)
+    push(_env_phase, ENV_IDLE)
+    push(_env_time, 0.0)
+    push(_env_value, 0.0)
+    push(_env_release_start, 0.0)
+    return id
+end
+
+fn env_trigger(id)
+    // Start envelope (note on).
+    let ei = int(id)
+    _env_phase[ei] = ENV_ATTACK
+    _env_time[ei] = 0.0
+    _env_value[ei] = 0.0
+    return 0.0
+end
+
+fn env_release_note(id)
+    // Begin release phase (note off).
+    let ei = int(id)
+    if _env_phase[ei] != ENV_DONE && _env_phase[ei] != ENV_IDLE
+        _env_release_start[ei] = _env_value[ei]
+        _env_phase[ei] = ENV_RELEASE
+        _env_time[ei] = 0.0
+    end
+    return 0.0
+end
+
+fn env_update(id, dt)
+    // Advance envelope by dt seconds. Returns current amplitude [0, 1].
+    let ei = int(id)
+    let phase = _env_phase[ei]
+    if phase == ENV_IDLE || phase == ENV_DONE
+        return _env_value[ei]
+    end
+    if dt <= 0.0
+        return _env_value[ei]
+    end
+    _env_time[ei] = _env_time[ei] + dt
+    let t = _env_time[ei]
+    if phase == ENV_ATTACK
+        let a = _env_attack[ei]
+        if t >= a
+            _env_value[ei] = 1.0
+            _env_phase[ei] = ENV_DECAY
+            _env_time[ei] = 0.0
+        else
+            _env_value[ei] = t / a
+        end
+    elif phase == ENV_DECAY
+        let d = _env_decay[ei]
+        let s = _env_sustain[ei]
+        if t >= d
+            _env_value[ei] = s
+            _env_phase[ei] = ENV_SUSTAIN
+            _env_time[ei] = 0.0
+        else
+            _env_value[ei] = 1.0 - (1.0 - s) * (t / d)
+        end
+    elif phase == ENV_SUSTAIN
+        _env_value[ei] = _env_sustain[ei]
+    elif phase == ENV_RELEASE
+        let r = _env_release[ei]
+        let start_val = _env_release_start[ei]
+        if t >= r
+            _env_value[ei] = 0.0
+            _env_phase[ei] = ENV_DONE
+        else
+            _env_value[ei] = start_val * (1.0 - t / r)
+        end
+    end
+    return _env_value[ei]
+end
+
+fn env_value(id)
+    // Current envelope value without advancing.
+    return _env_value[int(id)]
+end
+
+fn env_done(id)
+    // Returns 1.0 if envelope is complete.
+    let p = _env_phase[int(id)]
+    if p == ENV_DONE || p == ENV_IDLE
+        return 1.0
+    end
+    return 0.0
+end
+
+fn env_phase(id)
+    return _env_phase[int(id)]
+end
+
+fn env_reset(id)
+    let ei = int(id)
+    _env_phase[ei] = ENV_IDLE
+    _env_time[ei] = 0.0
+    _env_value[ei] = 0.0
+    return 0.0
+end
+
+// ── Stateless computation ────────────────────────────
+
+fn env_value_at(id, time, note_duration)
+    // Compute envelope value at a specific time.
+    // note_duration: how long the note is held (release starts after).
+    let ei = int(id)
+    let a = _env_attack[ei]
+    let d = _env_decay[ei]
+    let s = _env_sustain[ei]
+    let r = _env_release[ei]
+    if time < 0.0
+        return 0.0
+    end
+    if time < a
+        return time / a
+    end
+    let t_after_attack = time - a
+    if t_after_attack < d
+        return 1.0 - (1.0 - s) * (t_after_attack / d)
+    end
+    let sustain_start = a + d
+    if time < note_duration
+        return s
+    end
+    let t_release = time - note_duration
+    if t_release < r
+        return s * (1.0 - t_release / r)
+    end
+    return 0.0
+end
+
+fn env_apply(id, samples, n_samples, note_duration, sample_rate)
+    // Apply envelope to sample array in-place.
+    if sample_rate <= 0.0 || n_samples <= 0.0
+        return 0.0
+    end
+    let dt = 1.0 / sample_rate
+    let mut i = 0.0
+    while i < n_samples
+        let t = i * dt
+        let amp = env_value_at(id, t, note_duration)
+        samples[int(i)] = samples[int(i)] * amp
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Preset envelopes ─────────────────────────────────
+
+fn env_piano()
+    // Piano-like: fast attack, medium decay, moderate sustain, long release.
+    return env_create(0.005, 0.3, 0.4, 0.8)
+end
+
+fn env_pad()
+    // Pad/string: slow attack, slow decay, high sustain, slow release.
+    return env_create(0.5, 0.5, 0.8, 1.0)
+end
+
+fn env_pluck()
+    // Plucked string: instant attack, fast decay, no sustain, short release.
+    return env_create(0.001, 0.2, 0.0, 0.1)
+end
+
+fn env_organ()
+    // Organ: instant attack, no decay, full sustain, fast release.
+    return env_create(0.001, 0.001, 1.0, 0.05)
+end
+
+fn env_percussion()
+    // Percussion hit: instant attack, short decay, no sustain, no release.
+    return env_create(0.001, 0.1, 0.0, 0.001)
+end

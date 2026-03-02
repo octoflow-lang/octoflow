@@ -1,0 +1,152 @@
+// test_bloom_filter.flow — Tests for stdlib/collections/bloom_filter.flow
+use "bloom_filter"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Creation ──────────────────────────────────────────────────
+
+fn test_bloom_create()
+    let mut bf = bloom_create(100.0, 3.0)
+    check("create size", bloom_size(bf) == 100.0)
+    check("create count", bloom_count(bf) == 0.0)
+    check("create bits", bloom_bits_set(bf) == 0.0)
+    return 0.0
+end
+
+// ── Add / Test ────────────────────────────────────────────────
+
+fn test_bloom_add_test()
+    let mut bf = bloom_create(1000.0, 7.0)
+    bloom_add(bf, "hello")
+    bloom_add(bf, "world")
+    check("test hello", bloom_test(bf, "hello") == 1.0)
+    check("test world", bloom_test(bf, "world") == 1.0)
+    check("count", bloom_count(bf) == 2.0)
+    return 0.0
+end
+
+fn test_bloom_not_present()
+    let mut bf = bloom_create(1000.0, 7.0)
+    bloom_add(bf, "apple")
+    bloom_add(bf, "banana")
+    // These should very likely not be present (with 1000 bits, 7 hashes, 2 items)
+    check("not present cherry", bloom_test(bf, "cherry") == 0.0)
+    check("not present grape", bloom_test(bf, "grape") == 0.0)
+    check("not present mango", bloom_test(bf, "mango") == 0.0)
+    return 0.0
+end
+
+fn test_bloom_many()
+    let mut bf = bloom_create(500.0, 5.0)
+    bloom_add(bf, "a")
+    bloom_add(bf, "b")
+    bloom_add(bf, "c")
+    bloom_add(bf, "d")
+    bloom_add(bf, "e")
+    check("many a", bloom_test(bf, "a") == 1.0)
+    check("many b", bloom_test(bf, "b") == 1.0)
+    check("many c", bloom_test(bf, "c") == 1.0)
+    check("many d", bloom_test(bf, "d") == 1.0)
+    check("many e", bloom_test(bf, "e") == 1.0)
+    check("many count", bloom_count(bf) == 5.0)
+    return 0.0
+end
+
+// ── Bits Set ──────────────────────────────────────────────────
+
+fn test_bloom_bits()
+    let mut bf = bloom_create(100.0, 3.0)
+    check("bits initial", bloom_bits_set(bf) == 0.0)
+    bloom_add(bf, "test")
+    let bits = bloom_bits_set(bf)
+    check("bits after add", bits > 0.0 && bits <= 3.0)
+    return 0.0
+end
+
+// ── Clear ─────────────────────────────────────────────────────
+
+fn test_bloom_clear()
+    let mut bf = bloom_create(100.0, 3.0)
+    bloom_add(bf, "hello")
+    bloom_add(bf, "world")
+    bloom_clear(bf)
+    check("clear count", bloom_count(bf) == 0.0)
+    check("clear bits", bloom_bits_set(bf) == 0.0)
+    check("clear not found", bloom_test(bf, "hello") == 0.0)
+    return 0.0
+end
+
+// ── False Positive Rate ───────────────────────────────────────
+
+fn test_bloom_fpr()
+    let mut bf = bloom_create(1000.0, 7.0)
+    // Empty filter should have FPR = 0
+    let fpr0 = bloom_false_positive_rate(bf)
+    check("fpr empty", fpr0 == 0.0)
+
+    // Add some items
+    bloom_add(bf, "a")
+    bloom_add(bf, "b")
+    bloom_add(bf, "c")
+    let fpr = bloom_false_positive_rate(bf)
+    // With 1000 bits and 3 items, FPR should be very low
+    check("fpr low", fpr < 0.01)
+    return 0.0
+end
+
+// ── Optimal Parameters ────────────────────────────────────────
+
+fn test_optimal()
+    // For 1000 items at 1% FPR
+    let m = bloom_optimal_size(1000.0, 0.01)
+    check("optimal size", m > 5000.0 && m < 15000.0)  // ~9585
+
+    let k = bloom_optimal_hashes(m, 1000.0)
+    check("optimal hashes", k >= 5.0 && k <= 10.0)  // ~7
+    return 0.0
+end
+
+// ── No False Negatives ────────────────────────────────────────
+
+fn test_no_false_negatives()
+    // Add 50 items, verify all are found
+    let mut bf = bloom_create(2000.0, 7.0)
+    let mut i = 0.0
+    while i < 50.0
+        bloom_add(bf, "item_" + str(i))
+        i = i + 1.0
+    end
+
+    let mut all_found = 1.0
+    i = 0.0
+    while i < 50.0
+        if bloom_test(bf, "item_" + str(i)) == 0.0
+            all_found = 0.0
+        end
+        i = i + 1.0
+    end
+    check("no false negatives", all_found == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_bloom_create()
+test_bloom_add_test()
+test_bloom_not_present()
+test_bloom_many()
+test_bloom_bits()
+test_bloom_clear()
+test_bloom_fpr()
+test_optimal()
+test_no_false_negatives()
+print("")
+print("All bloom filter tests passed (9 tests)")

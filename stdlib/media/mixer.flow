@@ -1,0 +1,395 @@
+// stdlib/media/mixer.flow — Multi-track audio mixer
+//
+// Mix multiple audio tracks with per-track volume, pan, mute/solo.
+// Master bus with gain and clipping protection.
+//
+// Track storage: parallel arrays, index = track ID.
+// Mixer storage: parallel arrays, index = mixer ID.
+//
+// Functions: mixer_create, mixer_add_track, mixer_set_volume,
+//            mixer_set_pan, mixer_mute, mixer_solo, mixer_unmute,
+//            mixer_mix_down, mixer_get_master, mixer_set_master_gain
+//
+// Usage:
+//   use "mixer"
+//   let mx = mixer_create(44100.0)
+//   let t1 = mixer_add_track(mx, samples1, 1000.0)
+//   let t2 = mixer_add_track(mx, samples2, 1000.0)
+//   mixer_set_volume(mx, t1, 0.8)
+//   mixer_set_pan(mx, t2, -0.5)  // pan left
+//   let out = mixer_mix_down(mx, 1000.0)
+
+// ── Mixer storage ──────────────────────────────────────
+
+let mut _mx_rate = []
+let mut _mx_master_gain = []
+let mut _mx_track_count = []
+let mut _mx_track_start = []
+
+// Track storage (flat across all mixers)
+let mut _mt_mixer = []
+let mut _mt_data = []
+let mut _mt_data_start = []
+let mut _mt_data_len = []
+let mut _mt_volume = []
+let mut _mt_pan = []
+let mut _mt_mute = []
+let mut _mt_solo = []
+
+// ── Mixer API ──────────────────────────────────────────
+
+fn mixer_create(sample_rate)
+    // Create a mixer. Returns mixer ID.
+    let id = len(_mx_rate)
+    let mut sr = sample_rate
+    if sr <= 0.0
+        sr = 44100.0
+    end
+    push(_mx_rate, sr)
+    push(_mx_master_gain, 1.0)
+    push(_mx_track_count, 0.0)
+    push(_mx_track_start, len(_mt_mixer))
+    return id
+end
+
+fn mixer_add_track(mixer_id, samples, n_samples)
+    // Add a track to the mixer. Copies sample data. Returns track ID (local).
+    let mi = int(mixer_id)
+    if mi < 0 || mi >= len(_mx_rate)
+        return -1.0
+    end
+    let track_id = _mx_track_count[mi]
+    _mx_track_count[mi] = track_id + 1.0
+    push(_mt_mixer, mixer_id)
+    let data_start = len(_mt_data)
+    push(_mt_data_start, data_start)
+    let mut ns = n_samples
+    if ns < 0.0
+        ns = 0.0
+    end
+    push(_mt_data_len, ns)
+    push(_mt_volume, 1.0)
+    push(_mt_pan, 0.0)
+    push(_mt_mute, 0.0)
+    push(_mt_solo, 0.0)
+    // Copy samples
+    let src_len = len(samples)
+    let mut i = 0.0
+    while i < ns
+        if i < src_len
+            push(_mt_data, samples[int(i)])
+        else
+            push(_mt_data, 0.0)
+        end
+        i = i + 1.0
+    end
+    return track_id
+end
+
+fn _mt_global_idx(mixer_id, track_id)
+    // Convert mixer-local track_id to global storage index.
+    let mi = int(mixer_id)
+    if mi < 0 || mi >= len(_mx_rate)
+        return -1.0
+    end
+    if track_id < 0.0 || track_id >= _mx_track_count[mi]
+        return -1.0
+    end
+    return _mx_track_start[mi] + track_id
+end
+
+// ── Track controls ─────────────────────────────────────
+
+fn mixer_set_volume(mixer_id, track_id, volume)
+    // Set track volume [0, inf). 1.0 = unity.
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    let mut v = volume
+    if v < 0.0
+        v = 0.0
+    end
+    _mt_volume[int(gi)] = v
+    return 0.0
+end
+
+fn mixer_set_pan(mixer_id, track_id, pan)
+    // Set track pan [-1.0 = left, 0.0 = center, 1.0 = right].
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    let mut p = pan
+    if p < -1.0
+        p = -1.0
+    end
+    if p > 1.0
+        p = 1.0
+    end
+    _mt_pan[int(gi)] = p
+    return 0.0
+end
+
+fn mixer_mute(mixer_id, track_id)
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    _mt_mute[int(gi)] = 1.0
+    return 0.0
+end
+
+fn mixer_unmute(mixer_id, track_id)
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    _mt_mute[int(gi)] = 0.0
+    return 0.0
+end
+
+fn mixer_solo(mixer_id, track_id)
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    _mt_solo[int(gi)] = 1.0
+    return 0.0
+end
+
+fn mixer_unsolo(mixer_id, track_id)
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    _mt_solo[int(gi)] = 0.0
+    return 0.0
+end
+
+fn mixer_get_volume(mixer_id, track_id)
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    return _mt_volume[int(gi)]
+end
+
+fn mixer_get_pan(mixer_id, track_id)
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    return _mt_pan[int(gi)]
+end
+
+fn mixer_is_muted(mixer_id, track_id)
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    return _mt_mute[int(gi)]
+end
+
+fn mixer_track_count(mixer_id)
+    let mi = int(mixer_id)
+    if mi < 0 || mi >= len(_mx_rate)
+        return 0.0
+    end
+    return _mx_track_count[mi]
+end
+
+// ── Master bus ─────────────────────────────────────────
+
+fn mixer_set_master_gain(mixer_id, gain)
+    let mi = int(mixer_id)
+    if mi < 0 || mi >= len(_mx_rate)
+        return 0.0
+    end
+    let mut g = gain
+    if g < 0.0
+        g = 0.0
+    end
+    _mx_master_gain[mi] = g
+    return 0.0
+end
+
+fn mixer_get_master_gain(mixer_id)
+    let mi = int(mixer_id)
+    if mi < 0 || mi >= len(_mx_rate)
+        return 0.0
+    end
+    return _mx_master_gain[mi]
+end
+
+// ── Mixdown ────────────────────────────────────────────
+
+fn mixer_mix_down(mixer_id, n_output_samples, result)
+    // Mix all tracks to mono output. Appends to result.
+    // Returns number of samples written.
+    let mi = int(mixer_id)
+    if mi < 0 || mi >= len(_mx_rate)
+        return 0.0
+    end
+    let n_tracks = _mx_track_count[mi]
+    let start = int(_mx_track_start[mi])
+    let master = _mx_master_gain[mi]
+    if n_tracks <= 0.0 || n_output_samples <= 0.0
+        return 0.0
+    end
+    // Check if any track has solo
+    let mut has_solo = 0.0
+    let mut t = 0.0
+    while t < n_tracks
+        let gi = int(start + t)
+        if _mt_solo[gi] == 1.0
+            has_solo = 1.0
+        end
+        t = t + 1.0
+    end
+    // Mix
+    let mut i = 0.0
+    while i < n_output_samples
+        let mut sum = 0.0
+        t = 0.0
+        while t < n_tracks
+            let gi = int(start + t)
+            // Skip muted tracks
+            if _mt_mute[gi] == 0.0
+                // If solo mode active, only play solo'd tracks
+                let mut play = 1.0
+                if has_solo == 1.0 && _mt_solo[gi] == 0.0
+                    play = 0.0
+                end
+                if play == 1.0
+                    let vol = _mt_volume[gi]
+                    let ds = int(_mt_data_start[gi])
+                    let dl = _mt_data_len[gi]
+                    let mut sample = 0.0
+                    if i < dl
+                        sample = _mt_data[int(ds + i)]
+                    end
+                    sum = sum + sample * vol
+                end
+            end
+            t = t + 1.0
+        end
+        let mut out = sum * master
+        if out > 1.0
+            out = 1.0
+        elif out < -1.0
+            out = -1.0
+        end
+        push(result, out)
+        i = i + 1.0
+    end
+    return n_output_samples
+end
+
+fn mixer_mix_down_stereo(mixer_id, n_output_samples, result_l, result_r)
+    // Mix all tracks to stereo output with panning. Appends to result_l and result_r.
+    let mi = int(mixer_id)
+    if mi < 0 || mi >= len(_mx_rate)
+        return 0.0
+    end
+    let n_tracks = _mx_track_count[mi]
+    let start = int(_mx_track_start[mi])
+    let master = _mx_master_gain[mi]
+    if n_tracks <= 0.0 || n_output_samples <= 0.0
+        return 0.0
+    end
+    // Check solo
+    let mut has_solo = 0.0
+    let mut t = 0.0
+    while t < n_tracks
+        let gi = int(start + t)
+        if _mt_solo[gi] == 1.0
+            has_solo = 1.0
+        end
+        t = t + 1.0
+    end
+    // Mix with pan law (constant power approximation)
+    let mut i = 0.0
+    while i < n_output_samples
+        let mut sum_l = 0.0
+        let mut sum_r = 0.0
+        t = 0.0
+        while t < n_tracks
+            let gi = int(start + t)
+            if _mt_mute[gi] == 0.0
+                let mut play = 1.0
+                if has_solo == 1.0 && _mt_solo[gi] == 0.0
+                    play = 0.0
+                end
+                if play == 1.0
+                    let vol = _mt_volume[gi]
+                    let pan = _mt_pan[gi]
+                    let ds = int(_mt_data_start[gi])
+                    let dl = _mt_data_len[gi]
+                    let mut sample = 0.0
+                    if i < dl
+                        sample = _mt_data[int(ds + i)]
+                    end
+                    let s = sample * vol
+                    // Linear pan: L = (1-pan)/2, R = (1+pan)/2
+                    let gain_l = (1.0 - pan) * 0.5
+                    let gain_r = (1.0 + pan) * 0.5
+                    sum_l = sum_l + s * gain_l
+                    sum_r = sum_r + s * gain_r
+                end
+            end
+            t = t + 1.0
+        end
+        let mut out_l = sum_l * master
+        let mut out_r = sum_r * master
+        if out_l > 1.0
+            out_l = 1.0
+        elif out_l < -1.0
+            out_l = -1.0
+        end
+        if out_r > 1.0
+            out_r = 1.0
+        elif out_r < -1.0
+            out_r = -1.0
+        end
+        push(result_l, out_l)
+        push(result_r, out_r)
+        i = i + 1.0
+    end
+    return n_output_samples
+end
+
+// ── Track peak metering ────────────────────────────────
+
+fn mixer_track_peak(mixer_id, track_id)
+    // Get peak amplitude of a track.
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    let gii = int(gi)
+    let ds = int(_mt_data_start[gii])
+    let dl = _mt_data_len[gii]
+    let mut peak = 0.0
+    let mut i = 0.0
+    while i < dl
+        let a = abs(_mt_data[int(ds + i)])
+        if a > peak
+            peak = a
+        end
+        i = i + 1.0
+    end
+    return peak
+end
+
+fn mixer_remove_track(mixer_id, track_id)
+    // Mute and zero out a track (cannot truly remove from flat storage).
+    let gi = _mt_global_idx(mixer_id, track_id)
+    if gi < 0.0
+        return 0.0
+    end
+    let gii = int(gi)
+    _mt_mute[gii] = 1.0
+    _mt_volume[gii] = 0.0
+    return 0.0
+end

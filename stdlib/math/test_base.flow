@@ -1,0 +1,92 @@
+// test_base.flow — Tests for stdlib/math/base.flow
+use "base"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Binary ────────────────────────────────────────────────
+
+fn test_binary()
+    check("to_binary 42", to_binary(42.0) == "101010")
+    check("to_binary 0", to_binary(0.0) == "0")
+    check("to_binary 1", to_binary(1.0) == "1")
+    check("to_binary 255", to_binary(255.0) == "11111111")
+    check("from_binary 101010", from_binary("101010") == 42.0)
+    check("from_binary 0", from_binary("0") == 0.0)
+    check("from_binary 11111111", from_binary("11111111") == 255.0)
+    return 0.0
+end
+
+// ── Octal ─────────────────────────────────────────────────
+
+fn test_octal()
+    check("to_octal 8", to_octal(8.0) == "10")
+    check("to_octal 255", to_octal(255.0) == "377")
+    check("from_octal 377", from_octal("377") == 255.0)
+    return 0.0
+end
+
+// ── Hex ───────────────────────────────────────────────────
+
+fn test_hex()
+    check("to_hex 255", to_hex_str(255.0) == "FF")
+    check("to_hex 16", to_hex_str(16.0) == "10")
+    check("to_hex 0", to_hex_str(0.0) == "0")
+    check("from_hex FF", from_hex_str("FF") == 255.0)
+    check("from_hex ff", from_hex_str("ff") == 255.0)
+    check("from_hex 1A", from_hex_str("1A") == 26.0)
+    return 0.0
+end
+
+// ── Arbitrary base ────────────────────────────────────────
+
+fn test_arbitrary_base()
+    check("base36 hello", from_base("HELLO", 36.0) > 0.0)
+    check("roundtrip b5", from_base(to_base(100.0, 5.0), 5.0) == 100.0)
+    check("roundtrip b7", from_base(to_base(1000.0, 7.0), 7.0) == 1000.0)
+    return 0.0
+end
+
+// ── Roman numerals ────────────────────────────────────────
+
+fn test_roman()
+    check("roman 1", to_roman(1.0) == "I")
+    check("roman 4", to_roman(4.0) == "IV")
+    check("roman 9", to_roman(9.0) == "IX")
+    check("roman 42", to_roman(42.0) == "XLII")
+    check("roman 99", to_roman(99.0) == "XCIX")
+    check("roman 2024", to_roman(2024.0) == "MMXXIV")
+    check("roman 3999", to_roman(3999.0) == "MMMCMXCIX")
+    check("from_roman XIV", from_roman("XIV") == 14.0)
+    check("from_roman MCMXC", from_roman("MCMXC") == 1990.0)
+    check("from_roman MMXXIV", from_roman("MMXXIV") == 2024.0)
+    return 0.0
+end
+
+// ── Palindrome ────────────────────────────────────────────
+
+fn test_palindrome()
+    check("palindrome 5 b2", is_palindrome_base(5.0, 2.0) == 1.0)   // 101
+    check("palindrome 7 b2", is_palindrome_base(7.0, 2.0) == 1.0)   // 111
+    check("palindrome 6 b2", is_palindrome_base(6.0, 2.0) == 0.0)   // 110
+    check("palindrome 121 b10", is_palindrome_base(121.0, 10.0) == 1.0)
+    return 0.0
+end
+
+// ── Run all ───────────────────────────────────────────────
+
+test_binary()
+test_octal()
+test_hex()
+test_arbitrary_base()
+test_roman()
+test_palindrome()
+print("")
+print("All base tests passed (6 tests)")

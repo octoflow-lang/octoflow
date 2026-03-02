@@ -1,0 +1,164 @@
+// stdlib/algo/range.flow — Range and sequence generation
+//
+// Functions: range, range_step, linspace, arange, repeat_array,
+//            iota, reverse_array, array_slice, array_concat
+//
+// OctoFlow doesn't have Python-style range() in for loops, so these
+// functions generate arrays that can be iterated with `for x in arr`.
+//
+// Usage:
+//   use "range"
+//   let mut nums = range(0.0, 10.0)        // [0,1,2,...,9]
+//   let mut evens = range_step(0.0, 20.0, 2.0)  // [0,2,4,...,18]
+//   let mut pts = linspace(0.0, 1.0, 5.0)  // [0, 0.25, 0.5, 0.75, 1.0]
+
+// ── Range Generation ────────────────────────────────────────────
+
+fn range(start, stop)
+    // Generate array [start, start+1, ..., stop-1]
+    let mut result = []
+    let mut i = start
+    while i < stop
+        push(result, i)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn range_step(start, stop, step)
+    // Generate array [start, start+step, start+2*step, ...]
+    // Stops before reaching stop.
+    let mut result = []
+    if step > 0.0
+        let mut i = start
+        while i < stop
+            push(result, i)
+            i = i + step
+        end
+    elif step < 0.0
+        let mut i = start
+        while i > stop
+            push(result, i)
+            i = i + step
+        end
+    end
+    return result
+end
+
+fn linspace(start, stop, n)
+    // Generate n evenly spaced values from start to stop (inclusive).
+    let mut result = []
+    if n < 1.0
+        return result
+    end
+    if n < 2.0
+        push(result, start)
+        return result
+    end
+    let step = (stop - start) / (n - 1.0)
+    let mut i = 0.0
+    while i < n
+        push(result, start + i * step)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn arange(start, stop, step)
+    // Like range_step but for floating point sequences.
+    // Same as range_step — provided as NumPy-familiar alias.
+    return range_step(start, stop, step)
+end
+
+fn iota(n)
+    // Generate [0, 1, 2, ..., n-1]. Shorthand for range(0, n).
+    return range(0.0, n)
+end
+
+// ── Array Utilities ─────────────────────────────────────────────
+
+fn repeat_array(val, n)
+    // Create array of n copies of val.
+    return array_new(n, val)
+end
+
+fn reverse_array(arr)
+    // Reverse array in-place. Returns 0.0.
+    let n = len(arr)
+    let half = floor(n / 2.0)
+    let mut i = 0.0
+    while i < half
+        let j = n - 1.0 - i
+        let tmp = arr[i]
+        arr[i] = arr[j]
+        arr[j] = tmp
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn array_slice(arr, start, stop)
+    // Return new array with elements arr[start..stop) (exclusive end).
+    let mut result = []
+    let mut i = start
+    let n = len(arr)
+    while i < stop && i < n
+        push(result, arr[i])
+        i = i + 1.0
+    end
+    return result
+end
+
+fn array_concat(a, b)
+    // Concatenate two arrays. Returns new array.
+    let mut result = []
+    let na = len(a)
+    let nb = len(b)
+    let mut i = 0.0
+    while i < na
+        push(result, a[i])
+        i = i + 1.0
+    end
+    i = 0.0
+    while i < nb
+        push(result, b[i])
+        i = i + 1.0
+    end
+    return result
+end
+
+fn array_fill(arr, val, start, stop)
+    // Fill arr[start..stop) with val. Modifies in-place.
+    let n = len(arr)
+    let mut i = start
+    while i < stop && i < n
+        arr[i] = val
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn array_swap(arr, i, j)
+    // Swap elements at indices i and j. Modifies in-place.
+    let tmp = arr[i]
+    arr[i] = arr[j]
+    arr[j] = tmp
+    return 0.0
+end
+
+fn array_equals(a, b)
+    // Check if two arrays have identical elements.
+    let na = len(a)
+    let nb = len(b)
+    if na != nb
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < na
+        if a[i] != b[i]
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end

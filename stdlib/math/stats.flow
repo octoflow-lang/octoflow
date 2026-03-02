@@ -1,0 +1,470 @@
+// stdlib/math/stats.flow — Statistics functions
+//
+// Descriptive statistics, normalization, correlation, and distributions.
+//
+// Functions: variance, std_dev, covariance, correlation,
+//            z_score, z_scores, percentile, quartiles, iqr,
+//            normalize_array, standardize_array,
+//            mode, geometric_mean, harmonic_mean, weighted_mean,
+//            moving_average, exponential_moving_average,
+//            histogram, skewness, kurtosis
+//
+// Usage:
+//   use "stats"
+//   let data = [4.0, 8.0, 6.0, 5.0, 3.0, 7.0, 8.0, 1.0]
+//   let m = mean(data)              // already in math.flow
+//   let sd = std_dev(data)          // ~2.29
+//   let q = quartiles(data)         // [q1, median, q3]
+
+fn _stats_mean(arr)
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i < n
+        sum = sum + arr[i]
+        i = i + 1.0
+    end
+    return sum / n
+end
+
+fn _stats_min(arr)
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    let mut mn = arr[0]
+    let mut i = 1.0
+    while i < n
+        if arr[i] < mn
+            mn = arr[i]
+        end
+        i = i + 1.0
+    end
+    return mn
+end
+
+fn _stats_max(arr)
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    let mut mx = arr[0]
+    let mut i = 1.0
+    while i < n
+        if arr[i] > mx
+            mx = arr[i]
+        end
+        i = i + 1.0
+    end
+    return mx
+end
+
+fn _stats_sort(arr)
+    // Insertion sort (copy).
+    let n = len(arr)
+    let mut sorted = []
+    let mut i = 0.0
+    while i < n
+        push(sorted, arr[i])
+        i = i + 1.0
+    end
+    i = 1.0
+    while i < n
+        let key = sorted[i]
+        let mut j = i - 1.0
+        while j >= 0.0 && sorted[j] > key
+            sorted[j + 1.0] = sorted[j]
+            j = j - 1.0
+        end
+        sorted[j + 1.0] = key
+        i = i + 1.0
+    end
+    return sorted
+end
+
+// ── Central Tendency ────────────────────────────────────────────
+
+fn variance(arr)
+    // Population variance.
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    let m = _stats_mean(arr)
+    let mut sum_sq = 0.0
+    let mut i = 0.0
+    while i < n
+        let d = arr[i] - m
+        sum_sq = sum_sq + d * d
+        i = i + 1.0
+    end
+    return sum_sq / n
+end
+
+fn std_dev(arr)
+    // Population standard deviation.
+    return sqrt(variance(arr))
+end
+
+fn sample_variance(arr)
+    // Sample variance (Bessel's correction).
+    let n = len(arr)
+    if n <= 1.0
+        return 0.0
+    end
+    let m = _stats_mean(arr)
+    let mut sum_sq = 0.0
+    let mut i = 0.0
+    while i < n
+        let d = arr[i] - m
+        sum_sq = sum_sq + d * d
+        i = i + 1.0
+    end
+    return sum_sq / (n - 1.0)
+end
+
+fn sample_std_dev(arr)
+    return sqrt(sample_variance(arr))
+end
+
+fn mode(arr)
+    // Most frequent value. Returns first mode if tie.
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+
+    let mut best_val = arr[0]
+    let mut best_count = 0.0
+    let mut checked = map()
+
+    let mut i = 0.0
+    while i < n
+        let key = str(arr[i])
+        if !map_has(checked, key)
+            let mut count = 0.0
+            let mut j = 0.0
+            while j < n
+                if arr[j] == arr[i]
+                    count = count + 1.0
+                end
+                j = j + 1.0
+            end
+            if count > best_count
+                best_count = count
+                best_val = arr[i]
+            end
+            map_set(checked, key, "1")
+        end
+        i = i + 1.0
+    end
+    return best_val
+end
+
+fn geometric_mean(arr)
+    // Geometric mean (all values must be positive).
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    let mut log_sum = 0.0
+    let mut i = 0.0
+    while i < n
+        if arr[i] > 0.0
+            log_sum = log_sum + log(arr[i])
+        end
+        i = i + 1.0
+    end
+    return exp(log_sum / n)
+end
+
+fn harmonic_mean(arr)
+    // Harmonic mean (all values must be positive non-zero).
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    let mut inv_sum = 0.0
+    let mut i = 0.0
+    while i < n
+        if arr[i] != 0.0
+            inv_sum = inv_sum + 1.0 / arr[i]
+        end
+        i = i + 1.0
+    end
+    if inv_sum == 0.0
+        return 0.0
+    end
+    return n / inv_sum
+end
+
+fn weighted_mean(values, weights)
+    // Weighted average.
+    let n = len(values)
+    let mut sum_vw = 0.0
+    let mut sum_w = 0.0
+    let mut i = 0.0
+    while i < n
+        sum_vw = sum_vw + values[i] * weights[i]
+        sum_w = sum_w + weights[i]
+        i = i + 1.0
+    end
+    if sum_w == 0.0
+        return 0.0
+    end
+    return sum_vw / sum_w
+end
+
+// ── Spread / Position ───────────────────────────────────────────
+
+fn z_score(x, m, sd)
+    // Standard score of a single value.
+    if sd == 0.0
+        return 0.0
+    end
+    return (x - m) / sd
+end
+
+fn z_scores(arr)
+    // Z-scores for all values in array.
+    let m = _stats_mean(arr)
+    let sd = std_dev(arr)
+    let n = len(arr)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        push(result, z_score(arr[i], m, sd))
+        i = i + 1.0
+    end
+    return result
+end
+
+fn percentile(arr, p)
+    // p-th percentile (0-100). Uses linear interpolation.
+    let sorted = _stats_sort(arr)
+    let n = len(sorted)
+    if n == 0.0
+        return 0.0
+    end
+    if n == 1.0
+        return sorted[0]
+    end
+
+    let rank = p / 100.0 * (n - 1.0)
+    let lower = floor(rank)
+    let frac = rank - lower
+
+    if lower >= n - 1.0
+        return sorted[n - 1.0]
+    end
+    return sorted[lower] + frac * (sorted[lower + 1.0] - sorted[lower])
+end
+
+fn quartiles(arr)
+    // Returns [Q1, median, Q3].
+    let q1 = percentile(arr, 25.0)
+    let q2 = percentile(arr, 50.0)
+    let q3 = percentile(arr, 75.0)
+    let mut result = [q1, q2, q3]
+    return result
+end
+
+fn iqr(arr)
+    // Interquartile range: Q3 - Q1.
+    return percentile(arr, 75.0) - percentile(arr, 25.0)
+end
+
+// ── Correlation ─────────────────────────────────────────────────
+
+fn covariance(x, y)
+    // Population covariance.
+    let n = len(x)
+    if n == 0.0
+        return 0.0
+    end
+    let mx = _stats_mean(x)
+    let my = _stats_mean(y)
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i < n
+        sum = sum + (x[i] - mx) * (y[i] - my)
+        i = i + 1.0
+    end
+    return sum / n
+end
+
+fn correlation(x, y)
+    // Pearson correlation coefficient [-1, 1].
+    let cov = covariance(x, y)
+    let sx = std_dev(x)
+    let sy = std_dev(y)
+    if sx < 0.0001 || sy < 0.0001
+        return 0.0
+    end
+    return cov / (sx * sy)
+end
+
+// ── Normalization ───────────────────────────────────────────────
+
+fn normalize_array(arr)
+    // Min-max normalization to [0, 1].
+    let n = len(arr)
+    let mn = _stats_min(arr)
+    let mx = _stats_max(arr)
+    let range = mx - mn
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        if range > 0.0
+            push(result, (arr[i] - mn) / range)
+        else
+            push(result, 0.0)
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn standardize_array(arr)
+    // Z-score standardization (mean=0, std=1).
+    return z_scores(arr)
+end
+
+// ── Moving Averages ─────────────────────────────────────────────
+
+fn moving_average(arr, window)
+    // Simple moving average with given window size.
+    let n = len(arr)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        let mut sum = 0.0
+        let mut count = 0.0
+        let mut j = i
+        let start = i - window + 1.0
+        if start < 0.0
+            j = 0.0
+        else
+            j = start
+        end
+        while j <= i
+            sum = sum + arr[j]
+            count = count + 1.0
+            j = j + 1.0
+        end
+        push(result, sum / count)
+        i = i + 1.0
+    end
+    return result
+end
+
+fn exponential_moving_average(arr, alpha)
+    // Exponential moving average with smoothing factor alpha (0-1).
+    let n = len(arr)
+    if n == 0.0
+        let mut empty = []
+        return empty
+    end
+
+    let mut result = []
+    push(result, arr[0])
+    let mut i = 1.0
+    while i < n
+        let ema = alpha * arr[i] + (1.0 - alpha) * result[i - 1.0]
+        push(result, ema)
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Histogram ───────────────────────────────────────────────────
+
+fn histogram(arr, bins)
+    // Compute histogram counts for given number of bins.
+    // Returns flat array of counts.
+    let n = len(arr)
+    if n == 0.0 || bins <= 0.0
+        let mut empty = []
+        return empty
+    end
+
+    let mn = _stats_min(arr)
+    let mx = _stats_max(arr)
+    let range = mx - mn
+
+    let mut counts = []
+    let mut b = 0.0
+    while b < bins
+        push(counts, 0.0)
+        b = b + 1.0
+    end
+
+    if range == 0.0
+        counts[0] = n
+        return counts
+    end
+
+    let bin_width = range / bins
+    let mut i = 0.0
+    while i < n
+        let mut bi = floor((arr[i] - mn) / bin_width)
+        if bi >= bins
+            bi = bins - 1.0
+        end
+        if bi < 0.0
+            bi = 0.0
+        end
+        counts[bi] = counts[bi] + 1.0
+        i = i + 1.0
+    end
+    return counts
+end
+
+// ── Shape ───────────────────────────────────────────────────────
+
+fn skewness(arr)
+    // Population skewness.
+    let n = len(arr)
+    if n < 3.0
+        return 0.0
+    end
+    let m = _stats_mean(arr)
+    let sd = std_dev(arr)
+    if sd < 0.0001
+        return 0.0
+    end
+
+    let mut sum_cube = 0.0
+    let mut i = 0.0
+    while i < n
+        let d = (arr[i] - m) / sd
+        sum_cube = sum_cube + d * d * d
+        i = i + 1.0
+    end
+    return sum_cube / n
+end
+
+fn kurtosis(arr)
+    // Excess kurtosis (0 for normal distribution).
+    let n = len(arr)
+    if n < 4.0
+        return 0.0
+    end
+    let m = _stats_mean(arr)
+    let sd = std_dev(arr)
+    if sd < 0.0001
+        return 0.0
+    end
+
+    let mut sum_fourth = 0.0
+    let mut i = 0.0
+    while i < n
+        let d = (arr[i] - m) / sd
+        sum_fourth = sum_fourth + d * d * d * d
+        i = i + 1.0
+    end
+    return sum_fourth / n - 3.0
+end

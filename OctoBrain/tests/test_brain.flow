@@ -1,0 +1,153 @@
+// OctoBrain Integration Tests
+// Tests for lib/octobrain.flow — full brain API integration.
+// Uses PASS/FAIL print pattern.
+
+use "../lib/octobrain"
+
+// ── Helper: approximate equality ──────────────────────────────────
+fn approx_eq(x, y, tol)
+  let mut diff = x - y
+  if diff < 0.0
+    diff = diff * -1.0
+  end
+  if diff < tol
+    return 1.0
+  end
+  return 0.0
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 1: Create brain — octobrain_new returns correct config
+// ══════════════════════════════════════════════════════════════════
+
+let mut brain = octobrain_new(2.0)
+let t1_ac = map_get(brain, "action_count")
+let t1_obs = map_get(brain, "obs_count")
+let t1_init = map_get(brain, "initialized")
+if approx_eq(t1_ac, 2.0, 0.001) && approx_eq(t1_obs, 0.0, 0.001) && approx_eq(t1_init, 0.0, 0.001)
+  print("PASS test1: octobrain_new returns correct config (action_count=2, obs=0, init=0)")
+else
+  print("FAIL test1: expected ac=2 obs=0 init=0, got ac={t1_ac} obs={t1_obs} init={t1_init}")
+end
+
+// ── Create all external arrays ──────────────────────────────────
+let mut p_state = proto_new()
+let mut p_embs = []
+let mut p_mc = []
+
+let mut e_state = embed_new()
+let mut W_embed = []
+let mut obs_buffer = []
+
+let mut edge_state = edges_new()
+let mut en = []
+let mut ea = []
+let mut eo = []
+let mut ep = []
+let mut ew = []
+let mut eact = []
+
+let mut window = []
+let mut W_score = []
+
+// ══════════════════════════════════════════════════════════════════
+// Test 2: First observe — proto_count becomes 1
+// ══════════════════════════════════════════════════════════════════
+
+let data1 = [1.0, 0.0, 0.0]
+let d2 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, data1)
+
+let t2_pc = map_get(p_state, "proto_count")
+let t2_init = map_get(brain, "initialized")
+let t2_edim = map_get(brain, "embed_dim")
+if approx_eq(t2_pc, 1.0, 0.001) && approx_eq(t2_init, 1.0, 0.001) && approx_eq(t2_edim, 3.0, 0.001)
+  print("PASS test2: first observe creates proto (count=1, initialized=1, embed_dim=3)")
+else
+  print("FAIL test2: expected pc=1 init=1 edim=3, got pc={t2_pc} init={t2_init} edim={t2_edim}")
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 3: Similar observe — proto_count stays 1
+// ══════════════════════════════════════════════════════════════════
+
+let data2 = [0.95, 0.1, 0.05]
+let d3 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, data2)
+
+let t3_pc = map_get(p_state, "proto_count")
+if approx_eq(t3_pc, 1.0, 0.001)
+  print("PASS test3: similar observe keeps proto_count=1")
+else
+  print("FAIL test3: expected proto_count=1, got {t3_pc}")
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 4: Different cluster — proto_count becomes 2
+// ══════════════════════════════════════════════════════════════════
+
+let data3 = [0.0, 0.0, 1.0]
+let d4 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, data3)
+
+let t4_pc = map_get(p_state, "proto_count")
+if approx_eq(t4_pc, 2.0, 0.001)
+  print("PASS test4: different cluster creates proto_count=2")
+else
+  print("FAIL test4: expected proto_count=2, got {t4_pc}")
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 5: Transition detected after switching clusters
+// ══════════════════════════════════════════════════════════════════
+
+let t5_trans = octobrain_transition_detected(p_state)
+if approx_eq(t5_trans, 1.0, 0.001)
+  print("PASS test5: transition detected after cluster switch")
+else
+  print("FAIL test5: expected transition_detected=1, got {t5_trans}")
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 6: Recall produces scores with correct dimension
+// ══════════════════════════════════════════════════════════════════
+
+let scores6 = octobrain_recall(brain, p_state, p_embs, edge_state, en, ea, eo, ep, window, W_score)
+let t6_len = len(scores6)
+if approx_eq(t6_len, 2.0, 0.001)
+  let s6_0 = scores6[0]
+  let s6_1 = scores6[1]
+  print("PASS test6: recall returns 2 action scores [{s6_0:.4}, {s6_1:.4}]")
+else
+  print("FAIL test6: expected 2 action scores, got len={t6_len}")
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 7: Teach creates/strengthens edges
+// ══════════════════════════════════════════════════════════════════
+
+let ec_before = map_get(edge_state, "edge_count")
+let d7 = octobrain_teach(brain, p_state, p_embs, p_mc, edge_state, en, ea, eo, ep, ew, eact, window, 0.0, 1.0, 2.0)
+let ec_after = map_get(edge_state, "edge_count")
+
+if ec_after > 0.0
+  print("PASS test7: teach creates edges (before={ec_before}, after={ec_after})")
+else
+  print("FAIL test7: expected edge_count > 0 after teach, got {ec_after}")
+end
+
+// ══════════════════════════════════════════════════════════════════
+// Test 8: Stats returns correct values
+// ══════════════════════════════════════════════════════════════════
+
+let stats8 = octobrain_stats(brain, p_state, edge_state)
+let s8_edim = map_get(stats8, "embed_dim")
+let s8_pc = map_get(stats8, "proto_count")
+let s8_ec = map_get(stats8, "edge_count")
+let s8_obs = map_get(stats8, "obs_count")
+let s8_tc = map_get(stats8, "transition_count")
+
+if approx_eq(s8_edim, 3.0, 0.001) && approx_eq(s8_pc, 2.0, 0.001) && s8_ec > 0.0 && approx_eq(s8_obs, 3.0, 0.001) && s8_tc >= 1.0
+  print("PASS test8: stats correct (edim={s8_edim}, protos={s8_pc}, edges={s8_ec}, obs={s8_obs}, transitions={s8_tc})")
+else
+  print("FAIL test8: stats unexpected — edim={s8_edim} pc={s8_pc} ec={s8_ec} obs={s8_obs} tc={s8_tc}")
+end
+
+print("--- brain integration tests complete ---")

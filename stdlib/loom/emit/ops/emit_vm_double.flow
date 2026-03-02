@@ -1,0 +1,27 @@
+// emit_vm_double.flow — Doubler kernel: output[gid] = input[gid] * 2
+//
+// Doubles every element in a buffer.
+// Used as the consumer stage in mailbox pipeline demos.
+//
+// Binding 0: input (float array)
+// Binding 1: output (float array)
+// No push constants.
+
+use "../../../compiler/ir"
+
+fn emit_vm_double(out_path)
+  ir_new()
+  ir_input_count = 1.0
+  ir_workgroup_size = 256.0
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+  let val = ir_load_input_at(entry, 0.0, gid)
+  let two = ir_const_f(entry, 2.0)
+  let doubled = ir_fmul(entry, val, two)
+  ir_store_output_at(entry, gid, doubled)
+  ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

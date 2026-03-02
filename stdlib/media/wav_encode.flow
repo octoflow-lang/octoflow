@@ -1,0 +1,153 @@
+// stdlib/media/wav_encode.flow — WAV file encoder (PCM)
+//
+// Encodes audio samples to WAV byte arrays (RIFF format).
+// Supports 8-bit and 16-bit PCM, mono and stereo.
+// Samples expected as floats in [-1.0, 1.0].
+//
+// Functions: wav_encode, wav_encode_16, wav_encode_8
+//
+// Usage:
+//   use "wav_encode"
+//   let mut samples = [0.0, 0.5, 1.0, 0.5, 0.0, -0.5, -1.0, -0.5]
+//   let mut bytes = []
+//   wav_encode(bytes, samples, 8.0, 44100.0, 1.0, 16.0)
+
+// ── Byte helpers ───────────────────────────────────────
+
+fn _we_push_u16le(buf, val)
+    let v = floor(val)
+    push(buf, v - floor(v / 256.0) * 256.0)
+    push(buf, floor(v / 256.0))
+    return 0.0
+end
+
+fn _we_push_u32le(buf, val)
+    let v = floor(val)
+    let b0 = v - floor(v / 256.0) * 256.0
+    let r1 = floor(v / 256.0)
+    let b1 = r1 - floor(r1 / 256.0) * 256.0
+    let r2 = floor(r1 / 256.0)
+    let b2 = r2 - floor(r2 / 256.0) * 256.0
+    let b3 = floor(r2 / 256.0)
+    push(buf, b0)
+    push(buf, b1)
+    push(buf, b2)
+    push(buf, b3)
+    return 0.0
+end
+
+fn _we_push_str(buf, c0, c1, c2, c3)
+    push(buf, c0)
+    push(buf, c1)
+    push(buf, c2)
+    push(buf, c3)
+    return 0.0
+end
+
+// ── Main encoder ───────────────────────────────────────
+
+fn wav_encode(result, samples, n_samples, sample_rate, channels, bits_per_sample)
+    // Encode samples to WAV byte array. Appends to result.
+    // samples: interleaved float array [-1.0, 1.0]
+    // n_samples: samples per channel
+    // channels: 1 (mono) or 2 (stereo)
+    // bits_per_sample: 8 or 16
+    // Returns total bytes written.
+    if n_samples <= 0.0 || sample_rate <= 0.0
+        return 0.0
+    end
+    let mut ch = channels
+    if ch < 1.0
+        ch = 1.0
+    end
+    if ch > 2.0
+        ch = 2.0
+    end
+    let mut bps = bits_per_sample
+    if bps != 8.0 && bps != 16.0
+        bps = 16.0
+    end
+    let bytes_per_sample = floor(bps / 8.0)
+    let block_align = bytes_per_sample * ch
+    let byte_rate = sample_rate * block_align
+    let total_values = n_samples * ch
+    let data_size = total_values * bytes_per_sample
+
+    // RIFF header (12 bytes)
+    // "RIFF" + file_size + "WAVE"
+    let file_size = 36.0 + data_size
+    let _r1 = _we_push_str(result, 82.0, 73.0, 70.0, 70.0)   // "RIFF"
+    let _r2 = _we_push_u32le(result, file_size)
+    let _r3 = _we_push_str(result, 87.0, 65.0, 86.0, 69.0)   // "WAVE"
+
+    // fmt chunk (24 bytes)
+    // "fmt " + 16 + format(1=PCM) + channels + rate + byte_rate + align + bps
+    let _f1 = _we_push_str(result, 102.0, 109.0, 116.0, 32.0) // "fmt "
+    let _f2 = _we_push_u32le(result, 16.0)                     // chunk size
+    let _f3 = _we_push_u16le(result, 1.0)                      // PCM format
+    let _f4 = _we_push_u16le(result, ch)
+    let _f5 = _we_push_u32le(result, sample_rate)
+    let _f6 = _we_push_u32le(result, byte_rate)
+    let _f7 = _we_push_u16le(result, block_align)
+    let _f8 = _we_push_u16le(result, bps)
+
+    // data chunk header (8 bytes)
+    let _d1 = _we_push_str(result, 100.0, 97.0, 116.0, 97.0)  // "data"
+    let _d2 = _we_push_u32le(result, data_size)
+
+    // Sample data
+    let src_len = len(samples)
+    let mut i = 0.0
+    while i < total_values
+        let mut s = 0.0
+        if i < src_len
+            s = samples[int(i)]
+        end
+        // Clamp
+        if s > 1.0
+            s = 1.0
+        elif s < -1.0
+            s = -1.0
+        end
+        if bps == 16.0
+            // 16-bit signed: [-32768, 32767]
+            let mut val = floor(s * 32767.0)
+            if val < -32768.0
+                val = -32768.0
+            end
+            if val > 32767.0
+                val = 32767.0
+            end
+            // Convert to unsigned for byte storage
+            if val < 0.0
+                val = val + 65536.0
+            end
+            let lo = val - floor(val / 256.0) * 256.0
+            let hi = floor(val / 256.0)
+            push(result, lo)
+            push(result, hi)
+        else
+            // 8-bit unsigned: [0, 255], 128 = silence
+            let mut val = floor((s + 1.0) * 128.0)
+            if val < 0.0
+                val = 0.0
+            end
+            if val > 255.0
+                val = 255.0
+            end
+            push(result, val)
+        end
+        i = i + 1.0
+    end
+    return 44.0 + data_size
+end
+
+fn wav_encode_16(result, samples, n_samples, sample_rate, channels)
+    // Convenience: encode 16-bit WAV.
+    return wav_encode(result, samples, n_samples, sample_rate, channels, 16.0)
+end
+
+fn wav_encode_8(result, samples, n_samples, sample_rate, channels)
+    // Convenience: encode 8-bit WAV.
+    return wav_encode(result, samples, n_samples, sample_rate, channels, 8.0)
+end

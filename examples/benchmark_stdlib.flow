@@ -1,0 +1,75 @@
+// OctoFlow stdlib benchmark — exercises array ops, stats, encoding
+// Measures: array creation, stats computation, hex encoding, path ops
+//
+// Run: flowgpu-cli run examples/benchmark_stdlib.flow
+
+let t0 = now_ms()
+
+// ── Array creation: 10K elements ──
+let mut data = []
+let mut i = 0.0
+while i < 10000.0
+  push(data, i * 0.01)
+  i = i + 1.0
+end
+
+// ── Statistics ──
+let m = mean(data)
+let med = median(data)
+let sd = stddev(data)
+let v = variance(data)
+
+// ── Array queries ──
+let f = find(data, 50.0)
+let mn = min_val(data)
+let mx = max_val(data)
+let fi = first(data)
+let la = last(data)
+
+// ── Slice + range ──
+let sl = slice(data, 0, 100)
+let rng = range_array(0, 1000)
+
+// ── Linear algebra (100-element vectors) ──
+let mut va = []
+let mut vb = []
+i = 0.0
+while i < 100.0
+  push(va, i)
+  push(vb, 100.0 - i)
+  i = i + 1.0
+end
+let d = dot(va, vb)
+let n = norm(va)
+
+// ── Path utilities ──
+let ext = file_ext("/home/user/data/results.csv")
+let fn1 = file_name("/home/user/data/results.csv")
+let dn = dirname("/home/user/data/results.csv")
+
+// ── Date arithmetic ──
+let ts = time()
+let ts2 = add_hours(ts, 24.0)
+let diff = diff_hours(ts, ts2)
+
+// ── Hex encoding ──
+let encoded = hex_encode("OctoFlow GPU Language")
+let decoded = hex_decode(encoded)
+
+let t1 = now_ms()
+let elapsed = t1 - t0
+
+print("=== OctoFlow Stdlib Benchmark ===")
+print("Elements  : 10,000")
+print("Mean      : {m:.4}")
+print("Median    : {med:.4}")
+print("StdDev    : {sd:.4}")
+print("Variance  : {v:.4}")
+print("Min/Max   : {mn:.2}/{mx:.2}")
+print("Dot prod  : {d:.2}")
+print("Norm      : {n:.4}")
+print("Path ext  : {ext}")
+print("Filename  : {fn1}")
+print("Dirname   : {dn}")
+print("Hex round : {decoded}")
+print("Time      : {elapsed:.1} ms")

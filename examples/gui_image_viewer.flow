@@ -8,10 +8,10 @@
 //
 // Run: octoflow run gui_image_viewer.flow
 
-use "gui/gui"
-use "gui/canvas"
-use "gui/buffer_view"
-use "gui/layout"
+use "../stdlib/gui/gui"
+use "../stdlib/gui/canvas"
+use "../stdlib/gui/buffer_view"
+use "../stdlib/gui/layout"
 
 gui_init(700, 500, "Image Viewer")
 

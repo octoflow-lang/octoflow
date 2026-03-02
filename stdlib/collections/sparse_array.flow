@@ -1,0 +1,255 @@
+// stdlib/collections/sparse_array.flow — Sparse array (map-backed)
+//
+// Efficient storage for arrays that are mostly zeros/default values.
+// Only non-default values are stored. Good for large, sparse datasets.
+//
+// Functions: sparse_create, sparse_set, sparse_get, sparse_has,
+//            sparse_remove, sparse_size, sparse_nnz,
+//            sparse_keys, sparse_values, sparse_to_dense,
+//            sparse_add, sparse_dot, sparse_scale, sparse_apply
+//
+// Usage:
+//   use "sparse_array"
+//   let mut s = sparse_create(1000.0, 0.0)  // 1000 elements, default 0
+//   sparse_set(s, 42.0, 3.14)
+//   sparse_set(s, 999.0, 2.71)
+//   sparse_get(s, 42.0)   // 3.14
+//   sparse_get(s, 0.0)    // 0.0 (default)
+//   sparse_nnz(s)          // 2
+
+fn sparse_create(size, default_val)
+    // Create a sparse array with given logical size and default value.
+    let mut s = map()
+    map_set(s, "__size", str(size))
+    map_set(s, "__default", str(default_val))
+    map_set(s, "__nnz", "0")
+    map_set(s, "__indices", "")  // CSV of stored indices
+    return s
+end
+
+fn sparse_set(s, index, value)
+    // Set value at index. If value equals default, removes the entry.
+    let default_val = float(map_get(s, "__default"))
+    let key = "v_" + str(index)
+
+    if value == default_val
+        // Remove if exists
+        if map_has(s, key)
+            map_remove(s, key)
+            let nnz = float(map_get(s, "__nnz")) - 1.0
+            map_set(s, "__nnz", str(nnz))
+            // Remove from indices list
+            let old = map_get(s, "__indices")
+            let parts = split(old, ",")
+            let n = len(parts)
+            let target = str(index)
+            let mut new_idx = ""
+            let mut i = 0.0
+            while i < n
+                if parts[i] != target
+                    if len(new_idx) > 0.0
+                        new_idx = new_idx + "," + parts[i]
+                    else
+                        new_idx = parts[i]
+                    end
+                end
+                i = i + 1.0
+            end
+            map_set(s, "__indices", new_idx)
+        end
+        return 0.0
+    end
+
+    let already_exists = map_has(s, key)
+    map_set(s, key, str(value))
+
+    if already_exists == 0.0
+        let nnz = float(map_get(s, "__nnz")) + 1.0
+        map_set(s, "__nnz", str(nnz))
+        let old = map_get(s, "__indices")
+        if len(old) > 0.0
+            map_set(s, "__indices", old + "," + str(index))
+        else
+            map_set(s, "__indices", str(index))
+        end
+    end
+    return 0.0
+end
+
+fn sparse_get(s, index)
+    // Get value at index. Returns default if not stored.
+    let key = "v_" + str(index)
+    if map_has(s, key)
+        return float(map_get(s, key))
+    end
+    return float(map_get(s, "__default"))
+end
+
+fn sparse_has(s, index)
+    // Check if index has a non-default value stored.
+    let key = "v_" + str(index)
+    return map_has(s, key)
+end
+
+fn sparse_remove(s, index)
+    // Remove stored value at index (revert to default).
+    let key = "v_" + str(index)
+    if map_has(s, key)
+        map_remove(s, key)
+        let nnz = float(map_get(s, "__nnz")) - 1.0
+        map_set(s, "__nnz", str(nnz))
+        let old = map_get(s, "__indices")
+        let parts = split(old, ",")
+        let n = len(parts)
+        let target = str(index)
+        let mut new_idx = ""
+        let mut i = 0.0
+        while i < n
+            if parts[i] != target
+                if len(new_idx) > 0.0
+                    new_idx = new_idx + "," + parts[i]
+                else
+                    new_idx = parts[i]
+                end
+            end
+            i = i + 1.0
+        end
+        map_set(s, "__indices", new_idx)
+        return 1.0
+    end
+    return 0.0
+end
+
+fn sparse_size(s)
+    // Return logical size of array.
+    return float(map_get(s, "__size"))
+end
+
+fn sparse_nnz(s)
+    // Return number of non-zero (non-default) entries.
+    return float(map_get(s, "__nnz"))
+end
+
+fn sparse_keys(s)
+    // Return array of indices that have non-default values.
+    let idx_str = map_get(s, "__indices")
+    if len(idx_str) == 0.0
+        let mut empty = []
+        return empty
+    end
+    let parts = split(idx_str, ",")
+    let n = len(parts)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        push(result, float(parts[i]))
+        i = i + 1.0
+    end
+    return result
+end
+
+fn sparse_values(s)
+    // Return array of non-default values (matching sparse_keys order).
+    let idx_str = map_get(s, "__indices")
+    if len(idx_str) == 0.0
+        let mut empty = []
+        return empty
+    end
+    let parts = split(idx_str, ",")
+    let n = len(parts)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        push(result, sparse_get(s, float(parts[i])))
+        i = i + 1.0
+    end
+    return result
+end
+
+fn sparse_to_dense(s)
+    // Convert to dense flat array. Warning: may be very large!
+    let size = float(map_get(s, "__size"))
+    let default_val = float(map_get(s, "__default"))
+    let mut arr = []
+    let mut i = 0.0
+    while i < size
+        push(arr, default_val)
+        i = i + 1.0
+    end
+
+    let idx_str = map_get(s, "__indices")
+    if len(idx_str) > 0.0
+        let parts = split(idx_str, ",")
+        let n = len(parts)
+        i = 0.0
+        while i < n
+            let idx = float(parts[i])
+            arr[idx] = sparse_get(s, idx)
+            i = i + 1.0
+        end
+    end
+    return arr
+end
+
+fn sparse_add(a, b)
+    // Element-wise addition of two sparse arrays. Returns new sparse array.
+    let size_a = sparse_size(a)
+    let def_a = float(map_get(a, "__default"))
+    let def_b = float(map_get(b, "__default"))
+    let mut result = sparse_create(size_a, def_a + def_b)
+
+    // Add all non-default entries from a
+    let keys_a = sparse_keys(a)
+    let na = len(keys_a)
+    let mut i = 0.0
+    while i < na
+        let idx = keys_a[i]
+        let val = sparse_get(a, idx) + sparse_get(b, idx)
+        sparse_set(result, idx, val)
+        i = i + 1.0
+    end
+
+    // Add entries from b that aren't in a
+    let keys_b = sparse_keys(b)
+    let nb = len(keys_b)
+    i = 0.0
+    while i < nb
+        let idx = keys_b[i]
+        if sparse_has(a, idx) == 0.0
+            let val = def_a + sparse_get(b, idx)
+            sparse_set(result, idx, val)
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn sparse_dot(a, b)
+    // Dot product of two sparse arrays.
+    let keys_a = sparse_keys(a)
+    let na = len(keys_a)
+    let mut sum = 0.0
+    let mut i = 0.0
+    while i < na
+        let idx = keys_a[i]
+        sum = sum + sparse_get(a, idx) * sparse_get(b, idx)
+        i = i + 1.0
+    end
+    return sum
+end
+
+fn sparse_scale(s, factor)
+    // Scale all values by factor. Returns new sparse array.
+    let size = sparse_size(s)
+    let def = float(map_get(s, "__default"))
+    let mut result = sparse_create(size, def * factor)
+    let keys = sparse_keys(s)
+    let n = len(keys)
+    let mut i = 0.0
+    while i < n
+        let idx = keys[i]
+        sparse_set(result, idx, sparse_get(s, idx) * factor)
+        i = i + 1.0
+    end
+    return result
+end

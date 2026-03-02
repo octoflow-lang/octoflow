@@ -1,0 +1,569 @@
+// audio_player.flow — PCM audio playback engine
+// Provides play/pause/stop/seek, loop, volume, position tracking.
+// Uses parallel-array storage for multiple player instances.
+// Depends on: pcm.flow
+
+// ── Player state constants ───────────────────────────────
+let AP_STOPPED  = 0.0
+let AP_PLAYING  = 1.0
+let AP_PAUSED   = 2.0
+
+// ── Internal storage (parallel arrays) ───────────────────
+let mut _ap_state    = []   // AP_STOPPED / AP_PLAYING / AP_PAUSED
+let mut _ap_pcm_id   = []   // PCM buffer ID
+let mut _ap_position = []   // Current sample position (float)
+let mut _ap_volume   = []   // 0.0 - 1.0
+let mut _ap_loop     = []   // 1.0 = loop, 0.0 = no loop
+let mut _ap_speed    = []   // Playback speed (1.0 = normal)
+let mut _ap_start    = []   // Start sample (for region playback)
+let mut _ap_end_pos  = []   // End sample (for region playback, 0 = full)
+let mut _ap_fade_in  = []   // Fade-in duration in samples
+let mut _ap_fade_out = []   // Fade-out duration in samples
+let mut _ap_alive    = []   // 1.0 = active, 0.0 = destroyed
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn ap_create(pcm_id)
+    // Create a new audio player for a PCM buffer
+    // Returns player ID (index)
+    let id = len(_ap_state)
+    push(_ap_state, AP_STOPPED)
+    push(_ap_pcm_id, pcm_id)
+    push(_ap_position, 0.0)
+    push(_ap_volume, 1.0)
+    push(_ap_loop, 0.0)
+    push(_ap_speed, 1.0)
+    push(_ap_start, 0.0)
+    push(_ap_end_pos, 0.0)
+    push(_ap_fade_in, 0.0)
+    push(_ap_fade_out, 0.0)
+    push(_ap_alive, 1.0)
+    return id
+end
+
+fn ap_destroy(id)
+    // Mark player as destroyed
+    if id < 0.0 || id >= len(_ap_alive)
+        return -1.0
+    end
+    _ap_alive[id] = 0.0
+    _ap_state[id] = AP_STOPPED
+    _ap_position[id] = 0.0
+    return 0.0
+end
+
+fn _ap_valid(id)
+    if id < 0.0 || id >= len(_ap_alive)
+        return 0.0
+    end
+    if _ap_alive[id] < 0.5
+        return 0.0
+    end
+    return 1.0
+end
+
+// ── Transport controls ───────────────────────────────────
+
+fn ap_play(id)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    _ap_state[id] = AP_PLAYING
+    return 0.0
+end
+
+fn ap_pause(id)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    if _ap_state[id] > 0.5 && _ap_state[id] < 1.5
+        // Only pause if playing
+        _ap_state[id] = AP_PAUSED
+    end
+    return 0.0
+end
+
+fn ap_stop(id)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    _ap_state[id] = AP_STOPPED
+    _ap_position[id] = _ap_start[id]
+    return 0.0
+end
+
+fn ap_toggle(id)
+    // Toggle play/pause
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    if _ap_state[id] > 0.5 && _ap_state[id] < 1.5
+        _ap_state[id] = AP_PAUSED
+    else
+        _ap_state[id] = AP_PLAYING
+    end
+    return _ap_state[id]
+end
+
+// ── Seek ─────────────────────────────────────────────────
+
+fn ap_seek(id, sample_pos)
+    // Seek to a sample position
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    let pcm = _ap_pcm_id[id]
+    let total = pcm_sample_count(pcm)
+    if total < 0.5
+        return -1.0
+    end
+    let mut pos = sample_pos
+    if pos < 0.0
+        pos = 0.0
+    end
+    if pos > total - 1.0
+        pos = total - 1.0
+    end
+    _ap_position[id] = pos
+    return pos
+end
+
+fn ap_seek_seconds(id, seconds)
+    // Seek to a time in seconds
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    let pcm = _ap_pcm_id[id]
+    let sr = pcm_sample_rate(pcm)
+    if sr < 1.0
+        return -1.0
+    end
+    let sample_pos = floor(seconds * sr)
+    return ap_seek(id, sample_pos)
+end
+
+fn ap_seek_percent(id, pct)
+    // Seek to a percentage (0.0 - 1.0)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    let mut p = pct
+    if p < 0.0
+        p = 0.0
+    end
+    if p > 1.0
+        p = 1.0
+    end
+    let pcm = _ap_pcm_id[id]
+    let total = pcm_sample_count(pcm)
+    return ap_seek(id, floor(p * total))
+end
+
+// ── Properties ───────────────────────────────────────────
+
+fn ap_set_volume(id, vol)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    let mut v = vol
+    if v < 0.0
+        v = 0.0
+    end
+    if v > 1.0
+        v = 1.0
+    end
+    _ap_volume[id] = v
+    return v
+end
+
+fn ap_get_volume(id)
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    return _ap_volume[id]
+end
+
+fn ap_set_loop(id, loop_on)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    if loop_on > 0.5
+        _ap_loop[id] = 1.0
+    else
+        _ap_loop[id] = 0.0
+    end
+    return _ap_loop[id]
+end
+
+fn ap_get_loop(id)
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    return _ap_loop[id]
+end
+
+fn ap_set_speed(id, spd)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    let mut s = spd
+    if s < 0.1
+        s = 0.1
+    end
+    if s > 10.0
+        s = 10.0
+    end
+    _ap_speed[id] = s
+    return s
+end
+
+fn ap_get_speed(id)
+    if _ap_valid(id) < 0.5
+        return 1.0
+    end
+    return _ap_speed[id]
+end
+
+// ── Region playback ──────────────────────────────────────
+
+fn ap_set_region(id, start_sample, end_sample)
+    // Set a playback region (subset of the PCM buffer)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    let pcm = _ap_pcm_id[id]
+    let total = pcm_sample_count(pcm)
+    let mut s = start_sample
+    let mut e = end_sample
+    if s < 0.0
+        s = 0.0
+    end
+    if e <= 0.0 || e > total
+        e = total
+    end
+    if s >= e
+        s = 0.0
+        e = total
+    end
+    _ap_start[id] = s
+    _ap_end_pos[id] = e
+    // Clamp position to region
+    if _ap_position[id] < s
+        _ap_position[id] = s
+    end
+    if _ap_position[id] > e
+        _ap_position[id] = s
+    end
+    return 0.0
+end
+
+fn ap_clear_region(id)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    _ap_start[id] = 0.0
+    _ap_end_pos[id] = 0.0
+    return 0.0
+end
+
+// ── Fade ─────────────────────────────────────────────────
+
+fn ap_set_fade(id, fade_in_samples, fade_out_samples)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    let mut fi = fade_in_samples
+    let mut fo = fade_out_samples
+    if fi < 0.0
+        fi = 0.0
+    end
+    if fo < 0.0
+        fo = 0.0
+    end
+    _ap_fade_in[id] = fi
+    _ap_fade_out[id] = fo
+    return 0.0
+end
+
+// ── Query state ──────────────────────────────────────────
+
+fn ap_state(id)
+    if _ap_valid(id) < 0.5
+        return AP_STOPPED
+    end
+    return _ap_state[id]
+end
+
+fn ap_position(id)
+    // Current sample position
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    return _ap_position[id]
+end
+
+fn ap_position_seconds(id)
+    // Current position in seconds
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    let pcm = _ap_pcm_id[id]
+    let sr = pcm_sample_rate(pcm)
+    if sr < 1.0
+        return 0.0
+    end
+    return _ap_position[id] / sr
+end
+
+fn ap_position_percent(id)
+    // Current position as 0.0 - 1.0
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    let pcm = _ap_pcm_id[id]
+    let total = pcm_sample_count(pcm)
+    if total < 1.0
+        return 0.0
+    end
+    return _ap_position[id] / total
+end
+
+fn ap_duration(id)
+    // Duration in seconds
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    let pcm = _ap_pcm_id[id]
+    let sr = pcm_sample_rate(pcm)
+    let total = pcm_sample_count(pcm)
+    if sr < 1.0
+        return 0.0
+    end
+    return total / sr
+end
+
+fn ap_remaining(id)
+    // Remaining time in seconds
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    return ap_duration(id) - ap_position_seconds(id)
+end
+
+fn ap_is_playing(id)
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    if _ap_state[id] > 0.5 && _ap_state[id] < 1.5
+        return 1.0
+    end
+    return 0.0
+end
+
+fn ap_is_paused(id)
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    if _ap_state[id] > 1.5 && _ap_state[id] < 2.5
+        return 1.0
+    end
+    return 0.0
+end
+
+fn ap_is_stopped(id)
+    if _ap_valid(id) < 0.5
+        return 1.0
+    end
+    if _ap_state[id] < 0.5
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Advance (tick) ───────────────────────────────────────
+
+fn ap_advance(id, n_samples)
+    // Advance the player by n_samples (called each audio callback).
+    // Returns the number of samples actually advanced.
+    // If playback reaches end: stops or loops.
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    if _ap_state[id] < 0.5 || _ap_state[id] > 1.5
+        // Not playing
+        return 0.0
+    end
+    if n_samples <= 0.0
+        return 0.0
+    end
+
+    let pcm = _ap_pcm_id[id]
+    let total = pcm_sample_count(pcm)
+    let spd = _ap_speed[id]
+    let advance = n_samples * spd
+
+    // Determine effective end
+    let mut eff_end = total
+    if _ap_end_pos[id] > 0.5 && _ap_end_pos[id] <= total
+        eff_end = _ap_end_pos[id]
+    end
+    let eff_start = _ap_start[id]
+
+    let mut pos = _ap_position[id]
+    let new_pos = pos + advance
+
+    if new_pos >= eff_end
+        // Reached end
+        if _ap_loop[id] > 0.5
+            // Wrap around
+            let region_len = eff_end - eff_start
+            if region_len < 1.0
+                _ap_state[id] = AP_STOPPED
+                _ap_position[id] = eff_start
+                return 0.0
+            end
+            let overflow = new_pos - eff_end
+            _ap_position[id] = eff_start + (overflow - floor(overflow / region_len) * region_len)
+        else
+            // Stop at end
+            _ap_position[id] = eff_end
+            _ap_state[id] = AP_STOPPED
+        end
+        return advance
+    end
+
+    _ap_position[id] = new_pos
+    return advance
+end
+
+// ── Render audio block ───────────────────────────────────
+
+fn _ap_fade_gain(id, sample_idx, eff_start, eff_end)
+    // Compute fade gain for a sample position
+    let fi = _ap_fade_in[id]
+    let fo = _ap_fade_out[id]
+    let pos_in_region = sample_idx - eff_start
+    let region_len = eff_end - eff_start
+
+    let mut gain = 1.0
+
+    // Fade in
+    if fi > 0.5 && pos_in_region < fi
+        gain = pos_in_region / fi
+    end
+
+    // Fade out
+    if fo > 0.5
+        let dist_from_end = region_len - pos_in_region
+        if dist_from_end < fo
+            let fg = dist_from_end / fo
+            if fg < gain
+                gain = fg
+            end
+        end
+    end
+
+    if gain < 0.0
+        gain = 0.0
+    end
+    if gain > 1.0
+        gain = 1.0
+    end
+    return gain
+end
+
+fn ap_render(id, out_buffer, n_samples)
+    // Render n_samples into out_buffer (flat array).
+    // Applies volume and fade. Returns samples rendered.
+    if _ap_valid(id) < 0.5
+        return 0.0
+    end
+    if _ap_state[id] < 0.5 || _ap_state[id] > 1.5
+        return 0.0
+    end
+    if n_samples <= 0.0
+        return 0.0
+    end
+
+    let pcm = _ap_pcm_id[id]
+    let samples = pcm_samples(pcm)
+    let total = len(samples)
+    let vol = _ap_volume[id]
+
+    let mut eff_end = total
+    if _ap_end_pos[id] > 0.5 && _ap_end_pos[id] <= total
+        eff_end = _ap_end_pos[id]
+    end
+    let eff_start = _ap_start[id]
+
+    let mut pos = _ap_position[id]
+    let mut rendered = 0.0
+    let mut i = 0.0
+    while i < n_samples
+        if pos >= eff_end
+            // End of region
+            if _ap_loop[id] > 0.5
+                pos = eff_start
+            else
+                _ap_state[id] = AP_STOPPED
+                i = n_samples  // break
+            end
+        end
+        if pos < eff_end && _ap_state[id] > 0.5
+            let idx = floor(pos)
+            let mut sample = 0.0
+            if idx >= 0.0 && idx < total
+                sample = samples[idx]
+            end
+            let fade = _ap_fade_gain(id, pos, eff_start, eff_end)
+            push(out_buffer, sample * vol * fade)
+            pos = pos + _ap_speed[id]
+            rendered = rendered + 1.0
+        end
+        i = i + 1.0
+    end
+
+    _ap_position[id] = pos
+    return rendered
+end
+
+// ── PCM swap ─────────────────────────────────────────────
+
+fn ap_set_pcm(id, pcm_id)
+    // Replace the PCM buffer (e.g., for track switching)
+    if _ap_valid(id) < 0.5
+        return -1.0
+    end
+    _ap_pcm_id[id] = pcm_id
+    _ap_position[id] = 0.0
+    _ap_start[id] = 0.0
+    _ap_end_pos[id] = 0.0
+    _ap_state[id] = AP_STOPPED
+    return 0.0
+end
+
+// ── Player count ─────────────────────────────────────────
+
+fn ap_count()
+    let mut count = 0.0
+    let mut i = 0.0
+    while i < len(_ap_alive)
+        if _ap_alive[i] > 0.5
+            count = count + 1.0
+        end
+        i = i + 1.0
+    end
+    return count
+end
+
+fn ap_stop_all()
+    let mut i = 0.0
+    while i < len(_ap_alive)
+        if _ap_alive[i] > 0.5
+            _ap_state[i] = AP_STOPPED
+            _ap_position[i] = _ap_start[i]
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end

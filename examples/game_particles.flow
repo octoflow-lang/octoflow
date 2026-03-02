@@ -3,9 +3,9 @@
 // Controls: Click to emit particles, C to clear, 1-4 to change color
 // Features: Gravity, fade, color cycling, particle count display
 
-use "game/game"
-use "game/input"
-use "game/particles"
+use "../stdlib/game/game"
+use "../stdlib/game/input"
+use "../stdlib/game/particles"
 
 // [0]=color_mode (0=red, 1=green, 2=blue, 3=gold)
 let mut _pd = [0.0]

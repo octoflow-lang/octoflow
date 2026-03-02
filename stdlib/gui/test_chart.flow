@@ -1,0 +1,159 @@
+// test_chart.flow — Tests for stdlib/gui/chart.flow
+use "chart"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.1
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Auto range ──────────────────────────────────────────
+
+fn test_auto_range()
+    let mut data = [5.0, 2.0, 8.0, 1.0, 9.0]
+    let r = chart_auto_range(data)
+    check("range min", r[0] == 1.0)
+    check("range max", r[1] == 9.0)
+    // Equal values
+    let mut same = [5.0, 5.0, 5.0]
+    let r2 = chart_auto_range(same)
+    check("range equal min", r2[0] == 4.0)
+    check("range equal max", r2[1] == 6.0)
+    return 0.0
+end
+
+// ── Normalize ───────────────────────────────────────────
+
+fn test_normalize()
+    let mut data = [0.0, 50.0, 100.0]
+    let normed = chart_normalize(data, 0.0, 100.0)
+    check("norm 0", approx(normed[0], 0.0) == 1.0)
+    check("norm 0.5", approx(normed[1], 0.5) == 1.0)
+    check("norm 1", approx(normed[2], 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Bar chart ───────────────────────────────────────────
+
+fn test_bar()
+    let mut data = [10.0, 20.0, 30.0]
+    let cmds = chart_bar(data, 0.0, 0.0, 300.0, 200.0)
+    let count = chart_cmd_count(cmds)
+    check("bar count", count == 3.0)
+    // All should be rect commands
+    check("bar type 0", chart_cmd_type(cmds, 0.0) == CHART_CMD_RECT)
+    check("bar type 1", chart_cmd_type(cmds, 1.0) == CHART_CMD_RECT)
+    check("bar type 2", chart_cmd_type(cmds, 2.0) == CHART_CMD_RECT)
+    // Third bar should be tallest (highest value)
+    let h0 = chart_cmd_h(cmds, 0.0)
+    let h2 = chart_cmd_h(cmds, 2.0)
+    check("bar height order", h2 > h0)
+    return 0.0
+end
+
+// ── Line chart ──────────────────────────────────────────
+
+fn test_line()
+    let mut data = [10.0, 20.0, 15.0, 25.0]
+    let cmds = chart_line(data, 0.0, 0.0, 300.0, 200.0)
+    let count = chart_cmd_count(cmds)
+    check("line segments", count == 3.0)
+    check("line type", chart_cmd_type(cmds, 0.0) == CHART_CMD_LINE)
+    return 0.0
+end
+
+// ── Scatter plot ────────────────────────────────────────
+
+fn test_scatter()
+    let mut xs = [1.0, 2.0, 3.0, 4.0]
+    let mut ys = [10.0, 20.0, 15.0, 25.0]
+    let cmds = chart_scatter(xs, ys, 0.0, 0.0, 300.0, 200.0, 5.0)
+    let count = chart_cmd_count(cmds)
+    check("scatter count", count == 4.0)
+    check("scatter type", chart_cmd_type(cmds, 0.0) == CHART_CMD_CIRCLE)
+    return 0.0
+end
+
+// ── Pie chart ───────────────────────────────────────────
+
+fn test_pie()
+    let mut data = [25.0, 25.0, 50.0]
+    let cmds = chart_pie(data, 150.0, 150.0, 100.0)
+    let count = chart_cmd_count(cmds)
+    check("pie has cmds", count > 0.0)
+    // All should be rect (wedge approximation)
+    check("pie type", chart_cmd_type(cmds, 0.0) == CHART_CMD_RECT)
+    return 0.0
+end
+
+// ── Histogram ───────────────────────────────────────────
+
+fn test_histogram()
+    let mut data = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+    let cmds = chart_histogram(data, 3.0, 0.0, 0.0, 300.0, 200.0)
+    let count = chart_cmd_count(cmds)
+    check("hist bins", count == 3.0)
+    return 0.0
+end
+
+// ── Stacked bar ─────────────────────────────────────────
+
+fn test_stacked()
+    // 2 series, 3 categories
+    let mut series = [10.0, 20.0, 30.0, 5.0, 10.0, 15.0]
+    let cmds = chart_stacked_bar(series, 2.0, 3.0, 0.0, 0.0, 300.0, 200.0)
+    let count = chart_cmd_count(cmds)
+    check("stacked count", count == 6.0)
+    return 0.0
+end
+
+// ── Command accessors ───────────────────────────────────
+
+fn test_accessors()
+    let mut data = [50.0]
+    let cmds = chart_bar(data, 10.0, 20.0, 100.0, 80.0)
+    let count = chart_cmd_count(cmds)
+    check("accessor count", count == 1.0)
+    let r = chart_cmd_r(cmds, 0.0)
+    let g = chart_cmd_g(cmds, 0.0)
+    let b = chart_cmd_b(cmds, 0.0)
+    check("accessor has color", r > 0.0 || g > 0.0 || b > 0.0)
+    return 0.0
+end
+
+// ── Empty data ──────────────────────────────────────────
+
+fn test_empty()
+    let mut empty = []
+    let cmds1 = chart_bar(empty, 0.0, 0.0, 100.0, 100.0)
+    check("empty bar", chart_cmd_count(cmds1) == 0.0)
+    let cmds2 = chart_line(empty, 0.0, 0.0, 100.0, 100.0)
+    check("empty line", chart_cmd_count(cmds2) == 0.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────
+
+test_auto_range()
+test_normalize()
+test_bar()
+test_line()
+test_scatter()
+test_pie()
+test_histogram()
+test_stacked()
+test_accessors()
+test_empty()
+print("")
+print("All chart tests passed (10 tests)")

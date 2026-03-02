@@ -1,0 +1,122 @@
+// test_stack.flow — Tests for stdlib/collections/stack.flow
+use "stack"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic operations ────────────────────────────────────────
+
+fn test_create()
+    let mut st = stack_create()
+    check("create empty", stack_size(st) == 0.0)
+    check("create is_empty", stack_is_empty(st) == 1.0)
+    return 0.0
+end
+
+fn test_push_pop()
+    let mut st = stack_create()
+    stack_push(st, 10.0)
+    stack_push(st, 20.0)
+    stack_push(st, 30.0)
+    check("push size", stack_size(st) == 3.0)
+    check("pop 30", stack_pop(st) == 30.0)
+    check("pop 20", stack_pop(st) == 20.0)
+    check("pop 10", stack_pop(st) == 10.0)
+    check("pop empty", stack_pop(st) == -1.0)
+    return 0.0
+end
+
+fn test_peek()
+    let mut st = stack_create()
+    check("peek empty", stack_peek(st) == -1.0)
+    stack_push(st, 42.0)
+    check("peek 42", stack_peek(st) == 42.0)
+    check("peek no remove", stack_size(st) == 1.0)
+    return 0.0
+end
+
+fn test_clear()
+    let mut st = stack_create()
+    stack_push(st, 1.0)
+    stack_push(st, 2.0)
+    stack_clear(st)
+    check("clear empty", stack_is_empty(st) == 1.0)
+    return 0.0
+end
+
+fn test_to_array()
+    let mut st = stack_create()
+    stack_push(st, 1.0)
+    stack_push(st, 2.0)
+    stack_push(st, 3.0)
+    let arr = stack_to_array(st)
+    check("to_array len", len(arr) == 3.0)
+    check("to_array[0]", arr[0] == 1.0)
+    check("to_array[2]", arr[2] == 3.0)
+    return 0.0
+end
+
+fn test_contains()
+    let mut st = stack_create()
+    stack_push(st, 5.0)
+    stack_push(st, 15.0)
+    stack_push(st, 25.0)
+    check("contains yes", stack_contains(st, 15.0) == 1.0)
+    check("contains no", stack_contains(st, 99.0) == 0.0)
+    return 0.0
+end
+
+fn test_dup()
+    let mut st = stack_create()
+    stack_push(st, 7.0)
+    stack_dup(st)
+    check("dup size", stack_size(st) == 2.0)
+    check("dup top", stack_pop(st) == 7.0)
+    check("dup original", stack_pop(st) == 7.0)
+    return 0.0
+end
+
+fn test_swap()
+    let mut st = stack_create()
+    stack_push(st, 1.0)
+    stack_push(st, 2.0)
+    stack_swap(st)
+    check("swap top", stack_pop(st) == 1.0)
+    check("swap second", stack_pop(st) == 2.0)
+    return 0.0
+end
+
+fn test_rotate()
+    let mut st = stack_create()
+    stack_push(st, 1.0)
+    stack_push(st, 2.0)
+    stack_push(st, 3.0)
+    // Before: bottom [1, 2, 3] top
+    // After rotate: bottom [2, 3, 1] top
+    stack_rotate(st)
+    check("rotate top", stack_pop(st) == 1.0)
+    check("rotate mid", stack_pop(st) == 3.0)
+    check("rotate bot", stack_pop(st) == 2.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_create()
+test_push_pop()
+test_peek()
+test_clear()
+test_to_array()
+test_contains()
+test_dup()
+test_swap()
+test_rotate()
+print("")
+print("All stack tests passed (9 tests)")

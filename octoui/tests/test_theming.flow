@@ -1,0 +1,164 @@
+// tests/test_theming.flow — Theme System Tests
+//
+// Tests: theme switching (dark/light/terminal), color value correctness,
+//        ui_theme_apply_all widget color propagation.
+//
+// Run: octoflow run octoui/tests/test_theming.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../themes/light"
+use "../themes/terminal"
+use "../widgets/core/text"
+use "../widgets/layout/column"
+use "../platform/desktop/window_win32"
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// Open window
+let _w = ui_window_open(500.0, 400.0, "Theming Test")
+
+// Root layout with a few widgets for apply_all test
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 500.0, 400.0)
+let _t1 = ui_text(root, "THEME TEST WIDGET", UI_COLOR_TEXT)
+let _t2 = ui_text(root, "SECONDARY WIDGET", UI_COLOR_TEXT_DIM)
+
+// ── Test 1-3: Dark theme (initial state) ──
+
+// Dark BG should be (22, 22, 30) — Modern blue-violet palette (Phase 3H-THEME)
+let dark_bg_r = ui_theme_r(UI_COLOR_BG)
+if dark_bg_r == 22.0
+  print("PASS: dark BG red is 22")
+  pass = pass + 1.0
+else
+  print("FAIL: dark BG red should be 22")
+  fail = fail + 1.0
+end
+
+// Dark PRIMARY blue component (2.0=PRIMARY) — 237 in Modern palette
+let dark_pri_b = ui_theme_b(UI_COLOR_PRIMARY)
+if dark_pri_b == 237.0
+  print("PASS: dark PRIMARY blue is 237")
+  pass = pass + 1.0
+else
+  print("FAIL: dark PRIMARY blue should be 237")
+  fail = fail + 1.0
+end
+
+// Dark TEXT green — 214 in Modern palette
+let dark_txt_g = ui_theme_g(UI_COLOR_TEXT)
+if dark_txt_g == 214.0
+  print("PASS: dark TEXT green is 214")
+  pass = pass + 1.0
+else
+  print("FAIL: dark TEXT green should be 214")
+  fail = fail + 1.0
+end
+
+// ── Test 4-6: Light theme ──
+let _ll = ui_theme_load_light()
+
+// Light BG should be (240, 240, 245)
+let light_bg_r = ui_theme_r(UI_COLOR_BG)
+if light_bg_r == 240.0
+  print("PASS: light BG red is 240")
+  pass = pass + 1.0
+else
+  print("FAIL: light BG red should be 240")
+  fail = fail + 1.0
+end
+
+// Light TEXT should be dark (30, 30, 35)
+let light_txt_r = ui_theme_r(UI_COLOR_TEXT)
+if light_txt_r == 30.0
+  print("PASS: light TEXT red is 30 (dark text on light bg)")
+  pass = pass + 1.0
+else
+  print("FAIL: light TEXT red should be 30")
+  fail = fail + 1.0
+end
+
+// Light SURFACE
+let light_surf_r = ui_theme_r(UI_COLOR_SURFACE)
+if light_surf_r == 220.0
+  print("PASS: light SURFACE red is 220")
+  pass = pass + 1.0
+else
+  print("FAIL: light SURFACE red should be 220")
+  fail = fail + 1.0
+end
+
+// ── Test 7-9: Terminal theme ──
+let _lt = ui_theme_load_terminal()
+
+// Terminal BG near-black (8, 12, 8)
+let term_bg_r = ui_theme_r(UI_COLOR_BG)
+if term_bg_r == 8.0
+  print("PASS: terminal BG red is 8")
+  pass = pass + 1.0
+else
+  print("FAIL: terminal BG red should be 8")
+  fail = fail + 1.0
+end
+
+// Terminal PRIMARY: bright green (0, 220, 0)
+let term_pri_r = ui_theme_r(UI_COLOR_PRIMARY)
+if term_pri_r == 0.0
+  print("PASS: terminal PRIMARY red is 0 (pure green)")
+  pass = pass + 1.0
+else
+  print("FAIL: terminal PRIMARY red should be 0")
+  fail = fail + 1.0
+end
+
+let term_pri_g = ui_theme_g(UI_COLOR_PRIMARY)
+if term_pri_g == 220.0
+  print("PASS: terminal PRIMARY green is 220")
+  pass = pass + 1.0
+else
+  print("FAIL: terminal PRIMARY green should be 220")
+  fail = fail + 1.0
+end
+
+// ── Test 10-11: Back to dark, then apply_all ──
+let _ld = ui_theme_load_dark()
+
+let dark_bg_r2 = ui_theme_r(UI_COLOR_BG)
+if dark_bg_r2 == 30.0
+  print("PASS: restored to dark theme (BG red = 30)")
+  pass = pass + 1.0
+else
+  print("FAIL: dark restore failed")
+  fail = fail + 1.0
+end
+
+// ui_theme_apply_all should not crash and return 0
+let apply_result = ui_theme_apply_all()
+if apply_result == 0.0
+  print("PASS: ui_theme_apply_all returned 0 (no error)")
+  pass = pass + 1.0
+else
+  print("FAIL: ui_theme_apply_all returned non-zero")
+  fail = fail + 1.0
+end
+
+// ── Summary ──
+let _l = ui_layout_update()
+let _r = ui_pipeline_render()
+let _p = ui_pipeline_present()
+let _sl = sleep(200.0)
+let _wc = ui_window_close()
+
+let total = pass + fail
+print(" ")
+print("test_theming: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

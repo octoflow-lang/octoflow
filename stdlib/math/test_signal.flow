@@ -1,0 +1,159 @@
+// test_signal.flow — Tests for stdlib/math/signal.flow
+use "signal"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.1
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── DFT ─────────────────────────────────────────────────────
+
+fn test_dft()
+    // DC signal: [1, 1, 1, 1] → DFT real[0] = 4, rest = 0
+    let mut dc = [1.0, 1.0, 1.0, 1.0]
+    let re = sig_dft_real(dc)
+    let im = sig_dft_imag(dc)
+    check("dft dc real", approx(re[0], 4.0) == 1.0)
+    check("dft dc imag", approx(im[0], 0.0) == 1.0)
+    check("dft len", len(re) == 4.0)
+    return 0.0
+end
+
+// ── Convolution ─────────────────────────────────────────────
+
+fn test_convolve()
+    let mut x = [1.0, 2.0, 3.0]
+    let mut h = [1.0, 1.0]
+    let y = sig_convolve(x, h)
+    check("conv len", len(y) == 4.0)
+    check("conv[0]", y[0] == 1.0)
+    check("conv[1]", y[1] == 3.0)
+    check("conv[2]", y[2] == 5.0)
+    check("conv[3]", y[3] == 3.0)
+    return 0.0
+end
+
+// ── Auto-correlation ────────────────────────────────────────
+
+fn test_auto_correlate()
+    let mut x = [1.0, 0.0, -1.0, 0.0]
+    let ac = sig_auto_correlate(x)
+    // Auto-correlation is symmetric and peak at center
+    check("auto len", len(ac) == 7.0)
+    // Peak should be at index 3 (center)
+    check("auto peak", ac[3] >= ac[0])
+    return 0.0
+end
+
+// ── Windows ─────────────────────────────────────────────────
+
+fn test_windows()
+    let ham = sig_hamming(8.0)
+    check("hamming len", len(ham) == 8.0)
+    check("hamming ends", ham[0] < ham[4])
+
+    let han = sig_hanning(8.0)
+    check("hanning len", len(han) == 8.0)
+    check("hanning start", approx(han[0], 0.0) == 1.0)
+
+    let bl = sig_blackman(8.0)
+    check("blackman len", len(bl) == 8.0)
+    return 0.0
+end
+
+// ── Low-pass filter ─────────────────────────────────────────
+
+fn test_low_pass()
+    let mut noisy = [0.0, 10.0, 0.0, 10.0, 0.0, 10.0]
+    let filtered = sig_low_pass(noisy, 0.3)
+    check("lowpass len", len(filtered) == 6.0)
+    // Filtered should be smoother — less variation
+    let mut max_diff = 0.0
+    let mut i = 1.0
+    while i < 6.0
+        let d = abs(filtered[i] - filtered[i - 1.0])
+        if d > max_diff
+            max_diff = d
+        end
+        i = i + 1.0
+    end
+    check("lowpass smooth", max_diff < 10.0)
+    return 0.0
+end
+
+// ── Moving median ───────────────────────────────────────────
+
+fn test_moving_median()
+    let mut x = [1.0, 100.0, 2.0, 3.0, 4.0]
+    let med = sig_moving_median(x, 3.0)
+    check("median len", len(med) == 5.0)
+    // Spike at index 1 should be reduced
+    check("median spike", med[1] < 50.0)
+    return 0.0
+end
+
+// ── Peak detection ──────────────────────────────────────────
+
+fn test_peak_detect()
+    let mut x = [0.0, 1.0, 3.0, 1.0, 0.0, 2.0, 5.0, 2.0, 0.0]
+    let peaks = sig_peak_detect(x, 2.0)
+    check("peaks found", len(peaks) >= 1.0)
+    // Index 2 (val=3) and index 6 (val=5) should be peaks
+    check("peak at 2", peaks[0] == 2.0)
+    return 0.0
+end
+
+// ── Zero crossings ──────────────────────────────────────────
+
+fn test_zero_crossings()
+    let mut x = [1.0, -1.0, 1.0, -1.0]
+    let zc = sig_zero_crossings(x)
+    check("zc count", len(zc) == 3.0)
+    return 0.0
+end
+
+// ── Energy / RMS ────────────────────────────────────────────
+
+fn test_energy_rms()
+    let mut x = [3.0, 4.0]
+    check("energy", sig_energy(x) == 25.0)
+    check("rms", approx(sig_rms(x), 3.53) == 1.0)
+    return 0.0
+end
+
+// ── Normalize ───────────────────────────────────────────────
+
+fn test_normalize()
+    let mut x = [2.0, -4.0, 1.0]
+    let n = sig_normalize(x)
+    check("norm max", n[1] == -1.0)
+    check("norm scaled", approx(n[0], 0.5) == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_dft()
+test_convolve()
+test_auto_correlate()
+test_windows()
+test_low_pass()
+test_moving_median()
+test_peak_detect()
+test_zero_crossings()
+test_energy_rms()
+test_normalize()
+print("")
+print("All signal tests passed (10 tests)")

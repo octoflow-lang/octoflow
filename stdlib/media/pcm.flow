@@ -1,0 +1,507 @@
+// stdlib/media/pcm.flow — PCM audio buffer management
+//
+// High-level audio buffer abstraction. Samples stored as float arrays
+// in range [-1.0, 1.0]. Planar format: mono = 1 array, stereo = L then R
+// concatenated in a single flat array (L[0..n-1], R[n..2n-1]).
+//
+// Buffer storage: parallel arrays. Index = buffer ID.
+//
+// Functions: pcm_create, pcm_create_stereo, pcm_from_array,
+//            pcm_get, pcm_set, pcm_length, pcm_rate, pcm_channels,
+//            pcm_duration, pcm_slice, pcm_concat, pcm_normalize,
+//            pcm_gain, pcm_fade_in, pcm_fade_out, pcm_reverse,
+//            pcm_mix_to_mono, pcm_silence, pcm_peak, pcm_rms,
+//            pcm_resample_nearest, pcm_to_array
+//
+// Usage:
+//   use "pcm"
+//   let buf = pcm_silence(44100.0, 1.0, 1.0)  // 1 second mono silence
+//   let buf2 = pcm_create(44100.0, 1.0)
+//   // Fill with samples:
+//   pcm_set(buf2, 0.0, 0.5)
+
+// ── Storage ──────────────────────────────────────────
+let mut _pcm_data = []
+let mut _pcm_start = []
+let mut _pcm_len = []
+let mut _pcm_rate = []
+let mut _pcm_ch = []
+
+fn _pcm_alloc(n_samples, sample_rate, channels)
+    let id = len(_pcm_start)
+    let start = len(_pcm_data)
+    push(_pcm_start, start)
+    let total = n_samples * channels
+    push(_pcm_len, n_samples)
+    let mut sr = sample_rate
+    if sr <= 0.0
+        sr = 44100.0
+    end
+    push(_pcm_rate, sr)
+    let mut ch = channels
+    if ch < 1.0
+        ch = 1.0
+    end
+    if ch > 2.0
+        ch = 2.0
+    end
+    push(_pcm_ch, ch)
+    // Zero-fill
+    let mut i = 0.0
+    while i < total
+        push(_pcm_data, 0.0)
+        i = i + 1.0
+    end
+    return id
+end
+
+// ── Constructors ─────────────────────────────────────
+
+fn pcm_create(sample_rate, duration_sec)
+    // Create mono buffer of given duration (seconds). Returns buffer ID.
+    let n = floor(sample_rate * duration_sec)
+    if n < 1.0
+        return _pcm_alloc(1.0, sample_rate, 1.0)
+    end
+    return _pcm_alloc(n, sample_rate, 1.0)
+end
+
+fn pcm_create_stereo(sample_rate, duration_sec)
+    // Create stereo buffer. Returns buffer ID.
+    let n = floor(sample_rate * duration_sec)
+    if n < 1.0
+        return _pcm_alloc(1.0, sample_rate, 2.0)
+    end
+    return _pcm_alloc(n, sample_rate, 2.0)
+end
+
+fn pcm_silence(sample_rate, duration_sec, channels)
+    // Create silent buffer. Returns buffer ID.
+    let n = floor(sample_rate * duration_sec)
+    if n < 1.0
+        return _pcm_alloc(1.0, sample_rate, channels)
+    end
+    return _pcm_alloc(n, sample_rate, channels)
+end
+
+fn pcm_from_array(data, n_samples, sample_rate, channels)
+    // Create buffer from existing sample array. Returns buffer ID.
+    let mut ns = n_samples
+    if ns < 1.0
+        ns = 1.0
+    end
+    let id = _pcm_alloc(ns, sample_rate, channels)
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let total = ns * channels
+    let src_len = len(data)
+    let mut i = 0.0
+    while i < total && i < src_len
+        _pcm_data[int(start + i)] = data[int(i)]
+        i = i + 1.0
+    end
+    return id
+end
+
+// ── Queries ──────────────────────────────────────────
+
+fn pcm_length(id)
+    // Number of samples per channel.
+    return _pcm_len[int(id)]
+end
+
+fn pcm_rate(id)
+    // Sample rate in Hz.
+    return _pcm_rate[int(id)]
+end
+
+fn pcm_channels(id)
+    // Number of channels (1=mono, 2=stereo).
+    return _pcm_ch[int(id)]
+end
+
+fn pcm_duration(id)
+    // Duration in seconds.
+    let bi = int(id)
+    let rate = _pcm_rate[bi]
+    if rate <= 0.0
+        return 0.0
+    end
+    return _pcm_len[bi] / rate
+end
+
+// ── Sample access ────────────────────────────────────
+
+fn pcm_get(id, sample_idx)
+    // Get mono sample (or left channel for stereo).
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let n = _pcm_len[bi]
+    if sample_idx < 0.0 || sample_idx >= n
+        return 0.0
+    end
+    return _pcm_data[int(start + sample_idx)]
+end
+
+fn pcm_get_ch(id, sample_idx, channel)
+    // Get sample from specific channel (0=left/mono, 1=right).
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let n = _pcm_len[bi]
+    let ch = _pcm_ch[bi]
+    if sample_idx < 0.0 || sample_idx >= n || channel < 0.0 || channel >= ch
+        return 0.0
+    end
+    return _pcm_data[int(start + channel * n + sample_idx)]
+end
+
+fn pcm_set(id, sample_idx, value)
+    // Set mono sample (or left channel for stereo).
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let n = _pcm_len[bi]
+    if sample_idx < 0.0 || sample_idx >= n
+        return 0.0
+    end
+    let mut v = value
+    if v > 1.0
+        v = 1.0
+    end
+    if v < -1.0
+        v = -1.0
+    end
+    _pcm_data[int(start + sample_idx)] = v
+    return 0.0
+end
+
+fn pcm_set_ch(id, sample_idx, channel, value)
+    // Set sample on specific channel.
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let n = _pcm_len[bi]
+    let ch = _pcm_ch[bi]
+    if sample_idx < 0.0 || sample_idx >= n || channel < 0.0 || channel >= ch
+        return 0.0
+    end
+    let mut v = value
+    if v > 1.0
+        v = 1.0
+    end
+    if v < -1.0
+        v = -1.0
+    end
+    _pcm_data[int(start + channel * n + sample_idx)] = v
+    return 0.0
+end
+
+// ── Operations ───────────────────────────────────────
+
+fn pcm_gain(id, gain)
+    // Multiply all samples by gain factor. Clamps to [-1,1].
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let total = _pcm_len[bi] * _pcm_ch[bi]
+    let mut i = 0.0
+    while i < total
+        let mut v = _pcm_data[int(start + i)] * gain
+        if v > 1.0
+            v = 1.0
+        elif v < -1.0
+            v = -1.0
+        end
+        _pcm_data[int(start + i)] = v
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn pcm_normalize(id)
+    // Scale so peak amplitude = 1.0.
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let total = _pcm_len[bi] * _pcm_ch[bi]
+    let mut peak = 0.0
+    let mut i = 0.0
+    while i < total
+        let a = abs(_pcm_data[int(start + i)])
+        if a > peak
+            peak = a
+        end
+        i = i + 1.0
+    end
+    if peak < 0.00001
+        return 0.0
+    end
+    let scale = 1.0 / peak
+    i = 0.0
+    while i < total
+        _pcm_data[int(start + i)] = _pcm_data[int(start + i)] * scale
+        i = i + 1.0
+    end
+    return peak
+end
+
+fn pcm_fade_in(id, duration_sec)
+    // Linear fade-in from silence. Applied per-channel.
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let n = _pcm_len[bi]
+    let ch = _pcm_ch[bi]
+    let fade_samples = floor(_pcm_rate[bi] * duration_sec)
+    let mut fade_n = fade_samples
+    if fade_n > n
+        fade_n = n
+    end
+    if fade_n < 1.0
+        return 0.0
+    end
+    let mut c = 0.0
+    while c < ch
+        let ch_offset = c * n
+        let mut i = 0.0
+        while i < fade_n
+            let t = i / fade_n
+            _pcm_data[int(start + ch_offset + i)] = _pcm_data[int(start + ch_offset + i)] * t
+            i = i + 1.0
+        end
+        c = c + 1.0
+    end
+    return 0.0
+end
+
+fn pcm_fade_out(id, duration_sec)
+    // Linear fade-out to silence.
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let n = _pcm_len[bi]
+    let ch = _pcm_ch[bi]
+    let fade_samples = floor(_pcm_rate[bi] * duration_sec)
+    let mut fade_n = fade_samples
+    if fade_n > n
+        fade_n = n
+    end
+    if fade_n < 1.0
+        return 0.0
+    end
+    let mut c = 0.0
+    while c < ch
+        let ch_offset = c * n
+        let mut i = 0.0
+        while i < fade_n
+            let t = 1.0 - i / fade_n
+            let idx = int(start + ch_offset + n - fade_n + i)
+            _pcm_data[idx] = _pcm_data[idx] * t
+            i = i + 1.0
+        end
+        c = c + 1.0
+    end
+    return 0.0
+end
+
+fn pcm_reverse(id)
+    // Reverse audio in-place.
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let n = _pcm_len[bi]
+    let ch = _pcm_ch[bi]
+    let mut c = 0.0
+    while c < ch
+        let ch_offset = c * n
+        let mut lo = 0.0
+        let mut hi = n - 1.0
+        while lo < hi
+            let a = int(start + ch_offset + lo)
+            let b = int(start + ch_offset + hi)
+            let tmp = _pcm_data[a]
+            _pcm_data[a] = _pcm_data[b]
+            _pcm_data[b] = tmp
+            lo = lo + 1.0
+            hi = hi - 1.0
+        end
+        c = c + 1.0
+    end
+    return 0.0
+end
+
+fn pcm_peak(id)
+    // Peak absolute amplitude.
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let total = _pcm_len[bi] * _pcm_ch[bi]
+    let mut peak = 0.0
+    let mut i = 0.0
+    while i < total
+        let a = abs(_pcm_data[int(start + i)])
+        if a > peak
+            peak = a
+        end
+        i = i + 1.0
+    end
+    return peak
+end
+
+fn pcm_rms(id)
+    // Root mean square amplitude.
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let total = _pcm_len[bi] * _pcm_ch[bi]
+    if total <= 0.0
+        return 0.0
+    end
+    let mut sum_sq = 0.0
+    let mut i = 0.0
+    while i < total
+        let v = _pcm_data[int(start + i)]
+        sum_sq = sum_sq + v * v
+        i = i + 1.0
+    end
+    return sqrt(sum_sq / total)
+end
+
+fn pcm_mix_to_mono(id)
+    // Mix stereo to mono (average L+R). Returns new mono buffer ID.
+    let bi = int(id)
+    let n = _pcm_len[bi]
+    let ch = _pcm_ch[bi]
+    if ch == 1.0
+        // Already mono, copy
+        let new_id = _pcm_alloc(n, _pcm_rate[bi], 1.0)
+        let src = int(_pcm_start[bi])
+        let dst = int(_pcm_start[int(new_id)])
+        let mut i = 0.0
+        while i < n
+            _pcm_data[int(dst + i)] = _pcm_data[int(src + i)]
+            i = i + 1.0
+        end
+        return new_id
+    end
+    let new_id = _pcm_alloc(n, _pcm_rate[bi], 1.0)
+    let src = int(_pcm_start[bi])
+    let dst = int(_pcm_start[int(new_id)])
+    let mut i = 0.0
+    while i < n
+        let l = _pcm_data[int(src + i)]
+        let r = _pcm_data[int(src + n + i)]
+        _pcm_data[int(dst + i)] = (l + r) * 0.5
+        i = i + 1.0
+    end
+    return new_id
+end
+
+fn pcm_to_array(id, result)
+    // Copy buffer samples to result array. Returns sample count.
+    let bi = int(id)
+    let start = int(_pcm_start[bi])
+    let total = _pcm_len[bi] * _pcm_ch[bi]
+    let mut i = 0.0
+    while i < total
+        push(result, _pcm_data[int(start + i)])
+        i = i + 1.0
+    end
+    return total
+end
+
+fn pcm_slice(id, from_sample, to_sample)
+    // Create new buffer from sample range [from, to). Returns new buffer ID.
+    let bi = int(id)
+    let n = _pcm_len[bi]
+    let ch = _pcm_ch[bi]
+    let mut f = from_sample
+    let mut t = to_sample
+    if f < 0.0
+        f = 0.0
+    end
+    if t > n
+        t = n
+    end
+    if f >= t
+        return _pcm_alloc(1.0, _pcm_rate[bi], ch)
+    end
+    let slice_len = t - f
+    let new_id = _pcm_alloc(slice_len, _pcm_rate[bi], ch)
+    let src = int(_pcm_start[bi])
+    let dst = int(_pcm_start[int(new_id)])
+    let mut c = 0.0
+    while c < ch
+        let src_off = c * n
+        let dst_off = c * slice_len
+        let mut i = 0.0
+        while i < slice_len
+            _pcm_data[int(dst + dst_off + i)] = _pcm_data[int(src + src_off + f + i)]
+            i = i + 1.0
+        end
+        c = c + 1.0
+    end
+    return new_id
+end
+
+fn pcm_concat(id_a, id_b)
+    // Concatenate two buffers. Must have same channels and sample rate.
+    // Returns new buffer ID. If channel counts differ, uses id_a's count.
+    let ai = int(id_a)
+    let bii = int(id_b)
+    let n_a = _pcm_len[ai]
+    let n_b = _pcm_len[bii]
+    let ch = _pcm_ch[ai]
+    let ch_b = _pcm_ch[bii]
+    if ch != ch_b
+        // Channel mismatch — only copy id_a's data
+        return _pcm_alloc(n_a, _pcm_rate[ai], ch)
+    end
+    let new_id = _pcm_alloc(n_a + n_b, _pcm_rate[ai], ch)
+    let src_a = int(_pcm_start[ai])
+    let src_b = int(_pcm_start[bii])
+    let dst = int(_pcm_start[int(new_id)])
+    let new_n = n_a + n_b
+    let mut c = 0.0
+    while c < ch
+        let dst_off = c * new_n
+        let mut i = 0.0
+        while i < n_a
+            _pcm_data[int(dst + dst_off + i)] = _pcm_data[int(src_a + c * n_a + i)]
+            i = i + 1.0
+        end
+        i = 0.0
+        while i < n_b
+            _pcm_data[int(dst + dst_off + n_a + i)] = _pcm_data[int(src_b + c * n_b + i)]
+            i = i + 1.0
+        end
+        c = c + 1.0
+    end
+    return new_id
+end
+
+fn pcm_resample_nearest(id, target_rate)
+    // Resample using nearest-neighbor. Returns new buffer ID.
+    let bi = int(id)
+    let src_rate = _pcm_rate[bi]
+    let n = _pcm_len[bi]
+    let ch = _pcm_ch[bi]
+    if target_rate <= 0.0 || src_rate <= 0.0
+        return _pcm_alloc(1.0, target_rate, ch)
+    end
+    let ratio = target_rate / src_rate
+    let new_n = floor(n * ratio)
+    if new_n < 1.0
+        return _pcm_alloc(1.0, target_rate, ch)
+    end
+    let new_id = _pcm_alloc(new_n, target_rate, ch)
+    let src = int(_pcm_start[bi])
+    let dst = int(_pcm_start[int(new_id)])
+    let mut c = 0.0
+    while c < ch
+        let src_off = c * n
+        let dst_off = c * new_n
+        let mut i = 0.0
+        while i < new_n
+            let mut src_idx = floor(i / ratio)
+            if src_idx >= n
+                src_idx = n - 1.0
+            end
+            _pcm_data[int(dst + dst_off + i)] = _pcm_data[int(src + src_off + src_idx)]
+            i = i + 1.0
+        end
+        c = c + 1.0
+    end
+    return new_id
+end

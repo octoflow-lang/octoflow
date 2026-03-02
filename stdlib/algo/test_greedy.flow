@@ -1,0 +1,103 @@
+// test_greedy.flow — Tests for stdlib/algo/greedy.flow
+use "greedy"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.1
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Activity Selection ──────────────────────────────────────
+
+fn test_activity_selection()
+    // Activities: (1,4), (3,5), (0,6), (5,7), (3,9), (5,9), (6,10), (8,11), (8,12), (2,14), (12,16)
+    let mut acts = [1.0, 4.0, 3.0, 5.0, 0.0, 6.0, 5.0, 7.0, 3.0, 9.0, 5.0, 9.0, 6.0, 10.0, 8.0, 11.0, 8.0, 12.0, 2.0, 14.0, 12.0, 16.0]
+    let selected = greedy_activity_selection(acts, 11.0)
+    check("activity count", len(selected) >= 4.0)
+    return 0.0
+end
+
+fn test_activity_simple()
+    let mut acts = [1.0, 2.0, 3.0, 4.0, 0.0, 6.0, 5.0, 7.0]
+    let selected = greedy_activity_selection(acts, 4.0)
+    // Should select at least 3: (1,2), (3,4), (5,7)
+    check("activity simple", len(selected) >= 3.0)
+    return 0.0
+end
+
+// ── Fractional Knapsack ─────────────────────────────────────
+
+fn test_fractional_knapsack()
+    let mut values = [60.0, 100.0, 120.0]
+    let mut weights = [10.0, 20.0, 30.0]
+    let total = greedy_fractional_knapsack(values, weights, 3.0, 50.0)
+    check("frac knapsack", approx(total, 240.0) == 1.0)
+    return 0.0
+end
+
+// ── Coin Change ─────────────────────────────────────────────
+
+fn test_coin_change()
+    let mut coins = [25.0, 10.0, 5.0, 1.0]
+    let result = greedy_coin_change(coins, 4.0, 41.0)
+    check("coins 25", result[0] == 1.0)
+    check("coins 10", result[1] == 1.0)
+    check("coins 5", result[2] == 1.0)
+    check("coins 1", result[3] == 1.0)
+    return 0.0
+end
+
+// ── Job Sequencing ──────────────────────────────────────────
+
+fn test_job_sequencing()
+    let mut deadlines = [2.0, 1.0, 2.0, 1.0, 3.0]
+    let mut profits = [100.0, 19.0, 27.0, 25.0, 15.0]
+    let total = greedy_job_sequencing(deadlines, profits, 5.0)
+    check("job profit", total >= 127.0)  // At least jobs 1 (100) and 3 (27)
+    return 0.0
+end
+
+// ── Minimum Platforms ───────────────────────────────────────
+
+fn test_min_platforms()
+    let mut arr = [900.0, 940.0, 950.0, 1100.0, 1500.0, 1800.0]
+    let mut dep = [910.0, 1200.0, 1120.0, 1130.0, 1900.0, 2000.0]
+    let plat = greedy_min_platforms(arr, dep, 6.0)
+    check("platforms", plat == 3.0)
+    return 0.0
+end
+
+// ── Huffman ─────────────────────────────────────────────────
+
+fn test_huffman()
+    let mut freqs = [5.0, 9.0, 12.0, 13.0, 16.0, 45.0]
+    let lengths = greedy_huffman_lengths(freqs, 6.0)
+    check("huffman len", len(lengths) == 6.0)
+    // Most frequent (45) should have shortest code
+    // Least frequent (5) should have longest code
+    check("huffman freq order", lengths[5] <= lengths[0])
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_activity_selection()
+test_activity_simple()
+test_fractional_knapsack()
+test_coin_change()
+test_job_sequencing()
+test_min_platforms()
+test_huffman()
+print("")
+print("All greedy tests passed (7 tests)")

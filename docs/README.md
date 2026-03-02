@@ -12,7 +12,10 @@
 - [Builtins Reference](builtins.md) — all built-in functions
 - [Streams Guide](streams.md) — stream/pipeline syntax
 - [GPU Guide](gpu-guide.md) — GPU computing with Vulkan
-- [Loom Engine](loom-engine.md) — GPU VM, chain dispatch, LoomDB, OctoDB
+- [Loom Engine](loom-engine.md) — Main + Support Loom architecture, dispatch chains, threading, LoomDB
+- [Loom Use Cases](loom-engine-use-cases.md) — real-world applications across 8 domains
+- [Loom Showcases](loom-showcase-roadmap.md) — 5 GPU demos: N-Body, Fluid, MolDyn, Monte Carlo, ZK Proofs
+- [Loom Phase 4](loom-engine-phase4.md) — Adaptive Computing Fabric: OctoZip, Mailbox, Multi-Stack, JIT, Varying Bit
 - [GUI Guide](gui.md) — 16 widgets, canvas, charts, layout, themes (Windows)
 
 ## Tools

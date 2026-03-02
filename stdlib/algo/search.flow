@@ -1,0 +1,221 @@
+// stdlib/algo/search.flow — Search algorithms
+//
+// Functions: binary_search, linear_search, lower_bound, upper_bound,
+//            find_min, find_max, find_min_index, find_max_index,
+//            contains_value, count_value, find_all
+//
+// binary_search and bound functions require sorted arrays.
+//
+// Usage:
+//   use "search"
+//   let mut arr = [1.0, 3.0, 5.0, 7.0, 9.0]
+//   let idx = binary_search(arr, 5.0)  // 2.0
+//   let lb = lower_bound(arr, 4.0)     // 2.0 (index of first element >= 4)
+
+// ── Binary Search ───────────────────────────────────────────────
+// O(log n). Array must be sorted ascending.
+
+fn binary_search(arr, target)
+    // Returns index of target in sorted array, or -1.0 if not found.
+    let mut lo = 0.0
+    let mut hi = len(arr) - 1.0
+    while lo <= hi
+        let mid = floor((lo + hi) / 2.0)
+        if arr[mid] == target
+            return mid
+        end
+        if arr[mid] < target
+            lo = mid + 1.0
+        else
+            hi = mid - 1.0
+        end
+    end
+    return -1.0
+end
+
+fn lower_bound(arr, target)
+    // Returns index of first element >= target in sorted array.
+    // If all elements < target, returns len(arr).
+    let n = len(arr)
+    let mut lo = 0.0
+    let mut hi = n
+    while lo < hi
+        let mid = floor((lo + hi) / 2.0)
+        if arr[mid] < target
+            lo = mid + 1.0
+        else
+            hi = mid
+        end
+    end
+    return lo
+end
+
+fn upper_bound(arr, target)
+    // Returns index of first element > target in sorted array.
+    // If all elements <= target, returns len(arr).
+    let n = len(arr)
+    let mut lo = 0.0
+    let mut hi = n
+    while lo < hi
+        let mid = floor((lo + hi) / 2.0)
+        if arr[mid] <= target
+            lo = mid + 1.0
+        else
+            hi = mid
+        end
+    end
+    return lo
+end
+
+// ── Linear Search ───────────────────────────────────────────────
+// O(n). Works on unsorted arrays.
+
+fn linear_search(arr, target)
+    // Returns index of first occurrence of target, or -1.0 if not found.
+    let n = len(arr)
+    let mut i = 0.0
+    while i < n
+        if arr[i] == target
+            return i
+        end
+        i = i + 1.0
+    end
+    return -1.0
+end
+
+fn contains_value(arr, target)
+    // Returns 1.0 if target exists in array, 0.0 otherwise.
+    if linear_search(arr, target) >= 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn count_value(arr, target)
+    // Returns count of occurrences of target in array.
+    let n = len(arr)
+    let mut count = 0.0
+    let mut i = 0.0
+    while i < n
+        if arr[i] == target
+            count = count + 1.0
+        end
+        i = i + 1.0
+    end
+    return count
+end
+
+fn find_all(arr, target)
+    // Returns array of all indices where target appears.
+    let mut result = []
+    let n = len(arr)
+    let mut i = 0.0
+    while i < n
+        if arr[i] == target
+            push(result, i)
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── Min/Max ─────────────────────────────────────────────────────
+
+fn find_min(arr)
+    // Returns minimum value in array (or 0.0 for empty).
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    let mut best = arr[0]
+    let mut i = 1.0
+    while i < n
+        if arr[i] < best
+            best = arr[i]
+        end
+        i = i + 1.0
+    end
+    return best
+end
+
+fn find_max(arr)
+    // Returns maximum value in array (or 0.0 for empty).
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    let mut best = arr[0]
+    let mut i = 1.0
+    while i < n
+        if arr[i] > best
+            best = arr[i]
+        end
+        i = i + 1.0
+    end
+    return best
+end
+
+fn find_min_index(arr)
+    // Returns index of minimum value (or -1.0 for empty).
+    let n = len(arr)
+    if n == 0.0
+        return -1.0
+    end
+    let mut best_idx = 0.0
+    let mut i = 1.0
+    while i < n
+        if arr[i] < arr[best_idx]
+            best_idx = i
+        end
+        i = i + 1.0
+    end
+    return best_idx
+end
+
+fn find_max_index(arr)
+    // Returns index of maximum value (or -1.0 for empty).
+    let n = len(arr)
+    if n == 0.0
+        return -1.0
+    end
+    let mut best_idx = 0.0
+    let mut i = 1.0
+    while i < n
+        if arr[i] > arr[best_idx]
+            best_idx = i
+        end
+        i = i + 1.0
+    end
+    return best_idx
+end
+
+// ── Range Queries (sorted arrays) ───────────────────────────────
+
+fn count_in_range(arr, lo, hi)
+    // Count elements in [lo, hi] range in a sorted array. O(log n).
+    let start = lower_bound(arr, lo)
+    let end_idx = upper_bound(arr, hi)
+    return end_idx - start
+end
+
+fn find_closest(arr, target)
+    // Find value closest to target in sorted array. O(log n).
+    let n = len(arr)
+    if n == 0.0
+        return 0.0
+    end
+    let idx = lower_bound(arr, target)
+    if idx == 0.0
+        return arr[0]
+    end
+    if idx >= n
+        return arr[n - 1.0]
+    end
+    // Compare arr[idx] and arr[idx-1]
+    let diff_right = arr[idx] - target
+    let diff_left = target - arr[idx - 1.0]
+    if diff_left <= diff_right
+        return arr[idx - 1.0]
+    end
+    return arr[idx]
+end

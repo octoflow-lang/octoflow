@@ -3,9 +3,9 @@
 // Controls: Click to center, +/- to zoom, J to toggle Julia mode
 // Arrow keys to pan, R to reset
 
-use "game/game"
-use "game/input"
-use "game/fractals"
+use "../stdlib/game/game"
+use "../stdlib/game/input"
+use "../stdlib/game/fractals"
 
 // [0]=center_x, [1]=center_y, [2]=zoom, [3]=max_iter, [4]=mode (0=mandelbrot, 1=julia)
 // [5]=julia_cr, [6]=julia_ci, [7]=dirty

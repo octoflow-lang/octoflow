@@ -1,0 +1,294 @@
+// OctoBrain Word-Type Classification Benchmark
+// Pivot from failed transition prediction (0% in Phase 6) to classification.
+// Tests whether OctoBrain prototypes cluster by grammatical category.
+//
+// 4 word types, 25 words total:
+//   Class 0 (Articles):     the, a, an (3 words)
+//   Class 1 (Prepositions): on, in, at, to, of, by (6 words)
+//   Class 2 (Nouns):        cat, dog, fox, mat, rat, bat, hat, box (8 words)
+//   Class 3 (Verbs):        sat, ran, ate, hit, cut, got, put, let (8 words)
+//
+// Word encoding: 8D hash vector per word
+// Training: 5 repetitions per word (stabilize via EMA drift)
+// Classification: majority-vote mapping from prototypes to classes
+//
+// PASS/FAIL criteria (2 of 3 required):
+//   1. Accuracy >= 50% (above 25% random baseline)
+//   2. Proto count between 3 and 15
+//   3. At least 2/4 classes have per-class accuracy >= 0.60
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\bench_nlp_wordtype.flow"
+
+use "../lib/octobrain"
+use "../lib/text_word"
+use "../lib/preprocess"
+use "../lib/proto"
+use "../lib/benchmark"
+
+print("=== OctoBrain Word-Type Classification Benchmark ===")
+print("")
+print("Word Types:")
+print("  Class 0 (Articles): the, a, an (3 words)")
+print("  Class 1 (Prepositions): on, in, at, to, of, by (6 words)")
+print("  Class 2 (Nouns): cat, dog, fox, mat, rat, bat, hat, box (8 words)")
+print("  Class 3 (Verbs): sat, ran, ate, hit, cut, got, put, let (8 words)")
+print("  Total: 25 words, 8D hash encoding, 5 training reps")
+print("")
+
+// ── Step 1: Build flat arrays for words and labels ──────────────────
+let mut words = []
+let mut labels = []
+
+// Class 0 - Articles (3 words)
+push(words, "the")
+push(labels, 0.0)
+push(words, "a")
+push(labels, 0.0)
+push(words, "an")
+push(labels, 0.0)
+
+// Class 1 - Prepositions (6 words)
+push(words, "on")
+push(labels, 1.0)
+push(words, "in")
+push(labels, 1.0)
+push(words, "at")
+push(labels, 1.0)
+push(words, "to")
+push(labels, 1.0)
+push(words, "of")
+push(labels, 1.0)
+push(words, "by")
+push(labels, 1.0)
+
+// Class 2 - Nouns (8 words)
+push(words, "cat")
+push(labels, 2.0)
+push(words, "dog")
+push(labels, 2.0)
+push(words, "fox")
+push(labels, 2.0)
+push(words, "mat")
+push(labels, 2.0)
+push(words, "rat")
+push(labels, 2.0)
+push(words, "bat")
+push(labels, 2.0)
+push(words, "hat")
+push(labels, 2.0)
+push(words, "box")
+push(labels, 2.0)
+
+// Class 3 - Verbs (8 words)
+push(words, "sat")
+push(labels, 3.0)
+push(words, "ran")
+push(labels, 3.0)
+push(words, "ate")
+push(labels, 3.0)
+push(words, "hit")
+push(labels, 3.0)
+push(words, "cut")
+push(labels, 3.0)
+push(words, "got")
+push(labels, 3.0)
+push(words, "put")
+push(labels, 3.0)
+push(words, "let")
+push(labels, 3.0)
+
+let num_words = 25.0
+let embed_dim = 8.0
+let num_reps = 5.0
+let num_classes = 4.0
+
+let nw_int = int(num_words)
+print("Vocabulary: {nw_int} words loaded")
+print("")
+
+// ── Step 2: Initialize brain with standard 14+ array pattern ────────
+let mut brain = octobrain_new(2.0)
+let mut ps = proto_new()
+let mut pe = []
+let mut pm = []
+let mut es = embed_new()
+let mut we = []
+let mut ob = []
+let mut eds = edges_new()
+let mut en = []
+let mut ea = []
+let mut eo = []
+let mut ep = []
+let mut ew = []
+let mut eact = []
+let mut win = []
+let mut ws = []
+let mut cm = []
+let mut cc = [0.0]
+
+// ── Step 3: Training — 5 repetitions over all 25 words ─────────────
+// On the last repetition (rep == 4.0), record proto matches for evaluation.
+let mut match_protos = []
+let mut match_labels = []
+
+print("--- Training (5 reps x 25 words = 125 observations) ---")
+
+let mut rep = 0.0
+while rep < num_reps
+  let mut wi = 0.0
+  while wi < num_words
+    let word = words[wi]
+    let enc = word_encode_hash(word, embed_dim)
+    let cen = auto_center(enc, cm, cc)
+    let _d = octobrain_observe(brain, ps, pe, pm, es, we, ob, eds, en, ea, eo, ep, ew, eact, win, ws, cen)
+
+    // On last repetition, record prototype match and label
+    if rep == 4.0
+      let pid = map_get(ps, "last_match_id")
+      push(match_protos, pid)
+      push(match_labels, labels[wi])
+    end
+
+    wi = wi + 1.0
+  end
+
+  // Print progress per rep
+  let rep_int = int(rep + 1.0)
+  let pc_rep = map_get(ps, "proto_count")
+  let pc_rep_int = int(pc_rep)
+  print("  Rep {rep_int}/5: proto count = {pc_rep_int}")
+
+  rep = rep + 1.0
+end
+
+print("")
+print("--- Training Complete ---")
+let pc = map_get(ps, "proto_count")
+let pc_int = int(pc)
+print("  Proto count: {pc_int}")
+print("")
+
+// ── Step 4: Classification via benchmark harness ────────────────────
+let mapping = build_mapping(match_protos, match_labels, pc, num_classes)
+let accuracy = compute_accuracy(match_protos, match_labels, mapping, num_words)
+let pct = floor(accuracy * 1000.0) / 10.0
+
+print("--- Classification Results ---")
+print("  Accuracy: {pct}%")
+print("")
+
+// Print proto-to-class mapping
+print("--- Proto -> Class Mapping ---")
+let mut mi = 0.0
+while mi < pc
+  let mapped_class = mapping[mi]
+  let mc_int = int(mapped_class)
+  let mi_int = int(mi)
+  print("  Proto {mi_int} -> Class {mc_int}")
+  mi = mi + 1.0
+end
+print("")
+
+// Purity analysis
+print("--- Prototype Purity ---")
+let _pur = print_purity(match_protos, match_labels, pc, num_classes, num_words)
+print("")
+
+// Confusion matrix
+print("--- Confusion Matrix ---")
+let _cmx = print_confusion(match_protos, match_labels, mapping, num_words, num_classes)
+print("")
+
+// ── Step 5: PASS/FAIL Analysis ──────────────────────────────────────
+print("=== PASS/FAIL Analysis ===")
+print("")
+
+let mut npass = 0.0
+let mut nfail = 0.0
+
+// Criterion 1: Accuracy >= 50% (above 25% random baseline)
+if accuracy >= 0.50
+  print("PASS: Accuracy = {pct}% >= 50% (random baseline = 25%)")
+  npass = npass + 1.0
+else
+  print("FAIL: Accuracy = {pct}% < 50% (random baseline = 25%)")
+  nfail = nfail + 1.0
+end
+
+// Criterion 2: Proto count between 3 and 15
+if pc >= 3.0 && pc <= 15.0
+  print("PASS: Proto count = {pc_int} (in range 3-15)")
+  npass = npass + 1.0
+else
+  print("FAIL: Proto count = {pc_int} (expected 3-15)")
+  nfail = nfail + 1.0
+end
+
+// Criterion 3: At least 2/4 classes have per-class accuracy >= 0.60
+// Count correct predictions per class using the mapping
+let mut class_correct = []
+let mut class_total = []
+push(class_correct, 0.0)
+push(class_correct, 0.0)
+push(class_correct, 0.0)
+push(class_correct, 0.0)
+push(class_total, 0.0)
+push(class_total, 0.0)
+push(class_total, 0.0)
+push(class_total, 0.0)
+
+let mut ci = 0.0
+while ci < num_words
+  let true_cls = match_labels[ci]
+  let proto_id = match_protos[ci]
+  let pred_cls = mapping[proto_id]
+  class_total[true_cls] = class_total[true_cls] + 1.0
+  if pred_cls == true_cls
+    class_correct[true_cls] = class_correct[true_cls] + 1.0
+  end
+  ci = ci + 1.0
+end
+
+let mut high_purity_count = 0.0
+let mut ki = 0.0
+while ki < num_classes
+  let ct = class_total[ki]
+  let ki_int = int(ki)
+  if ct > 0.0
+    let class_acc = class_correct[ki] / ct
+    let class_pct = floor(class_acc * 1000.0) / 10.0
+    if class_acc >= 0.60
+      high_purity_count = high_purity_count + 1.0
+      print("  Class {ki_int}: {class_pct}% accuracy >= 60%")
+    else
+      print("  Class {ki_int}: {class_pct}% accuracy < 60%")
+    end
+  else
+    print("  Class {ki_int}: no samples")
+  end
+  ki = ki + 1.0
+end
+
+let hp_int = int(high_purity_count)
+if high_purity_count >= 2.0
+  print("PASS: {hp_int}/4 classes have accuracy >= 60% (need >= 2)")
+  npass = npass + 1.0
+else
+  print("FAIL: {hp_int}/4 classes have accuracy >= 60% (need >= 2)")
+  nfail = nfail + 1.0
+end
+
+// Overall result
+let npass_int = int(npass)
+let nfail_int = int(nfail)
+print("")
+print("Result: {npass_int}/3 criteria passed, {nfail_int}/3 failed")
+
+if npass >= 2.0
+  print("OVERALL: PASS")
+else
+  print("OVERALL: FAIL")
+end
+
+print("")
+print("--- word-type classification benchmark complete ---")

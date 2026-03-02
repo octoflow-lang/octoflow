@@ -384,10 +384,10 @@ let _dpa4 = vm_dispatch(vm_a4, "stdlib/loom/kernels/ops/vm_affine.spv", pc_a, wg
 let pa4 = vm_build(vm_a4)
 
 // Submit ALL 4 async — GPU runs all autonomously
-let _sub1 = vm_execute_async(pa1)
-let _sub2 = vm_execute_async(pa2)
-let _sub3 = vm_execute_async(pa3)
-let _sub4 = vm_execute_async(pa4)
+let _sub1 = loom_launch(pa1)
+let _sub2 = loom_launch(pa2)
+let _sub3 = loom_launch(pa3)
+let _sub4 = loom_launch(pa4)
 print("  Submitted 4 VMs async")
 
 // Poll all until done

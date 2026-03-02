@@ -1,0 +1,182 @@
+// viz_palette.flow — Scientific Color Palettes for Visualization
+//
+// Provides viridis, plasma, inferno, coolwarm, and grayscale palettes.
+// Maps scalar values to RGB colors for heatmaps and continuous data.
+//
+// Usage:
+//   use "viz/viz_palette"
+//   let pal = viz_palette(PAL_VIRIDIS, 5)     // 5-step viridis → [r0,g0,b0, r1,g1,b1, ...]
+//   let c = viz_palette_map(0.5, 0.0, 1.0, pal) // → [r, g, b]
+
+// Note: palette logic is self-contained, no external imports needed.
+
+// === Palette ID Constants ===
+let PAL_VIRIDIS   = 1.0
+let PAL_PLASMA    = 2.0
+let PAL_INFERNO   = 3.0
+let PAL_COOLWARM  = 4.0
+let PAL_GRAYSCALE = 5.0
+
+// === Palette Key Colors (5 control points each) ===
+// Viridis: dark purple → teal → green → yellow
+let _pal_viridis = [68.0, 1.0, 84.0, 59.0, 82.0, 139.0, 33.0, 145.0, 140.0, 94.0, 201.0, 98.0, 253.0, 231.0, 37.0]
+// Plasma: dark purple → magenta → orange → yellow
+let _pal_plasma = [13.0, 8.0, 135.0, 126.0, 3.0, 168.0, 204.0, 71.0, 120.0, 248.0, 149.0, 64.0, 240.0, 249.0, 33.0]
+// Inferno: black → dark red → orange → yellow-white
+let _pal_inferno = [0.0, 0.0, 4.0, 87.0, 16.0, 110.0, 188.0, 55.0, 84.0, 249.0, 142.0, 9.0, 252.0, 255.0, 164.0]
+// Coolwarm: blue → white → red
+let _pal_coolwarm = [59.0, 76.0, 192.0, 141.0, 176.0, 230.0, 221.0, 221.0, 221.0, 229.0, 151.0, 117.0, 180.0, 4.0, 38.0]
+// Grayscale: black → white
+let _pal_grayscale = [0.0, 0.0, 0.0, 64.0, 64.0, 64.0, 128.0, 128.0, 128.0, 192.0, 192.0, 192.0, 255.0, 255.0, 255.0]
+
+fn _pal_clamp(v, lo, hi)
+  if v < lo
+    return lo
+  end
+  if v > hi
+    return hi
+  end
+  return v
+end
+
+fn _pal_get_keys(id)
+  if id == PAL_VIRIDIS
+    return _pal_viridis
+  end
+  if id == PAL_PLASMA
+    return _pal_plasma
+  end
+  if id == PAL_INFERNO
+    return _pal_inferno
+  end
+  if id == PAL_COOLWARM
+    return _pal_coolwarm
+  end
+  return _pal_grayscale
+end
+
+fn _pal_lerp_color(keys, t)
+  // Interpolate along 5-point key palette at position t in [0, 1]
+  let n_keys = 5.0
+  let segments = n_keys - 1.0
+  let mut tc = _pal_clamp(t, 0.0, 1.0)
+  let pos = tc * segments
+  let mut idx = floor(pos)
+  if idx >= segments
+    idx = segments - 1.0
+  end
+  let frac = pos - idx
+  let i0 = int(idx * 3.0)
+  let i1 = int((idx + 1.0) * 3.0)
+  let r = keys[i0] + (keys[i1] - keys[i0]) * frac
+  let g = keys[i0 + 1] + (keys[i1 + 1] - keys[i0 + 1]) * frac
+  let b = keys[i0 + 2] + (keys[i1 + 2] - keys[i0 + 2]) * frac
+  return [_pal_clamp(r, 0.0, 255.0), _pal_clamp(g, 0.0, 255.0), _pal_clamp(b, 0.0, 255.0)]
+end
+
+// === Public API ===
+
+fn viz_palette(id, steps)
+  // Generate a palette with `steps` colors from palette `id`
+  // Returns flat array: [r0,g0,b0, r1,g1,b1, ...]
+  let keys = _pal_get_keys(id)
+  let mut result = []
+  if steps <= 0.0
+    return result
+  end
+  if steps == 1.0
+    let c = _pal_lerp_color(keys, 0.5)
+    push(result, c[0])
+    push(result, c[1])
+    push(result, c[2])
+    return result
+  end
+  let mut i = 0.0
+  while i < steps
+    let t = i / (steps - 1.0)
+    let c = _pal_lerp_color(keys, t)
+    push(result, c[0])
+    push(result, c[1])
+    push(result, c[2])
+    i = i + 1.0
+  end
+  return result
+end
+
+fn viz_palette_map(value, min_v, max_v, palette)
+  // Map a scalar value to an RGB color using a generated palette
+  // Returns [r, g, b]
+  let n_colors = floor(len(palette) / 3.0)
+  if n_colors <= 0.0
+    return [128.0, 128.0, 128.0]
+  end
+  if n_colors == 1.0
+    return [palette[0], palette[1], palette[2]]
+  end
+
+  // Normalize value to [0, 1]
+  let range = max_v - min_v
+  let mut t = 0.5
+  if range > 0.0
+    t = (value - min_v) / range
+  end
+  t = _pal_clamp(t, 0.0, 1.0)
+
+  // Interpolate between palette entries
+  let pos = t * (n_colors - 1.0)
+  let mut idx = floor(pos)
+  if idx >= n_colors - 1.0
+    idx = n_colors - 2.0
+  end
+  if idx < 0.0
+    idx = 0.0
+  end
+  let frac = pos - idx
+  let i0 = int(idx * 3.0)
+  let i1 = int((idx + 1.0) * 3.0)
+  let r = palette[i0] + (palette[i1] - palette[i0]) * frac
+  let g = palette[i0 + 1] + (palette[i1 + 1] - palette[i0 + 1]) * frac
+  let b = palette[i0 + 2] + (palette[i1 + 2] - palette[i0 + 2]) * frac
+  return [_pal_clamp(r, 0.0, 255.0), _pal_clamp(g, 0.0, 255.0), _pal_clamp(b, 0.0, 255.0)]
+end
+
+fn viz_palette_auto(fingerprint)
+  // Pick best palette based on data fingerprint
+  let bounded = fingerprint[14]  // FP_IS_BOUNDED
+  let skew = fingerprint[5]      // FP_SKEW
+  let mn = fingerprint[1]        // FP_MIN
+
+  // Diverging data (contains negatives or centered) → coolwarm
+  if mn < 0.0
+    return PAL_COOLWARM
+  end
+  // Bounded [0,1] data → viridis (perceptually uniform)
+  if bounded == 1.0
+    return PAL_VIRIDIS
+  end
+  // High skew → inferno (emphasizes extremes)
+  if skew > 1.5 || skew < -1.5
+    return PAL_INFERNO
+  end
+  // Default → viridis
+  return PAL_VIRIDIS
+end
+
+fn viz_palette_name(id)
+  if id == PAL_VIRIDIS
+    return "viridis"
+  end
+  if id == PAL_PLASMA
+    return "plasma"
+  end
+  if id == PAL_INFERNO
+    return "inferno"
+  end
+  if id == PAL_COOLWARM
+    return "coolwarm"
+  end
+  if id == PAL_GRAYSCALE
+    return "grayscale"
+  end
+  return "unknown"
+end

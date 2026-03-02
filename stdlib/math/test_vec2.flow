@@ -1,0 +1,258 @@
+// test_vec2.flow — Tests for stdlib/math/vec2.flow
+use "vec2"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.01
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Construction ────────────────────────────────────────────────
+
+fn test_vec2_create()
+    let mut v = vec2(3.0, 4.0)
+    check("vec2 create", v[0] == 3.0 && v[1] == 4.0)
+    let mut z = vec2_zero()
+    check("vec2 zero", z[0] == 0.0 && z[1] == 0.0)
+    return 0.0
+end
+
+// ── Arithmetic ──────────────────────────────────────────────────
+
+fn test_vec2_add()
+    let mut a = vec2(1.0, 2.0)
+    let mut b = vec2(3.0, 4.0)
+    let mut c = vec2_add(a, b)
+    check("vec2_add", c[0] == 4.0 && c[1] == 6.0)
+    return 0.0
+end
+
+fn test_vec2_sub()
+    let mut a = vec2(5.0, 7.0)
+    let mut b = vec2(2.0, 3.0)
+    let mut c = vec2_sub(a, b)
+    check("vec2_sub", c[0] == 3.0 && c[1] == 4.0)
+    return 0.0
+end
+
+fn test_vec2_scale()
+    let mut a = vec2(3.0, 4.0)
+    let mut s = vec2_scale(a, 2.0)
+    check("vec2_scale", s[0] == 6.0 && s[1] == 8.0)
+    return 0.0
+end
+
+// ── Products ────────────────────────────────────────────────────
+
+fn test_vec2_dot()
+    let mut a = vec2(1.0, 2.0)
+    let mut b = vec2(3.0, 4.0)
+    check("vec2_dot", vec2_dot(a, b) == 11.0)
+    return 0.0
+end
+
+fn test_vec2_cross()
+    let mut a = vec2(1.0, 0.0)
+    let mut b = vec2(0.0, 1.0)
+    check("vec2_cross", vec2_cross(a, b) == 1.0)
+    return 0.0
+end
+
+// ── Length ───────────────────────────────────────────────────────
+
+fn test_vec2_length()
+    let mut a = vec2(3.0, 4.0)
+    check("vec2_length", approx(vec2_length(a), 5.0) == 1.0)
+    check("vec2_length_sq", vec2_length_sq(a) == 25.0)
+    return 0.0
+end
+
+fn test_vec2_distance()
+    let mut a = vec2(0.0, 0.0)
+    let mut b = vec2(3.0, 4.0)
+    check("vec2_distance", approx(vec2_distance(a, b), 5.0) == 1.0)
+    check("vec2_manhattan", vec2_manhattan(a, b) == 7.0)
+    return 0.0
+end
+
+// ── Normalize ───────────────────────────────────────────────────
+
+fn test_vec2_normalize()
+    let mut a = vec2(3.0, 4.0)
+    let mut n = vec2_normalize(a)
+    check("normalize x", approx(n[0], 0.6) == 1.0)
+    check("normalize y", approx(n[1], 0.8) == 1.0)
+    check("normalize len", approx(vec2_length(n), 1.0) == 1.0)
+    return 0.0
+end
+
+fn test_vec2_normalize_zero()
+    let mut z = vec2_zero()
+    let mut n = vec2_normalize(z)
+    check("normalize zero", n[0] == 0.0 && n[1] == 0.0)
+    return 0.0
+end
+
+// ── Rotation ────────────────────────────────────────────────────
+
+fn test_vec2_rotate()
+    let pi = 3.14159265358979
+    let mut a = vec2(1.0, 0.0)
+    let mut r = vec2_rotate(a, pi / 2.0)
+    check("rotate 90", approx(r[0], 0.0) == 1.0 && approx(r[1], 1.0) == 1.0)
+    return 0.0
+end
+
+fn test_vec2_from_angle()
+    let pi = 3.14159265358979
+    let mut v = vec2_from_angle(0.0)
+    check("from_angle 0", approx(v[0], 1.0) == 1.0 && approx(v[1], 0.0) == 1.0)
+    let mut v2 = vec2_from_angle(pi / 2.0)
+    check("from_angle 90", approx(v2[0], 0.0) == 1.0 && approx(v2[1], 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Lerp ────────────────────────────────────────────────────────
+
+fn test_vec2_lerp()
+    let mut a = vec2(0.0, 0.0)
+    let mut b = vec2(10.0, 20.0)
+    let mut mid = vec2_lerp(a, b, 0.5)
+    check("lerp", mid[0] == 5.0 && mid[1] == 10.0)
+    return 0.0
+end
+
+fn test_vec2_midpoint()
+    let mut a = vec2(2.0, 4.0)
+    let mut b = vec2(8.0, 12.0)
+    let mut m = vec2_midpoint(a, b)
+    check("midpoint", m[0] == 5.0 && m[1] == 8.0)
+    return 0.0
+end
+
+// ── Projection / Reflection ─────────────────────────────────────
+
+fn test_vec2_project()
+    let mut a = vec2(3.0, 4.0)
+    let mut b = vec2(1.0, 0.0)
+    let mut p = vec2_project(a, b)
+    check("project", p[0] == 3.0 && approx(p[1], 0.0) == 1.0)
+    return 0.0
+end
+
+fn test_vec2_reflect()
+    let mut a = vec2(1.0, -1.0)
+    let mut n = vec2(0.0, 1.0)
+    let mut r = vec2_reflect(a, n)
+    check("reflect", approx(r[0], 1.0) == 1.0 && approx(r[1], 1.0) == 1.0)
+    return 0.0
+end
+
+fn test_vec2_perpendicular()
+    let mut a = vec2(1.0, 0.0)
+    let mut p = vec2_perpendicular(a)
+    check("perp", p[0] == 0.0 && p[1] == 1.0)
+    return 0.0
+end
+
+// ── Geometry ────────────────────────────────────────────────────
+
+fn test_point_in_triangle()
+    let mut p = vec2(1.0, 1.0)
+    let mut a = vec2(0.0, 0.0)
+    let mut b = vec2(4.0, 0.0)
+    let mut c = vec2(0.0, 4.0)
+    check("in triangle", point_in_triangle(p, a, b, c) == 1.0)
+    let mut outside = vec2(5.0, 5.0)
+    check("outside triangle", point_in_triangle(outside, a, b, c) == 0.0)
+    return 0.0
+end
+
+fn test_polygon_area()
+    // Unit square: (0,0), (1,0), (1,1), (0,1)
+    let mut verts = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]
+    let area = polygon_area(verts, 4.0)
+    check("polygon area square", approx(area, 1.0) == 1.0)
+    return 0.0
+end
+
+fn test_circle_contains()
+    check("in circle", circle_contains(0.0, 0.0, 5.0, 3.0, 4.0) == 1.0)
+    check("outside circle", circle_contains(0.0, 0.0, 5.0, 4.0, 4.0) == 0.0)
+    return 0.0
+end
+
+fn test_rect_contains()
+    check("in rect", rect_contains(0.0, 0.0, 10.0, 10.0, 5.0, 5.0) == 1.0)
+    check("outside rect", rect_contains(0.0, 0.0, 10.0, 10.0, 15.0, 5.0) == 0.0)
+    return 0.0
+end
+
+fn test_line_intersect()
+    let mut p1 = vec2(0.0, 0.0)
+    let mut p2 = vec2(10.0, 10.0)
+    let mut p3 = vec2(10.0, 0.0)
+    let mut p4 = vec2(0.0, 10.0)
+    let mut pt = line_intersect(p1, p2, p3, p4)
+    check("line intersect", approx(pt[0], 5.0) == 1.0 && approx(pt[1], 5.0) == 1.0)
+    return 0.0
+end
+
+fn test_line_no_intersect()
+    let mut p1 = vec2(0.0, 0.0)
+    let mut p2 = vec2(1.0, 0.0)
+    let mut p3 = vec2(0.0, 1.0)
+    let mut p4 = vec2(1.0, 1.0)
+    let mut pt = line_intersect(p1, p2, p3, p4)
+    check("line no intersect", pt[0] == -1.0)
+    return 0.0
+end
+
+fn test_closest_point()
+    let mut p = vec2(2.0, 3.0)
+    let mut a = vec2(0.0, 0.0)
+    let mut b = vec2(4.0, 0.0)
+    let mut c = closest_point_on_line(p, a, b)
+    check("closest point", c[0] == 2.0 && c[1] == 0.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_vec2_create()
+test_vec2_add()
+test_vec2_sub()
+test_vec2_scale()
+test_vec2_dot()
+test_vec2_cross()
+test_vec2_length()
+test_vec2_distance()
+test_vec2_normalize()
+test_vec2_normalize_zero()
+test_vec2_rotate()
+test_vec2_from_angle()
+test_vec2_lerp()
+test_vec2_midpoint()
+test_vec2_project()
+test_vec2_reflect()
+test_vec2_perpendicular()
+test_point_in_triangle()
+test_polygon_area()
+test_circle_contains()
+test_rect_contains()
+test_line_intersect()
+test_line_no_intersect()
+test_closest_point()
+print("")
+print("All vec2 tests passed (24 tests)")

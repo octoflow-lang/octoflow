@@ -7,7 +7,6 @@
 //
 // Run: octoflow run examples/mandelbrot_gpu.flow --allow-ffi --allow-read --allow-write
 
-use "../stdlib/loom/ops/runtime"
 use "../stdlib/media/gif_encode"
 
 let W = 320.0
@@ -18,9 +17,8 @@ let N = W * H
 
 print("GPU Mandelbrot zoom ({N_FRAMES} frames, {W}x{H})...")
 
-rt_init()
-
-let pipe = rt_load_pipeline("tests/gpu_shaders/54_mandelbrot.spv", 3.0, 4.0)
+let vm = loom_boot(1.0, 3.0, N)
+loom_prefetch("tests/gpu_shaders/54_mandelbrot.spv")
 
 // Zoom parameters
 let cx = -0.7453
@@ -58,30 +56,32 @@ while frame < N_FRAMES
     y = y + 1.0
   end
 
-  // Dispatch GPU Mandelbrot
-  let buf_cx = rt_create_buffer(N * 4.0)
-  let buf_cy = rt_create_buffer(N * 4.0)
-  let buf_iter = rt_create_buffer(N * 4.0)
+  // Upload coordinates to registers
+  vm_write_register(vm, 0.0, 0.0, cx_vals)
+  vm_write_register(vm, 0.0, 1.0, cy_vals)
 
-  rt_upload(buf_cx, cx_vals)
-  rt_upload(buf_cy, cy_vals)
+  // Zero output register
+  let mut iter_zeros = []
+  let mut zi = 0.0
+  while zi < N
+    push(iter_zeros, 0.0)
+    zi = zi + 1.0
+  end
+  vm_write_register(vm, 0.0, 2.0, iter_zeros)
 
   let n_wgs = int((N + 255.0) / 256.0)
 
-  rt_chain_begin(1.0, 3.0)
-  let mut pc = [MAX_ITER]
-  rt_chain_push_constants(pipe, pc)
-  let mut bufs = [buf_cx, buf_cy, buf_iter]
-  rt_chain_dispatch(pipe, bufs, n_wgs)
-  rt_chain_end()
-  rt_chain_submit_wait()
+  loom_dispatch(vm, "tests/gpu_shaders/54_mandelbrot.spv", [MAX_ITER], n_wgs)
+  let prog = loom_build(vm)
+  loom_run(prog)
+  loom_free(prog)
 
-  rt_download(buf_iter, N)
+  let iter_result = loom_read(vm, 0.0, 2.0, N)
 
   // Color mapping
   let mut i = 0.0
   while i < N
-    let it = rt_result[int(i)]
+    let it = iter_result[int(i)]
     let t = it / MAX_ITER
 
     let mut r = 0.0
@@ -109,7 +109,7 @@ while frame < N_FRAMES
   frame = frame + 1.0
 end
 
-rt_cleanup()
+loom_shutdown(vm)
 
 let t1 = time()
 let gpu_time = t1 - t0

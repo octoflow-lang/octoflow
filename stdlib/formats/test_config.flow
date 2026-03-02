@@ -1,0 +1,161 @@
+// test_config.flow — Tests for stdlib/formats/config.flow
+use "config"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Parse ───────────────────────────────────────────────────────
+
+fn test_parse_basic()
+    let text = "[server]\nhost = localhost\nport = 8080"
+    let cfg = config_parse(text)
+    check("parse host", config_get(cfg, "server", "host", "") == "localhost")
+    check("parse port", config_get(cfg, "server", "port", "") == "8080")
+    return 0.0
+end
+
+fn test_parse_default_section()
+    let text = "name = MyApp\nversion = 1.0"
+    let cfg = config_parse(text)
+    check("default section", config_get(cfg, "__default", "name", "") == "MyApp")
+    check("default version", config_get(cfg, "__default", "version", "") == "1.0")
+    return 0.0
+end
+
+fn test_parse_multiple_sections()
+    let text = "[db]\nhost = db.example.com\nport = 5432\n\n[cache]\nhost = redis.local\nport = 6379"
+    let cfg = config_parse(text)
+    check("multi section db host", config_get(cfg, "db", "host", "") == "db.example.com")
+    check("multi section cache port", config_get(cfg, "cache", "port", "") == "6379")
+    return 0.0
+end
+
+fn test_parse_comments()
+    let text = "# This is a comment\n; Another comment\n[app]\nname = Test"
+    let cfg = config_parse(text)
+    check("comments skipped", config_get(cfg, "app", "name", "") == "Test")
+    return 0.0
+end
+
+fn test_parse_whitespace()
+    let text = "[server]\n  host  =  localhost  \n  port  =  80  "
+    let cfg = config_parse(text)
+    check("whitespace trimmed host", config_get(cfg, "server", "host", "") == "localhost")
+    check("whitespace trimmed port", config_get(cfg, "server", "port", "") == "80")
+    return 0.0
+end
+
+// ── Get ─────────────────────────────────────────────────────────
+
+fn test_get_default()
+    let text = "[app]\nname = Test"
+    let cfg = config_parse(text)
+    check("get default", config_get(cfg, "app", "missing", "fallback") == "fallback")
+    return 0.0
+end
+
+fn test_get_float()
+    let text = "[server]\nport = 8080\ntimeout = 30.5"
+    let cfg = config_parse(text)
+    check("get_float port", config_get_float(cfg, "server", "port", 0.0) == 8080.0)
+    check("get_float timeout", config_get_float(cfg, "server", "timeout", 0.0) == 30.5)
+    check("get_float missing", config_get_float(cfg, "server", "missing", 99.0) == 99.0)
+    return 0.0
+end
+
+// ── Set ─────────────────────────────────────────────────────────
+
+fn test_set()
+    let text = "[app]\nname = Test"
+    let mut cfg = config_parse(text)
+    config_set(cfg, "app", "version", "2.0")
+    check("set new key", config_get(cfg, "app", "version", "") == "2.0")
+    config_set(cfg, "app", "name", "Updated")
+    check("set overwrite", config_get(cfg, "app", "name", "") == "Updated")
+    return 0.0
+end
+
+fn test_set_new_section()
+    let mut cfg = config_parse("")
+    config_set(cfg, "new_section", "key1", "value1")
+    check("set new section", config_get(cfg, "new_section", "key1", "") == "value1")
+    return 0.0
+end
+
+// ── Has / Remove ────────────────────────────────────────────────
+
+fn test_has()
+    let text = "[app]\nname = Test"
+    let cfg = config_parse(text)
+    check("has existing", config_has(cfg, "app", "name") == 1.0)
+    check("has missing", config_has(cfg, "app", "missing") == 0.0)
+    return 0.0
+end
+
+fn test_remove()
+    let text = "[app]\nname = Test\nversion = 1.0"
+    let mut cfg = config_parse(text)
+    config_remove(cfg, "app", "version")
+    check("remove", config_has(cfg, "app", "version") == 0.0)
+    check("remove keeps other", config_has(cfg, "app", "name") == 1.0)
+    return 0.0
+end
+
+// ── Sections / Keys ─────────────────────────────────────────────
+
+fn test_sections()
+    let text = "[db]\nhost = a\n[cache]\nhost = b"
+    let cfg = config_parse(text)
+    let sections = config_sections(cfg)
+    check("sections count >= 2", len(sections) >= 2.0)
+    return 0.0
+end
+
+fn test_keys()
+    let text = "[app]\nname = Test\nversion = 1.0\nport = 80"
+    let cfg = config_parse(text)
+    let keys = config_keys(cfg, "app")
+    check("keys count", len(keys) == 3.0)
+    return 0.0
+end
+
+// ── Roundtrip ───────────────────────────────────────────────────
+
+fn test_roundtrip()
+    let mut cfg = config_parse("")
+    config_set(cfg, "server", "host", "localhost")
+    config_set(cfg, "server", "port", "8080")
+    config_set(cfg, "db", "name", "mydb")
+    let text = config_to_string(cfg)
+    let cfg2 = config_parse(text)
+    check("roundtrip host", config_get(cfg2, "server", "host", "") == "localhost")
+    check("roundtrip port", config_get(cfg2, "server", "port", "") == "8080")
+    check("roundtrip db", config_get(cfg2, "db", "name", "") == "mydb")
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_parse_basic()
+test_parse_default_section()
+test_parse_multiple_sections()
+test_parse_comments()
+test_parse_whitespace()
+test_get_default()
+test_get_float()
+test_set()
+test_set_new_section()
+test_has()
+test_remove()
+test_sections()
+test_keys()
+test_roundtrip()
+print("")
+print("All config tests passed (14 tests)")

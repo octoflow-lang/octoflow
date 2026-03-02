@@ -1,0 +1,402 @@
+// stdlib/gui/anim_ui.flow — Widget animation utilities
+//
+// Animate widget properties (position, size, color, opacity) over time.
+// Supports sequences (chained), groups (parallel), and looping.
+// Built on easing functions compatible with game/tween.flow.
+//
+// Animation storage: flat parallel arrays, index = animation ID.
+// Property targets: flat array [prop_type, widget_id, start, end, ...]
+//
+// Functions: ua_create, ua_create_color, ua_update, ua_done, ua_reset,
+//            ua_loop, ua_value, ua_progress, ua_delay,
+//            ua_seq_create, ua_seq_add, ua_seq_update, ua_seq_done,
+//            ua_grp_create, ua_grp_add, ua_grp_update, ua_grp_done,
+//            ua_shake, ua_pulse, ua_slide, ua_fade
+//
+// Usage:
+//   use "anim_ui"
+//   let a = ua_create(0.0, 100.0, 0.5, UA_EASE_OUT_CUBIC)
+//   // In frame loop:
+//   let val = ua_update(a, dt)
+
+// ── Storage ─────────────────────────────────────────────
+let mut _ua_start = []
+let mut _ua_end = []
+let mut _ua_dur = []
+let mut _ua_elapsed = []
+let mut _ua_easing = []
+let mut _ua_looping = []
+let mut _ua_delay = []
+
+// Easing constants
+let UA_EASE_LINEAR = 0.0
+let UA_EASE_IN_QUAD = 1.0
+let UA_EASE_OUT_QUAD = 2.0
+let UA_EASE_IN_OUT_QUAD = 3.0
+let UA_EASE_IN_CUBIC = 4.0
+let UA_EASE_OUT_CUBIC = 5.0
+let UA_EASE_IN_OUT_CUBIC = 6.0
+let UA_EASE_OUT_ELASTIC = 7.0
+let UA_EASE_OUT_BOUNCE = 8.0
+let UA_EASE_OUT_BACK = 9.0
+
+// ── Easing functions ────────────────────────────────────
+
+fn _ua_ease(t, easing)
+    if easing == 1.0
+        return t * t
+    elif easing == 2.0
+        return t * (2.0 - t)
+    elif easing == 3.0
+        if t < 0.5
+            return 2.0 * t * t
+        end
+        return -1.0 + (4.0 - 2.0 * t) * t
+    elif easing == 4.0
+        return t * t * t
+    elif easing == 5.0
+        let t1 = t - 1.0
+        return t1 * t1 * t1 + 1.0
+    elif easing == 6.0
+        if t < 0.5
+            return 4.0 * t * t * t
+        end
+        let t1 = 2.0 * t - 2.0
+        return 0.5 * t1 * t1 * t1 + 1.0
+    elif easing == 7.0
+        // Out elastic
+        if t == 0.0 || t == 1.0
+            return t
+        end
+        let p = 0.3
+        let s = p / 4.0
+        let mut pow2 = 1.0
+        let mut ii = 0.0
+        let ex = floor(10.0 * t)
+        while ii < ex
+            pow2 = pow2 * 0.5
+            ii = ii + 1.0
+        end
+        return pow2 * sin((t - s) * 6.28318 / p) + 1.0
+    elif easing == 8.0
+        // Out bounce
+        if t < 1.0 / 2.75
+            return 7.5625 * t * t
+        elif t < 2.0 / 2.75
+            let t2 = t - 1.5 / 2.75
+            return 7.5625 * t2 * t2 + 0.75
+        elif t < 2.5 / 2.75
+            let t2 = t - 2.25 / 2.75
+            return 7.5625 * t2 * t2 + 0.9375
+        end
+        let t2 = t - 2.625 / 2.75
+        return 7.5625 * t2 * t2 + 0.984375
+    elif easing == 9.0
+        // Out back
+        let s = 1.70158
+        let t1 = t - 1.0
+        return t1 * t1 * ((s + 1.0) * t1 + s) + 1.0
+    end
+    return t
+end
+
+// ── Core API ────────────────────────────────────────────
+
+fn ua_create(start_val, end_val, duration, easing)
+    // Create animation. Returns animation ID.
+    let id = len(_ua_start)
+    push(_ua_start, start_val)
+    push(_ua_end, end_val)
+    let mut dur = duration
+    if dur <= 0.0
+        dur = 0.001
+    end
+    push(_ua_dur, dur)
+    push(_ua_elapsed, 0.0)
+    push(_ua_easing, easing)
+    push(_ua_looping, 0.0)
+    push(_ua_delay, 0.0)
+    return id
+end
+
+fn ua_delay(id, delay_sec)
+    // Set initial delay before animation starts.
+    _ua_delay[int(id)] = delay_sec
+    return 0.0
+end
+
+fn ua_loop(id, loop_flag)
+    // Set looping: 1.0 = loop forever, 0.0 = play once.
+    _ua_looping[int(id)] = loop_flag
+    return 0.0
+end
+
+fn ua_update(id, dt)
+    // Advance animation by dt seconds. Returns current interpolated value.
+    let i = int(id)
+    // Handle delay
+    if _ua_delay[i] > 0.0
+        _ua_delay[i] = _ua_delay[i] - dt
+        if _ua_delay[i] < 0.0
+            _ua_delay[i] = 0.0
+        end
+        return _ua_start[i]
+    end
+    _ua_elapsed[i] = _ua_elapsed[i] + dt
+    // Handle looping
+    if _ua_looping[i] == 1.0 && _ua_elapsed[i] > _ua_dur[i]
+        _ua_elapsed[i] = _ua_elapsed[i] - _ua_dur[i] * floor(_ua_elapsed[i] / _ua_dur[i])
+    end
+    if _ua_elapsed[i] > _ua_dur[i]
+        _ua_elapsed[i] = _ua_dur[i]
+    end
+    let mut t = _ua_elapsed[i] / _ua_dur[i]
+    if t > 1.0
+        t = 1.0
+    end
+    let eased = _ua_ease(t, _ua_easing[i])
+    return _ua_start[i] + (_ua_end[i] - _ua_start[i]) * eased
+end
+
+fn ua_value(id)
+    // Get current value without advancing time.
+    let i = int(id)
+    if _ua_delay[i] > 0.0
+        return _ua_start[i]
+    end
+    let mut t = _ua_elapsed[i] / _ua_dur[i]
+    if t > 1.0
+        t = 1.0
+    end
+    if t < 0.0
+        t = 0.0
+    end
+    let eased = _ua_ease(t, _ua_easing[i])
+    return _ua_start[i] + (_ua_end[i] - _ua_start[i]) * eased
+end
+
+fn ua_done(id)
+    // Returns 1.0 if animation is complete (non-looping only).
+    let i = int(id)
+    if _ua_looping[i] == 1.0
+        return 0.0
+    end
+    if _ua_elapsed[i] >= _ua_dur[i] && _ua_delay[i] <= 0.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn ua_progress(id)
+    // Returns normalized progress [0, 1].
+    let i = int(id)
+    if _ua_delay[i] > 0.0
+        return 0.0
+    end
+    let t = _ua_elapsed[i] / _ua_dur[i]
+    if t > 1.0
+        return 1.0
+    end
+    if t < 0.0
+        return 0.0
+    end
+    return t
+end
+
+fn ua_reset(id)
+    // Reset animation to beginning.
+    _ua_elapsed[int(id)] = 0.0
+    return 0.0
+end
+
+// ── Color animation ─────────────────────────────────────
+// Color stored as 3 separate animations (R, G, B).
+// Returns base ID; access R=id, G=id+1, B=id+2.
+
+fn ua_create_color(r1, g1, b1, r2, g2, b2, duration, easing)
+    // Create RGB color animation. Returns base ID.
+    let id_r = ua_create(r1, r2, duration, easing)
+    let _id_g = ua_create(g1, g2, duration, easing)
+    let _id_b = ua_create(b1, b2, duration, easing)
+    return id_r
+end
+
+fn ua_color_r(base_id, dt)
+    return ua_update(base_id, dt)
+end
+
+fn ua_color_g(base_id, dt)
+    return ua_update(base_id + 1.0, dt)
+end
+
+fn ua_color_b(base_id, dt)
+    return ua_update(base_id + 2.0, dt)
+end
+
+// ── Sequence (chained animations) ───────────────────────
+// Flat storage: _ua_seq_ids[start..start+count-1] = animation IDs.
+
+let mut _ua_seq_ids = []
+let mut _ua_seq_start = []
+let mut _ua_seq_count = []
+let mut _ua_seq_current = []
+
+fn ua_seq_create()
+    // Create empty sequence. Returns sequence ID.
+    let id = len(_ua_seq_start)
+    push(_ua_seq_start, len(_ua_seq_ids))
+    push(_ua_seq_count, 0.0)
+    push(_ua_seq_current, 0.0)
+    return id
+end
+
+fn ua_seq_add(seq_id, anim_id)
+    // Add animation to sequence (plays in order).
+    let si = int(seq_id)
+    // Append to global ID list
+    push(_ua_seq_ids, anim_id)
+    _ua_seq_count[si] = _ua_seq_count[si] + 1.0
+    return 0.0
+end
+
+fn ua_seq_update(seq_id, dt)
+    // Update current animation in sequence. Returns current value.
+    let si = int(seq_id)
+    let count = _ua_seq_count[si]
+    let cur = _ua_seq_current[si]
+    if cur >= count
+        // Sequence done, return last animation's end value
+        if count > 0.0
+            let last_idx = _ua_seq_start[si] + count - 1.0
+            let last_anim = _ua_seq_ids[int(last_idx)]
+            return ua_value(last_anim)
+        end
+        return 0.0
+    end
+    let anim_idx = _ua_seq_start[si] + cur
+    let anim_id = _ua_seq_ids[int(anim_idx)]
+    let val = ua_update(anim_id, dt)
+    if ua_done(anim_id) == 1.0
+        _ua_seq_current[si] = cur + 1.0
+    end
+    return val
+end
+
+fn ua_seq_done(seq_id)
+    let si = int(seq_id)
+    if _ua_seq_current[si] >= _ua_seq_count[si]
+        return 1.0
+    end
+    return 0.0
+end
+
+fn ua_seq_reset(seq_id)
+    let si = int(seq_id)
+    _ua_seq_current[si] = 0.0
+    let count = _ua_seq_count[si]
+    let start = _ua_seq_start[si]
+    let mut i = 0.0
+    while i < count
+        let _r = ua_reset(_ua_seq_ids[int(start + i)])
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Group (parallel animations) ─────────────────────────
+
+let mut _ua_grp_ids = []
+let mut _ua_grp_start = []
+let mut _ua_grp_count = []
+
+fn ua_grp_create()
+    // Create empty group (all play simultaneously). Returns group ID.
+    let id = len(_ua_grp_start)
+    push(_ua_grp_start, len(_ua_grp_ids))
+    push(_ua_grp_count, 0.0)
+    return id
+end
+
+fn ua_grp_add(grp_id, anim_id)
+    // Add animation to group.
+    let gi = int(grp_id)
+    push(_ua_grp_ids, anim_id)
+    _ua_grp_count[gi] = _ua_grp_count[gi] + 1.0
+    return 0.0
+end
+
+fn ua_grp_update(grp_id, dt)
+    // Update all animations in group. Returns number of completed animations.
+    let gi = int(grp_id)
+    let count = _ua_grp_count[gi]
+    let start = _ua_grp_start[gi]
+    let mut done_count = 0.0
+    let mut i = 0.0
+    while i < count
+        let anim_id = _ua_grp_ids[int(start + i)]
+        let _v = ua_update(anim_id, dt)
+        if ua_done(anim_id) == 1.0
+            done_count = done_count + 1.0
+        end
+        i = i + 1.0
+    end
+    return done_count
+end
+
+fn ua_grp_done(grp_id)
+    // Returns 1.0 if all animations in group are complete.
+    let gi = int(grp_id)
+    let count = _ua_grp_count[gi]
+    let start = _ua_grp_start[gi]
+    let mut i = 0.0
+    while i < count
+        let anim_id = _ua_grp_ids[int(start + i)]
+        if ua_done(anim_id) == 0.0
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+// ── Preset animations ───────────────────────────────────
+
+fn ua_slide(start_x, start_y, end_x, end_y, duration, easing)
+    // Create X/Y slide animation. Returns base ID (X=id, Y=id+1).
+    let id_x = ua_create(start_x, end_x, duration, easing)
+    let _id_y = ua_create(start_y, end_y, duration, easing)
+    return id_x
+end
+
+fn ua_fade(start_alpha, end_alpha, duration, easing)
+    // Create fade animation (0.0=transparent, 1.0=opaque).
+    return ua_create(start_alpha, end_alpha, duration, easing)
+end
+
+fn ua_pulse(center, amplitude, duration)
+    // Create pulsing animation (center ± amplitude).
+    let id = ua_create(center - amplitude, center + amplitude, duration, UA_EASE_IN_OUT_QUAD)
+    let _l = ua_loop(id, 1.0)
+    return id
+end
+
+fn ua_shake(center, amplitude, duration)
+    // Create shake animation (rapid oscillation around center).
+    let id = ua_create(center - amplitude, center + amplitude, duration, UA_EASE_OUT_ELASTIC)
+    return id
+end
+
+fn ua_scale(start_scale, end_scale, duration, easing)
+    // Create scale animation (1.0 = normal size).
+    return ua_create(start_scale, end_scale, duration, easing)
+end
+
+fn ua_spring(start_val, end_val, duration)
+    // Create spring animation (overshoots then settles).
+    return ua_create(start_val, end_val, duration, UA_EASE_OUT_BACK)
+end
+
+fn ua_bounce_in(start_val, end_val, duration)
+    // Create bounce-in animation.
+    return ua_create(start_val, end_val, duration, UA_EASE_OUT_BOUNCE)
+end

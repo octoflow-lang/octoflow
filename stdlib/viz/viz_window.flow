@@ -1,0 +1,267 @@
+// viz_window.flow — OctoUI Window with Split Layout + Transport Controls
+//
+// Creates a visualization window with:
+//   Left panel (200px): controls area (sliders, transport)
+//   Right panel (rest): main visualization canvas
+//
+// Usage:
+//   use "viz/viz_window"
+//   viz_window_open("LoomView", 900, 600)
+//   viz_window_transport()
+//   viz_window_update(data, VIZ_LINE, config)
+//   viz_window_loop(0)
+
+use "../gui/gui_core"
+use "../gui/window"
+use "../gui/layout"
+use "../gui/widgets"
+use "../gui/canvas"
+use "viz_data"
+use "viz_render"
+
+// === Window State ===
+let mut _vw_inited = 0.0
+let mut _vw_canvas = -1.0         // main canvas widget ID
+let mut _vw_playing = 0.0         // transport: 0=paused, 1=playing
+let mut _vw_speed = 1.0           // transport: playback speed multiplier
+let mut _vw_step = 0.0            // current simulation step
+let mut _vw_win_w = 900.0
+let mut _vw_win_h = 600.0
+let mut _vw_panel_w = 200.0       // left panel width
+let mut _vw_canvas_w = 700.0      // right canvas width
+let mut _vw_canvas_h = 600.0      // right canvas height
+
+// Transport widget IDs
+let mut _vw_btn_play = -1.0
+let mut _vw_btn_step = -1.0
+let mut _vw_btn_reset = -1.0
+let mut _vw_slider_speed = -1.0
+let mut _vw_label_step = -1.0
+let mut _vw_label_title = -1.0
+
+// Control panel layout ID
+let mut _vw_ctrl_layout = -1.0
+
+// Slider registry: [id0, id1, ...] for user-added sliders
+let mut _vw_sliders = []
+
+fn viz_window_open(title, width, height)
+  // Guard: minimum size
+  let mut w = width
+  let mut h = height
+  if w < 400.0
+    w = 400.0
+  end
+  if h < 300.0
+    h = 300.0
+  end
+
+  _vw_win_w = w
+  _vw_win_h = h
+  _vw_panel_w = 200.0
+  _vw_canvas_w = w - _vw_panel_w
+  _vw_canvas_h = h
+
+  let _ok = gui_init(w, h, title)
+  _vw_inited = 1.0
+
+  // Left panel background
+  let _p = gui_panel(0.0, 0.0, _vw_panel_w, h)
+
+  // Title label
+  _vw_label_title = gui_label(10.0, 10.0, title)
+
+  // Separator
+  let _sep = gui_separator(10.0, 35.0, _vw_panel_w - 20.0)
+
+  // Control panel layout — starts below separator
+  _vw_ctrl_layout = vstack(10.0, 50.0, 8.0)
+
+  // Main canvas (right panel)
+  _vw_canvas = gui_canvas(_vw_panel_w, 0.0, _vw_canvas_w, _vw_canvas_h)
+
+  // Reset sliders list
+  _vw_sliders = []
+
+  return _vw_canvas
+end
+
+fn viz_window_add_slider(label, min_v, max_v, default_v)
+  // Guard: valid range
+  let mut s_min = min_v
+  let mut s_max = max_v
+  let mut s_def = default_v
+  if s_min >= s_max
+    s_max = s_min + 1.0
+  end
+  if s_def < s_min
+    s_def = s_min
+  end
+  if s_def > s_max
+    s_def = s_max
+  end
+
+  // Add label + slider to control panel
+  let _lbl = vstack_label(_vw_ctrl_layout, label)
+  let sid = vstack_slider(_vw_ctrl_layout, _vw_panel_w - 30.0, s_min, s_max, s_def)
+  push(_vw_sliders, sid)
+  return sid
+end
+
+fn viz_window_get_slider(idx)
+  // Get current value of a user-added slider by index
+  if idx < 0.0 || idx >= len(_vw_sliders)
+    return 0.0
+  end
+  let sid = int(_vw_sliders[int(idx)])
+  return gui_slider_value(sid)
+end
+
+fn viz_window_transport()
+  // Add transport controls: Play/Pause, Step, Reset, Speed slider
+  let _sep = gui_separator(10.0, 0.0, _vw_panel_w - 20.0)
+  let _lbl = vstack_label(_vw_ctrl_layout, "Transport")
+
+  // Buttons row — use hstack for horizontal layout
+  let btn_lay = hstack(15.0, 0.0, 5.0)
+  // We need to position these manually since hstack needs its own y
+  _vw_btn_play = vstack_button(_vw_ctrl_layout, 55.0, 28.0, "Play")
+  _vw_btn_step = vstack_button(_vw_ctrl_layout, 55.0, 28.0, "Step")
+  _vw_btn_reset = vstack_button(_vw_ctrl_layout, 55.0, 28.0, "Reset")
+
+  // Speed slider
+  let _slbl = vstack_label(_vw_ctrl_layout, "Speed")
+  _vw_slider_speed = vstack_slider(_vw_ctrl_layout, _vw_panel_w - 30.0, 0.1, 10.0, 1.0)
+
+  // Step counter label
+  _vw_label_step = vstack_label(_vw_ctrl_layout, "Step: 0")
+
+  _vw_playing = 0.0
+  _vw_step = 0.0
+
+  return 1.0
+end
+
+fn viz_window_update(data, viz_type, config)
+  // Guard: must be initialized
+  if _vw_inited == 0.0
+    return 0.0
+  end
+  if _vw_canvas < 0.0
+    return 0.0
+  end
+
+  // Render data onto canvas
+  let _r = viz_render(_vw_canvas, data, viz_type, config, _vw_canvas_w, _vw_canvas_h)
+  return 1.0
+end
+
+fn viz_window_render_raw(render_fn, state, config)
+  // Direct render: call user's render function on the canvas
+  if _vw_inited == 0.0
+    return 0.0
+  end
+  if _vw_canvas < 0.0
+    return 0.0
+  end
+  let _c = gui_canvas_clear(_vw_canvas)
+  return render_fn(_vw_canvas, state, config)
+end
+
+fn _vw_handle_transport()
+  // Check transport button clicks
+  if _vw_btn_play >= 0.0
+    if gui_clicked(int(_vw_btn_play)) == 1.0
+      if _vw_playing == 0.0
+        _vw_playing = 1.0
+      else
+        _vw_playing = 0.0
+      end
+    end
+  end
+
+  if _vw_btn_step >= 0.0
+    if gui_clicked(int(_vw_btn_step)) == 1.0
+      _vw_step = _vw_step + 1.0
+      return 1.0  // signal: do one step
+    end
+  end
+
+  if _vw_btn_reset >= 0.0
+    if gui_clicked(int(_vw_btn_reset)) == 1.0
+      _vw_step = 0.0
+      _vw_playing = 0.0
+      return 2.0  // signal: reset
+    end
+  end
+
+  // Update speed from slider
+  if _vw_slider_speed >= 0.0
+    _vw_speed = gui_slider_value(int(_vw_slider_speed))
+    if _vw_speed < 0.1
+      _vw_speed = 0.1
+    end
+  end
+
+  if _vw_playing == 1.0
+    return 1.0  // signal: do step
+  end
+
+  return 0.0
+end
+
+fn viz_window_loop(step_fn)
+  // Main event loop
+  // step_fn: 0 for static view, or a function ref for stepping
+  if _vw_inited == 0.0
+    return 0.0
+  end
+
+  while gui_running() == 1.0
+    gui_update()
+
+    // Handle transport
+    let action = _vw_handle_transport()
+
+    // If step function provided and action is step
+    if step_fn != 0.0
+      if action == 1.0
+        _vw_step = _vw_step + 1.0
+      end
+      if action == 2.0
+        _vw_step = 0.0
+      end
+    end
+  end
+
+  return _vw_step
+end
+
+fn viz_window_is_playing()
+  return _vw_playing
+end
+
+fn viz_window_step()
+  return _vw_step
+end
+
+fn viz_window_speed()
+  return _vw_speed
+end
+
+fn viz_window_canvas()
+  return _vw_canvas
+end
+
+fn viz_window_canvas_size()
+  return [_vw_canvas_w, _vw_canvas_h]
+end
+
+fn viz_window_set_step(s)
+  let mut val = s
+  if val < 0.0
+    val = 0.0
+  end
+  _vw_step = val
+  return 0.0
+end

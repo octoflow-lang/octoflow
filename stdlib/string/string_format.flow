@@ -1,0 +1,235 @@
+// stdlib/string/string_format.flow — String formatting and character tests
+//
+// Padding, truncation, case conversion, and character type tests.
+//
+// Functions: pad_left, pad_right, center, truncate, reverse_string,
+//            to_title_case, is_numeric_str, is_alpha_str, is_alphanumeric_str,
+//            count_char, str_width, trim_left, trim_right, trim_both
+//
+// Usage:
+//   use "string_format"
+//   let s = pad_left("42", 5.0, "0")    // "00042"
+//   let r = reverse_string("hello")      // "olleh"
+//   let t = to_title_case("hello world") // "Hello World"
+
+fn pad_left(s, width, ch)
+    // Pad string on the left to reach target width.
+    let n = len(s)
+    if n >= width
+        return s
+    end
+    let mut result = ""
+    let mut i = 0.0
+    while i < width - n
+        result = result + ch
+        i = i + 1.0
+    end
+    return result + s
+end
+
+fn pad_right(s, width, ch)
+    // Pad string on the right to reach target width.
+    let n = len(s)
+    if n >= width
+        return s
+    end
+    let mut result = s
+    let mut i = 0.0
+    while i < width - n
+        result = result + ch
+        i = i + 1.0
+    end
+    return result
+end
+
+fn center(s, width, ch)
+    // Center string within width, padding with ch on both sides.
+    let n = len(s)
+    if n >= width
+        return s
+    end
+    let total_pad = width - n
+    let left_pad = floor(total_pad / 2.0)
+    let right_pad = total_pad - left_pad
+    let mut result = ""
+    let mut i = 0.0
+    while i < left_pad
+        result = result + ch
+        i = i + 1.0
+    end
+    result = result + s
+    i = 0.0
+    while i < right_pad
+        result = result + ch
+        i = i + 1.0
+    end
+    return result
+end
+
+fn truncate(s, max_len, suffix)
+    // Truncate string to max_len, appending suffix if truncated.
+    // E.g., truncate("Hello World", 8.0, "...") → "Hello..."
+    let n = len(s)
+    if n <= max_len
+        return s
+    end
+    let suf_len = len(suffix)
+    let keep = max_len - suf_len
+    if keep < 0.0
+        return substr(s, 0.0, max_len)
+    end
+    return substr(s, 0.0, keep) + suffix
+end
+
+fn reverse_string(s)
+    // Reverse a string.
+    let n = len(s)
+    let mut result = ""
+    let mut i = n - 1.0
+    while i >= 0.0
+        result = result + char_at(s, i)
+        i = i - 1.0
+    end
+    return result
+end
+
+fn to_title_case(s)
+    // Capitalize first letter of each word, lowercase rest.
+    // "hello WORLD" → "Hello World"
+    let n = len(s)
+    if n == 0.0
+        return ""
+    end
+    let mut result = ""
+    let mut cap_next = 1.0
+    let mut i = 0.0
+    while i < n
+        let c = char_at(s, i)
+        if c == " " || c == "\t" || c == "\n"
+            result = result + c
+            cap_next = 1.0
+        elif cap_next == 1.0
+            result = result + to_upper(c)
+            cap_next = 0.0
+        else
+            result = result + to_lower(c)
+        end
+        i = i + 1.0
+    end
+    return result
+end
+
+fn _is_digit_char(c)
+    let code = ord(c)
+    if code >= 48.0 && code <= 57.0
+        return 1.0
+    end
+    return 0.0
+end
+
+fn _is_alpha_char(c)
+    let code = ord(c)
+    if (code >= 65.0 && code <= 90.0) || (code >= 97.0 && code <= 122.0)
+        return 1.0
+    end
+    return 0.0
+end
+
+fn is_numeric_str(s)
+    // Check if entire string consists of digits (0-9).
+    let n = len(s)
+    if n == 0.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n
+        if _is_digit_char(char_at(s, i)) == 0.0
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn is_alpha_str(s)
+    // Check if entire string consists of letters (a-z, A-Z).
+    let n = len(s)
+    if n == 0.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n
+        if _is_alpha_char(char_at(s, i)) == 0.0
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn is_alphanumeric_str(s)
+    // Check if entire string consists of letters and digits.
+    let n = len(s)
+    if n == 0.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n
+        let c = char_at(s, i)
+        if _is_digit_char(c) == 0.0 && _is_alpha_char(c) == 0.0
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn count_char(s, target)
+    // Count occurrences of a single character in string.
+    let n = len(s)
+    let mut count = 0.0
+    let mut i = 0.0
+    while i < n
+        if char_at(s, i) == target
+            count = count + 1.0
+        end
+        i = i + 1.0
+    end
+    return count
+end
+
+fn str_width(s)
+    // Alias for len — returns character count.
+    return len(s)
+end
+
+fn trim_left(s, ch)
+    // Remove leading characters matching ch.
+    let n = len(s)
+    let mut start = 0.0
+    while start < n && char_at(s, start) == ch
+        start = start + 1.0
+    end
+    if start >= n
+        return ""
+    end
+    return substr(s, start, n)
+end
+
+fn trim_right(s, ch)
+    // Remove trailing characters matching ch.
+    let n = len(s)
+    let mut end_pos = n - 1.0
+    while end_pos >= 0.0 && char_at(s, end_pos) == ch
+        end_pos = end_pos - 1.0
+    end
+    if end_pos < 0.0
+        return ""
+    end
+    return substr(s, 0.0, end_pos + 1.0)
+end
+
+fn trim_both(s, ch)
+    // Remove leading and trailing characters matching ch.
+    return trim_right(trim_left(s, ch), ch)
+end

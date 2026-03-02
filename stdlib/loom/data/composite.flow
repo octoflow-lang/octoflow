@@ -3,7 +3,7 @@
 
 // Statistical summary
 fn gpu_describe(arr)
-    let result = map()
+    let mut result = map()
     map_set(result, "mean", gpu_mean(arr))
     map_set(result, "std", gpu_std(arr))
     map_set(result, "min", gpu_min(arr))
@@ -13,28 +13,31 @@ fn gpu_describe(arr)
     map_set(result, "max", gpu_max(arr))
     map_set(result, "count", len(arr))
     return result
+end
 
 // Outlier detection using z-score
 fn gpu_outlier_detection(arr, threshold_std)
     let zscores = gpu_zscore(arr)
     let n = len(zscores)
 
-    let outliers = []
-    let i = 0.0
+    let mut outliers = []
+    let mut i = 0.0
     while i < n
         if abs(zscores[i]) > threshold_std
-            append(outliers, 1.0)
+            push(outliers, 1.0)
         else
-            append(outliers, 0.0)
+            push(outliers, 0.0)
         end
         i = i + 1.0
     end
 
     return outliers
+end
 
 // Standardize: (x - mean) / std
 fn gpu_standardize(arr)
     return gpu_zscore(arr)
+end
 
 // Min-max scaling: (x - min) / (max - min)
 fn gpu_minmax_scale(arr)
@@ -44,72 +47,74 @@ fn gpu_minmax_scale(arr)
     let range = max_val - min_val
     if range == 0.0
         let n = len(arr)
-        let zeros = []
-        let i = 0.0
+        let mut zeros = []
+        let mut i = 0.0
         while i < n
-            append(zeros, 0.0)
+            push(zeros, 0.0)
             i = i + 1.0
         end
         return zeros
     end
 
     let n = len(arr)
-    let result = []
-    let i = 0.0
+    let mut result = []
+    let mut i = 0.0
     while i < n
-        append(result, (arr[i] - min_val) / range)
+        push(result, (arr[i] - min_val) / range)
         i = i + 1.0
     end
 
     return result
+end
 
 // Rank: ordinal position in sorted order
 fn gpu_rank(arr)
-    // Simple rank: sort &&find positions
+    // Simple rank: sort and find positions
     // For now, CPU implementation
     let n = len(arr)
-    let ranks = []
+    let mut ranks = []
 
-    let i = 0.0
+    let mut i = 0.0
     while i < n
-        let rank = 1.0
-        let j = 0.0
+        let mut rank = 1.0
+        let mut j = 0.0
         while j < n
             if arr[j] < arr[i]
-                let rank = rank + 1.0
+                rank = rank + 1.0
             end
             j = j + 1.0
         end
-        append(ranks, rank)
+        push(ranks, rank)
         i = i + 1.0
     end
 
     return ranks
+end
 
 // Argsort: indices that would sort array
 fn gpu_argsort(arr)
     let n = len(arr)
-    let indices = []
+    let mut indices = []
 
     // Create index array
-    let i = 0.0
+    let mut i = 0.0
     while i < n
-        append(indices, i)
+        push(indices, i)
         i = i + 1.0
     end
 
     // Bubble sort on indices by array values
-    let i = 0.0
+    let mut i = 0.0
     while i < n
-        let j = 0.0
+        let mut j = 0.0
         while j < n - 1.0
             let idx1 = indices[j]
             let idx2 = indices[j + 1.0]
 
             if arr[idx1] > arr[idx2]
                 let temp = indices[j]
-                let indices[j] = indices[j + 1.0]
-                let indices[j + 1.0] = temp
+                indices[j] = indices[j + 1.0]
+                indices[j + 1.0] = temp
             end
 
             j = j + 1.0
@@ -118,51 +123,54 @@ fn gpu_argsort(arr)
     end
 
     return indices
+end
 
 // Binary search in sorted array
 fn gpu_searchsorted(sorted_arr, values)
     let n = len(sorted_arr)
     let m = len(values)
 
-    let positions = []
-    let i = 0.0
+    let mut positions = []
+    let mut i = 0.0
     while i < m
         let val = values[i]
 
         // Binary search
-        let left = 0.0
-        let right = n
+        let mut left = 0.0
+        let mut right = n
 
         while left < right
             let mid = floor((left + right) / 2.0)
             if sorted_arr[mid] < val
-                let left = mid + 1.0
+                left = mid + 1.0
             else
-                let right = mid
+                right = mid
             end
         end
 
-        append(positions, left)
+        push(positions, left)
         i = i + 1.0
     end
 
     return positions
+end
 
 // Linear interpolation
 fn gpu_interpolate_linear(x_old, y_old, x_new)
     let n_old = len(x_old)
     let n_new = len(x_new)
 
-    let y_new = []
-    let i = 0.0
+    let mut y_new = []
+    let mut i = 0.0
     while i < n_new
         let x = x_new[i]
 
         // Find surrounding points
-        let j = 0.0
-        let found = 0.0
+        let mut j = 0.0
+        let mut found = 0.0
         while j < n_old - 1.0
-            if x >= x_old[j] &&x <= x_old[j + 1.0]
+            if x >= x_old[j]
+              if x <= x_old[j + 1.0]
                 // Interpolate
                 let x0 = x_old[j]
                 let x1 = x_old[j + 1.0]
@@ -172,9 +180,10 @@ fn gpu_interpolate_linear(x_old, y_old, x_new)
                 let t = (x - x0) / (x1 - x0)
                 let y = y0 + t * (y1 - y0)
 
-                append(y_new, y)
-                let found = 1.0
-                let j = n_old  // Break
+                push(y_new, y)
+                found = 1.0
+                j = n_old  // Break
+              end
             end
             j = j + 1.0
         end
@@ -182,9 +191,9 @@ fn gpu_interpolate_linear(x_old, y_old, x_new)
         if found == 0.0
             // Extrapolate
             if x < x_old[0.0]
-                append(y_new, y_old[0.0])
+                push(y_new, y_old[0.0])
             else
-                append(y_new, y_old[n_old - 1.0])
+                push(y_new, y_old[n_old - 1.0])
             end
         end
 
@@ -192,6 +201,7 @@ fn gpu_interpolate_linear(x_old, y_old, x_new)
     end
 
     return y_new
+end
 
 // Resample array to new length
 fn gpu_resample(arr, new_length)
@@ -201,22 +211,23 @@ fn gpu_resample(arr, new_length)
     end
 
     // Create index arrays
-    let old_indices = []
-    let i = 0.0
+    let mut old_indices = []
+    let mut i = 0.0
     while i < n
-        append(old_indices, i)
+        push(old_indices, i)
         i = i + 1.0
     end
 
-    let new_indices = []
-    let i = 0.0
+    let mut new_indices = []
+    let mut i = 0.0
     while i < new_length
-        append(new_indices, i * (n - 1.0) / (new_length - 1.0))
+        push(new_indices, i * (n - 1.0) / (new_length - 1.0))
         i = i + 1.0
     end
 
     // Interpolate
     return gpu_interpolate_linear(old_indices, arr, new_indices)
+end
 
 // Percentage change between elements
 fn gpu_pct_change(arr)
@@ -225,41 +236,42 @@ fn gpu_pct_change(arr)
         return []
     end
 
-    let result = []
-    let i = 1.0
+    let mut result = []
+    let mut i = 1.0
     while i < n
         if arr[i - 1.0] != 0.0
-            append(result, (arr[i] - arr[i - 1.0]) / arr[i - 1.0] * 100.0)
+            push(result, (arr[i] - arr[i - 1.0]) / arr[i - 1.0] * 100.0)
         else
-            append(result, 0.0)
+            push(result, 0.0)
         end
         i = i + 1.0
     end
 
     return result
+end
 
 // Covariance matrix
 fn gpu_covariance_matrix(data, n_features, n_samples)
     // data is flattened: [f0_s0, f0_s1, ..., f1_s0, ...]
     // Returns n_features x n_features covariance matrix
 
-    let cov_matrix = []
+    let mut cov_matrix = []
 
-    let i = 0.0
+    let mut i = 0.0
     while i < n_features
-        let j = 0.0
+        let mut j = 0.0
         while j < n_features
-            // Extract features i &&j
-            let feat_i = []
-            let feat_j = []
+            // Extract features i and j
+            let mut feat_i = []
+            let mut feat_j = []
 
-            let k = 0.0
+            let mut k = 0.0
             while k < n_samples
                 let idx_i = i * n_samples + k
                 let idx_j = j * n_samples + k
 
-                append(feat_i, data[idx_i])
-                append(feat_j, data[idx_j])
+                push(feat_i, data[idx_i])
+                push(feat_j, data[idx_j])
 
                 k = k + 1.0
             end
@@ -268,15 +280,15 @@ fn gpu_covariance_matrix(data, n_features, n_samples)
             let mean_i = gpu_mean(feat_i)
             let mean_j = gpu_mean(feat_j)
 
-            let cov = 0.0
-            let k = 0.0
+            let mut cov = 0.0
+            let mut k = 0.0
             while k < n_samples
-                let cov = cov + (feat_i[k] - mean_i) * (feat_j[k] - mean_j)
+                cov = cov + (feat_i[k] - mean_i) * (feat_j[k] - mean_j)
                 k = k + 1.0
             end
 
-            let cov = cov / (n_samples - 1.0)
-            append(cov_matrix, cov)
+            cov = cov / (n_samples - 1.0)
+            push(cov_matrix, cov)
 
             j = j + 1.0
         end
@@ -284,44 +296,47 @@ fn gpu_covariance_matrix(data, n_features, n_samples)
     end
 
     return cov_matrix
+end
 
 // Clip array to range
 fn gpu_clip(arr, min_val, max_val)
     return gpu_clamp(arr, min_val, max_val)
+end
 
 // Count non-zero elements
 fn gpu_count_nonzero(arr)
     let n = len(arr)
-    let count = 0.0
+    let mut count = 0.0
 
-    let i = 0.0
+    let mut i = 0.0
     while i < n
         if arr[i] != 0.0
-            let count = count + 1.0
+            count = count + 1.0
         end
         i = i + 1.0
     end
 
     return count
+end
 
 // All elements satisfy condition
 fn gpu_all(arr, threshold, op)
     let n = len(arr)
 
-    let i = 0.0
+    let mut i = 0.0
     while i < n
-        let passes = 0.0
+        let mut passes = 0.0
 
         if op == "gt"
-            let passes = arr[i] > threshold
+            passes = arr[i] > threshold
         elif op == "lt"
-            let passes = arr[i] < threshold
+            passes = arr[i] < threshold
         elif op == "eq"
-            let passes = arr[i] == threshold
+            passes = arr[i] == threshold
         elif op == "gte"
-            let passes = arr[i] >= threshold
+            passes = arr[i] >= threshold
         elif op == "lte"
-            let passes = arr[i] <= threshold
+            passes = arr[i] <= threshold
         end
 
         if passes == 0.0
@@ -332,25 +347,26 @@ fn gpu_all(arr, threshold, op)
     end
 
     return 1.0
+end
 
 // Any element satisfies condition
 fn gpu_any(arr, threshold, op)
     let n = len(arr)
 
-    let i = 0.0
+    let mut i = 0.0
     while i < n
-        let passes = 0.0
+        let mut passes = 0.0
 
         if op == "gt"
-            let passes = arr[i] > threshold
+            passes = arr[i] > threshold
         elif op == "lt"
-            let passes = arr[i] < threshold
+            passes = arr[i] < threshold
         elif op == "eq"
-            let passes = arr[i] == threshold
+            passes = arr[i] == threshold
         elif op == "gte"
-            let passes = arr[i] >= threshold
+            passes = arr[i] >= threshold
         elif op == "lte"
-            let passes = arr[i] <= threshold
+            passes = arr[i] <= threshold
         end
 
         if passes == 1.0
@@ -361,6 +377,7 @@ fn gpu_any(arr, threshold, op)
     end
 
     return 0.0
+end
 
 // Cumulative product
 fn gpu_cumprod(arr)
@@ -369,17 +386,18 @@ fn gpu_cumprod(arr)
         return []
     end
 
-    let result = []
-    let prod = 1.0
+    let mut result = []
+    let mut prod = 1.0
 
-    let i = 0.0
+    let mut i = 0.0
     while i < n
-        let prod = prod * arr[i]
-        append(result, prod)
+        prod = prod * arr[i]
+        push(result, prod)
         i = i + 1.0
     end
 
     return result
+end
 
 // Cumulative max
 fn gpu_cummax(arr)
@@ -388,19 +406,20 @@ fn gpu_cummax(arr)
         return []
     end
 
-    let result = []
-    let max_so_far = arr[0.0]
+    let mut result = []
+    let mut max_so_far = arr[0.0]
 
-    let i = 0.0
+    let mut i = 0.0
     while i < n
         if arr[i] > max_so_far
-            let max_so_far = arr[i]
+            max_so_far = arr[i]
         end
-        append(result, max_so_far)
+        push(result, max_so_far)
         i = i + 1.0
     end
 
     return result
+end
 
 // Cumulative min
 fn gpu_cummin(arr)
@@ -409,19 +428,20 @@ fn gpu_cummin(arr)
         return []
     end
 
-    let result = []
-    let min_so_far = arr[0.0]
+    let mut result = []
+    let mut min_so_far = arr[0.0]
 
-    let i = 0.0
+    let mut i = 0.0
     while i < n
         if arr[i] < min_so_far
-            let min_so_far = arr[i]
+            min_so_far = arr[i]
         end
-        append(result, min_so_far)
+        push(result, min_so_far)
         i = i + 1.0
     end
 
     return result
+end
 
 // Log returns: log(x[i] / x[i-1])
 fn gpu_log_returns(arr)
@@ -430,37 +450,45 @@ fn gpu_log_returns(arr)
         return []
     end
 
-    let result = []
-    let i = 1.0
+    let mut result = []
+    let mut i = 1.0
     while i < n
-        if arr[i - 1.0] > 0.0 &&arr[i] > 0.0
-            append(result, log(arr[i] / arr[i - 1.0]))
+        let mut do_log = 0.0
+        if arr[i - 1.0] > 0.0
+            if arr[i] > 0.0
+                do_log = 1.0
+            end
+        end
+        if do_log > 0.5
+            push(result, log(arr[i] / arr[i - 1.0]))
         else
-            append(result, 0.0)
+            push(result, 0.0)
         end
         i = i + 1.0
     end
 
     return result
+end
 
-// Sign function: -1, 0, ||1
+// Sign function: -1, 0, or 1
 fn gpu_sign(arr)
     let n = len(arr)
-    let result = []
+    let mut result = []
 
-    let i = 0.0
+    let mut i = 0.0
     while i < n
         if arr[i] > 0.0
-            append(result, 1.0)
+            push(result, 1.0)
         elif arr[i] < 0.0
-            append(result, 0.0 - 1.0)
+            push(result, 0.0 - 1.0)
         else
-            append(result, 0.0)
+            push(result, 0.0)
         end
         i = i + 1.0
     end
 
     return result
+end
 
 // Clip to percentile range
 fn gpu_clip_percentile(arr, lower_pct, upper_pct)
@@ -468,42 +496,48 @@ fn gpu_clip_percentile(arr, lower_pct, upper_pct)
     let upper = gpu_percentile(arr, upper_pct)
 
     return gpu_clamp(arr, lower, upper)
+end
 
 // Winsorize: clip outliers to percentiles
 fn gpu_winsorize(arr, lower_pct, upper_pct)
     return gpu_clip_percentile(arr, lower_pct, upper_pct)
+end
 
 // Z-score normalization with threshold
 fn gpu_robust_zscore(arr, cap_std)
     let zscores = gpu_zscore(arr)
     return gpu_clamp(zscores, 0.0 - cap_std, cap_std)
+end
 
 // Moving average (simple)
 fn gpu_sma(arr, window)
     return gpu_rolling_mean(arr, window)
+end
 
 // Exponentially weighted moving average
 fn gpu_ewma(arr, alpha)
     return gpu_ema(arr, alpha)
+end
 
 // Difference of moving averages
 fn gpu_ma_diff(arr, window1, window2)
     let ma1 = gpu_rolling_mean(arr, window1)
     let ma2 = gpu_rolling_mean(arr, window2)
 
-    let n = len(ma1)
+    let mut n = len(ma1)
     if len(ma2) < n
-        let n = len(ma2)
+        n = len(ma2)
     end
 
-    let result = []
-    let i = 0.0
+    let mut result = []
+    let mut i = 0.0
     while i < n
-        append(result, ma1[i] - ma2[i])
+        push(result, ma1[i] - ma2[i])
         i = i + 1.0
     end
 
     return result
+end
 
 // Bollinger bands
 fn gpu_bollinger_bands(arr, window, num_std)
@@ -511,41 +545,42 @@ fn gpu_bollinger_bands(arr, window, num_std)
     let n = len(arr)
 
     // Rolling std
-    let rolling_std = []
-    let i = 0.0
+    let mut rolling_std = []
+    let mut i = 0.0
     while i < n - window + 1.0
-        let window_data = []
-        let j = 0.0
+        let mut window_data = []
+        let mut j = 0.0
         while j < window
-            append(window_data, arr[i + j])
+            push(window_data, arr[i + j])
             j = j + 1.0
         end
 
-        append(rolling_std, gpu_std(window_data))
+        push(rolling_std, gpu_std(window_data))
         i = i + 1.0
     end
 
     // Compute bands
-    let upper = []
-    let lower = []
-    let i = 0.0
+    let mut upper = []
+    let mut lower = []
+    let mut i = 0.0
     while i < len(ma)
         if i < len(rolling_std)
-            append(upper, ma[i] + num_std * rolling_std[i])
-            append(lower, ma[i] - num_std * rolling_std[i])
+            push(upper, ma[i] + num_std * rolling_std[i])
+            push(lower, ma[i] - num_std * rolling_std[i])
         else
-            append(upper, ma[i])
-            append(lower, ma[i])
+            push(upper, ma[i])
+            push(lower, ma[i])
         end
         i = i + 1.0
     end
 
-    let bands = map()
+    let mut bands = map()
     map_set(bands, "upper", upper)
     map_set(bands, "middle", ma)
     map_set(bands, "lower", lower)
 
     return bands
+end
 
 // Rate of change
 fn gpu_roc(arr, period)
@@ -554,18 +589,19 @@ fn gpu_roc(arr, period)
         return []
     end
 
-    let result = []
-    let i = period
+    let mut result = []
+    let mut i = period
     while i < n
         if arr[i - period] != 0.0
-            append(result, (arr[i] - arr[i - period]) / arr[i - period] * 100.0)
+            push(result, (arr[i] - arr[i - period]) / arr[i - period] * 100.0)
         else
-            append(result, 0.0)
+            push(result, 0.0)
         end
         i = i + 1.0
     end
 
     return result
+end
 
 // Momentum
 fn gpu_momentum(arr, period)
@@ -574,45 +610,52 @@ fn gpu_momentum(arr, period)
         return []
     end
 
-    let result = []
-    let i = period
+    let mut result = []
+    let mut i = period
     while i < n
-        append(result, arr[i] - arr[i - period])
+        push(result, arr[i] - arr[i - period])
         i = i + 1.0
     end
 
     return result
+end
 
 // True range (for ATR calculation)
 fn gpu_true_range(high, low, close)
     let n = len(high)
-    if n != len(low) ||n != len(close)
+    if n != len(low)
+        print("Error: arrays must have same length")
+        return []
+    end
+    if n != len(close)
         print("Error: arrays must have same length")
         return []
     end
 
-    let tr = []
-    let i = 1.0
+    let mut tr = []
+    let mut i = 1.0
     while i < n
         let h_l = high[i] - low[i]
         let h_c = abs(high[i] - close[i - 1.0])
         let l_c = abs(low[i] - close[i - 1.0])
 
-        let max_tr = h_l
+        let mut max_tr = h_l
         if h_c > max_tr
-            let max_tr = h_c
+            max_tr = h_c
         end
         if l_c > max_tr
-            let max_tr = l_c
+            max_tr = l_c
         end
 
-        append(tr, max_tr)
+        push(tr, max_tr)
         i = i + 1.0
     end
 
     return tr
+end
 
 // Average True Range
 fn gpu_atr(high, low, close, period)
     let tr = gpu_true_range(high, low, close)
     return gpu_rolling_mean(tr, period)
+end

@@ -1,0 +1,291 @@
+// stdlib/game/debug_draw.flow — Immediate-mode debug drawing
+//
+// Visualize collision boxes, AI paths, physics vectors, and spatial queries.
+// Draw commands persist for a specified lifetime (in frames), then auto-expire.
+// Output is a flat draw command array compatible with chart.flow / gui_canvas.
+//
+// Command format: [type, x1, y1, x2, y2, r, g, b] = 8 floats per command
+// Types: 0=line, 1=rect_outline, 2=circle_outline, 3=point, 4=cross, 5=arrow
+//
+// Functions: dd_line, dd_rect, dd_circle, dd_point, dd_cross, dd_arrow,
+//            dd_update, dd_count, dd_clear, dd_get, dd_enabled, dd_toggle
+//
+// Usage:
+//   use "debug_draw"
+//   let _l = dd_line(0.0, 0.0, 100.0, 50.0, 255.0, 0.0, 0.0, 1.0)
+//   // In frame loop:
+//   dd_update()
+//   let n = dd_count()
+//   // Read commands via dd_get(idx, field)
+
+// Draw types
+let DD_LINE = 0.0
+let DD_RECT = 1.0
+let DD_CIRCLE = 2.0
+let DD_POINT = 3.0
+let DD_CROSS = 4.0
+let DD_ARROW = 5.0
+
+// Fields per draw: [type, x1, y1, x2, y2, r, g, b, lifetime]
+let DD_STRIDE = 9.0
+
+// Storage
+let mut _dd_data = []
+let mut _dd_count = 0.0
+let mut _dd_enabled = 1.0
+
+fn _dd_push(dtype, x1, y1, x2, y2, r, g, b, lifetime)
+    if _dd_enabled == 0.0
+        return -1.0
+    end
+    let mut life = lifetime
+    if life < 1.0
+        life = 1.0
+    end
+    let id = _dd_count
+    push(_dd_data, dtype)
+    push(_dd_data, x1)
+    push(_dd_data, y1)
+    push(_dd_data, x2)
+    push(_dd_data, y2)
+    push(_dd_data, r)
+    push(_dd_data, g)
+    push(_dd_data, b)
+    push(_dd_data, life)
+    _dd_count = _dd_count + 1.0
+    return id
+end
+
+// ── Drawing API ──────────────────────────────────────
+
+fn dd_line(x1, y1, x2, y2, r, g, b, lifetime)
+    // Draw line from (x1,y1) to (x2,y2).
+    return _dd_push(DD_LINE, x1, y1, x2, y2, r, g, b, lifetime)
+end
+
+fn dd_rect(x, y, w, h, r, g, b, lifetime)
+    // Draw rectangle outline at (x,y) with size (w,h).
+    return _dd_push(DD_RECT, x, y, w, h, r, g, b, lifetime)
+end
+
+fn dd_circle(cx, cy, radius, r, g, b, lifetime)
+    // Draw circle outline at center (cx,cy) with radius.
+    return _dd_push(DD_CIRCLE, cx, cy, radius, 0.0, r, g, b, lifetime)
+end
+
+fn dd_point(x, y, r, g, b, lifetime)
+    // Draw point at (x,y).
+    return _dd_push(DD_POINT, x, y, 0.0, 0.0, r, g, b, lifetime)
+end
+
+fn dd_cross(x, y, size, r, g, b, lifetime)
+    // Draw cross/crosshair at (x,y) with arm length = size.
+    return _dd_push(DD_CROSS, x, y, size, 0.0, r, g, b, lifetime)
+end
+
+fn dd_arrow(x1, y1, x2, y2, r, g, b, lifetime)
+    // Draw arrow from (x1,y1) to (x2,y2) with arrowhead.
+    return _dd_push(DD_ARROW, x1, y1, x2, y2, r, g, b, lifetime)
+end
+
+// ── Convenience colors ───────────────────────────────
+
+fn dd_line_red(x1, y1, x2, y2, lifetime)
+    return dd_line(x1, y1, x2, y2, 255.0, 0.0, 0.0, lifetime)
+end
+
+fn dd_line_green(x1, y1, x2, y2, lifetime)
+    return dd_line(x1, y1, x2, y2, 0.0, 255.0, 0.0, lifetime)
+end
+
+fn dd_line_blue(x1, y1, x2, y2, lifetime)
+    return dd_line(x1, y1, x2, y2, 0.0, 0.0, 255.0, lifetime)
+end
+
+fn dd_rect_red(x, y, w, h, lifetime)
+    return dd_rect(x, y, w, h, 255.0, 0.0, 0.0, lifetime)
+end
+
+fn dd_rect_green(x, y, w, h, lifetime)
+    return dd_rect(x, y, w, h, 0.0, 255.0, 0.0, lifetime)
+end
+
+// ── Debug shapes ─────────────────────────────────────
+
+fn dd_aabb(x, y, w, h, lifetime)
+    // Draw axis-aligned bounding box (green).
+    return dd_rect(x, y, w, h, 0.0, 255.0, 0.0, lifetime)
+end
+
+fn dd_velocity(x, y, vx, vy, scale, lifetime)
+    // Draw velocity vector from position (yellow arrow).
+    return dd_arrow(x, y, x + vx * scale, y + vy * scale, 255.0, 255.0, 0.0, lifetime)
+end
+
+fn dd_path(points, n_points, r, g, b, lifetime)
+    // Draw connected path from flat array [x0,y0, x1,y1, ...].
+    let pts_len = len(points)
+    let mut np = n_points
+    if np * 2.0 > pts_len
+        np = floor(pts_len / 2.0)
+    end
+    if np < 2.0
+        return 0.0
+    end
+    let mut i = 0.0
+    let mut count = 0.0
+    while i < np - 1.0
+        let x1 = points[int(i * 2.0)]
+        let y1 = points[int(i * 2.0 + 1.0)]
+        let x2 = points[int((i + 1.0) * 2.0)]
+        let y2 = points[int((i + 1.0) * 2.0 + 1.0)]
+        let _d = dd_line(x1, y1, x2, y2, r, g, b, lifetime)
+        count = count + 1.0
+        i = i + 1.0
+    end
+    return count
+end
+
+fn dd_grid(ox, oy, w, h, cell_size, r, g, b, lifetime)
+    // Draw grid lines for spatial debugging.
+    if cell_size < 1.0
+        return 0.0
+    end
+    // Guard against excessive line count
+    let max_lines = (w / cell_size + 1.0) + (h / cell_size + 1.0)
+    if max_lines > 500.0
+        return 0.0
+    end
+    let mut count = 0.0
+    // Vertical lines
+    let mut x = ox
+    while x <= ox + w
+        let _d = dd_line(x, oy, x, oy + h, r, g, b, lifetime)
+        x = x + cell_size
+        count = count + 1.0
+    end
+    // Horizontal lines
+    let mut y = oy
+    while y <= oy + h
+        let _d = dd_line(ox, y, ox + w, y, r, g, b, lifetime)
+        y = y + cell_size
+        count = count + 1.0
+    end
+    return count
+end
+
+// ── Frame update ─────────────────────────────────────
+
+fn dd_update()
+    // Decrement lifetimes and compact expired draws.
+    // Call once per frame.
+    let mut write = 0.0
+    let mut read = 0.0
+    while read < _dd_count
+        let base = int(read * DD_STRIDE)
+        let life = _dd_data[int(base + 8.0)] - 1.0
+        if life > 0.0
+            // Still alive — compact in place
+            if write != read
+                let dst = int(write * DD_STRIDE)
+                let mut f = 0.0
+                while f < DD_STRIDE - 1.0
+                    _dd_data[int(dst + f)] = _dd_data[int(base + f)]
+                    f = f + 1.0
+                end
+                _dd_data[int(dst + 8.0)] = life
+            else
+                _dd_data[int(base + 8.0)] = life
+            end
+            write = write + 1.0
+        end
+        read = read + 1.0
+    end
+    _dd_count = write
+    // Trim excess array entries (optional: only truncate if significant)
+    return _dd_count
+end
+
+// ── Queries ──────────────────────────────────────────
+
+fn dd_count()
+    // Number of active draw commands.
+    return _dd_count
+end
+
+fn dd_get(idx, field)
+    // Get field from draw command at index.
+    // Fields: 0=type, 1=x1, 2=y1, 3=x2, 4=y2, 5=r, 6=g, 7=b, 8=lifetime
+    if idx < 0.0 || idx >= _dd_count
+        return 0.0
+    end
+    if field < 0.0 || field >= DD_STRIDE
+        return 0.0
+    end
+    return _dd_data[int(idx * DD_STRIDE + field)]
+end
+
+fn dd_type(idx)
+    return dd_get(idx, 0.0)
+end
+
+fn dd_x1(idx)
+    return dd_get(idx, 1.0)
+end
+
+fn dd_y1(idx)
+    return dd_get(idx, 2.0)
+end
+
+fn dd_x2(idx)
+    return dd_get(idx, 3.0)
+end
+
+fn dd_y2(idx)
+    return dd_get(idx, 4.0)
+end
+
+fn dd_r(idx)
+    return dd_get(idx, 5.0)
+end
+
+fn dd_g(idx)
+    return dd_get(idx, 6.0)
+end
+
+fn dd_b(idx)
+    return dd_get(idx, 7.0)
+end
+
+fn dd_life(idx)
+    return dd_get(idx, 8.0)
+end
+
+// ── Toggle ───────────────────────────────────────────
+
+fn dd_enabled()
+    // Returns 1.0 if debug drawing is active.
+    return _dd_enabled
+end
+
+fn dd_toggle()
+    // Toggle debug drawing on/off.
+    if _dd_enabled == 1.0
+        _dd_enabled = 0.0
+    else
+        _dd_enabled = 1.0
+    end
+    return _dd_enabled
+end
+
+fn dd_set_enabled(flag)
+    _dd_enabled = flag
+    return 0.0
+end
+
+fn dd_clear()
+    // Remove all draw commands immediately.
+    _dd_count = 0.0
+    _dd_data = []
+    return 0.0
+end

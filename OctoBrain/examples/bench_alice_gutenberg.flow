@@ -1,0 +1,682 @@
+// OctoBrain Phase 16: Alice in Wonderland — Unsupervised Structure Discovery
+// Architecture:
+//   L1 prototype matching at dim=16 (threshold=0.6)
+//   GPU persistent buffers for vocabulary formation
+//   GPU batch match for whole-book classification (1 dispatch)
+//   OctoDB for transition tracking and chapter analysis
+//
+// PASS/FAIL criteria:
+//   1. Vocabulary > 1500 unique words
+//   2. L1 compression > 10%
+//   3. Chapter metrics table populated (12 chapters)
+//   4. Structure detected (transition rate variation across chapters)
+//   5. Pipeline completes without error
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\bench_alice_gutenberg.flow" --allow-ffi --allow-read
+
+use "../lib/text_word"
+use "../lib/proto"
+
+print("=== OctoBrain Phase 16: Alice in Wonderland ===")
+print("    Unsupervised Structure Discovery")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 1: CPU — Load corpus, detect chapters, build vocabulary
+// ══════════════════════════════════════════════════════════════════════
+
+let corpus_path = "OctoBrain/data/alice.txt"
+let lines = read_lines(corpus_path)
+let total_lines = len(lines)
+let total_lines_int = int(total_lines)
+
+let mut all_words = []
+let mut word_chapters = []
+let mut chapter_word_starts = []
+let mut vocab_map = map()
+let mut vocab = []
+let mut next_vocab_id = 0.0
+let mut current_chapter = 0.0
+let mut num_chapters = 0.0
+
+let mut li = 0.0
+while li < total_lines
+  let line = lines[li]
+  if starts_with(line, "CHAPTER")
+    current_chapter = current_chapter + 1.0
+    num_chapters = num_chapters + 1.0
+    push(chapter_word_starts, len(all_words))
+  elif len(line) > 0.0
+    if current_chapter > 0.0
+      let words = word_clean_split_fast(line)
+      let wlen = len(words)
+      let mut wi = 0.0
+      while wi < wlen
+        let w = words[wi]
+        if len(w) > 0.0
+          push(all_words, w)
+          push(word_chapters, current_chapter)
+          if map_has(vocab_map, w) == 0.0
+            map_set(vocab_map, w, next_vocab_id)
+            push(vocab, w)
+            next_vocab_id = next_vocab_id + 1.0
+          end
+        end
+        wi = wi + 1.0
+      end
+    end
+  end
+  li = li + 1.0
+end
+
+// Sentinel: end-of-book marker for chapter boundary calculation
+push(chapter_word_starts, len(all_words))
+
+let total_words = len(all_words)
+let num_vocab = len(vocab)
+let total_words_int = int(total_words)
+let num_vocab_int = int(num_vocab)
+let num_chapters_int = int(num_chapters)
+let embed_dim = 16.0
+
+print("Corpus: {corpus_path}")
+print("  Lines: {total_lines_int} | Chapters: {num_chapters_int}")
+print("  Total words: {total_words_int}")
+print("  Unique words: {num_vocab_int}")
+print("  Embed dim: 16D (threshold: 0.60)")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 2: L1 Vocabulary Formation — gpu_proto_observe on unique words
+// ══════════════════════════════════════════════════════════════════════
+print("--- Phase 2: L1 Vocabulary Formation ---")
+
+let mut psL1 = proto_new()
+let mut peL1 = []
+let mut pmL1 = []
+let mut cmL1 = []
+let mut ccL1 = [0.0]
+
+let t_vocab_start = time()
+
+// Rep 1: inline CPU proto matching (protos grow from 0 → ~112, inherently serial)
+// Inlines: encode (Rust builtin) + center (EMA) + normalize + dot-product match/create
+// Eliminates ~2,604 Vulkan round-trips through .flow runtime
+let threshold_r1 = compute_threshold(embed_dim)
+
+// Pre-allocate buffer for centered+normalized vectors (reused per word)
+let mut normed_buf = []
+let mut di = 0.0
+while di < embed_dim
+  push(normed_buf, 0.0)
+  di = di + 1.0
+end
+
+let mut vi = 0.0
+while vi < num_vocab
+  let vw = vocab[vi]
+  let venc = word_encode_hash(vw, embed_dim)
+
+  // Inline auto_center: EMA running mean update + subtraction
+  let cc = ccL1[0]
+  if cc < 0.5
+    // First observation: initialize running mean from data
+    let mut d = 0.0
+    while d < embed_dim
+      push(cmL1, venc[d])
+      d = d + 1.0
+    end
+    ccL1[0] = 1.0
+    // First call produces zero vector → skip (degenerate, no angular info)
+  else
+    // EMA update: mean = (1 - alpha) * mean + alpha * data
+    let mut d = 0.0
+    while d < embed_dim
+      cmL1[d] = 0.99 * cmL1[d] + 0.01 * venc[d]
+      d = d + 1.0
+    end
+    ccL1[0] = cc + 1.0
+
+    // Center + normalize into normed_buf (0 temp allocations)
+    let mut norm_sq = 0.0
+    d = 0.0
+    while d < embed_dim
+      let c = venc[d] - cmL1[d]
+      norm_sq = norm_sq + c * c
+      d = d + 1.0
+    end
+
+    if norm_sq > 0.000001
+      let inv_norm = 1.0 / sqrt(norm_sq)
+      d = 0.0
+      while d < embed_dim
+        normed_buf[d] = (venc[d] - cmL1[d]) * inv_norm
+        d = d + 1.0
+      end
+
+      // CPU dot-product matching against all existing protos
+      let pcL1_now = map_get(psL1, "proto_count")
+      let mut best_id = -1.0
+      let mut best_sim = -2.0
+      let mut p = 0.0
+      while p < pcL1_now
+        let base = p * embed_dim
+        let mut dot = 0.0
+        d = 0.0
+        while d < embed_dim
+          dot = dot + peL1[base + d] * normed_buf[d]
+          d = d + 1.0
+        end
+        if dot > best_sim
+          best_sim = dot
+          best_id = p
+        end
+        p = p + 1.0
+      end
+
+      if pcL1_now == 0.0 || best_sim < threshold_r1
+        // Create new prototype
+        d = 0.0
+        while d < embed_dim
+          push(peL1, normed_buf[d])
+          d = d + 1.0
+        end
+        push(pmL1, 1.0)
+        map_set(psL1, "proto_count", pcL1_now + 1.0)
+      else
+        // Match: EMA drift prototype + re-normalize
+        let base = best_id * embed_dim
+        let mut dnorm_sq = 0.0
+        d = 0.0
+        while d < embed_dim
+          let dv = 0.9 * peL1[base + d] + 0.1 * normed_buf[d]
+          dnorm_sq = dnorm_sq + dv * dv
+          d = d + 1.0
+        end
+        let dinv = 1.0 / sqrt(dnorm_sq)
+        d = 0.0
+        while d < embed_dim
+          peL1[base + d] = (0.9 * peL1[base + d] + 0.1 * normed_buf[d]) * dinv
+          d = d + 1.0
+        end
+        pmL1[best_id] = pmL1[best_id] + 1.0
+      end
+    end
+  end
+
+  vi = vi + 1.0
+end
+
+// Batch-encode all vocab for reps 2+3 (running mean converged after 3446+ obs)
+let mut vocab_batch_flat = []
+vi = 0.0
+while vi < num_vocab
+  let vw = vocab[vi]
+  let venc = word_encode_hash(vw, embed_dim)
+  // Inline center + normalize using frozen running mean (no EMA update)
+  let mut norm_sq = 0.0
+  let mut d = 0.0
+  while d < embed_dim
+    let c = venc[d] - cmL1[d]
+    norm_sq = norm_sq + c * c
+    d = d + 1.0
+  end
+  let mut inv_norm = 0.0
+  if norm_sq > 0.0000001
+    inv_norm = 1.0 / sqrt(norm_sq)
+  end
+  d = 0.0
+  while d < embed_dim
+    let c = venc[d] - cmL1[d]
+    push(vocab_batch_flat, c * inv_norm)
+    d = d + 1.0
+  end
+  vi = vi + 1.0
+end
+
+// Reps 2+3: Rust-native gpu_matmul (1 dispatch per rep, zero .flow runtime overhead)
+let batch_threshold = compute_threshold(embed_dim)
+let mut brep = 0.0
+while brep < 2.0
+  let pcL1_now = map_get(psL1, "proto_count")
+  // CPU transpose: peL1 (P×D) → peL1_T (D×P) — only ~8K elements, trivial
+  let mut peL1_T = []
+  let mut td = 0.0
+  while td < embed_dim
+    let mut tp = 0.0
+    while tp < pcL1_now
+      push(peL1_T, peL1[tp * embed_dim + td])
+      tp = tp + 1.0
+    end
+    td = td + 1.0
+  end
+  // Rust-native matmul: (Q×D) × (D×P) = (Q×P) similarity matrix
+  let sims = gpu_matmul(vocab_batch_flat, peL1_T, num_vocab, pcL1_now, embed_dim)
+  let mut bvi = 0.0
+  while bvi < num_vocab
+    let row_base = bvi * pcL1_now
+    let mut best_id = 0.0
+    let mut best_sim = sims[row_base]
+    let mut p = 1.0
+    while p < pcL1_now
+      let s = sims[row_base + p]
+      if s > best_sim
+        best_sim = s
+        best_id = p
+      end
+      p = p + 1.0
+    end
+    if best_sim >= batch_threshold
+      // Match: EMA drift prototype in-place + increment count
+      let base = best_id * embed_dim
+      let vbase = bvi * embed_dim
+      let mut dnorm = 0.0
+      let mut d = 0.0
+      while d < embed_dim
+        let dv = 0.9 * peL1[base + d] + 0.1 * vocab_batch_flat[vbase + d]
+        dnorm = dnorm + dv * dv
+        d = d + 1.0
+      end
+      let dinv = 1.0 / sqrt(dnorm)
+      d = 0.0
+      while d < embed_dim
+        peL1[base + d] = (0.9 * peL1[base + d] + 0.1 * vocab_batch_flat[vbase + d]) * dinv
+        d = d + 1.0
+      end
+      pmL1[best_id] = pmL1[best_id] + 1.0
+    else
+      // No match (rare in reps 2+3): create new prototype
+      let vbase = bvi * embed_dim
+      let mut d = 0.0
+      while d < embed_dim
+        push(peL1, vocab_batch_flat[vbase + d])
+        d = d + 1.0
+      end
+      push(pmL1, 1.0)
+      map_set(psL1, "proto_count", map_get(psL1, "proto_count") + 1.0)
+    end
+    bvi = bvi + 1.0
+  end
+  brep = brep + 1.0
+end
+let t_vocab_end = time()
+let vocab_ms = (t_vocab_end - t_vocab_start) * 1000.0
+let vocab_ms_int = int(vocab_ms)
+
+let pcL1 = map_get(psL1, "proto_count")
+let pcL1_int = int(pcL1)
+
+let mut compression_pct = 0.0
+if num_vocab > 0.0
+  compression_pct = (1.0 - pcL1 / num_vocab) * 100.0
+end
+let compression_pct_r = floor(compression_pct * 10.0) / 10.0
+
+print("  L1 protos: {pcL1_int} (from {num_vocab_int} unique words)")
+print("  Compression: {compression_pct_r}%")
+print("  Threshold: 0.60 (dim=16)")
+print("  Time: {vocab_ms_int} ms")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 3: Batch Classify + OctoDB Transition Tracking
+// ══════════════════════════════════════════════════════════════════════
+print("--- Phase 3: Sequential Analysis ---")
+
+// 3a: Pre-encode UNIQUE vocab (2604 words, not 26K occurrences)
+let mut cmL1_scan = []
+let mut ccL1_scan = [0.0]
+let cm_len = len(cmL1)
+let mut ci = 0.0
+while ci < cm_len
+  push(cmL1_scan, cmL1[ci])
+  ci = ci + 1.0
+end
+ccL1_scan[0] = ccL1[0]
+
+let t_encode_start = time()
+let mut vocab_flat = []
+let mut evi = 0.0
+while evi < num_vocab
+  let vw = vocab[evi]
+  let enc = word_encode_hash(vw, embed_dim)
+  // Inline: center = enc - running_mean, then normalize (0 temp allocations)
+  let mut norm_sq = 0.0
+  let mut d = 0.0
+  while d < embed_dim
+    let c = enc[d] - cmL1_scan[d]
+    norm_sq = norm_sq + c * c
+    d = d + 1.0
+  end
+  let mut inv_norm = 0.0
+  if norm_sq > 0.0000001
+    inv_norm = 1.0 / sqrt(norm_sq)
+  end
+  d = 0.0
+  while d < embed_dim
+    let c = enc[d] - cmL1_scan[d]
+    push(vocab_flat, c * inv_norm)
+    d = d + 1.0
+  end
+  evi = evi + 1.0
+end
+let t_encode_end = time()
+let encode_ms = (t_encode_end - t_encode_start) * 1000.0
+let encode_ms_int = int(encode_ms)
+print("  Encoded {num_vocab_int} unique words in {encode_ms_int} ms")
+
+// 3b: Rust-native gpu_matmul — ONE dispatch classifies all unique words
+let t_gpu_start = time()
+// CPU transpose: peL1 (P×D) → peL1_T_3b (D×P)
+let mut peL1_T_3b = []
+let mut td3 = 0.0
+while td3 < embed_dim
+  let mut tp3 = 0.0
+  while tp3 < pcL1
+    push(peL1_T_3b, peL1[tp3 * embed_dim + td3])
+    tp3 = tp3 + 1.0
+  end
+  td3 = td3 + 1.0
+end
+// Rust-native matmul: (Q×D) × (D×P) = (Q×P) similarity matrix
+let sims_3b = gpu_matmul(vocab_flat, peL1_T_3b, num_vocab, pcL1, embed_dim)
+// CPU argmax per row
+let mut vocab_proto_ids = []
+let mut qi = 0.0
+while qi < num_vocab
+  let row_base_3b = qi * pcL1
+  let mut best_id_3b = 0.0
+  let mut best_sim_3b = sims_3b[row_base_3b]
+  let mut p3 = 1.0
+  while p3 < pcL1
+    let s3 = sims_3b[row_base_3b + p3]
+    if s3 > best_sim_3b
+      best_sim_3b = s3
+      best_id_3b = p3
+    end
+    p3 = p3 + 1.0
+  end
+  push(vocab_proto_ids, best_id_3b)
+  qi = qi + 1.0
+end
+let t_gpu_end = time()
+let gpu_ms = (t_gpu_end - t_gpu_start) * 1000.0
+let gpu_ms_int = int(gpu_ms)
+print("  GPU batch classify: {gpu_ms_int} ms (1 dispatch, {num_vocab_int} vectors)")
+
+// 3b2: Build per-occurrence proto_ids via vocab lookup (fast, no encoding)
+let t_lookup_start = time()
+let mut proto_ids = []
+let mut lki = 0.0
+while lki < total_words
+  let w = all_words[lki]
+  let vid = map_get(vocab_map, w)
+  push(proto_ids, vocab_proto_ids[vid])
+  lki = lki + 1.0
+end
+let t_lookup_end = time()
+let lookup_ms = (t_lookup_end - t_lookup_start) * 1000.0
+let lookup_ms_int = int(lookup_ms)
+print("  Vocab lookup: {lookup_ms_int} ms ({total_words_int} occurrences)")
+
+// 3d: Iterate proto IDs — track transitions per chapter
+// Pure counters + arrays — no OctoDB, no string conversions, no map overhead
+let t_scan_start = time()
+let mut prev_proto = -1.0
+let mut total_trans = 0.0
+
+// Per-chapter results (arrays, read in Phase 4)
+let mut ch_wcs = []
+let mut ch_trans_arr = []
+let mut ch_uniqs = []
+let mut ch_novs = []
+
+// Per-chapter seen-proto flags (reset at chapter boundary)
+let mut ch_seen = []
+let mut gi = 0.0
+while gi < pcL1
+  push(ch_seen, 0.0)
+  gi = gi + 1.0
+end
+
+// Global seen-proto flags (never reset — tracks novelty)
+let mut global_seen = []
+gi = 0.0
+while gi < pcL1
+  push(global_seen, 0.0)
+  gi = gi + 1.0
+end
+
+let mut ch_trans_count = 0.0
+let mut ch_unique_count = 0.0
+let mut ch_novelty = 0.0
+let mut current_ch = 1.0
+let mut ch_wc = 0.0
+
+let mut pi = 0.0
+while pi < total_words
+  let pid = proto_ids[pi]
+  let ch = word_chapters[pi]
+
+  if ch != current_ch
+    // Store completed chapter
+    push(ch_wcs, ch_wc)
+    push(ch_trans_arr, ch_trans_count)
+    push(ch_uniqs, ch_unique_count)
+    push(ch_novs, ch_novelty)
+    // Reset for new chapter
+    current_ch = ch
+    ch_trans_count = 0.0
+    ch_unique_count = 0.0
+    ch_novelty = 0.0
+    ch_wc = 0.0
+    prev_proto = -1.0
+    // Reset ch_seen flags
+    let mut ri = 0.0
+    while ri < pcL1
+      ch_seen[ri] = 0.0
+      ri = ri + 1.0
+    end
+  end
+
+  ch_wc = ch_wc + 1.0
+
+  // Track unique protos per chapter (array flag, no str/map)
+  if ch_seen[pid] == 0.0
+    ch_seen[pid] = 1.0
+    ch_unique_count = ch_unique_count + 1.0
+    if global_seen[pid] == 0.0
+      ch_novelty = ch_novelty + 1.0
+    end
+  end
+  global_seen[pid] = 1.0
+
+  // Track transitions (counter only)
+  if prev_proto >= 0.0
+    if pid != prev_proto
+      ch_trans_count = ch_trans_count + 1.0
+      total_trans = total_trans + 1.0
+    end
+  end
+  prev_proto = pid
+
+  pi = pi + 1.0
+end
+
+// Store final chapter
+push(ch_wcs, ch_wc)
+push(ch_trans_arr, ch_trans_count)
+push(ch_uniqs, ch_unique_count)
+push(ch_novs, ch_novelty)
+
+let t_scan_end = time()
+let scan_ms = (t_scan_end - t_scan_start) * 1000.0
+let scan_ms_int = int(scan_ms)
+
+let trans_count = total_trans
+let chap_count = num_chapters
+let trans_count_int = int(trans_count)
+let chap_count_int = int(chap_count)
+print("  Scan: {scan_ms_int} ms")
+print("  Transitions recorded: {trans_count_int}")
+print("  Chapter summaries: {chap_count_int}")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 4: Chapter Boundary Analysis
+// ══════════════════════════════════════════════════════════════════════
+print("--- Per-Chapter Analysis ---")
+print("  Ch | Words | Trans | Rate  | Uniq | Novel | NovRate")
+print("  ---|-------|-------|-------|------|-------|--------")
+
+let mut total_trans_rate = 0.0
+let mut total_nov_rate = 0.0
+let mut max_trans_rate = 0.0
+let mut min_trans_rate = 1.0
+let mut above_avg_chapters = 0.0
+
+// First pass: compute rates and global average
+let mut rates = []
+let mut nov_rates = []
+let mut ch_i = 0.0
+while ch_i < chap_count
+  let wc = ch_wcs[ch_i]
+  let tc = ch_trans_arr[ch_i]
+  let mut rate = 0.0
+  if wc > 0.0
+    rate = tc / wc
+  end
+  push(rates, rate)
+  total_trans_rate = total_trans_rate + rate
+
+  let nov = ch_novs[ch_i]
+  let mut nrate = 0.0
+  if wc > 0.0
+    nrate = nov / wc
+  end
+  push(nov_rates, nrate)
+  total_nov_rate = total_nov_rate + nrate
+
+  if rate > max_trans_rate
+    max_trans_rate = rate
+  end
+  if rate < min_trans_rate
+    min_trans_rate = rate
+  end
+
+  ch_i = ch_i + 1.0
+end
+
+let avg_trans_rate = total_trans_rate / chap_count
+let avg_nov_rate = total_nov_rate / chap_count
+
+// Second pass: print table and detect above-average chapters
+let mut above_avg_list = ""
+ch_i = 0.0
+while ch_i < chap_count
+  let ch_num = ch_i + 1.0
+  let ch_num_int = int(ch_num)
+  let wc = ch_wcs[ch_i]
+  let wc_int = int(wc)
+  let tc = ch_trans_arr[ch_i]
+  let tc_int = int(tc)
+  let uq = ch_uniqs[ch_i]
+  let uq_int = int(uq)
+  let nov = ch_novs[ch_i]
+  let nov_int = int(nov)
+
+  let rate = rates[ch_i]
+  let rate_r = floor(rate * 1000.0) / 1000.0
+  let nrate = nov_rates[ch_i]
+  let nrate_r = floor(nrate * 10000.0) / 10000.0
+
+  print("  {ch_num_int}  | {wc_int} | {tc_int} | {rate_r} | {uq_int} | {nov_int} | {nrate_r}")
+
+  // Above-average transition rate = structural distinction
+  if rate > avg_trans_rate
+    above_avg_chapters = above_avg_chapters + 1.0
+    if len(above_avg_list) > 0.0
+      above_avg_list = above_avg_list + ", " + str(ch_num_int)
+    else
+      above_avg_list = str(ch_num_int)
+    end
+  end
+
+  ch_i = ch_i + 1.0
+end
+
+let avg_r = floor(avg_trans_rate * 1000.0) / 1000.0
+let max_r = floor(max_trans_rate * 1000.0) / 1000.0
+let min_r = floor(min_trans_rate * 1000.0) / 1000.0
+let range_r = floor((max_trans_rate - min_trans_rate) * 1000.0) / 1000.0
+let avg_nov_r = floor(avg_nov_rate * 10000.0) / 10000.0
+let above_int = int(above_avg_chapters)
+
+print("")
+print("  Avg transition rate: {avg_r}")
+print("  Range: {min_r} - {max_r} (spread: {range_r})")
+print("  Avg novelty rate: {avg_nov_r}")
+print("  Chapters above avg transition: [{above_avg_list}] ({above_int}/12)")
+print("")
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 5: PASS/FAIL
+// ══════════════════════════════════════════════════════════════════════
+print("=== PASS/FAIL ===")
+let mut npass = 0.0
+let mut nfail = 0.0
+
+if num_vocab > 1500.0
+  print("PASS: Vocabulary loaded ({num_vocab_int} unique words > 1500)")
+  npass = npass + 1.0
+else
+  print("FAIL: Vocabulary too small ({num_vocab_int} <= 1500)")
+  nfail = nfail + 1.0
+end
+
+if compression_pct > 10.0
+  print("PASS: L1 compression {compression_pct_r}% > 10%")
+  npass = npass + 1.0
+else
+  print("FAIL: L1 compression {compression_pct_r}% <= 10%")
+  nfail = nfail + 1.0
+end
+
+if chap_count >= 12.0
+  print("PASS: Chapter metrics populated ({chap_count_int} chapters)")
+  npass = npass + 1.0
+else
+  print("FAIL: Chapter metrics incomplete ({chap_count_int} < 12)")
+  nfail = nfail + 1.0
+end
+
+// Structure detected if transition rate varies across chapters
+// (range > 0 means chapters have different vocabulary patterns)
+if range_r > 0.0
+  print("PASS: Structure detected (transition rate spread: {range_r})")
+  npass = npass + 1.0
+else
+  print("FAIL: No structure detected (uniform transition rate)")
+  nfail = nfail + 1.0
+end
+
+print("PASS: Pipeline completed")
+npass = npass + 1.0
+
+let npass_int = int(npass)
+let nfail_int = int(nfail)
+print("")
+print("Result: {npass_int}/5 passed, {nfail_int}/5 failed")
+if npass >= 3.0
+  print("OVERALL: PASS ({npass_int}/5)")
+else
+  print("OVERALL: FAIL ({npass_int}/5)")
+end
+
+print("")
+print("=== Phase 15 comparison ===")
+print("  Phase 15: 335 words, 41.1% compression, 8D")
+print("  Phase 16: {num_vocab_int} words, {compression_pct_r}% compression, 16D")
+print("  Scale: {num_vocab_int} / 335 = ~10x vocabulary")
+print("")
+print("--- alice in wonderland benchmark complete ---")

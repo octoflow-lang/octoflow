@@ -1,0 +1,220 @@
+// test_matrix.flow — Tests for stdlib/math/matrix.flow
+use "matrix"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.001
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Creation ────────────────────────────────────────────────────
+
+fn test_mat_create()
+    let mut m = mat_create(2.0, 3.0, 5.0)
+    check("mat_create size", len(m) == 6.0)
+    check("mat_create fill", m[0] == 5.0 && m[5] == 5.0)
+    return 0.0
+end
+
+fn test_mat_zeros()
+    let mut m = mat_zeros(3.0, 3.0)
+    check("mat_zeros", m[0] == 0.0 && m[4] == 0.0 && m[8] == 0.0)
+    return 0.0
+end
+
+fn test_mat_identity()
+    let mut m = mat_identity(3.0)
+    check("identity diag", m[0] == 1.0 && m[4] == 1.0 && m[8] == 1.0)
+    check("identity off-diag", m[1] == 0.0 && m[3] == 0.0 && m[5] == 0.0)
+    return 0.0
+end
+
+// ── Access ──────────────────────────────────────────────────────
+
+fn test_mat_access()
+    let mut m = mat_identity(3.0)
+    check("mat_get (0,0) = 1", mat_get(m, 3.0, 0.0, 0.0) == 1.0)
+    check("mat_get (0,1) = 0", mat_get(m, 3.0, 0.0, 1.0) == 0.0)
+    mat_set(m, 3.0, 0.0, 1.0, 7.0)
+    check("mat_set (0,1) = 7", mat_get(m, 3.0, 0.0, 1.0) == 7.0)
+    return 0.0
+end
+
+fn test_mat_row_col()
+    let mut vals = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let mut m = mat_from_rows(2.0, 3.0, vals)
+    let mut row0 = mat_row(m, 3.0, 0.0)
+    check("mat_row 0", row0[0] == 1.0 && row0[1] == 2.0 && row0[2] == 3.0)
+    let mut col1 = mat_col(m, 2.0, 3.0, 1.0)
+    check("mat_col 1", col1[0] == 2.0 && col1[1] == 5.0)
+    return 0.0
+end
+
+// ── Arithmetic ──────────────────────────────────────────────────
+
+fn test_mat_add()
+    let mut a = [1.0, 2.0, 3.0, 4.0]
+    let mut b = [5.0, 6.0, 7.0, 8.0]
+    let mut c = mat_add(a, b, 2.0, 2.0)
+    check("mat_add", c[0] == 6.0 && c[1] == 8.0 && c[2] == 10.0 && c[3] == 12.0)
+    return 0.0
+end
+
+fn test_mat_sub()
+    let mut a = [5.0, 6.0, 7.0, 8.0]
+    let mut b = [1.0, 2.0, 3.0, 4.0]
+    let mut c = mat_sub(a, b, 2.0, 2.0)
+    check("mat_sub", c[0] == 4.0 && c[1] == 4.0 && c[2] == 4.0 && c[3] == 4.0)
+    return 0.0
+end
+
+fn test_mat_scale()
+    let mut m = [1.0, 2.0, 3.0, 4.0]
+    let mut s = mat_scale(m, 2.0, 2.0, 3.0)
+    check("mat_scale", s[0] == 3.0 && s[1] == 6.0 && s[2] == 9.0 && s[3] == 12.0)
+    return 0.0
+end
+
+// ── Transpose ───────────────────────────────────────────────────
+
+fn test_mat_transpose()
+    // [1,2,3; 4,5,6] → [1,4; 2,5; 3,6]
+    let mut m = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let mut t = mat_transpose(m, 2.0, 3.0)
+    check("transpose [0]", t[0] == 1.0)
+    check("transpose [1]", t[1] == 4.0)
+    check("transpose [2]", t[2] == 2.0)
+    check("transpose [3]", t[3] == 5.0)
+    check("transpose [4]", t[4] == 3.0)
+    check("transpose [5]", t[5] == 6.0)
+    return 0.0
+end
+
+// ── Multiplication ──────────────────────────────────────────────
+
+fn test_mat_multiply()
+    // [1,2; 3,4] * [5,6; 7,8] = [19,22; 43,50]
+    let mut a = [1.0, 2.0, 3.0, 4.0]
+    let mut b = [5.0, 6.0, 7.0, 8.0]
+    let mut c = mat_multiply(a, 2.0, 2.0, b, 2.0, 2.0)
+    check("matmul [0,0] = 19", c[0] == 19.0)
+    check("matmul [0,1] = 22", c[1] == 22.0)
+    check("matmul [1,0] = 43", c[2] == 43.0)
+    check("matmul [1,1] = 50", c[3] == 50.0)
+    return 0.0
+end
+
+fn test_mat_multiply_identity()
+    let mut a = [1.0, 2.0, 3.0, 4.0]
+    let mut id = mat_identity(2.0)
+    let mut c = mat_multiply(a, 2.0, 2.0, id, 2.0, 2.0)
+    check("matmul identity", c[0] == 1.0 && c[1] == 2.0 && c[2] == 3.0 && c[3] == 4.0)
+    return 0.0
+end
+
+fn test_mat_multiply_rect()
+    // [1,2,3; 4,5,6] (2x3) * [7; 8; 9] (3x1) = [50; 122]
+    let mut a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let mut b = [7.0, 8.0, 9.0]
+    let mut c = mat_multiply(a, 2.0, 3.0, b, 3.0, 1.0)
+    check("matmul rect [0]", c[0] == 50.0)
+    check("matmul rect [1]", c[1] == 122.0)
+    return 0.0
+end
+
+fn test_mat_vec_multiply()
+    let mut m = [1.0, 2.0, 3.0, 4.0]
+    let mut v = [5.0, 6.0]
+    let mut r = mat_vec_multiply(m, 2.0, 2.0, v)
+    check("matvec [0] = 17", r[0] == 17.0)
+    check("matvec [1] = 39", r[1] == 39.0)
+    return 0.0
+end
+
+// ── Vector Operations ───────────────────────────────────────────
+
+fn test_mat_dot()
+    let mut a = [1.0, 2.0, 3.0]
+    let mut b = [4.0, 5.0, 6.0]
+    check("dot product", mat_dot(a, b, 3.0) == 32.0)
+    return 0.0
+end
+
+fn test_vec_norm()
+    let mut v = [3.0, 4.0]
+    check("vec_norm [3,4] = 5", approx(vec_norm(v, 2.0), 5.0) == 1.0)
+    return 0.0
+end
+
+fn test_vec_normalize()
+    let mut v = [3.0, 4.0]
+    let mut u = vec_normalize(v, 2.0)
+    check("normalize [0]", approx(u[0], 0.6) == 1.0)
+    check("normalize [1]", approx(u[1], 0.8) == 1.0)
+    check("normalize norm = 1", approx(vec_norm(u, 2.0), 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Properties ──────────────────────────────────────────────────
+
+fn test_mat_trace()
+    let mut m = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+    check("trace 3x3", mat_trace(m, 3.0) == 15.0)
+    return 0.0
+end
+
+fn test_mat_det_2x2()
+    let mut m = [3.0, 8.0, 4.0, 6.0]
+    check("det 2x2", mat_det_2x2(m) == -14.0)
+    return 0.0
+end
+
+fn test_mat_det_3x3()
+    let mut m = [6.0, 1.0, 1.0, 4.0, -2.0, 5.0, 2.0, 8.0, 7.0]
+    check("det 3x3", mat_det_3x3(m) == -306.0)
+    return 0.0
+end
+
+fn test_mat_symmetric()
+    let mut sym = [1.0, 2.0, 3.0, 2.0, 4.0, 5.0, 3.0, 5.0, 6.0]
+    let mut nonsym = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+    check("symmetric yes", mat_is_symmetric(sym, 3.0) == 1.0)
+    check("symmetric no", mat_is_symmetric(nonsym, 3.0) == 0.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_mat_create()
+test_mat_zeros()
+test_mat_identity()
+test_mat_access()
+test_mat_row_col()
+test_mat_add()
+test_mat_sub()
+test_mat_scale()
+test_mat_transpose()
+test_mat_multiply()
+test_mat_multiply_identity()
+test_mat_multiply_rect()
+test_mat_vec_multiply()
+test_mat_dot()
+test_vec_norm()
+test_vec_normalize()
+test_mat_trace()
+test_mat_det_2x2()
+test_mat_det_3x3()
+test_mat_symmetric()
+print("")
+print("All matrix tests passed (20 tests)")

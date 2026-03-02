@@ -1,0 +1,39 @@
+[package]
+name = "octoview"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "GPU-native browser — transpiles HTML/CSS/JS to OctoView Documents"
+
+[[bin]]
+name = "octoview"
+path = "src/main.rs"
+
+[dependencies]
+# HTML parsing (Servo project)
+html5ever = "0.38"
+markup5ever = "0.38"
+markup5ever_rcdom = "0.38"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["blocking", "native-tls"], default-features = false }
+
+# URL handling
+url = "2"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Hashing (cache keys)
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Headless Chrome (JS engine for SPA/Tier C sites)
+headless_chrome = { version = "1.0", features = ["fetch"] }
+
+# Serialization (OVD file format)
+byteorder = "1"

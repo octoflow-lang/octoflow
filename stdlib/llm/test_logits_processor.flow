@@ -1,0 +1,192 @@
+// test_logits_processor.flow — Tests for stdlib/llm/logits_processor.flow
+use "logits_processor"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Repetition penalty ──────────────────────────────────
+
+fn test_rep_penalty()
+    let mut logits = [2.0, 1.0, 0.5, -1.0, 3.0]
+    let mut history = [0.0, 3.0, 0.0]
+    let _r = lp_repetition_penalty(logits, history, 1.5)
+    // Token 0 (positive): 2.0 / 1.5 = 1.333
+    check("rep pos", approx(logits[0], 1.333) == 1.0)
+    // Token 3 (negative): -1.0 * 1.5 = -1.5
+    check("rep neg", approx(logits[3], -1.5) == 1.0)
+    // Token 4 (not in history): unchanged
+    check("rep untouched", logits[4] == 3.0)
+    return 0.0
+end
+
+// ── Frequency penalty ───────────────────────────────────
+
+fn test_freq_penalty()
+    let mut logits = [5.0, 5.0, 5.0]
+    let mut history = [0.0, 0.0, 0.0, 1.0]
+    let _r = lp_frequency_penalty(logits, history, 0.5)
+    // Token 0 appeared 3 times: 5.0 - 0.5*3 = 3.5
+    check("freq t0", approx(logits[0], 3.5) == 1.0)
+    // Token 1 appeared 1 time: 5.0 - 0.5*1 = 4.5
+    check("freq t1", approx(logits[1], 4.5) == 1.0)
+    // Token 2 not in history: unchanged
+    check("freq t2", logits[2] == 5.0)
+    return 0.0
+end
+
+// ── Presence penalty ────────────────────────────────────
+
+fn test_pres_penalty()
+    let mut logits = [5.0, 5.0, 5.0]
+    let mut history = [0.0, 0.0, 0.0, 1.0]
+    let _r = lp_presence_penalty(logits, history, 1.0)
+    // Token 0 appeared (any count): 5.0 - 1.0 = 4.0
+    check("pres t0", logits[0] == 4.0)
+    // Token 1 appeared: same penalty
+    check("pres t1", logits[1] == 4.0)
+    // Token 2 not in history
+    check("pres t2", logits[2] == 5.0)
+    return 0.0
+end
+
+// ── Temperature ─────────────────────────────────────────
+
+fn test_temperature()
+    let mut logits = [2.0, 4.0, 6.0]
+    let _r = lp_temperature(logits, 2.0)
+    check("temp t0", logits[0] == 1.0)
+    check("temp t1", logits[1] == 2.0)
+    check("temp t2", logits[2] == 3.0)
+    // No-op at temp=1.0
+    let mut logits2 = [2.0, 4.0]
+    let _r2 = lp_temperature(logits2, 1.0)
+    check("temp noop", logits2[0] == 2.0)
+    return 0.0
+end
+
+// ── Top-K mask ──────────────────────────────────────────
+
+fn test_top_k()
+    let mut logits = [1.0, 5.0, 3.0, 2.0, 4.0]
+    let _r = lp_top_k_mask(logits, 3.0)
+    // Top 3: indices 1(5), 4(4), 2(3). Others masked.
+    check("topk kept 1", logits[1] == 5.0)
+    check("topk kept 4", logits[4] == 4.0)
+    check("topk kept 2", logits[2] == 3.0)
+    check("topk masked 0", logits[0] < -999.0)
+    check("topk masked 3", logits[3] < -999.0)
+    return 0.0
+end
+
+// ── Top-P mask ──────────────────────────────────────────
+
+fn test_top_p()
+    // Logits: token 0 has overwhelmingly high logit
+    let mut logits = [10.0, 0.0, 0.0, 0.0, 0.0]
+    let _r = lp_top_p_mask(logits, 0.9)
+    // Token 0 should be kept (probability >> 0.9)
+    check("topp kept dominant", logits[0] == 10.0)
+    // Others should be masked
+    check("topp masked", logits[1] < -999.0)
+    return 0.0
+end
+
+// ── Ban tokens ──────────────────────────────────────────
+
+fn test_ban()
+    let mut logits = [5.0, 5.0, 5.0, 5.0]
+    let mut banned = [1.0, 3.0]
+    let _r = lp_ban_tokens(logits, banned)
+    check("ban t0 ok", logits[0] == 5.0)
+    check("ban t1", logits[1] < -999.0)
+    check("ban t2 ok", logits[2] == 5.0)
+    check("ban t3", logits[3] < -999.0)
+    return 0.0
+end
+
+// ── Boost tokens ────────────────────────────────────────
+
+fn test_boost()
+    let mut logits = [1.0, 1.0, 1.0, 1.0]
+    let mut boosted = [0.0, 2.0]
+    let _r = lp_boost_tokens(logits, boosted, 5.0)
+    check("boost t0", logits[0] == 6.0)
+    check("boost t1 ok", logits[1] == 1.0)
+    check("boost t2", logits[2] == 6.0)
+    return 0.0
+end
+
+// ── Combined penalties ──────────────────────────────────
+
+fn test_combined()
+    let mut logits = [3.0, 2.0, 1.0, 0.0, -1.0]
+    let mut history = [0.0, 1.0, 0.0]
+    let _r = lp_apply_penalties(logits, history, 1.5, 0.5, 0.3)
+    // Token 0: rep(3.0/1.5=2.0) + freq(-0.5*2=-1.0) + pres(-0.3) = ~0.7
+    check("combined t0", logits[0] < 3.0)
+    // Token 1: rep(2.0/1.5=1.333) + freq(-0.5*1) + pres(-0.3)
+    check("combined t1", logits[1] < 2.0)
+    // Token 4: not in history, unchanged
+    check("combined t4", logits[4] == -1.0)
+    return 0.0
+end
+
+// ── Pipeline ────────────────────────────────────────────
+
+fn test_pipeline()
+    let pipe = lp_pipeline_create()
+    let _a1 = lp_pipeline_add(pipe, 0.0, 1.5)   // repetition penalty
+    let _a2 = lp_pipeline_add(pipe, 3.0, 0.8)    // temperature
+    let mut logits = [3.0, 1.0, 2.0]
+    let mut history = [0.0]
+    let _r = lp_pipeline_run(pipe, logits, history)
+    // Token 0 should be penalized then temperature-scaled
+    check("pipe t0 penalized", logits[0] < 3.0)
+    return 0.0
+end
+
+// ── Edge cases ──────────────────────────────────────────
+
+fn test_edge()
+    // Empty history
+    let mut logits = [1.0, 2.0]
+    let mut empty = []
+    let _r = lp_repetition_penalty(logits, empty, 2.0)
+    check("edge empty hist", logits[0] == 1.0)
+    // No penalty (1.0)
+    let mut logits2 = [1.0, 2.0]
+    let mut hist = [0.0]
+    let _r2 = lp_repetition_penalty(logits2, hist, 1.0)
+    check("edge no penalty", logits2[0] == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────
+
+test_rep_penalty()
+test_freq_penalty()
+test_pres_penalty()
+test_temperature()
+test_top_k()
+test_top_p()
+test_ban()
+test_boost()
+test_combined()
+test_pipeline()
+test_edge()
+print("")
+print("All logits_processor tests passed (11 tests)")

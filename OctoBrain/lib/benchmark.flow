@@ -1,0 +1,224 @@
+// OctoBrain Classification Harness
+// Bridge unsupervised prototype discovery to supervised accuracy metrics.
+// Standard evaluation protocol: majority-vote mapping from prototypes to classes.
+// Depends on vecmath.flow for vector operations.
+
+use "vecmath"
+
+// ── compute_means ──────────────────────────────────────────────
+// Compute per-feature means over a flat 2D array [num_samples x dim].
+// Returns array of length dim containing column means.
+fn compute_means(data_flat, num_samples, dim)
+  let mut means = []
+  let mut col = 0.0
+  while col < dim
+    let mut sum = 0.0
+    let mut row = 0.0
+    while row < num_samples
+      sum = sum + data_flat[row * dim + col]
+      row = row + 1.0
+    end
+    push(means, sum / num_samples)
+    col = col + 1.0
+  end
+  return means
+end
+
+// ── center_data ────────────────────────────────────────────────
+// Subtract per-feature means from each sample.
+// Returns a new flat array [num_samples x dim] with means subtracted.
+// Does not modify the input array.
+fn center_data(data_flat, means, num_samples, dim)
+  let mut result = []
+  let mut row = 0.0
+  while row < num_samples
+    let mut col = 0.0
+    while col < dim
+      let val = data_flat[row * dim + col] - means[col]
+      push(result, val)
+      col = col + 1.0
+    end
+    row = row + 1.0
+  end
+  return result
+end
+
+// ── build_mapping ──────────────────────────────────────────────
+// Build majority-vote mapping from prototype IDs to class labels.
+// match_protos: array [num_samples] — which proto each sample matched
+// labels: array [num_samples] — ground truth class ID (0-based float)
+// proto_count: number of prototypes
+// num_classes: number of distinct classes
+// Returns flat array [proto_count] — assigned class for each proto.
+// Each proto gets the label that appeared most often among its matches.
+// Protos with no matches default to class 0.
+fn build_mapping(match_protos, labels, proto_count, num_classes)
+  let num_samples = len(match_protos)
+
+  // For each prototype, find the majority class
+  let mut mapping = []
+  let mut p = 0.0
+  while p < proto_count
+    // Build vote counts for this proto: flat array [num_classes]
+    let mut votes = []
+    let mut c = 0.0
+    while c < num_classes
+      push(votes, 0.0)
+      c = c + 1.0
+    end
+
+    // Count how many samples with each label matched this proto
+    let mut i = 0.0
+    while i < num_samples
+      if match_protos[i] == p
+        let label = labels[i]
+        let old_count = votes[label]
+        votes[label] = old_count + 1.0
+      end
+      i = i + 1.0
+    end
+
+    // Find the class with the most votes
+    let mut best_class = 0.0
+    let mut best_count = votes[0]
+    let mut ci = 1.0
+    while ci < num_classes
+      if votes[ci] > best_count
+        best_count = votes[ci]
+        best_class = ci
+      end
+      ci = ci + 1.0
+    end
+
+    push(mapping, best_class)
+    p = p + 1.0
+  end
+
+  return mapping
+end
+
+// ── compute_accuracy ───────────────────────────────────────────
+// Classification accuracy using proto-to-class mapping.
+// For each sample, look up which proto it matched, then use
+// the mapping to get the predicted class. Compare to true label.
+// Returns float in [0, 1].
+fn compute_accuracy(match_protos, labels, mapping, num_samples)
+  let mut correct = 0.0
+  let mut i = 0.0
+  while i < num_samples
+    let proto_id = match_protos[i]
+    let predicted = mapping[proto_id]
+    let actual = labels[i]
+    if predicted == actual
+      correct = correct + 1.0
+    end
+    i = i + 1.0
+  end
+  return correct / num_samples
+end
+
+// ── print_confusion ────────────────────────────────────────────
+// Print num_classes x num_classes confusion matrix.
+// Rows = predicted class, Cols = actual class.
+fn print_confusion(match_protos, labels, mapping, num_samples, num_classes)
+  // Build flat confusion matrix [num_classes x num_classes], all zeros
+  let total_cells = num_classes * num_classes
+  let mut cm = []
+  let mut ci = 0.0
+  while ci < total_cells
+    push(cm, 0.0)
+    ci = ci + 1.0
+  end
+
+  // Fill confusion matrix
+  let mut i = 0.0
+  while i < num_samples
+    let proto_id = match_protos[i]
+    let predicted = mapping[proto_id]
+    let actual = labels[i]
+    let idx = predicted * num_classes + actual
+    let old_val = cm[idx]
+    cm[idx] = old_val + 1.0
+    i = i + 1.0
+  end
+
+  // Print header
+  let mut header = "          "
+  let mut h = 0.0
+  while h < num_classes
+    header = header + "  C" + str(int(h))
+    h = h + 1.0
+  end
+  print("{header}")
+
+  // Print rows
+  let mut r = 0.0
+  while r < num_classes
+    let mut row_str = "  Pred " + str(int(r)) + " "
+    let mut c = 0.0
+    while c < num_classes
+      let val = cm[r * num_classes + c]
+      row_str = row_str + "  " + str(int(val))
+      c = c + 1.0
+    end
+    print("{row_str}")
+    r = r + 1.0
+  end
+
+  return 0.0
+end
+
+// ── print_purity ───────────────────────────────────────────────
+// For each prototype, print the dominant class and its fraction.
+fn print_purity(match_protos, labels, proto_count, num_classes, num_samples)
+  let mut p = 0.0
+  while p < proto_count
+    // Count total matches and per-class counts for this proto
+    let mut votes = []
+    let mut c = 0.0
+    while c < num_classes
+      push(votes, 0.0)
+      c = c + 1.0
+    end
+
+    let mut total = 0.0
+    let mut i = 0.0
+    while i < num_samples
+      if match_protos[i] == p
+        let label = labels[i]
+        let old_count = votes[label]
+        votes[label] = old_count + 1.0
+        total = total + 1.0
+      end
+      i = i + 1.0
+    end
+
+    // Find dominant class
+    let mut best_class = 0.0
+    let mut best_count = 0.0
+    let mut ci = 0.0
+    while ci < num_classes
+      if votes[ci] > best_count
+        best_count = votes[ci]
+        best_class = ci
+      end
+      ci = ci + 1.0
+    end
+
+    // Print purity info
+    let p_id = int(p)
+    if total > 0.0
+      let purity = best_count / total
+      let bc_id = int(best_class)
+      let bc_n = int(best_count)
+      let tot_n = int(total)
+      print("  Proto {p_id}: class {bc_id}, purity {purity:.3} ({bc_n}/{tot_n})")
+    else
+      print("  Proto {p_id}: no matches")
+    end
+
+    p = p + 1.0
+  end
+
+  return 0.0
+end

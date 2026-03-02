@@ -1,0 +1,124 @@
+// loom_pipeline_demo.flow — Two-VM mailbox pipeline demo
+//
+// Demonstrates cross-loom communication via mailbox:
+//   VM A: generates data (sequence 0..N-1) via GPU kernel
+//   VM B: transforms data (multiply by 2) via GPU kernel
+//   Mailbox connects A → B
+//
+// Pipeline: dispatch gen → read → send → recv → write → dispatch double → read
+//
+// Run: octoflow run examples/loom_pipeline_demo.flow --allow-ffi --allow-read --allow-write
+
+use "../stdlib/loom/emit/ops/emit_vm_gen"
+use "../stdlib/loom/emit/ops/emit_vm_double"
+
+let N = 256.0
+
+print("=== Loom Pipeline Demo: Generator → Mailbox → Doubler ===")
+print("")
+
+// ── Step 1: Emit SPIR-V kernels ─────────────────────────────────────
+let gen_spv = "loom_pipeline_gen.spv"
+let dbl_spv = "loom_pipeline_double.spv"
+
+emit_vm_gen(gen_spv)
+emit_vm_double(dbl_spv)
+loom_prefetch(gen_spv)
+loom_prefetch(dbl_spv)
+print("  Emitted: {gen_spv}, {dbl_spv}")
+
+// ── Step 2: Boot VMs + mailbox ──────────────────────────────────────
+// gen kernel: input_count=0, so 1 binding (output = register 0)
+let vm_gen = loom_boot(1.0, 1.0, N)
+
+// double kernel: input_count=1, so 2 bindings (input=reg0, output=reg1)
+let vm_proc = loom_boot(1.0, 2.0, N)
+
+// Mailbox: slot_size=N floats, 8 slots
+let mb = loom_mailbox(N, 8.0)
+print("  Booted: vm_gen, vm_proc, mailbox")
+
+// ── Step 3: Generate data on VM A (GPU kernel) ──────────────────────
+// gen kernel fills register 0 with [0.0, 1.0, 2.0, ..., N-1]
+let mut zeros_gen = []
+let mut i = 0.0
+while i < N
+  push(zeros_gen, 0.0)
+  i = i + 1.0
+end
+vm_write_register(vm_gen, 0.0, 0.0, zeros_gen)
+
+loom_dispatch(vm_gen, gen_spv, [], 1.0)
+let p1 = loom_build(vm_gen)
+loom_run(p1)
+loom_free(p1)
+print("  Stage 1: gen kernel dispatched")
+
+// Read generated data from register 0
+let gen_data = loom_read(vm_gen, 0.0, 0.0, N)
+print("  gen_data[0]={gen_data[0]} gen_data[1]={gen_data[1]} gen_data[255]={gen_data[255]}")
+
+// ── Step 4: Send through mailbox ────────────────────────────────────
+vm_write_globals(vm_gen, 0.0, gen_data)
+let sent = loom_mail_send(mb, vm_gen, 0.0, N)
+print("  Mailbox send: {sent}")
+
+// ── Step 5: Receive into VM B ───────────────────────────────────────
+let count = loom_mail_recv(mb, vm_proc, 0.0)
+print("  Mailbox recv: {count} floats")
+
+// Copy from globals into register 0 (input for double kernel)
+let recv_data = vm_read_globals(vm_proc, 0.0, N)
+vm_write_register(vm_proc, 0.0, 0.0, recv_data)
+
+// ── Step 6: Process on VM B (double kernel) ─────────────────────────
+// Initialize output register
+let mut zeros_out = []
+let mut i = 0.0
+while i < N
+  push(zeros_out, 0.0)
+  i = i + 1.0
+end
+vm_write_register(vm_proc, 0.0, 1.0, zeros_out)
+
+loom_dispatch(vm_proc, dbl_spv, [], 1.0)
+let p2 = loom_build(vm_proc)
+loom_run(p2)
+loom_free(p2)
+print("  Stage 2: double kernel dispatched")
+
+// ── Step 7: Read and verify results ─────────────────────────────────
+let result = loom_read(vm_proc, 0.0, 1.0, N)
+
+print("")
+print("  Pipeline results:")
+print("    result[0]   = {result[0]}")
+print("    result[1]   = {result[1]}")
+print("    result[2]   = {result[2]}")
+print("    result[127] = {result[127]}")
+print("    result[255] = {result[255]}")
+
+// Verify: result[i] should be i * 2
+let mut errors = 0.0
+let mut i = 0.0
+while i < N
+  let expected = i * 2.0
+  if abs(result[i] - expected) > 0.5
+    errors = errors + 1.0
+  end
+  i = i + 1.0
+end
+
+print("")
+if errors < 0.5
+  print("  ALL CORRECT: {N} elements verified (output[i] = i * 2)")
+else
+  print("  ERRORS: {errors} mismatches out of {N}")
+end
+
+// ── Cleanup ─────────────────────────────────────────────────────────
+loom_shutdown(vm_gen)
+loom_shutdown(vm_proc)
+print("")
+print("Pipeline demo complete.")
+print("")

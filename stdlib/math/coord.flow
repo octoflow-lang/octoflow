@@ -1,0 +1,153 @@
+// stdlib/math/coord.flow — Coordinate system conversions
+//
+// Convert between Cartesian, polar, spherical, and cylindrical coordinates.
+// Also includes geographic distance (haversine) and bearing calculations.
+//
+// Functions: cartesian_to_polar, polar_to_cartesian,
+//            cartesian_to_spherical, spherical_to_cartesian,
+//            cartesian_to_cylindrical, cylindrical_to_cartesian,
+//            haversine_distance, bearing, midpoint_geo,
+//            manhattan_2d, manhattan_3d, chebyshev_2d, chebyshev_3d
+//
+// Usage:
+//   use "coord"
+//   let p = cartesian_to_polar(3.0, 4.0)   // [5.0, 0.9273]
+//   let d = haversine_distance(51.5074, -0.1278, 48.8566, 2.3522)  // ~343.5 km
+
+fn cartesian_to_polar(x, y)
+    // Convert (x, y) to [r, theta]. Theta in radians, range (-pi, pi].
+    let r = sqrt(x * x + y * y)
+    let theta = atan2(y, x)
+    let mut result = [r, theta]
+    return result
+end
+
+fn polar_to_cartesian(r, theta)
+    // Convert (r, theta) to [x, y]. Theta in radians.
+    let x = r * cos(theta)
+    let y = r * sin(theta)
+    let mut result = [x, y]
+    return result
+end
+
+fn cartesian_to_spherical(x, y, z)
+    // Convert (x, y, z) to [r, theta, phi].
+    // r = distance, theta = polar angle from z-axis, phi = azimuthal angle in xy-plane.
+    let r = sqrt(x * x + y * y + z * z)
+    if r < 0.000001
+        let mut result = [0.0, 0.0, 0.0]
+        return result
+    end
+    let theta = acos(z / r)
+    let phi = atan2(y, x)
+    let mut result = [r, theta, phi]
+    return result
+end
+
+fn spherical_to_cartesian(r, theta, phi)
+    // Convert (r, theta, phi) to [x, y, z].
+    let x = r * sin(theta) * cos(phi)
+    let y = r * sin(theta) * sin(phi)
+    let z = r * cos(theta)
+    let mut result = [x, y, z]
+    return result
+end
+
+fn cartesian_to_cylindrical(x, y, z)
+    // Convert (x, y, z) to [rho, phi, z].
+    let rho = sqrt(x * x + y * y)
+    let phi = atan2(y, x)
+    let mut result = [rho, phi, z]
+    return result
+end
+
+fn cylindrical_to_cartesian(rho, phi, z)
+    // Convert (rho, phi, z) to [x, y, z].
+    let x = rho * cos(phi)
+    let y = rho * sin(phi)
+    let mut result = [x, y, z]
+    return result
+end
+
+fn _deg_to_rad(deg)
+    return deg * 3.14159265358979 / 180.0
+end
+
+fn haversine_distance(lat1, lon1, lat2, lon2)
+    // Great-circle distance between two geographic points in kilometers.
+    // Input: latitude and longitude in degrees.
+    let R = 6371.0  // Earth radius in km
+    let dlat = _deg_to_rad(lat2 - lat1)
+    let dlon = _deg_to_rad(lon2 - lon1)
+    let rlat1 = _deg_to_rad(lat1)
+    let rlat2 = _deg_to_rad(lat2)
+    let a = sin(dlat / 2.0) * sin(dlat / 2.0) + cos(rlat1) * cos(rlat2) * sin(dlon / 2.0) * sin(dlon / 2.0)
+    let c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a))
+    return R * c
+end
+
+fn bearing(lat1, lon1, lat2, lon2)
+    // Initial bearing from point 1 to point 2 in degrees (0-360).
+    let rlat1 = _deg_to_rad(lat1)
+    let rlat2 = _deg_to_rad(lat2)
+    let dlon = _deg_to_rad(lon2 - lon1)
+    let x = sin(dlon) * cos(rlat2)
+    let y = cos(rlat1) * sin(rlat2) - sin(rlat1) * cos(rlat2) * cos(dlon)
+    let theta = atan2(x, y)
+    let deg = theta * 180.0 / 3.14159265358979
+    // Normalize to 0-360
+    let mut result = deg - floor(deg / 360.0) * 360.0
+    if result < 0.0
+        result = result + 360.0
+    end
+    return result
+end
+
+fn midpoint_geo(lat1, lon1, lat2, lon2)
+    // Geographic midpoint between two points. Returns [lat, lon] in degrees.
+    let rlat1 = _deg_to_rad(lat1)
+    let rlon1 = _deg_to_rad(lon1)
+    let rlat2 = _deg_to_rad(lat2)
+    let dlon = _deg_to_rad(lon2 - lon1)
+    let bx = cos(rlat2) * cos(dlon)
+    let by = cos(rlat2) * sin(dlon)
+    let lat3 = atan2(sin(rlat1) + sin(rlat2), sqrt((cos(rlat1) + bx) * (cos(rlat1) + bx) + by * by))
+    let lon3 = rlon1 + atan2(by, cos(rlat1) + bx)
+    let mut result = [lat3 * 180.0 / 3.14159265358979, lon3 * 180.0 / 3.14159265358979]
+    return result
+end
+
+fn manhattan_2d(x1, y1, x2, y2)
+    // Manhattan (L1) distance in 2D.
+    return abs(x2 - x1) + abs(y2 - y1)
+end
+
+fn manhattan_3d(x1, y1, z1, x2, y2, z2)
+    // Manhattan (L1) distance in 3D.
+    return abs(x2 - x1) + abs(y2 - y1) + abs(z2 - z1)
+end
+
+fn chebyshev_2d(x1, y1, x2, y2)
+    // Chebyshev (L-infinity) distance in 2D.
+    let dx = abs(x2 - x1)
+    let dy = abs(y2 - y1)
+    if dx > dy
+        return dx
+    end
+    return dy
+end
+
+fn chebyshev_3d(x1, y1, z1, x2, y2, z2)
+    // Chebyshev (L-infinity) distance in 3D.
+    let dx = abs(x2 - x1)
+    let dy = abs(y2 - y1)
+    let dz = abs(z2 - z1)
+    let mut mx = dx
+    if dy > mx
+        mx = dy
+    end
+    if dz > mx
+        mx = dz
+    end
+    return mx
+end

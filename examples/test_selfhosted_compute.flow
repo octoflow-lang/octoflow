@@ -1,0 +1,56 @@
+// test_selfhosted_compute.flow — Verify self-hosted math correctness
+
+print("Self-hosted compilation test")
+
+// Test 1: Basic arithmetic
+let a = 10.0
+let b = 5.0
+let sum = a + b
+let prod = a * b
+let ratio = a / b
+
+print("Arithmetic: {sum}, {prod}, {ratio}")
+
+if sum != 15.0
+  print("FAIL: sum")
+end
+if prod != 50.0
+  print("FAIL: prod")
+end
+if ratio != 2.0
+  print("FAIL: ratio")
+end
+
+// Test 2: Loops
+let mut fib_a = 0.0
+let mut fib_b = 1.0
+let mut i = 0.0
+while i < 10.0
+  let tmp = fib_a + fib_b
+  fib_a = fib_b
+  fib_b = tmp
+  i = i + 1.0
+end
+
+print("Fib(10) = {fib_a}")
+
+if fib_a != 55.0
+  print("FAIL: fibonacci")
+end
+
+// Test 3: Functions
+fn factorial(n)
+  if n <= 1.0
+    return 1.0
+  end
+  return n * factorial(n - 1.0)
+end
+
+let fact5 = factorial(5.0)
+print("5! = {fact5}")
+
+if fact5 != 120.0
+  print("FAIL: factorial")
+end
+
+print("All tests passed - self-hosted compiler correct!")

@@ -1,0 +1,12 @@
+# Gmail Login — interactive login workflow
+# Usage: octoview run examples/gmail-login.ova --headed --timeout 120
+#
+# This script opens Gmail in headed mode so you can manually
+# complete 2FA/OAuth. After login, cookies are saved to your profile.
+
+navigate https://mail.google.com
+sleep 3000
+title
+url
+screenshot gmail-state.png
+print Gmail page loaded — check screenshot for login state

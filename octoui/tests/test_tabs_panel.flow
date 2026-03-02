@@ -1,0 +1,175 @@
+// tests/test_tabs_panel.flow — Tab Container + Collapsible Section Tests
+//
+// Tests: tab creation, switching, panel access, section expand/collapse.
+//
+// Run: octoflow run octoui/tests/test_tabs_panel.flow --allow-read --allow-write --allow-ffi --max-iters 1000000
+
+use "../engine/tree"
+use "../engine/layout"
+use "../engine/pipeline"
+use "../engine/dirty"
+use "../themes/dark"
+use "../widgets/core/text"
+use "../widgets/input/button"
+use "../widgets/input/tabs"
+use "../widgets/layout/column"
+use "../widgets/layout/section"
+use "../platform/desktop/window_win32"
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// Open window
+let _w = ui_window_open(500.0, 400.0, "Tabs + Panel Test")
+
+// Root layout
+let root = ui_column(-1.0, 8.0)
+let _sp = ui_tree_set_padding(root, 16.0)
+let _sr = ui_tree_set_pos(root, 0.0, 0.0)
+let _ss = ui_tree_set_size(root, 500.0, 400.0)
+
+// ── Test 1: Tab container created ──
+let tabs = ui_tabs(root, 460.0)
+if tabs >= 0.0
+  print("PASS: tabs widget created")
+  pass = pass + 1.0
+else
+  print("FAIL: tabs widget invalid")
+  fail = fail + 1.0
+end
+
+let _t1 = ui_tab(tabs, "GENERAL")
+let _t2 = ui_tab(tabs, "ADVANCED")
+let _t3 = ui_tab(tabs, "ABOUT")
+let _fin = ui_tabs_finalize(tabs)
+
+// ── Test 2: Default selected tab is 0 ──
+let t_sel = ui_tabs_selected(tabs)
+if t_sel == 0.0
+  print("PASS: default selected tab is 0")
+  pass = pass + 1.0
+else
+  print("FAIL: default tab should be 0")
+  fail = fail + 1.0
+end
+
+// ── Test 3-5: Panel access ──
+let p1 = ui_tab_panel(tabs, 0.0)
+if p1 >= 0.0
+  print("PASS: tab panel 0 valid")
+  pass = pass + 1.0
+else
+  print("FAIL: tab panel 0 invalid")
+  fail = fail + 1.0
+end
+let _pt1 = ui_text(p1, "GENERAL CONTENT", UI_COLOR_TEXT)
+
+let p2 = ui_tab_panel(tabs, 1.0)
+if p2 >= 0.0
+  print("PASS: tab panel 1 valid")
+  pass = pass + 1.0
+else
+  print("FAIL: tab panel 1 invalid")
+  fail = fail + 1.0
+end
+let _pt2 = ui_text(p2, "ADVANCED CONTENT", UI_COLOR_TEXT)
+
+let p3 = ui_tab_panel(tabs, 2.0)
+if p3 >= 0.0
+  print("PASS: tab panel 2 valid")
+  pass = pass + 1.0
+else
+  print("FAIL: tab panel 2 invalid")
+  fail = fail + 1.0
+end
+let _pt3 = ui_text(p3, "ABOUT CONTENT", UI_COLOR_TEXT)
+
+// ── Test 6-8: Tab switching ──
+let _ts = ui_tabs_set(tabs, 1.0)
+let t_sel2 = ui_tabs_selected(tabs)
+if t_sel2 == 1.0
+  print("PASS: tab 1 selected after set(1)")
+  pass = pass + 1.0
+else
+  print("FAIL: tab should be 1")
+  fail = fail + 1.0
+end
+
+let _ts2 = ui_tabs_set(tabs, 2.0)
+let t_sel3 = ui_tabs_selected(tabs)
+if t_sel3 == 2.0
+  print("PASS: tab 2 selected after set(2)")
+  pass = pass + 1.0
+else
+  print("FAIL: tab should be 2")
+  fail = fail + 1.0
+end
+
+let _ts3 = ui_tabs_set(tabs, 0.0)
+let t_sel4 = ui_tabs_selected(tabs)
+if t_sel4 == 0.0
+  print("PASS: back to tab 0 after set(0)")
+  pass = pass + 1.0
+else
+  print("FAIL: tab should be 0")
+  fail = fail + 1.0
+end
+
+// ── Test 9-12: Collapsible section ──
+let body = ui_section(root, "TEST SECTION")
+if body >= 0.0
+  print("PASS: section body widget valid")
+  pass = pass + 1.0
+else
+  print("FAIL: section body invalid")
+  fail = fail + 1.0
+end
+
+let _sw1 = ui_text(body, "SECTION CONTENT", UI_COLOR_TEXT)
+
+// Section starts expanded
+let sec_exp1 = ui_section_is_expanded(body)
+if sec_exp1 == 1.0
+  print("PASS: section starts expanded")
+  pass = pass + 1.0
+else
+  print("FAIL: section should start expanded")
+  fail = fail + 1.0
+end
+
+// Collapse section
+let _sc = ui_section_collapse(body)
+let sec_exp2 = ui_section_is_expanded(body)
+if sec_exp2 == 0.0
+  print("PASS: section collapsed")
+  pass = pass + 1.0
+else
+  print("FAIL: section should be collapsed")
+  fail = fail + 1.0
+end
+
+// Expand section
+let _se = ui_section_expand(body)
+let sec_exp3 = ui_section_is_expanded(body)
+if sec_exp3 == 1.0
+  print("PASS: section expanded again")
+  pass = pass + 1.0
+else
+  print("FAIL: section should be expanded")
+  fail = fail + 1.0
+end
+
+// ── Summary ──
+let _l = ui_layout_update()
+let _tu = ui_tabs_update_all()
+let _r = ui_pipeline_render()
+let _p = ui_pipeline_present()
+let _sl = sleep(200.0)
+let _wc = ui_window_close()
+
+let total = pass + fail
+print(" ")
+print("test_tabs_panel: {pass}/{total} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

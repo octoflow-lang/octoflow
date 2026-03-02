@@ -77,7 +77,7 @@ fn ui_radio(group, label)
     // First button is selected by default
     let _sc = ui_tree_set_color_themed(dot, UI_COLOR_PRIMARY)
   else
-    let _sc = ui_tree_set_color_themed(dot, UI_COLOR_BORDER)
+    let _sc = ui_tree_set_color_themed(dot, UI_COLOR_SURFACE_2)
   end
 
   // Label text
@@ -140,7 +140,7 @@ fn ui_radio_update_visuals(group)
       if idx == selected
         let _sc = ui_tree_set_color_themed(dot, UI_COLOR_PRIMARY)
       else
-        let _sc = ui_tree_set_color_themed(dot, UI_COLOR_BORDER)
+        let _sc = ui_tree_set_color_themed(dot, UI_COLOR_SURFACE_2)
       end
     end
     i = i + 1.0

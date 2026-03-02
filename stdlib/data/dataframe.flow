@@ -1,0 +1,635 @@
+// stdlib/data/dataframe.flow — Tabular data operations
+//
+// A DataFrame is a map-based table with named columns and numeric rows.
+// Each column is stored as a flat array of floats or strings (via map keys).
+//
+// Internal structure (map):
+//   __cols: comma-separated column names
+//   __nrows: row count (as string)
+//   col_{name}: flat array of values (float or string)
+//
+// String columns use "s_{name}_{row}" map keys (since arrays are float-only).
+// Numeric columns use flat arrays stored in "col_{name}".
+//
+// Functions: df_create, df_add_column, df_add_row, df_get, df_set,
+//            df_nrows, df_ncols, df_columns, df_column,
+//            df_head, df_tail, df_filter, df_sort_by,
+//            df_sum, df_mean, df_min, df_max, df_count,
+//            df_describe, df_print, df_from_csv_string
+//
+// Usage:
+//   use "dataframe"
+//   let mut df = df_create("name,age,score")
+//   df_add_row(df, "Alice,30,95")
+//   df_add_row(df, "Bob,25,87")
+//   let avg = df_mean(df, "score")  // 91.0
+
+// ── Creation ────────────────────────────────────────────────────
+
+fn df_create(col_names)
+    // Create empty DataFrame with named columns.
+    // col_names: comma-separated string like "name,age,score"
+    let mut df = map()
+    map_set(df, "__cols", col_names)
+    map_set(df, "__nrows", "0")
+
+    // Initialize empty columns
+    let cols = split(col_names, ",")
+    let nc = len(cols)
+    let mut i = 0.0
+    while i < nc
+        let col_key = "col_" + trim(cols[i])
+        let mut empty = []
+        map_set(df, col_key, empty)
+        i = i + 1.0
+    end
+    return df
+end
+
+// ── Structure ───────────────────────────────────────────────────
+
+fn df_nrows(df)
+    return float(map_get(df, "__nrows"))
+end
+
+fn df_ncols(df)
+    let cols = split(map_get(df, "__cols"), ",")
+    return len(cols)
+end
+
+fn df_columns(df)
+    // Returns array of column name strings.
+    return split(map_get(df, "__cols"), ",")
+end
+
+fn df_has_column(df, name)
+    let col_key = "col_" + name
+    if map_has(df, col_key)
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Data Access ─────────────────────────────────────────────────
+
+fn df_column(df, name)
+    // Get entire column as array. Returns array reference.
+    let col_key = "col_" + name
+    return map_get(df, col_key)
+end
+
+fn df_get(df, row, col_name)
+    // Get value at (row, col_name).
+    let col = df_column(df, col_name)
+    return col[row]
+end
+
+fn df_set(df, row, col_name, value)
+    // Set value at (row, col_name).
+    let col = df_column(df, col_name)
+    col[row] = value
+    return 0.0
+end
+
+// ── Adding Data ─────────────────────────────────────────────────
+
+fn df_add_column(df, name, default_val)
+    // Add a new column with default value for all existing rows.
+    let cols_str = map_get(df, "__cols")
+    map_set(df, "__cols", cols_str + "," + name)
+
+    let nrows = df_nrows(df)
+    let mut col = array_new(nrows, default_val)
+    map_set(df, "col_" + name, col)
+    return 0.0
+end
+
+fn df_add_row(df, values_csv)
+    // Add a row. values_csv: comma-separated values matching column order.
+    let cols = df_columns(df)
+    let nc = len(cols)
+    let values = split(values_csv, ",")
+    let nrows = df_nrows(df)
+
+    let mut i = 0.0
+    while i < nc
+        let col = df_column(df, trim(cols[i]))
+        if i < len(values)
+            let val = trim(values[i])
+            push(col, float(val))
+        else
+            push(col, 0.0)
+        end
+        i = i + 1.0
+    end
+
+    map_set(df, "__nrows", str(nrows + 1.0))
+    return 0.0
+end
+
+fn df_add_row_array(df, values)
+    // Add a row from an array of floats.
+    let cols = df_columns(df)
+    let nc = len(cols)
+    let nrows = df_nrows(df)
+
+    let mut i = 0.0
+    while i < nc
+        let col = df_column(df, trim(cols[i]))
+        if i < len(values)
+            push(col, values[i])
+        else
+            push(col, 0.0)
+        end
+        i = i + 1.0
+    end
+
+    map_set(df, "__nrows", str(nrows + 1.0))
+    return 0.0
+end
+
+// ── Aggregation ─────────────────────────────────────────────────
+
+fn df_sum(df, col_name)
+    let col = df_column(df, col_name)
+    let n = df_nrows(df)
+    let mut total = 0.0
+    let mut i = 0.0
+    while i < n
+        total = total + col[i]
+        i = i + 1.0
+    end
+    return total
+end
+
+fn df_mean(df, col_name)
+    let n = df_nrows(df)
+    if n < 1.0
+        return 0.0
+    end
+    return df_sum(df, col_name) / n
+end
+
+fn df_min(df, col_name)
+    let col = df_column(df, col_name)
+    let n = df_nrows(df)
+    if n < 1.0
+        return 0.0
+    end
+    let mut best = col[0]
+    let mut i = 1.0
+    while i < n
+        if col[i] < best
+            best = col[i]
+        end
+        i = i + 1.0
+    end
+    return best
+end
+
+fn df_max(df, col_name)
+    let col = df_column(df, col_name)
+    let n = df_nrows(df)
+    if n < 1.0
+        return 0.0
+    end
+    let mut best = col[0]
+    let mut i = 1.0
+    while i < n
+        if col[i] > best
+            best = col[i]
+        end
+        i = i + 1.0
+    end
+    return best
+end
+
+fn df_count(df, col_name)
+    // Count non-zero values in column.
+    let col = df_column(df, col_name)
+    let n = df_nrows(df)
+    let mut count = 0.0
+    let mut i = 0.0
+    while i < n
+        if col[i] != 0.0
+            count = count + 1.0
+        end
+        i = i + 1.0
+    end
+    return count
+end
+
+fn df_std(df, col_name)
+    // Standard deviation of column.
+    let n = df_nrows(df)
+    if n < 2.0
+        return 0.0
+    end
+    let avg = df_mean(df, col_name)
+    let col = df_column(df, col_name)
+    let mut sum_sq = 0.0
+    let mut i = 0.0
+    while i < n
+        let diff = col[i] - avg
+        sum_sq = sum_sq + diff * diff
+        i = i + 1.0
+    end
+    return sqrt(sum_sq / (n - 1.0))
+end
+
+// ── Slicing ─────────────────────────────────────────────────────
+
+fn df_head(df, count)
+    // Return new DataFrame with first count rows.
+    let cols = df_columns(df)
+    let nc = len(cols)
+    let nrows = df_nrows(df)
+    let mut limit = count
+    if limit > nrows
+        limit = nrows
+    end
+
+    let mut result = df_create(map_get(df, "__cols"))
+    let mut ci = 0.0
+    while ci < nc
+        let src_col = df_column(df, trim(cols[ci]))
+        let dst_col = df_column(result, trim(cols[ci]))
+        let mut ri = 0.0
+        while ri < limit
+            push(dst_col, src_col[ri])
+            ri = ri + 1.0
+        end
+        ci = ci + 1.0
+    end
+    map_set(result, "__nrows", str(limit))
+    return result
+end
+
+fn df_tail(df, count)
+    // Return new DataFrame with last count rows.
+    let cols = df_columns(df)
+    let nc = len(cols)
+    let nrows = df_nrows(df)
+    let mut start = nrows - count
+    if start < 0.0
+        start = 0.0
+    end
+
+    let mut result = df_create(map_get(df, "__cols"))
+    let mut ci = 0.0
+    while ci < nc
+        let src_col = df_column(df, trim(cols[ci]))
+        let dst_col = df_column(result, trim(cols[ci]))
+        let mut ri = start
+        while ri < nrows
+            push(dst_col, src_col[ri])
+            ri = ri + 1.0
+        end
+        ci = ci + 1.0
+    end
+    map_set(result, "__nrows", str(nrows - start))
+    return result
+end
+
+// ── Selection ───────────────────────────────────────────────────
+
+fn df_select(df, col_names_csv)
+    // Select specific columns. Returns new DataFrame.
+    let sel_cols = split(col_names_csv, ",")
+    let nsel = len(sel_cols)
+    let nrows = df_nrows(df)
+
+    let mut result = df_create(col_names_csv)
+    let mut ci = 0.0
+    while ci < nsel
+        let name = trim(sel_cols[ci])
+        let src_col = df_column(df, name)
+        let dst_col = df_column(result, name)
+        let mut ri = 0.0
+        while ri < nrows
+            push(dst_col, src_col[ri])
+            ri = ri + 1.0
+        end
+        ci = ci + 1.0
+    end
+    map_set(result, "__nrows", str(nrows))
+    return result
+end
+
+// ── Filter ──────────────────────────────────────────────────────
+
+fn df_filter_gt(df, col_name, threshold)
+    // Return new DataFrame with rows where col_name > threshold.
+    let cols = df_columns(df)
+    let nc = len(cols)
+    let nrows = df_nrows(df)
+    let filter_col = df_column(df, col_name)
+
+    let mut result = df_create(map_get(df, "__cols"))
+    let mut count = 0.0
+    let mut ri = 0.0
+    while ri < nrows
+        if filter_col[ri] > threshold
+            // Copy row
+            let mut ci = 0.0
+            while ci < nc
+                let src_col = df_column(df, trim(cols[ci]))
+                let dst_col = df_column(result, trim(cols[ci]))
+                push(dst_col, src_col[ri])
+                ci = ci + 1.0
+            end
+            count = count + 1.0
+        end
+        ri = ri + 1.0
+    end
+    map_set(result, "__nrows", str(count))
+    return result
+end
+
+fn df_filter_lt(df, col_name, threshold)
+    // Return new DataFrame with rows where col_name < threshold.
+    let cols = df_columns(df)
+    let nc = len(cols)
+    let nrows = df_nrows(df)
+    let filter_col = df_column(df, col_name)
+
+    let mut result = df_create(map_get(df, "__cols"))
+    let mut count = 0.0
+    let mut ri = 0.0
+    while ri < nrows
+        if filter_col[ri] < threshold
+            let mut ci = 0.0
+            while ci < nc
+                let src_col = df_column(df, trim(cols[ci]))
+                let dst_col = df_column(result, trim(cols[ci]))
+                push(dst_col, src_col[ri])
+                ci = ci + 1.0
+            end
+            count = count + 1.0
+        end
+        ri = ri + 1.0
+    end
+    map_set(result, "__nrows", str(count))
+    return result
+end
+
+fn df_filter_eq(df, col_name, value)
+    // Return new DataFrame with rows where col_name == value.
+    let cols = df_columns(df)
+    let nc = len(cols)
+    let nrows = df_nrows(df)
+    let filter_col = df_column(df, col_name)
+
+    let mut result = df_create(map_get(df, "__cols"))
+    let mut count = 0.0
+    let mut ri = 0.0
+    while ri < nrows
+        if filter_col[ri] == value
+            let mut ci = 0.0
+            while ci < nc
+                let src_col = df_column(df, trim(cols[ci]))
+                let dst_col = df_column(result, trim(cols[ci]))
+                push(dst_col, src_col[ri])
+                ci = ci + 1.0
+            end
+            count = count + 1.0
+        end
+        ri = ri + 1.0
+    end
+    map_set(result, "__nrows", str(count))
+    return result
+end
+
+// ── Sort ────────────────────────────────────────────────────────
+
+fn df_sort_by(df, col_name, ascending)
+    // Sort DataFrame by a column. Returns new DataFrame.
+    // ascending: 1.0 for ascending, 0.0 for descending.
+    let cols = df_columns(df)
+    let nc = len(cols)
+    let nrows = df_nrows(df)
+    let sort_col = df_column(df, col_name)
+
+    // Build index array and sort indices by column values
+    let mut indices = array_new(nrows, 0.0)
+    let mut i = 0.0
+    while i < nrows
+        indices[i] = i
+        i = i + 1.0
+    end
+
+    // Insertion sort on indices by sort_col values
+    let mut si = 1.0
+    while si < nrows
+        let key_idx = indices[si]
+        let key_val = sort_col[key_idx]
+        let mut j = si - 1.0
+        let mut done = 0.0
+        while j >= 0.0 && done < 0.5
+            let cmp_val = sort_col[indices[j]]
+            let mut should_swap = 0.0
+            if ascending > 0.5
+                if cmp_val > key_val
+                    should_swap = 1.0
+                end
+            else
+                if cmp_val < key_val
+                    should_swap = 1.0
+                end
+            end
+            if should_swap > 0.5
+                indices[j + 1.0] = indices[j]
+                j = j - 1.0
+            else
+                done = 1.0
+            end
+        end
+        indices[j + 1.0] = key_idx
+        si = si + 1.0
+    end
+
+    // Build result DataFrame using sorted indices
+    let mut result = df_create(map_get(df, "__cols"))
+    let mut ci = 0.0
+    while ci < nc
+        let src_col = df_column(df, trim(cols[ci]))
+        let dst_col = df_column(result, trim(cols[ci]))
+        let mut ri = 0.0
+        while ri < nrows
+            push(dst_col, src_col[indices[ri]])
+            ri = ri + 1.0
+        end
+        ci = ci + 1.0
+    end
+    map_set(result, "__nrows", str(nrows))
+    return result
+end
+
+// ── Computed Columns ────────────────────────────────────────────
+
+fn df_add_computed(df, new_name, col_a, col_b, op)
+    // Add a computed column: new = col_a op col_b
+    // op: "add", "sub", "mul", "div"
+    let a = df_column(df, col_a)
+    let b = df_column(df, col_b)
+    let nrows = df_nrows(df)
+
+    df_add_column(df, new_name, 0.0)
+    let new_col = df_column(df, new_name)
+
+    let mut i = 0.0
+    while i < nrows
+        if op == "add"
+            new_col[i] = a[i] + b[i]
+        elif op == "sub"
+            new_col[i] = a[i] - b[i]
+        elif op == "mul"
+            new_col[i] = a[i] * b[i]
+        elif op == "div"
+            if b[i] != 0.0
+                new_col[i] = a[i] / b[i]
+            else
+                new_col[i] = 0.0
+            end
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn df_add_scaled(df, new_name, col_name, scalar)
+    // Add a column = existing_col * scalar
+    let src = df_column(df, col_name)
+    let nrows = df_nrows(df)
+
+    df_add_column(df, new_name, 0.0)
+    let new_col = df_column(df, new_name)
+
+    let mut i = 0.0
+    while i < nrows
+        new_col[i] = src[i] * scalar
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Summary ─────────────────────────────────────────────────────
+
+fn df_describe(df, col_name)
+    // Print summary statistics for a column.
+    let n = df_nrows(df)
+    let s = df_sum(df, col_name)
+    let m = df_mean(df, col_name)
+    let mn = df_min(df, col_name)
+    let mx = df_max(df, col_name)
+    let sd = df_std(df, col_name)
+    print("  {col_name}:")
+    print("    count: {n}")
+    print("    sum:   {s}")
+    print("    mean:  {m}")
+    print("    std:   {sd}")
+    print("    min:   {mn}")
+    print("    max:   {mx}")
+    return 0.0
+end
+
+fn df_print(df, max_rows)
+    // Print DataFrame in tabular format.
+    let cols = df_columns(df)
+    let nc = len(cols)
+    let nrows = df_nrows(df)
+    let mut limit = max_rows
+    if limit > nrows
+        limit = nrows
+    end
+
+    // Header
+    let mut header = ""
+    let mut ci = 0.0
+    while ci < nc
+        if ci > 0.0
+            header = header + "\t"
+        end
+        header = header + trim(cols[ci])
+        ci = ci + 1.0
+    end
+    print(header)
+
+    // Rows
+    let mut ri = 0.0
+    while ri < limit
+        let mut row = ""
+        let mut ci2 = 0.0
+        while ci2 < nc
+            if ci2 > 0.0
+                row = row + "\t"
+            end
+            let col = df_column(df, trim(cols[ci2]))
+            row = row + str(col[ri])
+            ci2 = ci2 + 1.0
+        end
+        print(row)
+        ri = ri + 1.0
+    end
+
+    if limit < nrows
+        let remaining = nrows - limit
+        print("... ({remaining} more rows)")
+    end
+    return 0.0
+end
+
+// ── CSV Import ──────────────────────────────────────────────────
+
+fn df_from_csv_string(csv_text)
+    // Parse CSV string into DataFrame.
+    // First line is header. All values parsed as floats.
+    let lines = split(csv_text, "\n")
+    let n = len(lines)
+    if n < 1.0
+        return df_create("")
+    end
+
+    // Parse header
+    let header = trim(lines[0])
+    let mut df = df_create(header)
+
+    // Parse data rows
+    let mut i = 1.0
+    while i < n
+        let line = trim(lines[i])
+        if len(line) > 0.0
+            df_add_row(df, line)
+        end
+        i = i + 1.0
+    end
+    return df
+end
+
+fn df_to_csv_string(df)
+    // Serialize DataFrame to CSV string.
+    let cols = df_columns(df)
+    let nc = len(cols)
+    let nrows = df_nrows(df)
+
+    // Header
+    let mut result = map_get(df, "__cols") + "\n"
+
+    // Rows
+    let mut ri = 0.0
+    while ri < nrows
+        let mut row = ""
+        let mut ci = 0.0
+        while ci < nc
+            if ci > 0.0
+                row = row + ","
+            end
+            let col = df_column(df, trim(cols[ci]))
+            row = row + str(col[ri])
+            ci = ci + 1.0
+        end
+        result = result + row + "\n"
+        ri = ri + 1.0
+    end
+    return result
+end

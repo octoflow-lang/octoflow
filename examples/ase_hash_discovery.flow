@@ -1,0 +1,260 @@
+// ase_hash_discovery.flow — ASE Hash Function Evolution Demo
+//
+// Evolves hash function parameters (multiply, shift, XOR constant, table size)
+// for minimum collisions on a test dataset.
+//
+// Genome: 4 genes per individual (flat array)
+//   gene 0: multiply constant [1, 65535]
+//   gene 1: shift amount [1, 31]
+//   gene 2: XOR constant [0, 65535]
+//   gene 3: table size exponent [4, 12] → table_size = 2^gene3
+//
+// Hash: ((key * multiply) >> shift) XOR xor_const) % table_size
+//
+// Run: octoflow run examples/ase_hash_discovery.flow
+
+print("=== ASE Hash Function Evolution ===")
+print("")
+
+let POP_SIZE = 16.0
+let GENES = 4.0
+let GENERATIONS = 30.0
+let KEEP = 4.0
+let MUT_RATE = 0.3
+let NUM_KEYS = 64.0
+
+fn modulo(val, div)
+  return val - floor(val / div) * div
+end
+
+fn pow2(exp)
+  let e = floor(exp)
+  let mut result = 1.0
+  let mut i = 0.0
+  while i < e
+    result = result * 2.0
+    i = i + 1.0
+  end
+  return result
+end
+
+// ── Schema helpers ──────────────────────────────────────────────────
+fn gene_lo(gene_idx)
+  let gi = floor(gene_idx)
+  if gi == 0.0
+    return 1.0
+  end
+  if gi == 1.0
+    return 1.0
+  end
+  if gi == 2.0
+    return 0.0
+  end
+  return 4.0
+end
+
+fn gene_hi(gene_idx)
+  let gi = floor(gene_idx)
+  if gi == 0.0
+    return 65535.0
+  end
+  if gi == 1.0
+    return 31.0
+  end
+  if gi == 2.0
+    return 65535.0
+  end
+  return 12.0
+end
+
+// ── Generate test keys ──────────────────────────────────────────────
+let mut keys = []
+let mut ki = 0.0
+while ki < NUM_KEYS
+  push(keys, ki * 17.0 + 31.0)
+  ki = ki + 1.0
+end
+
+// ── Hash + collision evaluation ─────────────────────────────────────
+
+fn eval_hash(pop, idx, test_keys, num_keys)
+  let base = idx * 4.0
+  let multiply = floor(pop[base])
+  let shift = floor(pop[base + 1.0])
+  let xor_const = floor(pop[base + 2.0])
+  let tbl_exp = floor(pop[base + 3.0])
+  let tbl_size = pow2(tbl_exp)
+
+  // Build collision table
+  let mut table = []
+  let mut ti = 0.0
+  while ti < tbl_size
+    push(table, 0.0)
+    ti = ti + 1.0
+  end
+
+  // Hash each key and count collisions
+  let mut collisions = 0.0
+  let mut ki = 0.0
+  while ki < num_keys
+    let key = test_keys[ki]
+    let product = key * multiply
+    let shifted = floor(product / pow2(shift))
+    let xored = abs(shifted - xor_const)
+    let bucket = modulo(floor(xored), tbl_size)
+    if table[bucket] > 0.5
+      collisions = collisions + 1.0
+    end
+    table[bucket] = table[bucket] + 1.0
+    ki = ki + 1.0
+  end
+
+  return 1.0 - (collisions / num_keys)
+end
+
+// ── Initialize flat population ──────────────────────────────────────
+// Two arrays: pop (current gen) and buf (staging for next gen)
+let total = POP_SIZE * GENES
+let mut pop = []
+let mut buf = []
+let mut pi = 0.0
+while pi < total
+  let gene_idx = modulo(pi, GENES)
+  let lo = gene_lo(gene_idx)
+  let hi = gene_hi(gene_idx)
+  let val = lo + random() * (hi - lo)
+  push(pop, val)
+  push(buf, 0.0)
+  pi = pi + 1.0
+end
+
+// ── Evolution loop ──────────────────────────────────────────────────
+let mut gen = 0.0
+while gen < GENERATIONS
+  // Evaluate fitness
+  let mut scores = []
+  let mut best_score = -1.0
+  let mut best_idx = 0.0
+  let mut p = 0.0
+  while p < POP_SIZE
+    let sc = eval_hash(pop, p, keys, NUM_KEYS)
+    push(scores, sc)
+    if sc > best_score
+      best_score = sc
+      best_idx = p
+    end
+    p = p + 1.0
+  end
+
+  let bbase = best_idx * 4.0
+  let bmul = floor(pop[bbase])
+  let bshift = floor(pop[bbase + 1.0])
+  let bxor = floor(pop[bbase + 2.0])
+  let bexp = floor(pop[bbase + 3.0])
+  print("Gen {gen}: fitness={best_score}  mul={bmul} shift={bshift} xor={bxor} exp={bexp}")
+
+  // Selection: find top KEEP indices
+  let mut top_indices = []
+  let mut used = []
+  let mut ui = 0.0
+  while ui < POP_SIZE
+    push(used, 0.0)
+    ui = ui + 1.0
+  end
+  let mut kk = 0.0
+  while kk < KEEP
+    let mut best_k = -1.0
+    let mut best_f = -999.0
+    let mut si = 0.0
+    while si < POP_SIZE
+      if used[si] < 0.5
+        if scores[si] > best_f
+          best_f = scores[si]
+          best_k = si
+        end
+      end
+      si = si + 1.0
+    end
+    if best_k > -0.5
+      push(top_indices, best_k)
+      used[best_k] = 1.0
+    end
+    kk = kk + 1.0
+  end
+
+  // Build next generation into buf (index writes)
+  let mut write_idx = 0.0
+
+  // Copy winners
+  let mut wi = 0.0
+  while wi < KEEP
+    let src_idx = top_indices[wi]
+    let src_base = src_idx * 4.0
+    let mut gi = 0.0
+    while gi < GENES
+      buf[write_idx] = pop[src_base + gi]
+      write_idx = write_idx + 1.0
+      gi = gi + 1.0
+    end
+    wi = wi + 1.0
+  end
+
+  // Crossover + mutation for rest
+  let mut ci = KEEP
+  while ci < POP_SIZE
+    let pa = floor(random() * KEEP)
+    let mut pb = floor(random() * KEEP)
+    if abs(pb - pa) < 0.5
+      pb = modulo(pa + 1.0, KEEP)
+    end
+    let pa_base = top_indices[pa] * 4.0
+    let pb_base = top_indices[pb] * 4.0
+    let cut = floor(random() * GENES)
+
+    let mut gi = 0.0
+    while gi < GENES
+      let mut gene_val = 0.0
+      if gi < cut
+        gene_val = pop[pa_base + gi]
+      end
+      if gi >= cut
+        gene_val = pop[pb_base + gi]
+      end
+      // Mutation
+      if random() < MUT_RATE
+        let lo = gene_lo(gi)
+        let hi = gene_hi(gi)
+        gene_val = gene_val + (random() - 0.5) * (hi - lo) * 0.4
+        if gene_val < lo
+          gene_val = lo
+        end
+        if gene_val > hi
+          gene_val = hi
+        end
+      end
+      buf[write_idx] = gene_val
+      write_idx = write_idx + 1.0
+      gi = gi + 1.0
+    end
+    ci = ci + 1.0
+  end
+
+  // Copy buf → pop
+  let mut cp = 0.0
+  while cp < total
+    pop[cp] = buf[cp]
+    cp = cp + 1.0
+  end
+
+  gen = gen + 1.0
+end
+
+// ── Report winner ───────────────────────────────────────────────────
+print("")
+let wmul = floor(pop[0])
+let wshift = floor(pop[1])
+let wxor = floor(pop[2])
+let wexp = floor(pop[3])
+let wtbl = pow2(wexp)
+print("Winner: hash(k) = ((k * {wmul}) >> {wshift}) XOR {wxor}) % {wtbl}")
+print("")

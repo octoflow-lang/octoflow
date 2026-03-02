@@ -1,0 +1,142 @@
+// tests/test_kernels.flow — GPU Kernel Verification Tests
+//
+// Tests ui_clear.spv and ui_rect.spv by dispatching on Loom GPU
+// and reading back framebuffer values.
+// NOTE: vm_shutdown/vm_read_globals remain pending loom_* alias (Dev 1).
+//
+// Run: octoflow run octoui/tests/test_kernels.flow --allow-read --allow-write --allow-ffi
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+// ── Test 1: Clear kernel fills framebuffer ──
+// Small framebuffer: 4x4 = 16 pixels, 3 channels = 48 floats
+let w1 = 4.0
+let h1 = 4.0
+let total1 = w1 * h1
+
+let vm1 = loom_boot(1.0, 1.0, total1 * 3.0)
+
+// Clear to red (255, 0, 0)
+let mut pc_clear = [255.0, 0.0, 0.0, total1]
+let wg1 = floor((total1 + 255.0) / 256.0)
+let _d1 = loom_dispatch(vm1, "octoui/kernels/ui_clear.spv", pc_clear, wg1)
+let prog1 = loom_build(vm1)
+let _e1 = loom_run(prog1)
+
+// Read back R channel
+let r_chan = vm_read_globals(vm1, 0.0, total1)
+let g_chan = vm_read_globals(vm1, total1, total1)
+let b_chan = vm_read_globals(vm1, total1 * 2.0, total1)
+
+// Check first pixel: R=255, G=0, B=0
+if r_chan[0] == 255.0
+  if g_chan[0] == 0.0
+    if b_chan[0] == 0.0
+      print("PASS: clear kernel fills RGB correctly")
+      pass = pass + 1.0
+    else
+      let bv = b_chan[0]
+      print("FAIL: blue should be 0, got {bv}")
+      fail = fail + 1.0
+    end
+  else
+    let gv = g_chan[0]
+    print("FAIL: green should be 0, got {gv}")
+    fail = fail + 1.0
+  end
+else
+  let rv = r_chan[0]
+  print("FAIL: red should be 255, got {rv}")
+  fail = fail + 1.0
+end
+
+// Check last pixel is also filled
+let last = total1 - 1.0
+if r_chan[last] == 255.0
+  print("PASS: last pixel also filled")
+  pass = pass + 1.0
+else
+  let rv2 = r_chan[last]
+  print("FAIL: last pixel R should be 255, got {rv2}")
+  fail = fail + 1.0
+end
+
+let _s1 = vm_shutdown(vm1)
+
+// ── Test 2: Rect kernel draws rectangle ──
+let w2 = 8.0
+let h2 = 8.0
+let total2 = w2 * h2
+
+let vm2 = loom_boot(1.0, 1.0, total2 * 3.0)
+
+// Clear to black first
+let mut pc_clear2 = [0.0, 0.0, 0.0, total2]
+let wg2c = floor((total2 + 255.0) / 256.0)
+let _d2c = loom_dispatch(vm2, "octoui/kernels/ui_clear.spv", pc_clear2, wg2c)
+
+// Draw white rect at (2, 2) size 3x3
+let mut pc_rect = [2.0, 2.0, 3.0, 3.0, 255.0, 255.0, 255.0, w2, total2]
+let rect_pixels = 3.0 * 3.0
+let wg2r = floor((rect_pixels + 255.0) / 256.0)
+let _d2r = loom_dispatch(vm2, "octoui/kernels/ui_rect.spv", pc_rect, wg2r)
+
+let prog2 = loom_build(vm2)
+let _e2 = loom_run(prog2)
+
+let r2 = vm_read_globals(vm2, 0.0, total2)
+
+// Check pixel at (0,0) — should be black (outside rect)
+if r2[0] == 0.0
+  print("PASS: pixel (0,0) is black (outside rect)")
+  pass = pass + 1.0
+else
+  let v00 = r2[0]
+  print("FAIL: pixel (0,0) should be 0, got {v00}")
+  fail = fail + 1.0
+end
+
+// Check pixel at (2,2) — should be white (inside rect)
+// Index = 2 * 8 + 2 = 18
+let idx22 = 2.0 * w2 + 2.0
+if r2[idx22] == 255.0
+  print("PASS: pixel (2,2) is white (inside rect)")
+  pass = pass + 1.0
+else
+  let v22 = r2[idx22]
+  print("FAIL: pixel (2,2) should be 255, got {v22}")
+  fail = fail + 1.0
+end
+
+// Check pixel at (4,4) — should be white (inside rect, bottom-right)
+let idx44 = 4.0 * w2 + 4.0
+if r2[idx44] == 255.0
+  print("PASS: pixel (4,4) is white (inside rect)")
+  pass = pass + 1.0
+else
+  let v44 = r2[idx44]
+  print("FAIL: pixel (4,4) should be 255, got {v44}")
+  fail = fail + 1.0
+end
+
+// Check pixel at (5,2) — should be black (right of rect)
+let idx52 = 2.0 * w2 + 5.0
+if r2[idx52] == 0.0
+  print("PASS: pixel (5,2) is black (right of rect)")
+  pass = pass + 1.0
+else
+  let v52 = r2[idx52]
+  print("FAIL: pixel (5,2) should be 0, got {v52}")
+  fail = fail + 1.0
+end
+
+let _s2 = vm_shutdown(vm2)
+
+// Summary
+let total_tests = pass + fail
+print(" ")
+print("test_kernels: {pass}/{total_tests} passed")
+if fail > 0.0
+  print("FAILURES: {fail}")
+end

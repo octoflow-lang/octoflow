@@ -1,0 +1,205 @@
+// test_mailbox.flow — Tests for mailbox cross-loom communication
+//
+// Validates loom_mailbox, loom_mail_send, loom_mail_recv, loom_mail_poll,
+// loom_mail_depth builtins with 5 test scenarios.
+//
+// Run: octoflow run stdlib/loom/tests/test_mailbox.flow --allow-ffi --allow-read --allow-write
+
+print("=== Test: Mailbox Cross-Loom Communication ===")
+print("")
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+fn check(name, got, expected)
+  if abs(got - expected) < 0.5
+    print("  PASS: {name} = {got}")
+    return 1.0
+  else
+    print("  FAIL: {name} = {got} (expected {expected})")
+    return 0.0
+  end
+end
+
+fn tally(result)
+  if result > 0.5
+    pass = pass + 1.0
+  else
+    fail = fail + 1.0
+  end
+  return 0.0
+end
+
+// ── Test 1: Basic send/recv ─────────────────────────────────────────
+print("Test 1: Basic send/recv")
+
+let mb1 = loom_mailbox(16.0, 4.0)
+let vm_a1 = loom_boot(1.0, 1.0, 64.0)
+let vm_b1 = loom_boot(1.0, 1.0, 64.0)
+
+let data1 = [1.0, 2.0, 3.0, 4.0, 5.0]
+vm_write_globals(vm_a1, 0.0, data1)
+
+let sent1 = loom_mail_send(mb1, vm_a1, 0.0, 5.0)
+let _t = tally(check("send returns 1", sent1, 1.0))
+
+let recv1 = loom_mail_recv(mb1, vm_b1, 0.0)
+let _t = tally(check("recv returns 5", recv1, 5.0))
+
+let r1 = vm_read_globals(vm_b1, 0.0, 5.0)
+let _t = tally(check("data[0]", r1[0], 1.0))
+let _t = tally(check("data[1]", r1[1], 2.0))
+let _t = tally(check("data[2]", r1[2], 3.0))
+let _t = tally(check("data[3]", r1[3], 4.0))
+let _t = tally(check("data[4]", r1[4], 5.0))
+
+loom_shutdown(vm_a1)
+loom_shutdown(vm_b1)
+print("")
+
+// ── Test 2: FIFO ordering ───────────────────────────────────────────
+print("Test 2: FIFO ordering (3 messages)")
+
+let mb2 = loom_mailbox(16.0, 4.0)
+let vm_s2 = loom_boot(1.0, 1.0, 64.0)
+let vm_r2 = loom_boot(1.0, 1.0, 64.0)
+
+// Send message 1: [10, 20, 30]
+let msg2a = [10.0, 20.0, 30.0]
+vm_write_globals(vm_s2, 0.0, msg2a)
+let _s = loom_mail_send(mb2, vm_s2, 0.0, 3.0)
+
+// Send message 2: [40, 50, 60]
+let msg2b = [40.0, 50.0, 60.0]
+vm_write_globals(vm_s2, 0.0, msg2b)
+let _s = loom_mail_send(mb2, vm_s2, 0.0, 3.0)
+
+// Send message 3: [70, 80, 90]
+let msg2c = [70.0, 80.0, 90.0]
+vm_write_globals(vm_s2, 0.0, msg2c)
+let _s = loom_mail_send(mb2, vm_s2, 0.0, 3.0)
+
+let _t = tally(check("depth after 3 sends", loom_mail_depth(mb2), 3.0))
+
+// Recv 1 — should get [10, 20, 30]
+let _rc = loom_mail_recv(mb2, vm_r2, 0.0)
+let fifo1 = vm_read_globals(vm_r2, 0.0, 3.0)
+let _t = tally(check("msg1[0]", fifo1[0], 10.0))
+let _t = tally(check("msg1[2]", fifo1[2], 30.0))
+
+// Recv 2 — should get [40, 50, 60]
+let _rc = loom_mail_recv(mb2, vm_r2, 0.0)
+let fifo2 = vm_read_globals(vm_r2, 0.0, 3.0)
+let _t = tally(check("msg2[0]", fifo2[0], 40.0))
+let _t = tally(check("msg2[2]", fifo2[2], 60.0))
+
+// Recv 3 — should get [70, 80, 90]
+let _rc = loom_mail_recv(mb2, vm_r2, 0.0)
+let fifo3 = vm_read_globals(vm_r2, 0.0, 3.0)
+let _t = tally(check("msg3[0]", fifo3[0], 70.0))
+let _t = tally(check("msg3[2]", fifo3[2], 90.0))
+
+loom_shutdown(vm_s2)
+loom_shutdown(vm_r2)
+print("")
+
+// ── Test 3: Overflow / backpressure ─────────────────────────────────
+print("Test 3: Overflow / backpressure (2 slots)")
+
+let mb3 = loom_mailbox(16.0, 2.0)
+let vm_s3 = loom_boot(1.0, 1.0, 64.0)
+let vm_r3 = loom_boot(1.0, 1.0, 64.0)
+
+// Send 2 messages — should succeed
+let fill3a = [100.0]
+vm_write_globals(vm_s3, 0.0, fill3a)
+let ok3a = loom_mail_send(mb3, vm_s3, 0.0, 1.0)
+let _t = tally(check("send1 ok", ok3a, 1.0))
+
+let fill3b = [200.0]
+vm_write_globals(vm_s3, 0.0, fill3b)
+let ok3b = loom_mail_send(mb3, vm_s3, 0.0, 1.0)
+let _t = tally(check("send2 ok", ok3b, 1.0))
+
+// Send 3rd — should fail (full)
+let fill3c = [300.0]
+vm_write_globals(vm_s3, 0.0, fill3c)
+let ok3c = loom_mail_send(mb3, vm_s3, 0.0, 1.0)
+let _t = tally(check("send3 full", ok3c, 0.0))
+
+// Recv 1 — free one slot
+let _rc = loom_mail_recv(mb3, vm_r3, 0.0)
+
+// Send again — should succeed now
+let fill3d = [400.0]
+vm_write_globals(vm_s3, 0.0, fill3d)
+let ok3d = loom_mail_send(mb3, vm_s3, 0.0, 1.0)
+let _t = tally(check("send4 after drain", ok3d, 1.0))
+
+loom_shutdown(vm_s3)
+loom_shutdown(vm_r3)
+print("")
+
+// ── Test 4: Empty recv ──────────────────────────────────────────────
+print("Test 4: Empty recv (no messages)")
+
+let mb4 = loom_mailbox(16.0, 4.0)
+let vm_r4 = loom_boot(1.0, 1.0, 64.0)
+
+let poll4 = loom_mail_poll(mb4)
+let _t = tally(check("poll empty", poll4, 0.0))
+
+let depth4 = loom_mail_depth(mb4)
+let _t = tally(check("depth empty", depth4, 0.0))
+
+let recv4 = loom_mail_recv(mb4, vm_r4, 0.0)
+let _t = tally(check("recv empty", recv4, 0.0))
+
+loom_shutdown(vm_r4)
+print("")
+
+// ── Test 5: Multi-sender ────────────────────────────────────────────
+print("Test 5: Multi-sender (two VMs → one mailbox)")
+
+let mb5 = loom_mailbox(16.0, 4.0)
+let vm_sa = loom_boot(1.0, 1.0, 64.0)
+let vm_sb = loom_boot(1.0, 1.0, 64.0)
+let vm_r5 = loom_boot(1.0, 1.0, 64.0)
+
+// VM A sends [100, 200]
+let d5a = [100.0, 200.0]
+vm_write_globals(vm_sa, 0.0, d5a)
+let _s = loom_mail_send(mb5, vm_sa, 0.0, 2.0)
+
+// VM B sends [300, 400]
+let d5b = [300.0, 400.0]
+vm_write_globals(vm_sb, 0.0, d5b)
+let _s = loom_mail_send(mb5, vm_sb, 0.0, 2.0)
+
+let _t = tally(check("depth 2 msgs", loom_mail_depth(mb5), 2.0))
+
+// Recv 1 — should get VM A's data (FIFO: A sent first)
+let _rc = loom_mail_recv(mb5, vm_r5, 0.0)
+let ms1 = vm_read_globals(vm_r5, 0.0, 2.0)
+let _t = tally(check("sender A [0]", ms1[0], 100.0))
+let _t = tally(check("sender A [1]", ms1[1], 200.0))
+
+// Recv 2 — should get VM B's data
+let _rc = loom_mail_recv(mb5, vm_r5, 0.0)
+let ms2 = vm_read_globals(vm_r5, 0.0, 2.0)
+let _t = tally(check("sender B [0]", ms2[0], 300.0))
+let _t = tally(check("sender B [1]", ms2[1], 400.0))
+
+loom_shutdown(vm_sa)
+loom_shutdown(vm_sb)
+loom_shutdown(vm_r5)
+print("")
+
+// ── Summary ─────────────────────────────────────────────────────────
+print("Results: {pass} passed, {fail} failed")
+if fail < 0.5
+  print("ALL PASS")
+else
+  print("SOME FAILED")
+end
+print("")

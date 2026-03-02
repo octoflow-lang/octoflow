@@ -27,8 +27,8 @@ let wg = floor((reg_size + 255.0) / 256.0)
 // VM-A processes dataset A, VM-B processes dataset B
 print("--- Test 1: Same task, two VMs (parallel affine workers) ---")
 
-let vm_a = vm_boot(1.0, reg_size, 1.0)
-let vm_b = vm_boot(1.0, reg_size, 1.0)
+let vm_a = loom_boot(1.0, reg_size, 1.0)
+let vm_b = loom_boot(1.0, reg_size, 1.0)
 print("  Booted VM-A={vm_a}, VM-B={vm_b}")
 
 // Write different data to each VM's R0
@@ -51,8 +51,8 @@ let prog_b = vm_build(vm_b)
 print("  Built program A={prog_a}, B={prog_b}")
 
 // Execute both (blocking for now — async tested in Test 3)
-let _ea = vm_execute(prog_a)
-let _eb = vm_execute(prog_b)
+let _ea = loom_run(prog_a)
+let _eb = loom_run(prog_b)
 
 // Read results from R1
 let result_a = vm_read_register(vm_a, 0.0, 1.0, reg_size)
@@ -105,8 +105,8 @@ let _dr = vm_dispatch(vm_b, "stdlib/loom/kernels/ops/vm_relu.spv", relu_pc, wg)
 let prog_relu = vm_build(vm_b)
 
 // Execute both
-let _en = vm_execute(prog_norm)
-let _er = vm_execute(prog_relu)
+let _en = loom_run(prog_norm)
+let _er = loom_run(prog_relu)
 
 // Read results
 let norm_result = vm_read_register(vm_a, 0.0, 1.0, reg_size)
@@ -165,7 +165,7 @@ let prog_async = vm_build(vm_a)
 print("  Built async program={prog_async} (affine → relu → R2)")
 
 // Submit WITHOUT waiting — GPU runs autonomously
-let _submit = vm_execute_async(prog_async)
+let _submit = loom_launch(prog_async)
 print("  Submitted async (GPU running autonomously)")
 
 // CPU polls until GPU is done
@@ -202,8 +202,8 @@ print("--- Test 4: Two VMs async + poll both ---")
 // Reuse existing programs: prog_a (affine on VM-A), prog_b (affine on VM-B)
 // Both already have data loaded from Test 1
 // Re-execute them both async
-let _sa = vm_execute_async(prog_a)
-let _sb = vm_execute_async(prog_b)
+let _sa = loom_launch(prog_a)
+let _sb = loom_launch(prog_b)
 print("  Both VMs submitted async")
 
 // Poll both until done

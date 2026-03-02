@@ -1,0 +1,264 @@
+// stdlib/media/oscillator.flow — Audio waveform generators
+//
+// Generate sine, square, sawtooth, triangle, and noise waveforms.
+// Both stateless (fill buffer) and stateful (track phase) modes.
+//
+// Functions: osc_sine, osc_square, osc_saw, osc_triangle, osc_noise,
+//            osc_create, osc_next, osc_fill, osc_set_freq, osc_set_amp,
+//            osc_fm, osc_chord
+//
+// Usage:
+//   use "oscillator"
+//   let mut samples = []
+//   osc_sine(samples, 440.0, 1.0, 44100.0, 44100.0)  // 1 sec A4
+
+let PI = 3.14159265358979
+let TWO_PI = 6.28318530717959
+
+// Wave types
+let OSC_SINE = 0.0
+let OSC_SQUARE = 1.0
+let OSC_SAW = 2.0
+let OSC_TRIANGLE = 3.0
+let OSC_NOISE = 4.0
+
+// ── Stateless generators ─────────────────────────────
+
+fn osc_sine(result, freq, amplitude, sample_rate, n_samples)
+    // Generate sine wave. Appends to result array.
+    if sample_rate <= 0.0 || n_samples <= 0.0
+        return 0.0
+    end
+    let phase_inc = TWO_PI * freq / sample_rate
+    let mut i = 0.0
+    while i < n_samples
+        push(result, amplitude * sin(phase_inc * i))
+        i = i + 1.0
+    end
+    return n_samples
+end
+
+fn osc_square(result, freq, amplitude, sample_rate, n_samples)
+    // Generate square wave.
+    if sample_rate <= 0.0 || n_samples <= 0.0
+        return 0.0
+    end
+    let period = sample_rate / freq
+    if period <= 0.0
+        return 0.0
+    end
+    let half = period / 2.0
+    let mut i = 0.0
+    while i < n_samples
+        let phase = i - floor(i / period) * period
+        if phase < half
+            push(result, amplitude)
+        else
+            push(result, 0.0 - amplitude)
+        end
+        i = i + 1.0
+    end
+    return n_samples
+end
+
+fn osc_saw(result, freq, amplitude, sample_rate, n_samples)
+    // Generate sawtooth wave (ramp up, reset).
+    if sample_rate <= 0.0 || n_samples <= 0.0
+        return 0.0
+    end
+    let period = sample_rate / freq
+    if period <= 0.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n_samples
+        let phase = i - floor(i / period) * period
+        let t = phase / period
+        push(result, amplitude * (2.0 * t - 1.0))
+        i = i + 1.0
+    end
+    return n_samples
+end
+
+fn osc_triangle(result, freq, amplitude, sample_rate, n_samples)
+    // Generate triangle wave.
+    if sample_rate <= 0.0 || n_samples <= 0.0
+        return 0.0
+    end
+    let period = sample_rate / freq
+    if period <= 0.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n_samples
+        let phase = i - floor(i / period) * period
+        let t = phase / period
+        if t < 0.5
+            push(result, amplitude * (4.0 * t - 1.0))
+        else
+            push(result, amplitude * (3.0 - 4.0 * t))
+        end
+        i = i + 1.0
+    end
+    return n_samples
+end
+
+fn osc_noise(result, amplitude, n_samples)
+    // Generate white noise.
+    if n_samples <= 0.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n_samples
+        push(result, amplitude * (random_float() * 2.0 - 1.0))
+        i = i + 1.0
+    end
+    return n_samples
+end
+
+// ── Stateful oscillators ─────────────────────────────
+// Track phase for seamless multi-call generation.
+
+let mut _osc_phase = []
+let mut _osc_freq = []
+let mut _osc_amp = []
+let mut _osc_type = []
+let mut _osc_rate = []
+
+fn osc_create(wave_type, freq, amplitude, sample_rate)
+    // Create stateful oscillator. Returns oscillator ID.
+    let id = len(_osc_phase)
+    push(_osc_phase, 0.0)
+    push(_osc_freq, freq)
+    push(_osc_amp, amplitude)
+    push(_osc_type, wave_type)
+    let mut sr = sample_rate
+    if sr <= 0.0
+        sr = 44100.0
+    end
+    push(_osc_rate, sr)
+    return id
+end
+
+fn osc_set_freq(id, freq)
+    _osc_freq[int(id)] = freq
+    return 0.0
+end
+
+fn osc_set_amp(id, amplitude)
+    _osc_amp[int(id)] = amplitude
+    return 0.0
+end
+
+fn _osc_sample(phase, wave_type, amplitude)
+    // Compute sample from normalized phase [0, 1).
+    if wave_type == OSC_SINE
+        return amplitude * sin(TWO_PI * phase)
+    elif wave_type == OSC_SQUARE
+        if phase < 0.5
+            return amplitude
+        end
+        return 0.0 - amplitude
+    elif wave_type == OSC_SAW
+        return amplitude * (2.0 * phase - 1.0)
+    elif wave_type == OSC_TRIANGLE
+        if phase < 0.5
+            return amplitude * (4.0 * phase - 1.0)
+        end
+        return amplitude * (3.0 - 4.0 * phase)
+    elif wave_type == OSC_NOISE
+        return amplitude * (random_float() * 2.0 - 1.0)
+    end
+    return 0.0
+end
+
+fn osc_next(id)
+    // Get next sample from oscillator. Advances phase.
+    let oi = int(id)
+    let freq = _osc_freq[oi]
+    let rate = _osc_rate[oi]
+    let phase = _osc_phase[oi]
+    let val = _osc_sample(phase, _osc_type[oi], _osc_amp[oi])
+    // Advance phase
+    let new_phase = phase + freq / rate
+    _osc_phase[oi] = new_phase - floor(new_phase)
+    return val
+end
+
+fn osc_fill(id, result, n_samples)
+    // Fill result array with n_samples from oscillator.
+    let mut i = 0.0
+    while i < n_samples
+        push(result, osc_next(id))
+        i = i + 1.0
+    end
+    return n_samples
+end
+
+// ── Advanced generators ──────────────────────────────
+
+fn osc_fm(result, carrier_freq, mod_freq, mod_depth, amplitude, sample_rate, n_samples)
+    // FM synthesis: carrier modulated by modulator.
+    if sample_rate <= 0.0 || n_samples <= 0.0
+        return 0.0
+    end
+    let c_inc = TWO_PI * carrier_freq / sample_rate
+    let m_inc = TWO_PI * mod_freq / sample_rate
+    let mut i = 0.0
+    while i < n_samples
+        let mod_val = mod_depth * sin(m_inc * i)
+        push(result, amplitude * sin(c_inc * i + mod_val))
+        i = i + 1.0
+    end
+    return n_samples
+end
+
+fn osc_chord(result, freqs, n_freqs, amplitude, sample_rate, n_samples)
+    // Generate chord (sum of sine waves). freqs = flat array of frequencies.
+    if sample_rate <= 0.0 || n_samples <= 0.0 || n_freqs <= 0.0
+        return 0.0
+    end
+    let scale = amplitude / n_freqs
+    let mut i = 0.0
+    while i < n_samples
+        let mut sum = 0.0
+        let mut f = 0.0
+        while f < n_freqs
+            let inc = TWO_PI * freqs[int(f)] / sample_rate
+            sum = sum + sin(inc * i)
+            f = f + 1.0
+        end
+        push(result, sum * scale)
+        i = i + 1.0
+    end
+    return n_samples
+end
+
+fn osc_pulse(result, freq, duty_cycle, amplitude, sample_rate, n_samples)
+    // Pulse wave with variable duty cycle (0-1). 0.5 = square wave.
+    if sample_rate <= 0.0 || n_samples <= 0.0
+        return 0.0
+    end
+    let period = sample_rate / freq
+    if period <= 0.0
+        return 0.0
+    end
+    let mut dc = duty_cycle
+    if dc < 0.01
+        dc = 0.01
+    end
+    if dc > 0.99
+        dc = 0.99
+    end
+    let mut i = 0.0
+    while i < n_samples
+        let phase = i - floor(i / period) * period
+        if phase / period < dc
+            push(result, amplitude)
+        else
+            push(result, 0.0 - amplitude)
+        end
+        i = i + 1.0
+    end
+    return n_samples
+end

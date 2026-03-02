@@ -1,0 +1,151 @@
+// test_numeric.flow — Tests for stdlib/math/numeric.flow
+use "numeric"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.05
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Bisection ───────────────────────────────────────────────
+
+fn test_bisection()
+    // Find root of f(x) = x^2 - 4 (root at x=2)
+    let mut x = [0.0, 1.0, 2.0, 3.0, 4.0]
+    let mut y = [-4.0, -3.0, 0.0, 5.0, 12.0]
+    let root = nm_bisection(x, y, 1.0, 3.0, 0.001, 50.0)
+    check("bisection sqrt4", approx(root, 2.0) == 1.0)
+    return 0.0
+end
+
+// ── Newton step ─────────────────────────────────────────────
+
+fn test_newton()
+    // Newton step for x^2 - 4 at x=3: f=5, f'=6
+    let x_new = nm_newton_step(3.0, 5.0, 6.0)
+    check("newton step", approx(x_new, 2.166) == 1.0)
+    return 0.0
+end
+
+// ── Trapezoidal ─────────────────────────────────────────────
+
+fn test_trapezoidal()
+    // Integrate x^2 from 0 to 1 (exact = 1/3)
+    let mut x = [0.0, 0.25, 0.5, 0.75, 1.0]
+    let mut y = [0.0, 0.0625, 0.25, 0.5625, 1.0]
+    let area = nm_trapezoidal(x, y)
+    check("trap x^2", approx(area, 0.3333) == 1.0)
+    return 0.0
+end
+
+fn test_trapezoidal_linear()
+    // Integrate y=x from 0 to 1 (exact = 0.5) — trapezoidal is exact for linear
+    let mut x = [0.0, 0.5, 1.0]
+    let mut y = [0.0, 0.5, 1.0]
+    let area = nm_trapezoidal(x, y)
+    check("trap linear", area == 0.5)
+    return 0.0
+end
+
+// ── Simpson's ───────────────────────────────────────────────
+
+fn test_simpsons()
+    // Integrate x^2 from 0 to 1 with 5 points
+    let mut x = [0.0, 0.25, 0.5, 0.75, 1.0]
+    let mut y = [0.0, 0.0625, 0.25, 0.5625, 1.0]
+    let area = nm_simpsons(x, y)
+    check("simpsons x^2", approx(area, 0.3333) == 1.0)
+    return 0.0
+end
+
+// ── Euler step ──────────────────────────────────────────────
+
+fn test_euler()
+    // dy/dt = 1, y(0) = 0, step h = 0.1 → y(0.1) = 0.1
+    let y_new = nm_euler_step(0.0, 1.0, 0.1)
+    check("euler step", y_new == 0.1)
+    return 0.0
+end
+
+// ── RK4 step ────────────────────────────────────────────────
+
+fn test_rk4()
+    // dy/dt = 1 (constant), y=0, h=0.1
+    // k1=k2=k3=k4=1, y_new = 0 + (0.1/6)(1+2+2+1) = 0.1
+    let y_new = nm_rk4_step(0.0, 1.0, 1.0, 1.0, 1.0, 0.1)
+    check("rk4 step", approx(y_new, 0.1) == 1.0)
+    return 0.0
+end
+
+// ── Finite differences ──────────────────────────────────────
+
+fn test_finite_diff()
+    // y = x^2 at [0, 1, 2, 3, 4] → y' = 2x → [2, 4, 6] at interior
+    let mut y = [0.0, 1.0, 4.0, 9.0, 16.0]
+    let dy = nm_finite_diff(y, 1.0)
+    check("diff len", len(dy) == 3.0)
+    check("diff[0]", approx(dy[0], 2.0) == 1.0)
+    check("diff[1]", approx(dy[1], 4.0) == 1.0)
+    check("diff[2]", approx(dy[2], 6.0) == 1.0)
+    return 0.0
+end
+
+fn test_finite_diff2()
+    // y = x^2 → y'' = 2 everywhere
+    let mut y = [0.0, 1.0, 4.0, 9.0, 16.0]
+    let d2y = nm_finite_diff2(y, 1.0)
+    check("diff2 len", len(d2y) == 3.0)
+    check("diff2 const", approx(d2y[0], 2.0) == 1.0)
+    return 0.0
+end
+
+// ── Linear regression ───────────────────────────────────────
+
+fn test_linear_regression()
+    // Perfect linear: y = 2x + 1
+    let mut x = [0.0, 1.0, 2.0, 3.0, 4.0]
+    let mut y = [1.0, 3.0, 5.0, 7.0, 9.0]
+    let reg = nm_linear_regression(x, y)
+    check("reg slope", approx(reg[0], 2.0) == 1.0)
+    check("reg intercept", approx(reg[1], 1.0) == 1.0)
+    check("reg r2", approx(reg[2], 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Lagrange interpolation ──────────────────────────────────
+
+fn test_lagrange()
+    // Points: (0,0), (1,1), (2,4) → f(x) = x^2
+    let mut xd = [0.0, 1.0, 2.0]
+    let mut yd = [0.0, 1.0, 4.0]
+    check("lagrange 1.5", approx(nm_lagrange_interp(xd, yd, 1.5), 2.25) == 1.0)
+    check("lagrange 0.5", approx(nm_lagrange_interp(xd, yd, 0.5), 0.25) == 1.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────
+
+test_bisection()
+test_newton()
+test_trapezoidal()
+test_trapezoidal_linear()
+test_simpsons()
+test_euler()
+test_rk4()
+test_finite_diff()
+test_finite_diff2()
+test_linear_regression()
+test_lagrange()
+print("")
+print("All numeric tests passed (11 tests)")

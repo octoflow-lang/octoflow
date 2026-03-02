@@ -5,7 +5,7 @@
 fn gpu_group_by_sum(values, keys, num_groups)
     let n = len(values)
     if n != len(keys)
-        print("Error: values &&keys must have same length")
+        print("Error: values and keys must have same length")
         return []
     end
 
@@ -18,39 +18,42 @@ fn gpu_group_by_sum(values, keys, num_groups)
 
     let result = gpu_run(spv_path, values, keys, num_groups)
     return result
+end
 
 // Group-by count: count occurrences per group
 fn gpu_group_by_count(keys, num_groups)
     let n = len(keys)
 
     // Create all-ones array
-    let ones = []
-    let i = 0.0
+    let mut ones = []
+    let mut i = 0.0
     while i < n
-        append(ones, 1.0)
+        push(ones, 1.0)
         i = i + 1.0
     end
 
     // Sum the ones per group
     return gpu_group_by_sum(ones, keys, num_groups)
+end
 
 // Group-by mean: average per group
 fn gpu_group_by_mean(values, keys, num_groups)
     let sums = gpu_group_by_sum(values, keys, num_groups)
     let counts = gpu_group_by_count(keys, num_groups)
 
-    let means = []
-    let i = 0.0
+    let mut means = []
+    let mut i = 0.0
     while i < num_groups
         if counts[i] > 0.0
-            append(means, sums[i] / counts[i])
+            push(means, sums[i] / counts[i])
         else
-            append(means, 0.0)
+            push(means, 0.0)
         end
         i = i + 1.0
     end
 
     return means
+end
 
 // Binned statistics: compute stat per bin
 fn gpu_binned_statistics(data, bins, stat_type)
@@ -58,30 +61,32 @@ fn gpu_binned_statistics(data, bins, stat_type)
     let nbins = len(bins) - 1.0
 
     // Assign each value to a bin
-    let bin_ids = []
-    let i = 0.0
+    let mut bin_ids = []
+    let mut i = 0.0
     while i < n
         let val = data[i]
-        let bin_id = 0.0
-        let found = 0.0
+        let mut bin_id = 0.0
+        let mut found = 0.0
 
-        let j = 0.0
+        let mut j = 0.0
         while j < nbins
-            if val >= bins[j] &&val < bins[j + 1.0]
-                let bin_id = j
-                let found = 1.0
-                let j = nbins  // Break
+            if val >= bins[j]
+              if val < bins[j + 1.0]
+                bin_id = j
+                found = 1.0
+                j = nbins  // Break
+              end
             end
             j = j + 1.0
         end
 
         if found == 0.0
             if val >= bins[nbins]
-                let bin_id = nbins - 1.0
+                bin_id = nbins - 1.0
             end
         end
 
-        append(bin_ids, bin_id)
+        push(bin_ids, bin_id)
         i = i + 1.0
     end
 
@@ -96,6 +101,7 @@ fn gpu_binned_statistics(data, bins, stat_type)
         print("Unknown stat_type")
         return []
     end
+end
 
 // Rolling sum with fixed window
 fn gpu_rolling_sum(arr, window)
@@ -112,20 +118,22 @@ fn gpu_rolling_sum(arr, window)
 
     let result = gpu_run(spv_path, arr, n, window)
     return result
+end
 
 // Rolling mean
 fn gpu_rolling_mean(arr, window)
     let sums = gpu_rolling_sum(arr, window)
     let n = len(sums)
 
-    let means = []
-    let i = 0.0
+    let mut means = []
+    let mut i = 0.0
     while i < n
-        append(means, sums[i] / window)
+        push(means, sums[i] / window)
         i = i + 1.0
     end
 
     return means
+end
 
 // Rolling min
 fn gpu_rolling_min(arr, window)
@@ -142,6 +150,7 @@ fn gpu_rolling_min(arr, window)
 
     let result = gpu_run(spv_path, arr, n, window)
     return result
+end
 
 // Rolling max
 fn gpu_rolling_max(arr, window)
@@ -158,6 +167,7 @@ fn gpu_rolling_max(arr, window)
 
     let result = gpu_run(spv_path, arr, n, window)
     return result
+end
 
 // Quantile via binned approximation
 fn gpu_quantile_binned(arr, q, num_bins)
@@ -165,11 +175,11 @@ fn gpu_quantile_binned(arr, q, num_bins)
     let max_val = gpu_max(arr)
 
     // Create bins
-    let bins = []
+    let mut bins = []
     let bin_width = (max_val - min_val) / num_bins
-    let i = 0.0
+    let mut i = 0.0
     while i <= num_bins
-        append(bins, min_val + i * bin_width)
+        push(bins, min_val + i * bin_width)
         i = i + 1.0
     end
 
@@ -180,20 +190,21 @@ fn gpu_quantile_binned(arr, q, num_bins)
     let total = len(arr)
     let target = q * total
 
-    let cumsum = 0.0
-    let result_bin = 0.0
-    let i = 0.0
+    let mut cumsum = 0.0
+    let mut result_bin = 0.0
+    let mut i = 0.0
     while i < num_bins
-        let cumsum = cumsum + counts[i]
+        cumsum = cumsum + counts[i]
         if cumsum >= target
-            let result_bin = i
-            let i = num_bins  // Break
+            result_bin = i
+            i = num_bins  // Break
         end
         i = i + 1.0
     end
 
     // Return bin midpoint
     return bins[result_bin] + bin_width / 2.0
+end
 
 // ===== SPIR-V Emitters =====
 
@@ -241,7 +252,7 @@ fn group_sum_emit()
     let gid = spirv_load_builtin_global_id(spv, uint_t, 0.0)
     let zero = spirv_constant_uint(spv, uint_t, 0.0)
 
-    // Load value &&key
+    // Load value and key
     let ptr_val = spirv_access_chain(spv, float_t, val_var, zero, gid)
     let ptr_key = spirv_access_chain(spv, float_t, key_var, zero, gid)
 
@@ -262,6 +273,7 @@ fn group_sum_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/group_sum.spv")
+end
 
 fn rolling_sum_emit()
     use "spirv_emit.flow"
@@ -329,6 +341,7 @@ fn rolling_sum_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/rolling_sum.spv")
+end
 
 fn rolling_min_emit()
     use "spirv_emit.flow"
@@ -398,6 +411,7 @@ fn rolling_min_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/rolling_min.spv")
+end
 
 fn rolling_max_emit()
     use "spirv_emit.flow"
@@ -465,3 +479,4 @@ fn rolling_max_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/rolling_max.spv")
+end

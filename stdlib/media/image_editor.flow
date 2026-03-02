@@ -1,0 +1,795 @@
+// image_editor.flow — Image layer editor
+// Layers, brush/eraser/fill tools, rectangular selection, filters pipeline, undo.
+// Images are parallel arrays (r[], g[], b[]) with width/height.
+// Uses parallel-array storage for editor instances.
+
+// ── Tool modes ───────────────────────────────────────────
+let IE_TOOL_BRUSH   = 0.0
+let IE_TOOL_ERASER  = 1.0
+let IE_TOOL_FILL    = 2.0
+let IE_TOOL_SELECT  = 3.0
+let IE_TOOL_EYEDROP = 4.0
+let IE_TOOL_LINE    = 5.0
+
+// ── Blend modes ──────────────────────────────────────────
+let IE_BLEND_NORMAL   = 0.0
+let IE_BLEND_MULTIPLY = 1.0
+let IE_BLEND_SCREEN   = 2.0
+let IE_BLEND_OVERLAY  = 3.0
+
+// ── Layer storage (flat) ─────────────────────────────────
+// Each layer: [editor_id, width, height, opacity, visible, blend_mode, locked]
+let IE_LAYER_STRIDE = 7.0
+let mut _ie_layer_data  = []
+let mut _ie_layer_count = []
+let mut _ie_layer_off   = []
+
+// Layer pixel data: separate flat arrays per layer
+// We store r/g/b arrays per layer in _ie_layer_pixels
+// Index: layer_global_idx * 3 → r_offset, g_offset, b_offset
+let mut _ie_layer_r = []
+let mut _ie_layer_g = []
+let mut _ie_layer_b = []
+let mut _ie_lpx_off = []   // Offset into _ie_layer_r/g/b per layer
+let mut _ie_lpx_count = 0.0  // Total layers with pixel data
+
+// ── Editor storage ───────────────────────────────────────
+let mut _ie_width       = []
+let mut _ie_height      = []
+let mut _ie_tool        = []
+let mut _ie_brush_size  = []
+let mut _ie_brush_r     = []
+let mut _ie_brush_g     = []
+let mut _ie_brush_b     = []
+let mut _ie_opacity     = []   // Tool opacity
+let mut _ie_sel_x       = []   // Selection rect
+let mut _ie_sel_y       = []
+let mut _ie_sel_w       = []
+let mut _ie_sel_h       = []
+let mut _ie_active_layer = []
+let mut _ie_zoom        = []
+let mut _ie_pan_x       = []
+let mut _ie_pan_y       = []
+let mut _ie_alive       = []
+
+// Undo: flat [editor_id, action_type, layer, x, y, w, h, 0] per entry
+let IE_UNDO_STRIDE = 8.0
+let IE_MAX_UNDO = 30.0
+let mut _ie_undo_data  = []
+let mut _ie_undo_count = []
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn ie_create(width, height)
+    let id = len(_ie_alive)
+    let mut w = width
+    let mut h = height
+    if w < 1.0
+        w = 1.0
+    end
+    if h < 1.0
+        h = 1.0
+    end
+    push(_ie_width, w)
+    push(_ie_height, h)
+    push(_ie_tool, IE_TOOL_BRUSH)
+    push(_ie_brush_size, 3.0)
+    push(_ie_brush_r, 0.0)
+    push(_ie_brush_g, 0.0)
+    push(_ie_brush_b, 0.0)
+    push(_ie_opacity, 1.0)
+    push(_ie_sel_x, 0.0)
+    push(_ie_sel_y, 0.0)
+    push(_ie_sel_w, 0.0)
+    push(_ie_sel_h, 0.0)
+    push(_ie_active_layer, 0.0)
+    push(_ie_zoom, 1.0)
+    push(_ie_pan_x, 0.0)
+    push(_ie_pan_y, 0.0)
+    push(_ie_alive, 1.0)
+    push(_ie_layer_count, 0.0)
+    push(_ie_layer_off, len(_ie_layer_data))
+    push(_ie_undo_count, 0.0)
+    // Auto-add background layer
+    ie_add_layer(id)
+    return id
+end
+
+fn ie_destroy(id)
+    if id < 0.0 || id >= len(_ie_alive)
+        return -1.0
+    end
+    _ie_alive[id] = 0.0
+    return 0.0
+end
+
+fn _ie_valid(id)
+    if id < 0.0 || id >= len(_ie_alive)
+        return 0.0
+    end
+    if _ie_alive[id] < 0.5
+        return 0.0
+    end
+    return 1.0
+end
+
+// ── Layers ───────────────────────────────────────────────
+
+fn ie_add_layer(id)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _ie_layer_count[id]
+    let w = _ie_width[id]
+    let h = _ie_height[id]
+    let n = w * h
+    // Store layer metadata
+    push(_ie_layer_data, id)
+    push(_ie_layer_data, w)
+    push(_ie_layer_data, h)
+    push(_ie_layer_data, 1.0)   // opacity
+    push(_ie_layer_data, 1.0)   // visible
+    push(_ie_layer_data, IE_BLEND_NORMAL)
+    push(_ie_layer_data, 0.0)   // locked
+    // Store pixel data offset
+    let px_off = len(_ie_layer_r)
+    push(_ie_lpx_off, px_off)
+    // Fill with white (background)
+    let mut i = 0.0
+    while i < n
+        push(_ie_layer_r, 255.0)
+        push(_ie_layer_g, 255.0)
+        push(_ie_layer_b, 255.0)
+        i = i + 1.0
+    end
+    _ie_lpx_count = _ie_lpx_count + 1.0
+    _ie_layer_count[id] = cnt + 1.0
+    return cnt
+end
+
+fn ie_layer_count(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_layer_count[id]
+end
+
+fn ie_set_active_layer(id, layer_idx)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    if layer_idx < 0.0 || layer_idx >= _ie_layer_count[id]
+        return -1.0
+    end
+    _ie_active_layer[id] = layer_idx
+    return layer_idx
+end
+
+fn ie_active_layer(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_active_layer[id]
+end
+
+fn _ie_layer_global(id, layer_idx)
+    // Get the global layer index in _ie_layer_data
+    let off = _ie_layer_off[id]
+    let cnt = _ie_layer_count[id]
+    if layer_idx < 0.0 || layer_idx >= cnt
+        return -1.0
+    end
+    // Count layers belonging to this editor
+    let mut found = 0.0
+    let mut i = 0.0
+    while i * IE_LAYER_STRIDE < len(_ie_layer_data)
+        let base = i * IE_LAYER_STRIDE
+        if _ie_layer_data[base] == id
+            if found == layer_idx
+                return i
+            end
+            found = found + 1.0
+        end
+        i = i + 1.0
+    end
+    return -1.0
+end
+
+fn ie_set_layer_opacity(id, layer_idx, opacity)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let gi = _ie_layer_global(id, layer_idx)
+    if gi < 0.0
+        return -1.0
+    end
+    let mut o = opacity
+    if o < 0.0
+        o = 0.0
+    end
+    if o > 1.0
+        o = 1.0
+    end
+    _ie_layer_data[gi * IE_LAYER_STRIDE + 3.0] = o
+    return o
+end
+
+fn ie_get_layer_opacity(id, layer_idx)
+    if _ie_valid(id) < 0.5
+        return 1.0
+    end
+    let gi = _ie_layer_global(id, layer_idx)
+    if gi < 0.0
+        return 1.0
+    end
+    return _ie_layer_data[gi * IE_LAYER_STRIDE + 3.0]
+end
+
+fn ie_set_layer_visible(id, layer_idx, visible)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let gi = _ie_layer_global(id, layer_idx)
+    if gi < 0.0
+        return -1.0
+    end
+    if visible > 0.5
+        _ie_layer_data[gi * IE_LAYER_STRIDE + 4.0] = 1.0
+    else
+        _ie_layer_data[gi * IE_LAYER_STRIDE + 4.0] = 0.0
+    end
+    return 0.0
+end
+
+fn ie_is_layer_visible(id, layer_idx)
+    if _ie_valid(id) < 0.5
+        return 1.0
+    end
+    let gi = _ie_layer_global(id, layer_idx)
+    if gi < 0.0
+        return 1.0
+    end
+    return _ie_layer_data[gi * IE_LAYER_STRIDE + 4.0]
+end
+
+fn ie_set_layer_locked(id, layer_idx, locked)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let gi = _ie_layer_global(id, layer_idx)
+    if gi < 0.0
+        return -1.0
+    end
+    if locked > 0.5
+        _ie_layer_data[gi * IE_LAYER_STRIDE + 6.0] = 1.0
+    else
+        _ie_layer_data[gi * IE_LAYER_STRIDE + 6.0] = 0.0
+    end
+    return 0.0
+end
+
+fn ie_is_layer_locked(id, layer_idx)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    let gi = _ie_layer_global(id, layer_idx)
+    if gi < 0.0
+        return 0.0
+    end
+    return _ie_layer_data[gi * IE_LAYER_STRIDE + 6.0]
+end
+
+fn ie_set_layer_blend(id, layer_idx, blend_mode)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let gi = _ie_layer_global(id, layer_idx)
+    if gi < 0.0
+        return -1.0
+    end
+    if blend_mode < 0.0 || blend_mode > 3.0
+        return -1.0
+    end
+    _ie_layer_data[gi * IE_LAYER_STRIDE + 5.0] = blend_mode
+    return blend_mode
+end
+
+// ── Pixel access on active layer ─────────────────────────
+
+fn _ie_px_idx(id, x, y)
+    let w = _ie_width[id]
+    let h = _ie_height[id]
+    if x < 0.0 || x >= w || y < 0.0 || y >= h
+        return -1.0
+    end
+    let li = _ie_active_layer[id]
+    let gi = _ie_layer_global(id, li)
+    if gi < 0.0
+        return -1.0
+    end
+    let off = _ie_lpx_off[gi]
+    return off + floor(y) * w + floor(x)
+end
+
+fn ie_get_pixel(id, x, y, result)
+    // result[0]=r, result[1]=g, result[2]=b
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    if len(result) < 3.0
+        return -1.0
+    end
+    let idx = _ie_px_idx(id, x, y)
+    if idx < 0.0
+        return -1.0
+    end
+    result[0] = _ie_layer_r[idx]
+    result[1] = _ie_layer_g[idx]
+    result[2] = _ie_layer_b[idx]
+    return 0.0
+end
+
+fn ie_set_pixel(id, x, y, r, g, b)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    // Check locked
+    let li = _ie_active_layer[id]
+    if ie_is_layer_locked(id, li) > 0.5
+        return -1.0
+    end
+    let idx = _ie_px_idx(id, x, y)
+    if idx < 0.0
+        return -1.0
+    end
+    let mut rv = r
+    let mut gv = g
+    let mut bv = b
+    if rv < 0.0
+        rv = 0.0
+    end
+    if rv > 255.0
+        rv = 255.0
+    end
+    if gv < 0.0
+        gv = 0.0
+    end
+    if gv > 255.0
+        gv = 255.0
+    end
+    if bv < 0.0
+        bv = 0.0
+    end
+    if bv > 255.0
+        bv = 255.0
+    end
+    _ie_layer_r[idx] = rv
+    _ie_layer_g[idx] = gv
+    _ie_layer_b[idx] = bv
+    return 0.0
+end
+
+// ── Tool settings ────────────────────────────────────────
+
+fn ie_set_tool(id, tool)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    if tool < 0.0 || tool > 5.0
+        return -1.0
+    end
+    _ie_tool[id] = tool
+    return tool
+end
+
+fn ie_get_tool(id)
+    if _ie_valid(id) < 0.5
+        return IE_TOOL_BRUSH
+    end
+    return _ie_tool[id]
+end
+
+fn ie_set_brush_size(id, size)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let mut s = size
+    if s < 1.0
+        s = 1.0
+    end
+    if s > 100.0
+        s = 100.0
+    end
+    _ie_brush_size[id] = s
+    return s
+end
+
+fn ie_get_brush_size(id)
+    if _ie_valid(id) < 0.5
+        return 3.0
+    end
+    return _ie_brush_size[id]
+end
+
+fn ie_set_color(id, r, g, b)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let mut rv = r
+    let mut gv = g
+    let mut bv = b
+    if rv < 0.0
+        rv = 0.0
+    end
+    if rv > 255.0
+        rv = 255.0
+    end
+    if gv < 0.0
+        gv = 0.0
+    end
+    if gv > 255.0
+        gv = 255.0
+    end
+    if bv < 0.0
+        bv = 0.0
+    end
+    if bv > 255.0
+        bv = 255.0
+    end
+    _ie_brush_r[id] = rv
+    _ie_brush_g[id] = gv
+    _ie_brush_b[id] = bv
+    return 0.0
+end
+
+fn ie_get_color_r(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_brush_r[id]
+end
+
+fn ie_get_color_g(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_brush_g[id]
+end
+
+fn ie_get_color_b(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_brush_b[id]
+end
+
+fn ie_set_opacity(id, opacity)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let mut o = opacity
+    if o < 0.0
+        o = 0.0
+    end
+    if o > 1.0
+        o = 1.0
+    end
+    _ie_opacity[id] = o
+    return o
+end
+
+fn ie_get_opacity(id)
+    if _ie_valid(id) < 0.5
+        return 1.0
+    end
+    return _ie_opacity[id]
+end
+
+// ── Brush stroke ─────────────────────────────────────────
+
+fn ie_brush_at(id, cx, cy)
+    // Paint a circular brush stroke at (cx, cy)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let li = _ie_active_layer[id]
+    if ie_is_layer_locked(id, li) > 0.5
+        return -1.0
+    end
+    let size = _ie_brush_size[id]
+    let half = floor(size / 2.0)
+    let r = _ie_brush_r[id]
+    let g = _ie_brush_g[id]
+    let b = _ie_brush_b[id]
+    let opa = _ie_opacity[id]
+    let tool = _ie_tool[id]
+    let mut count = 0.0
+    let mut dy = 0.0 - half
+    while dy <= half
+        let mut dx = 0.0 - half
+        while dx <= half
+            // Circle check
+            if dx * dx + dy * dy <= half * half + 0.5
+                let px = floor(cx + dx)
+                let py = floor(cy + dy)
+                let idx = _ie_px_idx(id, px, py)
+                if idx >= 0.0
+                    if tool < 0.5
+                        // Brush: blend with opacity
+                        let old_r = _ie_layer_r[idx]
+                        let old_g = _ie_layer_g[idx]
+                        let old_b = _ie_layer_b[idx]
+                        _ie_layer_r[idx] = old_r + (r - old_r) * opa
+                        _ie_layer_g[idx] = old_g + (g - old_g) * opa
+                        _ie_layer_b[idx] = old_b + (b - old_b) * opa
+                    else
+                        if tool > 0.5 && tool < 1.5
+                            // Eraser: blend toward white
+                            let old_r = _ie_layer_r[idx]
+                            let old_g = _ie_layer_g[idx]
+                            let old_b = _ie_layer_b[idx]
+                            _ie_layer_r[idx] = old_r + (255.0 - old_r) * opa
+                            _ie_layer_g[idx] = old_g + (255.0 - old_g) * opa
+                            _ie_layer_b[idx] = old_b + (255.0 - old_b) * opa
+                        end
+                    end
+                    count = count + 1.0
+                end
+            end
+            dx = dx + 1.0
+        end
+        dy = dy + 1.0
+    end
+    return count
+end
+
+// ── Fill ─────────────────────────────────────────────────
+
+fn ie_fill_rect(id, x, y, w, h, r, g, b)
+    // Fill a rectangular area with a color
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let li = _ie_active_layer[id]
+    if ie_is_layer_locked(id, li) > 0.5
+        return -1.0
+    end
+    let iw = _ie_width[id]
+    let ih = _ie_height[id]
+    let mut count = 0.0
+    let mut py = y
+    while py < y + h && py < ih
+        if py >= 0.0
+            let mut px = x
+            while px < x + w && px < iw
+                if px >= 0.0
+                    ie_set_pixel(id, px, py, r, g, b)
+                    count = count + 1.0
+                end
+                px = px + 1.0
+            end
+        end
+        py = py + 1.0
+    end
+    return count
+end
+
+fn ie_fill_all(id, r, g, b)
+    return ie_fill_rect(id, 0.0, 0.0, _ie_width[id], _ie_height[id], r, g, b)
+end
+
+// ── Eyedropper ───────────────────────────────────────────
+
+fn ie_eyedrop(id, x, y)
+    // Pick color at (x, y) and set as brush color
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let mut result = [0.0, 0.0, 0.0]
+    let r = ie_get_pixel(id, x, y, result)
+    if r < 0.0
+        return -1.0
+    end
+    _ie_brush_r[id] = result[0]
+    _ie_brush_g[id] = result[1]
+    _ie_brush_b[id] = result[2]
+    return 0.0
+end
+
+// ── Selection ────────────────────────────────────────────
+
+fn ie_select_rect(id, x, y, w, h)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let iw = _ie_width[id]
+    let ih = _ie_height[id]
+    let mut sx = x
+    let mut sy = y
+    let mut sw = w
+    let mut sh = h
+    if sx < 0.0
+        sw = sw + sx
+        sx = 0.0
+    end
+    if sy < 0.0
+        sh = sh + sy
+        sy = 0.0
+    end
+    if sx + sw > iw
+        sw = iw - sx
+    end
+    if sy + sh > ih
+        sh = ih - sy
+    end
+    if sw < 0.0
+        sw = 0.0
+    end
+    if sh < 0.0
+        sh = 0.0
+    end
+    _ie_sel_x[id] = sx
+    _ie_sel_y[id] = sy
+    _ie_sel_w[id] = sw
+    _ie_sel_h[id] = sh
+    return sw * sh
+end
+
+fn ie_select_all(id)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    return ie_select_rect(id, 0.0, 0.0, _ie_width[id], _ie_height[id])
+end
+
+fn ie_deselect(id)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    _ie_sel_x[id] = 0.0
+    _ie_sel_y[id] = 0.0
+    _ie_sel_w[id] = 0.0
+    _ie_sel_h[id] = 0.0
+    return 0.0
+end
+
+fn ie_has_selection(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    if _ie_sel_w[id] > 0.5 && _ie_sel_h[id] > 0.5
+        return 1.0
+    end
+    return 0.0
+end
+
+fn ie_selection_x(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_sel_x[id]
+end
+
+fn ie_selection_y(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_sel_y[id]
+end
+
+fn ie_selection_w(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_sel_w[id]
+end
+
+fn ie_selection_h(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_sel_h[id]
+end
+
+// ── Zoom / Pan ───────────────────────────────────────────
+
+fn ie_set_zoom(id, zoom)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let mut z = zoom
+    if z < 0.1
+        z = 0.1
+    end
+    if z > 32.0
+        z = 32.0
+    end
+    _ie_zoom[id] = z
+    return z
+end
+
+fn ie_get_zoom(id)
+    if _ie_valid(id) < 0.5
+        return 1.0
+    end
+    return _ie_zoom[id]
+end
+
+fn ie_pan(id, dx, dy)
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    _ie_pan_x[id] = _ie_pan_x[id] + dx
+    _ie_pan_y[id] = _ie_pan_y[id] + dy
+    return 0.0
+end
+
+// ── Flatten (composite all visible layers) ───────────────
+
+fn ie_flatten(id, out_r, out_g, out_b)
+    // Composite all visible layers into output arrays
+    if _ie_valid(id) < 0.5
+        return -1.0
+    end
+    let w = _ie_width[id]
+    let h = _ie_height[id]
+    let n = w * h
+    // Start with white background
+    let mut i = 0.0
+    while i < n
+        push(out_r, 255.0)
+        push(out_g, 255.0)
+        push(out_b, 255.0)
+        i = i + 1.0
+    end
+    // Composite each visible layer
+    let cnt = _ie_layer_count[id]
+    let mut li = 0.0
+    while li < cnt
+        let gi = _ie_layer_global(id, li)
+        if gi >= 0.0
+            let vis = _ie_layer_data[gi * IE_LAYER_STRIDE + 4.0]
+            let opa = _ie_layer_data[gi * IE_LAYER_STRIDE + 3.0]
+            if vis > 0.5 && opa > 0.001
+                let off = _ie_lpx_off[gi]
+                let mut j = 0.0
+                while j < n
+                    if off + j < len(_ie_layer_r)
+                        let lr = _ie_layer_r[off + j]
+                        let lg = _ie_layer_g[off + j]
+                        let lb = _ie_layer_b[off + j]
+                        out_r[j] = out_r[j] + (lr - out_r[j]) * opa
+                        out_g[j] = out_g[j] + (lg - out_g[j]) * opa
+                        out_b[j] = out_b[j] + (lb - out_b[j]) * opa
+                    end
+                    j = j + 1.0
+                end
+            end
+        end
+        li = li + 1.0
+    end
+    return n
+end
+
+// ── Query ────────────────────────────────────────────────
+
+fn ie_width(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_width[id]
+end
+
+fn ie_height(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_height[id]
+end
+
+fn ie_undo_count(id)
+    if _ie_valid(id) < 0.5
+        return 0.0
+    end
+    return _ie_undo_count[id]
+end

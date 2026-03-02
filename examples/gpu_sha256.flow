@@ -1,6 +1,6 @@
 // gpu_sha256.flow — GPU SHA-256 Parallel Hashing
 //
-// "1024 independent SHA-256 hashes. 1 dispatch. 1 submit. 0 CPU hash iterations."
+// "1024 independent SHA-256 hashes. 1 dispatch. 0 CPU hash iterations."
 //
 // Each thread hashes one pre-padded 64-byte message.
 // Messages are sequential: msg[i] = "abc" with nonce byte = i % 256.
@@ -8,45 +8,33 @@
 //
 // Run: octoflow run examples/gpu_sha256.flow --allow-ffi --allow-read
 
-use "../stdlib/loom/ops/runtime"
-
 let N = 1024.0
 
-// Boot GPU
-rt_init()
-
-let pipe_sha = rt_load_pipeline("tests/gpu_shaders/24_sha256.spv", 2.0, 4.0)
+let vm = loom_boot(1.0, 2.0, N * 64.0)
+loom_prefetch("tests/gpu_shaders/24_sha256.spv")
 
 // ── Build N messages (64 bytes each, pre-padded) ─────────────────────
-// Message format: [97, 98, 99, nonce, 128, 0...0, 0, 32]
-// "abc" + nonce byte, total 4 data bytes → 32 bits length
 let mut input = []
 let mut i = 0.0
 while i < N
   let nonce = i - floor(i / 256.0) * 256.0
-  // Bytes 0-3: a, b, c, nonce
   push(input, 97.0)
   push(input, 98.0)
   push(input, 99.0)
   push(input, nonce)
-  // Byte 4: padding start
   push(input, 128.0)
-  // Bytes 5-61: zeros
   let mut j = 5.0
   while j < 62.0
     push(input, 0.0)
     j = j + 1.0
   end
-  // Bytes 62-63: length = 32 bits = 0x0020
   push(input, 0.0)
   push(input, 32.0)
   i = i + 1.0
 end
 
 // ── Upload ───────────────────────────────────────────────────────────
-let buf_in = rt_create_buffer(N * 64.0 * 4.0)
-let buf_out = rt_create_buffer(N * 32.0 * 4.0)
-rt_upload(buf_in, input)
+vm_write_register(vm, 0.0, 0.0, input)
 
 // Zero output
 let mut zeros = []
@@ -55,38 +43,31 @@ while i < N * 32.0
   push(zeros, 0.0)
   i = i + 1.0
 end
-rt_upload(buf_out, zeros)
+vm_write_register(vm, 0.0, 1.0, zeros)
 
 // ── Dispatch: N/256 = 4 workgroups ───────────────────────────────────
 let t0 = time()
 
-rt_chain_begin(1.0, 2.0)
-let mut pc = [N]
-rt_chain_push_constants(pipe_sha, pc)
-let mut bufs = [buf_in, buf_out]
-rt_chain_dispatch(pipe_sha, bufs, 4.0)
-rt_chain_end()
+loom_dispatch(vm, "tests/gpu_shaders/24_sha256.spv", [N], 4.0)
+let prog = loom_build(vm)
 
 let t1 = time()
 let record_ms = (t1 - t0) * 1000.0
 
 let t2 = time()
-rt_chain_submit_wait()
+loom_run(prog)
 let t3 = time()
 let gpu_ms = (t3 - t2) * 1000.0
+loom_free(prog)
 
 // ── Download all hashes ──────────────────────────────────────────────
-rt_download(buf_out, N * 32.0)
-
-// ── CPU verification: hash message 0 ("abc" + nonce=0) ───────────────
-// SHA-256 of [97, 98, 99, 0] (4 bytes) should match GPU result for msg 0
-// We verify first hash against known computation
+let result = loom_read(vm, 0.0, 1.0, N * 32.0)
 
 // Extract first hash (32 bytes)
 let mut hash0 = []
 let mut i = 0.0
 while i < 32.0
-  push(hash0, rt_result[int(i)])
+  push(hash0, result[int(i)])
   i = i + 1.0
 end
 
@@ -118,12 +99,12 @@ let mut all_nonzero = 1.0
 let mut i = 0.0
 while i < N
   let base = i * 32.0
-  let b0 = rt_result[int(base)]
-  let b1 = rt_result[int(base + 1.0)]
+  let b0 = result[int(base)]
+  let b1 = result[int(base + 1.0)]
   if b0 == 0.0
     if b1 == 0.0
-      let b2 = rt_result[int(base + 2.0)]
-      let b3 = rt_result[int(base + 3.0)]
+      let b2 = result[int(base + 2.0)]
+      let b3 = result[int(base + 3.0)]
       if b2 == 0.0
         if b3 == 0.0
           all_nonzero = 0.0
@@ -134,25 +115,24 @@ while i < N
   i = i + 1.0
 end
 
-// Check messages with same nonce produce same hash (N=1024, nonces wrap at 256)
-// msg[0] and msg[256] both have nonce=0 → same input → same hash
+// Check messages with same nonce produce same hash
 let mut consistency = 1.0
 let mut i = 0.0
 while i < 32.0
-  let a = rt_result[int(i)]
-  let b = rt_result[int(256.0 * 32.0 + i)]
+  let a = result[int(i)]
+  let b = result[int(256.0 * 32.0 + i)]
   if a != b
     consistency = 0.0
   end
   i = i + 1.0
 end
 
-// Check different nonces produce different hashes (msg[0] vs msg[1])
+// Check different nonces produce different hashes
 let mut differs = 0.0
 let mut i = 0.0
 while i < 32.0
-  let a = rt_result[int(i)]
-  let b = rt_result[int(32.0 + i)]
+  let a = result[int(i)]
+  let b = result[int(32.0 + i)]
   if a != b
     differs = 1.0
   end
@@ -166,7 +146,6 @@ print("  Messages: {N}")
 print("  Message size: 64 bytes (pre-padded)")
 print("  Workgroups: 4 (256 threads each)")
 print("  Dispatches: 1")
-print("  Submissions: 1")
 print("  CPU hash iterations: 0")
 print("  Record time: {record_ms} ms")
 print("  GPU time:    {gpu_ms} ms")
@@ -191,4 +170,4 @@ else
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm)

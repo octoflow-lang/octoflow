@@ -1,0 +1,24 @@
+// emit_vm_gen.flow — Generator kernel: output[gid] = gid
+//
+// Fills a buffer with global invocation IDs (0, 1, 2, ...).
+// Used as the producer stage in mailbox pipeline demos.
+//
+// Binding 0: output (float array)
+// No push constants.
+
+use "../../../compiler/ir"
+
+fn emit_vm_gen(out_path)
+  ir_new()
+  ir_input_count = 0.0
+  ir_workgroup_size = 256.0
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  ir_store_output_at(entry, gid, gid_f)
+  ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

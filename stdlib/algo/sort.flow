@@ -1,0 +1,291 @@
+// stdlib/algo/sort.flow — Sorting algorithms
+//
+// Functions: bubble_sort, insertion_sort, quicksort, mergesort,
+//            sort (alias for quicksort), is_sorted
+//
+// All functions sort arrays of numbers in ascending order.
+// Arrays are modified in-place where possible.
+//
+// Usage:
+//   use "sort"
+//   let mut arr = [5.0, 2.0, 8.0, 1.0, 9.0]
+//   quicksort(arr, 0.0, len(arr) - 1.0)
+//   // arr is now [1.0, 2.0, 5.0, 8.0, 9.0]
+
+// ── Bubble Sort ─────────────────────────────────────────────────
+// O(n²) average/worst. Simple, stable. Good for small or nearly-sorted data.
+
+fn bubble_sort(arr)
+    let n = len(arr)
+    if n < 2.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n - 1.0
+        let mut swapped = 0.0
+        let mut j = 0.0
+        while j < n - 1.0 - i
+            if arr[j] > arr[j + 1.0]
+                let tmp = arr[j]
+                arr[j] = arr[j + 1.0]
+                arr[j + 1.0] = tmp
+                swapped = 1.0
+            end
+            j = j + 1.0
+        end
+        if swapped < 0.5
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Insertion Sort ──────────────────────────────────────────────
+// O(n²) average/worst, O(n) best. Stable. Fastest for small arrays (<20 elements).
+
+fn insertion_sort(arr)
+    let n = len(arr)
+    if n < 2.0
+        return 0.0
+    end
+    let mut i = 1.0
+    while i < n
+        let key = arr[i]
+        let mut j = i - 1.0
+        while j >= 0.0 && arr[j] > key
+            arr[j + 1.0] = arr[j]
+            j = j - 1.0
+        end
+        arr[j + 1.0] = key
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Selection Sort ──────────────────────────────────────────────
+// O(n²) always. Simple. Minimizes swaps — useful when writes are expensive.
+
+fn selection_sort(arr)
+    let n = len(arr)
+    if n < 2.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n - 1.0
+        let mut min_idx = i
+        let mut j = i + 1.0
+        while j < n
+            if arr[j] < arr[min_idx]
+                min_idx = j
+            end
+            j = j + 1.0
+        end
+        if min_idx != i
+            let tmp = arr[i]
+            arr[i] = arr[min_idx]
+            arr[min_idx] = tmp
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Quicksort ───────────────────────────────────────────────────
+// O(n log n) average, O(n²) worst. In-place. Not stable.
+// Uses median-of-three pivot selection to avoid worst-case on sorted input.
+
+fn _qs_partition(arr, lo, hi)
+    // Median-of-three pivot selection
+    let mid = floor((lo + hi) / 2.0)
+
+    // Sort lo, mid, hi to find median
+    if arr[lo] > arr[mid]
+        let t1 = arr[lo]
+        arr[lo] = arr[mid]
+        arr[mid] = t1
+    end
+    if arr[lo] > arr[hi]
+        let t2 = arr[lo]
+        arr[lo] = arr[hi]
+        arr[hi] = t2
+    end
+    if arr[mid] > arr[hi]
+        let t3 = arr[mid]
+        arr[mid] = arr[hi]
+        arr[hi] = t3
+    end
+
+    // Move median to hi-1 position as pivot
+    let pivot = arr[mid]
+    let t4 = arr[mid]
+    arr[mid] = arr[hi - 1.0]
+    arr[hi - 1.0] = t4
+
+    let mut i = lo
+    let mut j = hi - 1.0
+
+    let mut done = 0.0
+    while done < 0.5
+        // Move i right past elements < pivot
+        i = i + 1.0
+        while i < hi && arr[i] < pivot
+            i = i + 1.0
+        end
+        // Move j left past elements > pivot
+        j = j - 1.0
+        while j > lo && arr[j] > pivot
+            j = j - 1.0
+        end
+
+        if i < j
+            let tmp = arr[i]
+            arr[i] = arr[j]
+            arr[j] = tmp
+        else
+            done = 1.0
+        end
+    end
+
+    // Restore pivot to partition point
+    let t5 = arr[i]
+    arr[i] = arr[hi - 1.0]
+    arr[hi - 1.0] = t5
+
+    return i
+end
+
+fn quicksort(arr, lo, hi)
+    if hi - lo < 10.0
+        // Insertion sort for small subarrays
+        if lo < hi
+            let mut i = lo + 1.0
+            while i <= hi
+                let key = arr[i]
+                let mut j = i - 1.0
+                while j >= lo && arr[j] > key
+                    arr[j + 1.0] = arr[j]
+                    j = j - 1.0
+                end
+                arr[j + 1.0] = key
+                i = i + 1.0
+            end
+        end
+        return 0.0
+    end
+
+    let pivot_idx = _qs_partition(arr, lo, hi)
+    quicksort(arr, lo, pivot_idx - 1.0)
+    quicksort(arr, pivot_idx + 1.0, hi)
+    return 0.0
+end
+
+// ── Mergesort ───────────────────────────────────────────────────
+// O(n log n) always. Stable. Uses auxiliary array.
+
+fn _merge(arr, aux, lo, mid, hi)
+    // Copy to auxiliary
+    let mut k = lo
+    while k <= hi
+        aux[k] = arr[k]
+        k = k + 1.0
+    end
+
+    // Merge back
+    let mut i = lo
+    let mut j = mid + 1.0
+    let mut idx = lo
+    while i <= mid && j <= hi
+        if aux[i] <= aux[j]
+            arr[idx] = aux[i]
+            i = i + 1.0
+        else
+            arr[idx] = aux[j]
+            j = j + 1.0
+        end
+        idx = idx + 1.0
+    end
+
+    // Copy remaining from left half
+    while i <= mid
+        arr[idx] = aux[i]
+        i = i + 1.0
+        idx = idx + 1.0
+    end
+    // Right half remaining elements are already in place
+    return 0.0
+end
+
+fn _mergesort_rec(arr, aux, lo, hi)
+    if lo >= hi
+        return 0.0
+    end
+    let mid = floor((lo + hi) / 2.0)
+    _mergesort_rec(arr, aux, lo, mid)
+    _mergesort_rec(arr, aux, mid + 1.0, hi)
+
+    // Skip merge if already sorted across partition
+    if arr[mid] <= arr[mid + 1.0]
+        return 0.0
+    end
+    _merge(arr, aux, lo, mid, hi)
+    return 0.0
+end
+
+fn mergesort(arr)
+    let n = len(arr)
+    if n < 2.0
+        return 0.0
+    end
+    let mut aux = array_new(n, 0.0)
+    _mergesort_rec(arr, aux, 0.0, n - 1.0)
+    return 0.0
+end
+
+// ── Convenience ─────────────────────────────────────────────────
+
+fn sort(arr)
+    // Default sort: quicksort for arrays > 20 elements, insertion for smaller.
+    let n = len(arr)
+    if n < 2.0
+        return 0.0
+    end
+    if n <= 20.0
+        insertion_sort(arr)
+    else
+        quicksort(arr, 0.0, n - 1.0)
+    end
+    return 0.0
+end
+
+fn is_sorted(arr)
+    // Check if array is sorted in ascending order.
+    let n = len(arr)
+    if n < 2.0
+        return 1.0
+    end
+    let mut i = 0.0
+    while i < n - 1.0
+        if arr[i] > arr[i + 1.0]
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn sort_descending(arr)
+    // Sort in descending order (sort ascending, then reverse in-place).
+    sort(arr)
+    let n = len(arr)
+    let mut i = 0.0
+    let half = floor(n / 2.0)
+    while i < half
+        let j = n - 1.0 - i
+        let tmp = arr[i]
+        arr[i] = arr[j]
+        arr[j] = tmp
+        i = i + 1.0
+    end
+    return 0.0
+end

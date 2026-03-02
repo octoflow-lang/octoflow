@@ -1,0 +1,145 @@
+// stdlib/collections/state_machine.flow — Finite State Machine
+//
+// Functions: fsm_create, fsm_add_state, fsm_add_transition, fsm_step,
+//            fsm_current, fsm_reset, fsm_is_accepting, fsm_can_step,
+//            fsm_transitions, fsm_run_sequence
+//
+// State machine stored as a map with:
+//   __current: current state name
+//   __initial: initial state name
+//   __accepting: comma-separated list of accepting states
+//   __states: comma-separated list of all states
+//   t_{from}_{input}: destination state for transition
+//   a_{from}_{input}: action string for transition
+//
+// Usage:
+//   use "state_machine"
+//   let mut fsm = fsm_create("idle")
+//   fsm_add_state(fsm, "idle")
+//   fsm_add_state(fsm, "running")
+//   fsm_add_transition(fsm, "idle", "start", "running", "begin_work")
+//   let action = fsm_step(fsm, "start")  // → "begin_work", current = "running"
+
+fn fsm_create(initial_state)
+    // Create a new FSM with initial state.
+    let mut fsm = map()
+    map_set(fsm, "__current", initial_state)
+    map_set(fsm, "__initial", initial_state)
+    map_set(fsm, "__accepting", "")
+    map_set(fsm, "__states", initial_state)
+    return fsm
+end
+
+fn fsm_add_state(fsm, name)
+    // Register a state. Duplicate registration is safe.
+    let states = map_get(fsm, "__states")
+    let delimited = "," + states + ","
+    if contains(delimited, "," + name + ",") == 0.0
+        map_set(fsm, "__states", states + "," + name)
+    end
+    return 0.0
+end
+
+fn fsm_set_accepting(fsm, name)
+    // Mark a state as an accepting/final state.
+    fsm_add_state(fsm, name)
+    let acc = map_get(fsm, "__accepting")
+    if len(acc) > 0.0
+        let delimited = "," + acc + ","
+        if contains(delimited, "," + name + ",") == 0.0
+            map_set(fsm, "__accepting", acc + "," + name)
+        end
+    else
+        map_set(fsm, "__accepting", name)
+    end
+    return 0.0
+end
+
+fn fsm_add_transition(fsm, from_state, input, to_state, action)
+    // Add a transition: from_state --input--> to_state, performing action.
+    // action is a string label (or "" for no action).
+    fsm_add_state(fsm, from_state)
+    fsm_add_state(fsm, to_state)
+    let tkey = "t_" + from_state + "_" + input
+    let akey = "a_" + from_state + "_" + input
+    map_set(fsm, tkey, to_state)
+    map_set(fsm, akey, action)
+    return 0.0
+end
+
+fn fsm_step(fsm, input)
+    // Process an input. Transitions to new state if valid.
+    // Returns action string, or "" if no valid transition.
+    let current = map_get(fsm, "__current")
+    let tkey = "t_" + current + "_" + input
+    if map_has(fsm, tkey)
+        let next = map_get(fsm, tkey)
+        let akey = "a_" + current + "_" + input
+        let action = map_get(fsm, akey)
+        map_set(fsm, "__current", next)
+        return action
+    end
+    return ""
+end
+
+fn fsm_can_step(fsm, input)
+    // Check if input is valid from current state.
+    let current = map_get(fsm, "__current")
+    let tkey = "t_" + current + "_" + input
+    if map_has(fsm, tkey)
+        return 1.0
+    end
+    return 0.0
+end
+
+fn fsm_current(fsm)
+    // Get current state name.
+    return map_get(fsm, "__current")
+end
+
+fn fsm_reset(fsm)
+    // Reset to initial state.
+    let initial = map_get(fsm, "__initial")
+    map_set(fsm, "__current", initial)
+    return 0.0
+end
+
+fn fsm_is_accepting(fsm)
+    // Check if current state is an accepting state.
+    let current = map_get(fsm, "__current")
+    let acc = map_get(fsm, "__accepting")
+    if len(acc) == 0.0
+        return 0.0
+    end
+    let delimited = "," + acc + ","
+    if contains(delimited, "," + current + ",")
+        return 1.0
+    end
+    return 0.0
+end
+
+fn fsm_run_sequence(fsm, inputs)
+    // Run a sequence of inputs (comma-separated string).
+    // Returns comma-separated string of actions taken.
+    let parts = split(inputs, ",")
+    let n = len(parts)
+    let mut actions = ""
+    let mut i = 0.0
+    while i < n
+        let action = fsm_step(fsm, parts[i])
+        if len(action) > 0.0
+            if len(actions) > 0.0
+                actions = actions + "," + action
+            else
+                actions = action
+            end
+        end
+        i = i + 1.0
+    end
+    return actions
+end
+
+fn fsm_states(fsm)
+    // Get all registered states as comma-separated string.
+    return map_get(fsm, "__states")
+end

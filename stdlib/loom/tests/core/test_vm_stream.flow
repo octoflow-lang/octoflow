@@ -139,7 +139,7 @@ while batch_num < 3.0
   let _wb = vm_write_register(vm2, 0.0, 0.0, batch_data)
 
   // Execute async
-  let _ea = vm_execute_async(prog2)
+  let _ea = loom_launch(prog2)
 
   // Poll until done
   let mut bdone = vm_poll(prog2)

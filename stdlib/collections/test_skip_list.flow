@@ -1,0 +1,120 @@
+// test_skip_list.flow — Tests for stdlib/collections/skip_list.flow
+use "skip_list"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Basic operations ──────────────────────────────────────
+
+fn test_create()
+    let mut sl = skip_create()
+    check("create empty", skip_size(sl) == 0.0)
+    check("create min", skip_min(sl) == -1.0)
+    return 0.0
+end
+
+fn test_insert_search()
+    let mut sl = skip_create()
+    skip_insert(sl, 5.0)
+    skip_insert(sl, 3.0)
+    skip_insert(sl, 8.0)
+    skip_insert(sl, 1.0)
+    skip_insert(sl, 10.0)
+    check("size 5", skip_size(sl) == 5.0)
+    check("search 5", skip_search(sl, 5.0) == 1.0)
+    check("search 3", skip_search(sl, 3.0) == 1.0)
+    check("search 8", skip_search(sl, 8.0) == 1.0)
+    check("search miss", skip_search(sl, 7.0) == 0.0)
+    return 0.0
+end
+
+// ── Min / Max ─────────────────────────────────────────────
+
+fn test_min_max()
+    let mut sl = skip_create()
+    skip_insert(sl, 20.0)
+    skip_insert(sl, 5.0)
+    skip_insert(sl, 15.0)
+    skip_insert(sl, 10.0)
+    check("min", skip_min(sl) == 5.0)
+    check("max", skip_max(sl) == 20.0)
+    return 0.0
+end
+
+// ── To array (sorted) ─────────────────────────────────────
+
+fn test_to_array()
+    let mut sl = skip_create()
+    skip_insert(sl, 30.0)
+    skip_insert(sl, 10.0)
+    skip_insert(sl, 20.0)
+    let arr = skip_to_array(sl)
+    check("arr len", len(arr) == 3.0)
+    check("arr[0]", arr[0] == 10.0)
+    check("arr[1]", arr[1] == 20.0)
+    check("arr[2]", arr[2] == 30.0)
+    return 0.0
+end
+
+// ── Remove ────────────────────────────────────────────────
+
+fn test_remove()
+    let mut sl = skip_create()
+    skip_insert(sl, 1.0)
+    skip_insert(sl, 2.0)
+    skip_insert(sl, 3.0)
+    skip_insert(sl, 4.0)
+    let removed = skip_remove(sl, 2.0)
+    check("remove found", removed == 1.0)
+    check("remove size", skip_size(sl) == 3.0)
+    check("remove search", skip_search(sl, 2.0) == 0.0)
+    let not_found = skip_remove(sl, 99.0)
+    check("remove miss", not_found == 0.0)
+    return 0.0
+end
+
+// ── Range query ───────────────────────────────────────────
+
+fn test_range()
+    let mut sl = skip_create()
+    skip_insert(sl, 1.0)
+    skip_insert(sl, 3.0)
+    skip_insert(sl, 5.0)
+    skip_insert(sl, 7.0)
+    skip_insert(sl, 9.0)
+    let r = skip_range(sl, 3.0, 7.0)
+    check("range len", len(r) == 3.0)
+    check("range[0]", r[0] == 3.0)
+    check("range[1]", r[1] == 5.0)
+    check("range[2]", r[2] == 7.0)
+    return 0.0
+end
+
+// ── Contains ──────────────────────────────────────────────
+
+fn test_contains()
+    let mut sl = skip_create()
+    skip_insert(sl, 42.0)
+    check("contains yes", skip_contains(sl, 42.0) == 1.0)
+    check("contains no", skip_contains(sl, 43.0) == 0.0)
+    return 0.0
+end
+
+// ── Run all ───────────────────────────────────────────────
+
+test_create()
+test_insert_search()
+test_min_max()
+test_to_array()
+test_remove()
+test_range()
+test_contains()
+print("")
+print("All skip_list tests passed (7 tests)")

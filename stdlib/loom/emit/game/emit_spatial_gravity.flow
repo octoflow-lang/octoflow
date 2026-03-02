@@ -1,0 +1,228 @@
+// emit_spatial_gravity.flow — O(N) gravity using spatial hash grid
+//
+// 1 thread = 1 particle. Only checks 27 neighbor cells for interactions.
+// Uses sorted particle arrays + prefix-sum offsets.
+//
+// Push constants (4 floats):
+//   pc[0] = N (particle count)
+//   pc[1] = GRID_SIZE
+//   pc[2] = dt (timestep)
+//   pc[3] = softening²
+//
+// Buffer layout:
+//   Binding 0: sorted_pos[N*4], sorted_vel[N*4] — READ
+//   Binding 1: offsets[GRID³+1] — READ (prefix sum)
+//   Binding 2: positions[N*4], velocities[N*4] — WRITE (original order)
+//   Binding 3: sorted_to_original[N] — READ (index mapping)
+//
+// Dispatch: loom_dispatch(vm, "spatial_gravity.spv", [N, GRID, dt, soft²], ceil(N/256))
+
+use "../../../compiler/ir"
+
+fn emit_spatial_gravity(out_path)
+  ir_new()
+  ir_input_count = 4.0
+
+  let entry = ir_block("entry")
+
+  let c0f = ir_const_f(entry, 0.0)
+  let c1f = ir_const_f(entry, 1.0)
+  let c2f = ir_const_f(entry, 2.0)
+  let c_neg1f = ir_const_f(entry, -1.0)
+  let c3f = ir_const_f(entry, 3.0)
+  let c27f = ir_const_f(entry, 27.0)
+  let c0u = ir_const_u(entry, 0)
+  let c1u = ir_const_u(entry, 1)
+  let c2u = ir_const_u(entry, 2)
+  let c3u = ir_const_u(entry, 3)
+  let c4u = ir_const_u(entry, 4)
+
+  let pc_n = ir_push_const(entry, 0.0)
+  let pc_grid = ir_push_const(entry, 1.0)
+  let pc_dt = ir_push_const(entry, 2.0)
+  let pc_soft2 = ir_push_const(entry, 3.0)
+
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let in_bounds = ir_folt(entry, gid_f, pc_n)
+
+  let main_m = ir_block("main_merge")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_bounds, work, main_m)
+
+  let n_u = ir_ftou(work, pc_n)
+
+  // ── Load my particle (sorted) ──
+  let i4 = ir_imul(work, gid, c4u)
+  let pos_x = ir_load_input_at(work, 0.0, i4)
+  let pos_y = ir_load_input_at(work, 0.0, ir_iadd(work, i4, c1u))
+  let pos_z = ir_load_input_at(work, 0.0, ir_iadd(work, i4, c2u))
+  let mass_i = ir_load_input_at(work, 0.0, ir_iadd(work, i4, c3u))
+
+  let vel_base = ir_imul(work, n_u, c4u)
+  let vel_off = ir_iadd(work, vel_base, i4)
+  let vel_x = ir_load_input_at(work, 0.0, vel_off)
+  let vel_y = ir_load_input_at(work, 0.0, ir_iadd(work, vel_off, c1u))
+  let vel_z = ir_load_input_at(work, 0.0, ir_iadd(work, vel_off, c2u))
+
+  // ── Compute my cell coordinates ──
+  let grid_half = ir_fdiv(work, pc_grid, c2f)
+  let grid_m1 = ir_fsub(work, pc_grid, c1f)
+  let cx = ir_fmin(work, ir_fmax(work, ir_floor(work, ir_fmul(work, ir_fadd(work, pos_x, c1f), grid_half)), c0f), grid_m1)
+  let cy = ir_fmin(work, ir_fmax(work, ir_floor(work, ir_fmul(work, ir_fadd(work, pos_y, c1f), grid_half)), c0f), grid_m1)
+  let cz = ir_fmin(work, ir_fmax(work, ir_floor(work, ir_fmul(work, ir_fadd(work, pos_z, c1f), grid_half)), c0f), grid_m1)
+
+  let grid2 = ir_fmul(work, pc_grid, pc_grid)
+
+  // ── Outer loop: 27 neighbor offsets (encoded as 0..26) ──
+  // neighbor_idx → (dx, dy, dz) where dx = idx%3-1, dy = (idx/3)%3-1, dz = idx/9-1
+  let nh = ir_block("n_hdr")
+  let nb = ir_block("n_body")
+  let nc = ir_block("n_cont")
+  let nm = ir_block("n_merge")
+
+  ir_term_branch(work, nh)
+  ir_loop_merge(nh, nm, nc)
+
+  let phi_ni = ir_phi(nh, IR_TYPE_FLOAT)
+  let phi_ax = ir_phi(nh, IR_TYPE_FLOAT)
+  let phi_ay = ir_phi(nh, IR_TYPE_FLOAT)
+  let phi_az = ir_phi(nh, IR_TYPE_FLOAT)
+
+  let ni_cond = ir_folt(nh, phi_ni, c27f)
+  ir_term_cond_branch(nh, ni_cond, nb, nm)
+
+  // Decode neighbor offset: dx = ni%3-1, dy = (ni/3)%3-1, dz = ni/9-1
+  let ni_dx = ir_fsub(nb, ir_fsub(nb, phi_ni, ir_fmul(nb, ir_floor(nb, ir_fdiv(nb, phi_ni, c3f)), c3f)), c1f)
+  let ni_dy = ir_fsub(nb, ir_fsub(nb, ir_floor(nb, ir_fdiv(nb, phi_ni, c3f)), ir_fmul(nb, ir_floor(nb, ir_fdiv(nb, phi_ni, ir_const_f(nb, 9.0))), c3f)), c1f)
+  let ni_dz = ir_fsub(nb, ir_floor(nb, ir_fdiv(nb, phi_ni, ir_const_f(nb, 9.0))), c1f)
+
+  // Neighbor cell coords
+  let ncx = ir_fadd(nb, cx, ni_dx)
+  let ncy = ir_fadd(nb, cy, ni_dy)
+  let ncz = ir_fadd(nb, cz, ni_dz)
+
+  // Bounds check: valid if all coords in [0, GRID-1]
+  let nx_valid = ir_land(nb, ir_foge(nb, ncx, c0f), ir_folt(nb, ncx, pc_grid))
+  let ny_valid = ir_land(nb, ir_foge(nb, ncy, c0f), ir_folt(nb, ncy, pc_grid))
+  let nz_valid = ir_land(nb, ir_foge(nb, ncz, c0f), ir_folt(nb, ncz, pc_grid))
+  let cell_valid = ir_land(nb, ir_land(nb, nx_valid, ny_valid), nz_valid)
+
+  // Neighbor cell linear index
+  let ncell = ir_fadd(nb, ir_fadd(nb, ncx, ir_fmul(nb, ncy, pc_grid)), ir_fmul(nb, ncz, grid2))
+  let ncell_u = ir_ftou(nb, ncell)
+
+  // Read offsets[ncell] and offsets[ncell+1] from binding 1
+  let range_start_f = ir_select(nb, IR_TYPE_FLOAT, cell_valid, ir_load_input_at(nb, 1.0, ncell_u), c0f)
+  let ncell_p1 = ir_iadd(nb, ncell_u, c1u)
+  let range_end_f = ir_select(nb, IR_TYPE_FLOAT, cell_valid, ir_load_input_at(nb, 1.0, ncell_p1), c0f)
+
+  // ── Inner loop: particles in this neighbor cell ──
+  let jh = ir_block("j_hdr")
+  let jb = ir_block("j_body")
+  let jc = ir_block("j_cont")
+  let jm = ir_block("j_merge")
+
+  ir_term_branch(nb, jh)
+  ir_loop_merge(jh, jm, jc)
+
+  let phi_j = ir_phi(jh, IR_TYPE_FLOAT)
+  let phi_jax = ir_phi(jh, IR_TYPE_FLOAT)
+  let phi_jay = ir_phi(jh, IR_TYPE_FLOAT)
+  let phi_jaz = ir_phi(jh, IR_TYPE_FLOAT)
+
+  let j_cond = ir_folt(jh, phi_j, range_end_f)
+  ir_term_cond_branch(jh, j_cond, jb, jm)
+
+  // Load sorted particle j
+  let ju = ir_ftou(jb, phi_j)
+  let j4 = ir_imul(jb, ju, c4u)
+  let sj_x = ir_load_input_at(jb, 0.0, j4)
+  let sj_y = ir_load_input_at(jb, 0.0, ir_iadd(jb, j4, c1u))
+  let sj_z = ir_load_input_at(jb, 0.0, ir_iadd(jb, j4, c2u))
+  let sj_m = ir_load_input_at(jb, 0.0, ir_iadd(jb, j4, c3u))
+
+  // Gravity: skip self (j == gid)
+  let not_self = ir_fone(jb, phi_j, gid_f)
+  let dx = ir_fsub(jb, sj_x, pos_x)
+  let dy = ir_fsub(jb, sj_y, pos_y)
+  let dz = ir_fsub(jb, sj_z, pos_z)
+  let dist2 = ir_fadd(jb, ir_fadd(jb, ir_fadd(jb, ir_fmul(jb, dx, dx), ir_fmul(jb, dy, dy)), ir_fmul(jb, dz, dz)), pc_soft2)
+  let dist = ir_sqrt(jb, dist2)
+  let dist3 = ir_fmul(jb, dist2, dist)
+  let inv_dist3 = ir_fdiv(jb, c1f, dist3)
+  let force = ir_fmul(jb, sj_m, inv_dist3)
+
+  // Conditionally accumulate (skip self)
+  let add_x = ir_select(jb, IR_TYPE_FLOAT, not_self, ir_fmul(jb, dx, force), c0f)
+  let add_y = ir_select(jb, IR_TYPE_FLOAT, not_self, ir_fmul(jb, dy, force), c0f)
+  let add_z = ir_select(jb, IR_TYPE_FLOAT, not_self, ir_fmul(jb, dz, force), c0f)
+
+  let new_jax = ir_fadd(jb, phi_jax, add_x)
+  let new_jay = ir_fadd(jb, phi_jay, add_y)
+  let new_jaz = ir_fadd(jb, phi_jaz, add_z)
+
+  ir_term_branch(jb, jc)
+
+  let j_next = ir_fadd(jc, phi_j, c1f)
+  ir_term_branch(jc, jh)
+
+  // Wire inner phi
+  ir_phi_add(phi_j, range_start_f, nb)
+  ir_phi_add(phi_j, j_next, jc)
+  ir_phi_add(phi_jax, phi_ax, nb)
+  ir_phi_add(phi_jax, new_jax, jc)
+  ir_phi_add(phi_jay, phi_ay, nb)
+  ir_phi_add(phi_jay, new_jay, jc)
+  ir_phi_add(phi_jaz, phi_az, nb)
+  ir_phi_add(phi_jaz, new_jaz, jc)
+
+  // After inner loop → continue outer
+  ir_term_branch(jm, nc)
+
+  let ni_next = ir_fadd(nc, phi_ni, c1f)
+  ir_term_branch(nc, nh)
+
+  // Wire outer phi
+  ir_phi_add(phi_ni, c0f, work)
+  ir_phi_add(phi_ni, ni_next, nc)
+  ir_phi_add(phi_ax, c0f, work)
+  ir_phi_add(phi_ax, phi_jax, nc)
+  ir_phi_add(phi_ay, c0f, work)
+  ir_phi_add(phi_ay, phi_jay, nc)
+  ir_phi_add(phi_az, c0f, work)
+  ir_phi_add(phi_az, phi_jaz, nc)
+
+  // ── Leapfrog integration ──
+  let new_vx = ir_fadd(nm, vel_x, ir_fmul(nm, phi_ax, pc_dt))
+  let new_vy = ir_fadd(nm, vel_y, ir_fmul(nm, phi_ay, pc_dt))
+  let new_vz = ir_fadd(nm, vel_z, ir_fmul(nm, phi_az, pc_dt))
+  let new_px = ir_fadd(nm, pos_x, ir_fmul(nm, new_vx, pc_dt))
+  let new_py = ir_fadd(nm, pos_y, ir_fmul(nm, new_vy, pc_dt))
+  let new_pz = ir_fadd(nm, pos_z, ir_fmul(nm, new_vz, pc_dt))
+
+  // ── Get original index from binding 3 ──
+  let orig_idx_f = ir_load_input_at(nm, 3.0, gid)
+  let orig_u = ir_ftou(nm, orig_idx_f)
+  let o4 = ir_imul(nm, orig_u, c4u)
+
+  // ── Write to original positions (binding 2) ──
+  ir_buf_store_f(nm, 2.0, o4, new_px)
+  ir_buf_store_f(nm, 2.0, ir_iadd(nm, o4, c1u), new_py)
+  ir_buf_store_f(nm, 2.0, ir_iadd(nm, o4, c2u), new_pz)
+  ir_buf_store_f(nm, 2.0, ir_iadd(nm, o4, c3u), mass_i)
+
+  // Write velocities (binding 2, offset N*4)
+  let vel_dst = ir_iadd(nm, ir_imul(nm, n_u, c4u), o4)
+  ir_buf_store_f(nm, 2.0, vel_dst, new_vx)
+  ir_buf_store_f(nm, 2.0, ir_iadd(nm, vel_dst, c1u), new_vy)
+  ir_buf_store_f(nm, 2.0, ir_iadd(nm, vel_dst, c2u), new_vz)
+  ir_buf_store_f(nm, 2.0, ir_iadd(nm, vel_dst, c3u), c0f)
+
+  ir_term_branch(nm, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

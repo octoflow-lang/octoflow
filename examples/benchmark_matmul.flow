@@ -1,0 +1,43 @@
+// Matrix Multiplication Benchmark — OctoFlow GPU
+// Compare with: python examples/benchmark_matmul.py
+// Tests: 256x256, 512x512, 1024x1024 on Vulkan GPU
+
+print("=== OctoFlow GPU Matrix Multiply Benchmark ===")
+
+// 256x256
+let n1 = 256.0
+let sz1 = n1 * n1
+let a1 = gpu_fill(1.0, sz1)
+let b1 = gpu_fill(1.0, sz1)
+let t1 = now_ms()
+let c1 = gpu_matmul(a1, b1, n1, n1, n1)
+let t2 = now_ms()
+let ms1 = t2 - t1
+let v1 = c1[0]
+print("256x256:  {ms1:.1} ms  c[0]={v1}")
+
+// 512x512
+let n2 = 512.0
+let sz2 = n2 * n2
+let a2 = gpu_fill(1.0, sz2)
+let b2 = gpu_fill(1.0, sz2)
+let t3 = now_ms()
+let c2 = gpu_matmul(a2, b2, n2, n2, n2)
+let t4 = now_ms()
+let ms2 = t4 - t3
+let v2 = c2[0]
+print("512x512:  {ms2:.1} ms  c[0]={v2}")
+
+// 1024x1024
+let n3 = 1024.0
+let sz3 = n3 * n3
+let a3 = gpu_fill(1.0, sz3)
+let b3 = gpu_fill(1.0, sz3)
+let t5 = now_ms()
+let c3 = gpu_matmul(a3, b3, n3, n3, n3)
+let t6 = now_ms()
+let ms3 = t6 - t5
+let v3 = c3[0]
+print("1024x1024: {ms3:.1} ms  c[0]={v3}")
+
+print("--- done ---")

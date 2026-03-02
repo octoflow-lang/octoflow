@@ -27,11 +27,11 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Models & large data
+# Models & large data (not source)
 models/
 *.gguf
 
-# Release staging
+# Release staging (binary distribution)
 release-staging/
 
 # Logs
@@ -44,11 +44,11 @@ hello
 pytorch_results.txt
 showcase_err.txt
 
-# Root-level debug/test scripts
+# Root-level debug/test scripts and data
 /*.flow
 /test_data/
 
-# Internal session notes
+# Internal session notes (archived to docs/archive/)
 /ATOMIC_IMPLEMENTATION.md
 /CONSOLIDATION_TODO.md
 /HONEST_ASSESSMENT.md
@@ -68,79 +68,13 @@ showcase_err.txt
 # Tools
 /tools/
 
-# ── NOT PUBLIC ──
-# Source code (Rust compiler, not stdlib/compiler which is .flow)
-/compiler/
-apps/
-Cargo.toml
-Cargo.lock
-run_test.ps1
+# Test artifacts
+compiler/test.png
+examples/high_scores.csv
+stdlib/db/__test_*
 
-# Internal
-tests/
-benchmark/
-scripts/
-training/
-CLAUDE.md
-OctoBrain/
-
-# Internal docs (only user-facing docs are tracked)
-docs/archive/
-docs/plans/
-docs/llm/
-docs/octoflow-docs/
-docs/stdlib/
-docs/annex-*.md
-docs/positioning.md
-docs/roadmap.md
-docs/blueprint.md
-docs/*.zip
-docs/AUDIT_AND_HARDENING.md
-docs/CODING-GUIDE.md
-docs/COMPILER_ON_GPU.md
-docs/DEBUG.md
-docs/GPU_VIRTUAL_MACHINE.md
-docs/LAUNCH_CHECKLIST.md
-docs/OCTOFLOW_*.md
-docs/benchmark-gpu.md
-docs/domain-*.md
-docs/ffi-design.md
-docs/gpu-*.md
-docs/milestone-*.md
-docs/octoflow-*.md
-docs/octoview-*.md
-docs/phase*.md
-docs/public-release-readiness.md
-docs/rust-dependency-audit.md
-docs/stdlib.md
-docs/zero-dependency-vision.md
-
-# Binary assets in examples
-examples/*.png
-examples/*.PNG
-examples/*.jpg
-examples/*.mp4
-examples/*.gif
-
-# Benchmark files
-examples/benchmark_*.py
-examples/benchmark_*.cu
-examples/benchmark_*.flow
-examples/benchmark.flow
-examples/bench_*.flow
-examples/run_*.ps1
-examples/run_*.bat
-examples/test_data/
-examples/stress_*.flow
-examples/test_*.flow
-!examples/test_scalar_mod.flow
-!examples/test_struct_mod.flow
-!examples/test_const_mod.flow
-!examples/test_all_mod.flow
-!examples/test_array_mod.flow
-!examples/test_array_fn_mod.flow
-!examples/test_math_mod.flow
-!examples/test_nested_use_mod.flow
-examples/GPU_*.md
-.github/*
-!.github/ISSUE_TEMPLATE/
+# Large data files
+examples/test_data/bench_10m.csv
+models/*.gguf
+models/*/embed.bin
+*.bin.gz

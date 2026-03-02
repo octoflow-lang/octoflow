@@ -1,0 +1,329 @@
+// OctoBrain NLP Transition Prediction Benchmark
+// Measures how well the brain predicts next-character-pattern transitions
+// in English text using edge structure and a first-order Markov table.
+//
+// Training: "the quick brown fox jumps over the lazy dog " x20 (~900 chars)
+// Test:     "the cat sat on the mat the dog ran " x10 (~350 chars)
+//
+// Zero-centering: subtract corpus mean from each code before feeding.
+// Transition table: flat [proto_count x proto_count] counts from training.
+// Prediction: argmax(trans_counts[current_proto * proto_count + :])
+//
+// PASS/FAIL criteria:
+//   - Transition prediction >= 30% on test text
+//   - New protos during test <= 3
+//   - Total proto count <= 20
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\bench_nlp.flow"
+
+use "../lib/octobrain"
+use "../lib/text"
+
+// ── Create brain with 2 actions ──────────────────────────────────
+let mut brain = octobrain_new(2.0)
+
+// Proto arrays
+let mut p_state = proto_new()
+let mut p_embs = []
+let mut p_mc = []
+
+// Embed arrays
+let mut e_state = embed_new()
+let mut W_embed = []
+let mut obs_buffer = []
+
+// Edge arrays
+let mut edge_state = edges_new()
+let mut en = []
+let mut ea = []
+let mut eo = []
+let mut ep = []
+let mut ew = []
+let mut eact = []
+
+// Context window
+let mut window = []
+
+// Action weights
+let mut W_score = []
+
+print("=== OctoBrain NLP Transition Prediction Benchmark ===")
+print("")
+
+// ── Training corpus ────────────────────────────────────────────────
+let train_base = "the quick brown fox jumps over the lazy dog "
+let mut train_text = ""
+let mut rep = 0.0
+while rep < 20.0
+  train_text = train_text + train_base
+  rep = rep + 1.0
+end
+
+let train_len = len(train_text)
+let train_len_int = int(train_len)
+print("Training text: '{train_base}' x20 = {train_len_int} chars")
+
+// ── Convert training text to codes and compute mean ────────────────
+let train_codes = text_to_codes(train_text)
+let train_codes_len = len(train_codes)
+let gram_size = 3.0
+
+// Compute mean code for zero-centering
+let mut code_sum = 0.0
+let mut ci = 0.0
+while ci < train_codes_len
+  code_sum = code_sum + train_codes[ci]
+  ci = ci + 1.0
+end
+let code_mean = code_sum / train_codes_len
+
+let train_max_pos = train_codes_len - gram_size + 1.0
+let train_obs_int = int(train_max_pos)
+print("Training observations (3-grams): {train_obs_int}")
+print("Code mean for zero-centering: {code_mean:.4}")
+print("")
+
+// ── Training pass: feed zero-centered 3-grams, record proto sequence ──
+print("--- Training Phase ---")
+let mut train_seq = []
+let mut pos = 0.0
+let mut obs_count = 0.0
+while pos < train_max_pos
+  // Extract raw trigram and zero-center
+  let raw_gram = text_ngram(train_codes, pos, gram_size)
+  let c0 = raw_gram[0] - code_mean
+  let c1 = raw_gram[1] - code_mean
+  let c2 = raw_gram[2] - code_mean
+  let mut gram = []
+  push(gram, c0)
+  push(gram, c1)
+  push(gram, c2)
+
+  let dummy = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, gram)
+  let pid = map_get(p_state, "last_match_id")
+  push(train_seq, pid)
+  obs_count = obs_count + 1.0
+
+  // Print milestones
+  if obs_count == 200.0 || obs_count == 500.0 || obs_count == 800.0
+    let stats = octobrain_stats(brain, p_state, edge_state)
+    let pc = map_get(stats, "proto_count")
+    let ec = map_get(stats, "edge_count")
+    let tc = map_get(stats, "transition_count")
+    let oc_int = int(obs_count)
+    print("  Step {oc_int}: protos={pc}, edges={ec}, transitions={tc}")
+  end
+
+  pos = pos + 1.0
+end
+
+let train_stats = octobrain_stats(brain, p_state, edge_state)
+let train_pc = map_get(train_stats, "proto_count")
+let train_ec = map_get(train_stats, "edge_count")
+let train_tc = map_get(train_stats, "transition_count")
+let train_pc_int = int(train_pc)
+let train_ec_int = int(train_ec)
+let train_tc_int = int(train_tc)
+print("Training complete: protos={train_pc_int}, edges={train_ec_int}, transitions={train_tc_int}")
+print("")
+
+// ── Build first-order Markov transition table from training sequence ──
+print("--- Building Transition Table ---")
+
+// Flat table: trans_counts[from * train_pc + to] = count
+let mut trans_counts = []
+let table_size = train_pc * train_pc
+let mut ti = 0.0
+while ti < table_size
+  push(trans_counts, 0.0)
+  ti = ti + 1.0
+end
+
+let seqlen = len(train_seq)
+let mut si = 1.0
+let mut trans_total = 0.0
+while si < seqlen
+  let from_id = train_seq[si - 1.0]
+  let to_id = train_seq[si]
+  let tidx = from_id * train_pc + to_id
+  trans_counts[tidx] = trans_counts[tidx] + 1.0
+  trans_total = trans_total + 1.0
+  si = si + 1.0
+end
+
+let trans_total_int = int(trans_total)
+let table_size_int = int(table_size)
+print("Transition table: {table_size_int} cells ({train_pc_int}x{train_pc_int})")
+print("Total transitions recorded: {trans_total_int}")
+
+// Count non-zero transition cells
+let mut nonzero_cells = 0.0
+let mut nzi = 0.0
+while nzi < table_size
+  if trans_counts[nzi] > 0.0
+    nonzero_cells = nonzero_cells + 1.0
+  end
+  nzi = nzi + 1.0
+end
+let nonzero_int = int(nonzero_cells)
+print("Non-zero transition cells: {nonzero_int}")
+
+// Random baseline
+let random_baseline = 1.0 / train_pc
+print("Random baseline: 1/{train_pc_int} = {random_baseline:.4}")
+print("")
+
+// ── Test corpus ────────────────────────────────────────────────────
+let test_base = "the cat sat on the mat the dog ran "
+let mut test_text = ""
+let mut rep2 = 0.0
+while rep2 < 10.0
+  test_text = test_text + test_base
+  rep2 = rep2 + 1.0
+end
+
+let test_len = len(test_text)
+let test_len_int = int(test_len)
+print("--- Test Phase ---")
+print("Test text: '{test_base}' x10 = {test_len_int} chars")
+
+// Convert test text to codes (use TRAINING mean for centering)
+let test_codes = text_to_codes(test_text)
+let test_codes_len = len(test_codes)
+let test_max_pos = test_codes_len - gram_size + 1.0
+let test_obs_int = int(test_max_pos)
+print("Test observations (3-grams): {test_obs_int}")
+
+// Record proto count before test
+let pre_test_pc = map_get(p_state, "proto_count")
+let pre_test_pc_int = int(pre_test_pc)
+print("Proto count before test: {pre_test_pc_int}")
+print("")
+
+// ── Test evaluation: predict and measure accuracy ──────────────────
+let mut correct = 0.0
+let mut total = 0.0
+let mut test_pos = 0.0
+
+while test_pos < test_max_pos
+  // Extract raw trigram and zero-center using TRAINING mean
+  let test_raw = text_ngram(test_codes, test_pos, gram_size)
+  let tc0 = test_raw[0] - code_mean
+  let tc1 = test_raw[1] - code_mean
+  let tc2 = test_raw[2] - code_mean
+  let mut test_gram = []
+  push(test_gram, tc0)
+  push(test_gram, tc1)
+  push(test_gram, tc2)
+
+  if test_pos > 0.0
+    // Get current proto (the one assigned to previous observation)
+    let current_pid = map_get(p_state, "last_match_id")
+
+    // Predict next proto using transition table
+    // argmax over trans_counts[current_pid * train_pc + :]
+    let mut best_next = 0.0
+    let mut best_count = -1.0
+    let mut cj = 0.0
+    while cj < train_pc
+      let cidx = current_pid * train_pc + cj
+      // Guard: only access valid indices
+      if cidx < table_size
+        if trans_counts[cidx] > best_count
+          best_count = trans_counts[cidx]
+          best_next = cj
+        end
+      end
+      cj = cj + 1.0
+    end
+
+    // Feed observation
+    let dt = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, test_gram)
+    let actual_pid = map_get(p_state, "last_match_id")
+
+    // Check prediction
+    if best_next == actual_pid
+      correct = correct + 1.0
+    end
+    total = total + 1.0
+  else
+    // First observation: no prediction, just feed
+    let dt0 = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, test_gram)
+  end
+
+  test_pos = test_pos + 1.0
+end
+
+// ── Results ────────────────────────────────────────────────────────
+print("")
+print("=== Results ===")
+
+let accuracy = correct / total
+let pct = floor(accuracy * 1000.0) / 10.0
+let correct_int = int(correct)
+let total_int = int(total)
+print("Transition prediction: {correct_int}/{total_int} = {pct}%")
+
+// Proto count after test
+let post_test_pc = map_get(p_state, "proto_count")
+let post_test_pc_int = int(post_test_pc)
+let new_protos = post_test_pc - pre_test_pc
+let new_protos_int = int(new_protos)
+print("Proto count after test: {post_test_pc_int}")
+print("New protos during test: {new_protos_int}")
+
+// Final edge and transition counts
+let final_stats = octobrain_stats(brain, p_state, edge_state)
+let final_ec = map_get(final_stats, "edge_count")
+let final_tc = map_get(final_stats, "transition_count")
+let final_ec_int = int(final_ec)
+let final_tc_int = int(final_tc)
+print("Total edges: {final_ec_int}, Total transitions: {final_tc_int}")
+print("")
+
+// ── PASS/FAIL analysis ─────────────────────────────────────────────
+print("=== PASS/FAIL Analysis ===")
+
+let mut pass_count = 0.0
+let mut fail_count = 0.0
+
+// Criterion 1: Transition prediction >= 30%
+if accuracy >= 0.30
+  print("PASS: Transition prediction {pct}% >= 30% (random baseline: {random_baseline:.4})")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL: Transition prediction {pct}% < 30% (random baseline: {random_baseline:.4})")
+  fail_count = fail_count + 1.0
+end
+
+// Criterion 2: New protos during test <= 3
+if new_protos <= 3.0
+  print("PASS: New protos during test = {new_protos_int} <= 3 (English patterns overlap)")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL: New protos during test = {new_protos_int} > 3 (too many new patterns)")
+  fail_count = fail_count + 1.0
+end
+
+// Criterion 3: Total proto count <= 20
+if post_test_pc <= 20.0
+  print("PASS: Total proto count = {post_test_pc_int} <= 20 (reasonable clustering)")
+  pass_count = pass_count + 1.0
+else
+  print("FAIL: Total proto count = {post_test_pc_int} > 20 (over-fragmented)")
+  fail_count = fail_count + 1.0
+end
+
+let pass_int = int(pass_count)
+let fail_int = int(fail_count)
+print("")
+print("Result: {pass_int}/3 criteria passed, {fail_int}/3 failed")
+
+if pass_count == 3.0
+  print("OVERALL: PASS")
+else
+  print("OVERALL: FAIL")
+end
+
+print("")
+print("--- nlp transition prediction benchmark complete ---")

@@ -1,0 +1,225 @@
+// emit_nbody_raytrace.flow — N-body ray trace GPU kernel emitter
+//
+// Per-pixel sphere ray casting with diffuse + ambient shading.
+// 1 thread = 1 pixel. Workgroup size = 256.
+//
+// Push constants (7 floats):
+//   pc[0] = N (particle count)
+//   pc[1] = W (framebuffer width)
+//   pc[2] = H (framebuffer height)
+//   pc[3] = cam_x, pc[4] = cam_y, pc[5] = cam_z
+//   pc[6] = sphere_radius
+//
+// Buffer layout:
+//   Binding 0 (input): positions (x, y, z, mass) × N
+//   Binding 1 (output): planar RGB framebuffer [R: 0..W*H, G: W*H..2*W*H, B: 2*W*H..3*W*H]
+//
+// Dispatch: loom_dispatch(vm, "nbody_raytrace.spv", [N,W,H,cx,cy,cz,radius], ceil(W*H/256))
+
+use "../../../compiler/ir"
+
+fn emit_nbody_raytrace(out_path)
+  ir_new()
+  ir_input_count = 2.0
+
+  let entry = ir_block("entry")
+
+  // ── Constants ──
+  let c0f = ir_const_f(entry, 0.0)
+  let c1f = ir_const_f(entry, 1.0)
+  let c_half = ir_const_f(entry, 0.5)
+  let c_neg1 = ir_const_f(entry, -1.0)
+  let c_eps = ir_const_f(entry, 0.001)
+  let c_big = ir_const_f(entry, 99999.0)
+  let c_255 = ir_const_f(entry, 255.0)
+  let c_amb = ir_const_f(entry, 0.15)
+  let c_dif = ir_const_f(entry, 0.85)
+  let c0u = ir_const_u(entry, 0)
+  let c1u = ir_const_u(entry, 1)
+  let c2u = ir_const_u(entry, 2)
+  let c3u = ir_const_u(entry, 3)
+  let c4u = ir_const_u(entry, 4)
+
+  // ── Push constants ──
+  let pc_n = ir_push_const(entry, 0.0)
+  let pc_w = ir_push_const(entry, 1.0)
+  let pc_h = ir_push_const(entry, 2.0)
+  let pc_cx = ir_push_const(entry, 3.0)
+  let pc_cy = ir_push_const(entry, 4.0)
+  let pc_cz = ir_push_const(entry, 5.0)
+  let pc_rad = ir_push_const(entry, 6.0)
+
+  // ── Bounds check ──
+  let gid = ir_load_gid(entry)
+  let gid_f = ir_utof(entry, gid)
+  let total = ir_fmul(entry, pc_w, pc_h)
+  let in_bounds = ir_folt(entry, gid_f, total)
+
+  let main_m = ir_block("main_merge")
+  let work = ir_block("work")
+  ir_selection_merge(entry, main_m)
+  ir_term_cond_branch(entry, in_bounds, work, main_m)
+
+  // ── Pixel coordinates ──
+  let wu = ir_ftou(work, pc_w)
+  let px_u = ir_umod(work, gid, wu)
+  let py_u = ir_udiv(work, gid, wu)
+  let px_f = ir_utof(work, px_u)
+  let py_f = ir_utof(work, py_u)
+
+  // ── Camera ray (perspective) ──
+  let half_w = ir_fmul(work, pc_w, c_half)
+  let half_h = ir_fmul(work, pc_h, c_half)
+  let u = ir_fdiv(work, ir_fsub(work, px_f, half_w), pc_w)
+  let v = ir_fdiv(work, ir_fsub(work, half_h, py_f), pc_h)
+  // ray_dir = normalize(u, v, -1)
+  let rd_len2 = ir_fadd(work, ir_fadd(work, ir_fmul(work, u, u), ir_fmul(work, v, v)), c1f)
+  let rd_inv = ir_invsqrt(work, rd_len2)
+  let rd_x = ir_fmul(work, u, rd_inv)
+  let rd_y = ir_fmul(work, v, rd_inv)
+  let rd_z = ir_fmul(work, c_neg1, rd_inv)
+
+  // radius²
+  let rad2 = ir_fmul(work, pc_rad, pc_rad)
+
+  // ── Sphere intersection loop ──
+  let lh = ir_block("loop_hdr")
+  let lb = ir_block("loop_body")
+  let lc = ir_block("loop_cont")
+  let lm = ir_block("loop_merge")
+
+  ir_term_branch(work, lh)
+  ir_loop_merge(lh, lm, lc)
+
+  let phi_i = ir_phi(lh, IR_TYPE_FLOAT)
+  let phi_best_t = ir_phi(lh, IR_TYPE_FLOAT)
+  let phi_best_idx = ir_phi(lh, IR_TYPE_FLOAT)
+
+  let loop_cond = ir_folt(lh, phi_i, pc_n)
+  ir_term_cond_branch(lh, loop_cond, lb, lm)
+
+  // ── Ray-sphere intersection ──
+  let iu = ir_ftou(lb, phi_i)
+  let i4 = ir_imul(lb, iu, c4u)
+  let sx = ir_load_input_at(lb, 0.0, i4)
+  let sy = ir_load_input_at(lb, 0.0, ir_iadd(lb, i4, c1u))
+  let sz = ir_load_input_at(lb, 0.0, ir_iadd(lb, i4, c2u))
+
+  // oc = cam - center
+  let oc_x = ir_fsub(lb, pc_cx, sx)
+  let oc_y = ir_fsub(lb, pc_cy, sy)
+  let oc_z = ir_fsub(lb, pc_cz, sz)
+
+  // b = dot(oc, rd)
+  let b = ir_fadd(lb, ir_fadd(lb, ir_fmul(lb, oc_x, rd_x), ir_fmul(lb, oc_y, rd_y)), ir_fmul(lb, oc_z, rd_z))
+  // c = dot(oc,oc) - r²
+  let c_val = ir_fsub(lb, ir_fadd(lb, ir_fadd(lb, ir_fmul(lb, oc_x, oc_x), ir_fmul(lb, oc_y, oc_y)), ir_fmul(lb, oc_z, oc_z)), rad2)
+  // disc = b² - c
+  let disc = ir_fsub(lb, ir_fmul(lb, b, b), c_val)
+  let disc_safe = ir_select(lb, IR_TYPE_FLOAT, ir_fogt(lb, disc, c0f), disc, c0f)
+  let t = ir_fsub(lb, ir_fneg(lb, b), ir_sqrt(lb, disc_safe))
+
+  // Valid: disc > 0 AND t > eps AND t < best_t
+  let valid = ir_land(lb, ir_land(lb, ir_fogt(lb, disc, c0f), ir_fogt(lb, t, c_eps)), ir_folt(lb, t, phi_best_t))
+  let new_best_t = ir_select(lb, IR_TYPE_FLOAT, valid, t, phi_best_t)
+  let new_best_idx = ir_select(lb, IR_TYPE_FLOAT, valid, phi_i, phi_best_idx)
+
+  ir_term_branch(lb, lc)
+
+  // Continue
+  let i_next = ir_fadd(lc, phi_i, c1f)
+  ir_term_branch(lc, lh)
+
+  // Wire phi
+  ir_phi_add(phi_i, c0f, work)
+  ir_phi_add(phi_i, i_next, lc)
+  ir_phi_add(phi_best_t, c_big, work)
+  ir_phi_add(phi_best_t, new_best_t, lc)
+  ir_phi_add(phi_best_idx, c_neg1, work)
+  ir_phi_add(phi_best_idx, new_best_idx, lc)
+
+  // ── After loop: shading ──
+  let hit = ir_folt(lm, phi_best_t, c_big)
+
+  // Hit point
+  let hx = ir_fadd(lm, pc_cx, ir_fmul(lm, rd_x, phi_best_t))
+  let hy = ir_fadd(lm, pc_cy, ir_fmul(lm, rd_y, phi_best_t))
+  let hz = ir_fadd(lm, pc_cz, ir_fmul(lm, rd_z, phi_best_t))
+
+  // Sphere center from best_idx
+  let bu = ir_ftou(lm, phi_best_idx)
+  let b4 = ir_imul(lm, bu, c4u)
+  let best_cx = ir_load_input_at(lm, 0.0, b4)
+  let best_cy = ir_load_input_at(lm, 0.0, ir_iadd(lm, b4, c1u))
+  let best_cz = ir_load_input_at(lm, 0.0, ir_iadd(lm, b4, c2u))
+  let best_mass = ir_load_input_at(lm, 0.0, ir_iadd(lm, b4, c3u))
+
+  // Normal = normalize(hit - center)
+  let nx_raw = ir_fsub(lm, hx, best_cx)
+  let ny_raw = ir_fsub(lm, hy, best_cy)
+  let nz_raw = ir_fsub(lm, hz, best_cz)
+  let n_inv = ir_invsqrt(lm, ir_fadd(lm, ir_fadd(lm, ir_fmul(lm, nx_raw, nx_raw), ir_fmul(lm, ny_raw, ny_raw)), ir_fmul(lm, nz_raw, nz_raw)))
+  let nx = ir_fmul(lm, nx_raw, n_inv)
+  let ny = ir_fmul(lm, ny_raw, n_inv)
+  let nz = ir_fmul(lm, nz_raw, n_inv)
+
+  // Light direction = normalize(cam - hit) (light from camera)
+  let lx_raw = ir_fsub(lm, pc_cx, hx)
+  let ly_raw = ir_fsub(lm, pc_cy, hy)
+  let lz_raw = ir_fsub(lm, pc_cz, hz)
+  let l_inv = ir_invsqrt(lm, ir_fadd(lm, ir_fadd(lm, ir_fmul(lm, lx_raw, lx_raw), ir_fmul(lm, ly_raw, ly_raw)), ir_fmul(lm, lz_raw, lz_raw)))
+  let lx = ir_fmul(lm, lx_raw, l_inv)
+  let ly = ir_fmul(lm, ly_raw, l_inv)
+  let lz = ir_fmul(lm, lz_raw, l_inv)
+
+  // ndotl = max(dot(n, l), 0)
+  let ndotl_raw = ir_fadd(lm, ir_fadd(lm, ir_fmul(lm, nx, lx), ir_fmul(lm, ny, ly)), ir_fmul(lm, nz, lz))
+  let ndotl = ir_select(lm, IR_TYPE_FLOAT, ir_fogt(lm, ndotl_raw, c0f), ndotl_raw, c0f)
+  let shade = ir_fadd(lm, c_amb, ir_fmul(lm, ndotl, c_dif))
+
+  // Color from mass — warm palette: R=high, G=mid, B=low
+  // Hue based on mass: low mass = blue, high mass = orange
+  let c_0p1 = ir_const_f(lm, 0.1)
+  let c_0p3 = ir_const_f(lm, 0.3)
+  let c_0p5 = ir_const_f(lm, 0.5)
+  let c_0p7 = ir_const_f(lm, 0.7)
+  let c_0p8 = ir_const_f(lm, 0.8)
+  let mass_t = ir_fmul(lm, best_mass, c_0p5)  // mass 0.5-1.5 → t 0.25-0.75
+  let base_r = ir_fadd(lm, c_0p3, ir_fmul(lm, mass_t, c_0p7))
+  let base_g = ir_fadd(lm, c_0p1, ir_fmul(lm, mass_t, c_0p5))
+  let base_b = ir_fsub(lm, c_0p8, ir_fmul(lm, mass_t, c_0p5))
+
+  let hit_r = ir_fmul(lm, ir_fmul(lm, base_r, shade), c_255)
+  let hit_g = ir_fmul(lm, ir_fmul(lm, base_g, shade), c_255)
+  let hit_b = ir_fmul(lm, ir_fmul(lm, base_b, shade), c_255)
+
+  // Sky gradient for misses
+  let v_norm = ir_fadd(lm, ir_fmul(lm, v, c_half), c_half)
+  let sky_r = ir_fmul(lm, ir_const_f(lm, 10.0), ir_fsub(lm, c1f, v_norm))
+  let sky_g = ir_fmul(lm, ir_const_f(lm, 15.0), ir_fsub(lm, c1f, v_norm))
+  let sky_b = ir_fadd(lm, ir_const_f(lm, 20.0), ir_fmul(lm, ir_const_f(lm, 30.0), v_norm))
+
+  // Select hit vs sky
+  let fr = ir_select(lm, IR_TYPE_FLOAT, hit, hit_r, sky_r)
+  let fg = ir_select(lm, IR_TYPE_FLOAT, hit, hit_g, sky_g)
+  let fb = ir_select(lm, IR_TYPE_FLOAT, hit, hit_b, sky_b)
+
+  // Clamp [0, 255]
+  let cr = ir_fmin(lm, ir_fmax(lm, fr, c0f), c_255)
+  let cg = ir_fmin(lm, ir_fmax(lm, fg, c0f), c_255)
+  let cb = ir_fmin(lm, ir_fmax(lm, fb, c0f), c_255)
+
+  // ── Write planar RGB to binding 1 ──
+  let total_u = ir_ftou(lm, total)
+  ir_store_output_at(lm, gid, cr)
+  let g_off = ir_iadd(lm, gid, total_u)
+  ir_store_output_at(lm, g_off, cg)
+  let b_off = ir_iadd(lm, g_off, total_u)
+  ir_store_output_at(lm, b_off, cb)
+
+  ir_term_branch(lm, main_m)
+  ir_term_return(main_m)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end

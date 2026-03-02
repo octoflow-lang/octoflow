@@ -21,6 +21,7 @@ fn gpu_convolve_1d(signal, kernel)
 
     let result = gpu_run(spv_path, signal, kernel, out_n, k)
     return result
+end
 
 // Autocorrelation: measure similarity of signal with delayed copy
 fn gpu_autocorrelation(signal, max_lag)
@@ -29,38 +30,45 @@ fn gpu_autocorrelation(signal, max_lag)
         let max_lag = n - 1.0
     end
 
-    let result = []
-    let i = 0.0
+    let mut result = []
+    let mut i = 0.0
     while i <= max_lag
-        let shifted = []
-        let j = 0.0
+        let mut shifted = []
+        let mut j = 0.0
         while j < n - i
             let idx = j + i
             if idx < n
-                append(shifted, signal[idx])
+                push(shifted, signal[idx])
             end
             j = j + 1.0
         end
 
-        // Correlation between original &&shifted
-        let truncated = []
-        let k = 0.0
+        // Correlation between original and shifted
+        let mut truncated = []
+        let mut k = 0.0
         while k < len(shifted)
-            append(truncated, signal[k])
+            push(truncated, signal[k])
             k = k + 1.0
         end
 
-        if len(truncated) > 0.0 &&len(shifted) > 0.0
+        let mut do_corr = 0.0
+        if len(truncated) > 0.0
+            if len(shifted) > 0.0
+                do_corr = 1.0
+            end
+        end
+        if do_corr > 0.5
             let corr = gpu_correlation(truncated, shifted)
-            append(result, corr)
+            push(result, corr)
         else
-            append(result, 0.0)
+            push(result, 0.0)
         end
 
         i = i + 1.0
     end
 
     return result
+end
 
 // Cross-correlation: measure similarity between two signals
 fn gpu_cross_correlation(sig1, sig2)
@@ -74,6 +82,7 @@ fn gpu_cross_correlation(sig1, sig2)
 
     // Use existing correlation
     return gpu_correlation(sig1, sig2)
+end
 
 // First difference: output[i] = arr[i+1] - arr[i]
 fn gpu_diff(arr)
@@ -91,6 +100,7 @@ fn gpu_diff(arr)
     let out_n = n - 1.0
     let result = gpu_run(spv_path, arr, out_n)
     return result
+end
 
 // Cumulative sum using prefix scan
 fn gpu_cumsum(arr)
@@ -107,6 +117,7 @@ fn gpu_cumsum(arr)
 
     let result = gpu_run(spv_path, arr, n)
     return result
+end
 
 // Exponential moving average
 fn gpu_ema(arr, alpha)
@@ -115,7 +126,11 @@ fn gpu_ema(arr, alpha)
         return []
     end
 
-    if alpha <= 0.0 ||alpha > 1.0
+    if alpha <= 0.0
+        print("Error: alpha must be in (0,1]")
+        return arr
+    end
+    if alpha > 1.0
         print("Error: alpha must be in (0,1]")
         return arr
     end
@@ -128,6 +143,7 @@ fn gpu_ema(arr, alpha)
 
     let result = gpu_run(spv_path, arr, n, alpha)
     return result
+end
 
 // Simple bandpass filter (frequency domain)
 fn gpu_bandpass_filter(signal, low_freq, high_freq)
@@ -139,33 +155,36 @@ fn gpu_bandpass_filter(signal, low_freq, high_freq)
 
     // Simple moving average for low-pass
     let window = 3.0
-    let smoothed = []
+    let mut smoothed = []
     let n = len(diff_sig)
 
-    let i = 0.0
+    let mut i = 0.0
     while i < n
-        let sum = 0.0
-        let count = 0.0
-        let j = 0.0
+        let mut sum = 0.0
+        let mut count = 0.0
+        let mut j = 0.0
         while j < window
             let idx = i + j - floor(window / 2.0)
-            if idx >= 0.0 &&idx < n
-                let sum = sum + diff_sig[idx]
-                let count = count + 1.0
+            if idx >= 0.0
+                if idx < n
+                    sum = sum + diff_sig[idx]
+                    count = count + 1.0
+                end
             end
             j = j + 1.0
         end
 
         if count > 0.0
-            append(smoothed, sum / count)
+            push(smoothed, sum / count)
         else
-            append(smoothed, diff_sig[i])
+            push(smoothed, diff_sig[i])
         end
 
         i = i + 1.0
     end
 
     return smoothed
+end
 
 // FFT Radix-2 (iterative Cooley-Tukey for power-of-2 lengths)
 fn gpu_fft_radix2(arr)
@@ -179,9 +198,11 @@ fn gpu_fft_radix2(arr)
     end
 
     // For now, placeholder - full FFT needs complex arithmetic
-    // Would require separate real/imag arrays ||interleaved format
+    // Would require separate real/imag arrays or interleaved format
+    // TODO: FFT requires complex arithmetic — not yet implemented
     print("FFT not yet implemented - requires complex number support")
     return arr
+end
 
 // ===== SPIR-V Emitters =====
 
@@ -239,7 +260,7 @@ fn convolve_1d_emit()
     let kernel_size = spirv_constant_uint(spv, uint_t, 0.0)  // Will be push constant
 
     // Loop over kernel
-    // For simplicity, unroll small kernel ||use fixed size
+    // For simplicity, unroll small kernel or use fixed size
     // Here: simple 3-element kernel
 
     let zero = spirv_constant_uint(spv, uint_t, 0.0)
@@ -281,6 +302,7 @@ fn convolve_1d_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/convolve_1d.spv")
+end
 
 fn diff_emit()
     use "spirv_emit.flow"
@@ -340,6 +362,7 @@ fn diff_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/diff.spv")
+end
 
 fn prefix_sum_emit()
     use "spirv_emit.flow"
@@ -397,6 +420,7 @@ fn prefix_sum_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/prefix_sum.spv")
+end
 
 fn ema_emit()
     use "spirv_emit.flow"
@@ -451,3 +475,4 @@ fn ema_emit()
     spirv_function_end(spv)
 
     spirv_emit(spv, "tests/gpu_shaders/ema.spv")
+end

@@ -1,0 +1,207 @@
+// stdlib/collections/bloom_filter.flow — Probabilistic set membership
+//
+// Space-efficient probabilistic data structure. Tests whether an element
+// is a member of a set. False positives possible, false negatives not.
+//
+// Internal structure:
+//   bf[0] = size (number of bits in the bit array)
+//   bf[1] = num_hashes (number of hash functions)
+//   bf[2] = count (elements added)
+//   bf[3..] = bit array (0.0 or 1.0 per slot)
+//
+// Uses k independent hash functions derived from two base hashes (djb2, fnv1a)
+// via the Kirschner-Mitzenmacher technique: h_i(x) = h1(x) + i * h2(x) mod size.
+//
+// Functions: bloom_create, bloom_add, bloom_test, bloom_clear,
+//            bloom_count, bloom_size, bloom_false_positive_rate,
+//            bloom_optimal_size, bloom_optimal_hashes
+//
+// Usage:
+//   use "bloom_filter"
+//   let mut bf = bloom_create(1000.0, 7.0)  // 1000 bits, 7 hashes
+//   bloom_add(bf, "hello")
+//   bloom_add(bf, "world")
+//   bloom_test(bf, "hello")    // 1.0 (definitely added)
+//   bloom_test(bf, "xyz")      // 0.0 (probably not added)
+
+fn _bf_djb2(s)
+    // DJB2 hash — returns positive float.
+    let mut hash = 5381.0
+    let n = len(s)
+    let mut i = 0.0
+    while i < n
+        let c = ord(char_at(s, i))
+        hash = hash * 33.0 + c
+        // Keep in range to avoid float precision issues
+        if hash > 1000000000.0
+            hash = hash - floor(hash / 1000000000.0) * 1000000000.0
+        end
+        i = i + 1.0
+    end
+    if hash < 0.0
+        hash = 0.0 - hash
+    end
+    return hash
+end
+
+fn _bf_fnv1a(s)
+    // FNV-1a hash — returns positive float.
+    let mut hash = 2166136261.0
+    let n = len(s)
+    let mut i = 0.0
+    while i < n
+        let c = ord(char_at(s, i))
+        // XOR simulated: hash + c (simplified since no true XOR available)
+        hash = (hash + c) * 16777619.0
+        if hash > 1000000000.0
+            hash = hash - floor(hash / 1000000000.0) * 1000000000.0
+        end
+        i = i + 1.0
+    end
+    if hash < 0.0
+        hash = 0.0 - hash
+    end
+    return hash
+end
+
+fn _bf_hash_i(s, i, size)
+    // i-th hash function using Kirschner-Mitzenmacher technique.
+    let h1 = _bf_djb2(s)
+    let h2 = _bf_fnv1a(s)
+    let combined = h1 + i * h2
+    let idx = combined - floor(combined / size) * size
+    return floor(idx)
+end
+
+fn bloom_create(size, num_hashes)
+    // Create bloom filter with given bit array size and number of hash functions.
+    let mut bf = []
+    push(bf, size)
+    push(bf, num_hashes)
+    push(bf, 0.0)  // count
+
+    // Initialize bit array to all zeros
+    let mut i = 0.0
+    while i < size
+        push(bf, 0.0)
+        i = i + 1.0
+    end
+    return bf
+end
+
+fn bloom_add(bf, element)
+    // Add element to bloom filter.
+    let size = bf[0]
+    let k = bf[1]
+    let mut i = 0.0
+    while i < k
+        let idx = _bf_hash_i(element, i, size)
+        bf[3.0 + idx] = 1.0
+        i = i + 1.0
+    end
+    bf[2] = bf[2] + 1.0
+    return 0.0
+end
+
+fn bloom_test(bf, element)
+    // Test if element might be in the set.
+    // Returns 1.0 if possibly present, 0.0 if definitely not.
+    let size = bf[0]
+    let k = bf[1]
+    let mut i = 0.0
+    while i < k
+        let idx = _bf_hash_i(element, i, size)
+        if bf[3.0 + idx] == 0.0
+            return 0.0
+        end
+        i = i + 1.0
+    end
+    return 1.0
+end
+
+fn bloom_clear(bf)
+    // Reset all bits to zero.
+    let size = bf[0]
+    let mut i = 0.0
+    while i < size
+        bf[3.0 + i] = 0.0
+        i = i + 1.0
+    end
+    bf[2] = 0.0
+    return 0.0
+end
+
+fn bloom_count(bf)
+    // Number of elements added.
+    return bf[2]
+end
+
+fn bloom_size(bf)
+    // Size of the bit array.
+    return bf[0]
+end
+
+fn bloom_bits_set(bf)
+    // Count how many bits are set to 1.
+    let size = bf[0]
+    let mut count = 0.0
+    let mut i = 0.0
+    while i < size
+        if bf[3.0 + i] == 1.0
+            count = count + 1.0
+        end
+        i = i + 1.0
+    end
+    return count
+end
+
+fn bloom_false_positive_rate(bf)
+    // Estimated false positive rate based on current fill.
+    // FPR ≈ (bits_set / total_bits) ^ num_hashes
+    let size = bf[0]
+    let k = bf[1]
+    let bits = bloom_bits_set(bf)
+
+    if size == 0.0
+        return 1.0
+    end
+
+    let ratio = bits / size
+    // ratio^k approximation using repeated multiplication
+    let mut fpr = 1.0
+    let mut i = 0.0
+    while i < k
+        fpr = fpr * ratio
+        i = i + 1.0
+    end
+    return fpr
+end
+
+fn bloom_optimal_size(n, fpr)
+    // Calculate optimal bit array size for n items and desired false positive rate.
+    // m = -(n * ln(fpr)) / (ln(2)^2)
+    let ln2 = 0.693147180559945
+    if fpr <= 0.0 || fpr >= 1.0
+        return n * 10.0
+    end
+    let mut log_fpr = 0.0 - fpr  // placeholder
+    // Use ln approximation: ln(x) ≈ via builtin if available
+    // Simplified: use the formula directly
+    let m = 0.0 - (n * log(fpr)) / (ln2 * ln2)
+    return ceil(m)
+end
+
+fn bloom_optimal_hashes(m, n)
+    // Calculate optimal number of hash functions.
+    // k = (m/n) * ln(2)
+    let ln2 = 0.693147180559945
+    if n == 0.0
+        return 1.0
+    end
+    let k = (m / n) * ln2
+    let mut result = floor(k + 0.5)
+    if result < 1.0
+        result = 1.0
+    end
+    return result
+end

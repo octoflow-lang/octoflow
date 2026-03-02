@@ -1,0 +1,721 @@
+// ase_swarm_sort.flow — ASE Swarm Sort Discovery Demo
+//
+// Evolves the ENTIRE distributed sorting strategy: VM count, partition
+// strategy, sort kernel params, merge method. 8-gene genome creates a
+// rich search space for multi-VM cooperative sorting via Loom Engine.
+//
+// Run: octoflow run examples/ase_swarm_sort.flow --allow-ffi --allow-read --allow-write
+
+use "../stdlib/compiler/ir"
+
+print("=== ASE Swarm Sort Discovery ===")
+print("")
+
+let N = 1024.0
+let POP_SIZE = 8.0
+let GENERATIONS = 8.0
+let KEEP = 3.0
+let MUT_RATE = 0.25
+let GENE_COUNT = 8.0
+
+// ── Decode genome into discrete parameters ──────────────────────────
+
+fn decode_genome(genome)
+  let vm_count_lut = [1.0, 2.0, 4.0, 8.0]
+  let wg_size_lut = [32.0, 64.0, 128.0, 256.0]
+
+  let mut vm_idx = floor(genome[0])
+  if vm_idx < 0.0
+    vm_idx = 0.0
+  end
+  if vm_idx > 3.0
+    vm_idx = 3.0
+  end
+
+  let mut wg_idx = floor(genome[2])
+  if wg_idx < 0.0
+    wg_idx = 0.0
+  end
+  if wg_idx > 3.0
+    wg_idx = 3.0
+  end
+
+  let mut part_strat = floor(genome[1])
+  if part_strat < 0.0
+    part_strat = 0.0
+  end
+  if part_strat > 2.0
+    part_strat = 2.0
+  end
+
+  let mut stages = floor(genome[3])
+  if stages < 1.0
+    stages = 1.0
+  end
+  if stages > 8.0
+    stages = 8.0
+  end
+
+  let mut merge_strat = floor(genome[4])
+  if merge_strat < 0.0
+    merge_strat = 0.0
+  end
+  if merge_strat > 1.0
+    merge_strat = 1.0
+  end
+
+  let mut pass_count = floor(genome[5])
+  if pass_count < 1.0
+    pass_count = 1.0
+  end
+  if pass_count > 3.0
+    pass_count = 3.0
+  end
+
+  let mut presort = floor(genome[6])
+  if presort < 0.0
+    presort = 0.0
+  end
+  if presort > 1.0
+    presort = 1.0
+  end
+
+  let mut merge_dir = floor(genome[7])
+  if merge_dir < 0.0
+    merge_dir = 0.0
+  end
+  if merge_dir > 1.0
+    merge_dir = 1.0
+  end
+
+  let mut decoded = []
+  push(decoded, vm_count_lut[vm_idx])
+  push(decoded, part_strat)
+  push(decoded, wg_size_lut[wg_idx])
+  push(decoded, stages)
+  push(decoded, merge_strat)
+  push(decoded, pass_count)
+  push(decoded, presort)
+  push(decoded, merge_dir)
+  return decoded
+end
+
+// ── Bitonic sort kernel emitter ─────────────────────────────────────
+
+fn _emit_cmp_swap(blk, lid, j_val, k_val)
+  let j_u = ir_const_u(blk, j_val)
+  let k_u = ir_const_u(blk, k_val)
+  let zero_u = ir_const_u(blk, 0.0)
+
+  let partner = ir_ixor(blk, lid, j_u)
+  let dir_bits = ir_iand(blk, lid, k_u)
+  let is_ascending = ir_uequ(blk, dir_bits, zero_u)
+  let pos_bits = ir_iand(blk, lid, j_u)
+  let is_lower = ir_uequ(blk, pos_bits, zero_u)
+
+  let my_val = ir_shared_load(blk, lid)
+  let p_val = ir_shared_load(blk, partner)
+  let lo = ir_fmin(blk, my_val, p_val)
+  let hi = ir_fmax(blk, my_val, p_val)
+
+  let asc_pick = ir_select(blk, 1.0, is_ascending, lo, hi)
+  let desc_pick = ir_select(blk, 1.0, is_ascending, hi, lo)
+  let result = ir_select(blk, 1.0, is_lower, asc_pick, desc_pick)
+
+  ir_shared_store(blk, lid, result)
+  ir_barrier(blk)
+  return 0.0
+end
+
+fn emit_sort_kernel(wg_size, num_stages, out_path)
+  ir_new()
+  ir_input_count = 1.0
+  ir_shared_size = wg_size
+  ir_workgroup_size = wg_size
+
+  let entry = ir_block("entry")
+  let gid = ir_load_gid(entry)
+  let lid = ir_load_local_id(entry)
+
+  let val = ir_load_input_at(entry, 0.0, gid)
+  ir_shared_store(entry, lid, val)
+  ir_barrier(entry)
+
+  let mut stage = 0.0
+  let mut k = 2.0
+  while k <= wg_size
+    if stage < num_stages
+      let mut j = k / 2.0
+      while j >= 1.0
+        _emit_cmp_swap(entry, lid, j, k)
+        j = j / 2.0
+      end
+    end
+    stage = stage + 1.0
+    k = k * 2.0
+  end
+
+  let sorted_val = ir_shared_load(entry, lid)
+  ir_store_output_at(entry, gid, sorted_val)
+  ir_term_return(entry)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+// ── Partition data into flat array ──────────────────────────────────
+
+fn partition_data(data, n_vms, strategy, n)
+  let chunk = floor(n / n_vms)
+  let total = n_vms * chunk
+
+  // Pre-allocate flat output
+  let mut parts = []
+  let mut ai = 0.0
+  while ai < total
+    push(parts, 0.0)
+    ai = ai + 1.0
+  end
+
+  if strategy < 0.5
+    // Equal chunks: partition v gets data[v*chunk .. (v+1)*chunk]
+    let mut ei = 0.0
+    while ei < total
+      parts[ei] = data[ei]
+      ei = ei + 1.0
+    end
+  end
+
+  if strategy > 0.5
+    if strategy < 1.5
+      // Interleaved: element j goes to VM (j % n_vms)
+      let mut cursors = []
+      let mut cv = 0.0
+      while cv < n_vms
+        push(cursors, 0.0)
+        cv = cv + 1.0
+      end
+
+      let mut ij = 0.0
+      while ij < n
+        let mut tgt = floor(ij - floor(ij / n_vms) * n_vms)
+        if tgt >= n_vms
+          tgt = n_vms - 1.0
+        end
+        let slot = tgt * chunk + cursors[tgt]
+        if slot < total
+          parts[slot] = data[ij]
+          cursors[tgt] = cursors[tgt] + 1.0
+        end
+        ij = ij + 1.0
+      end
+    else
+      // Random shuffle (Fisher-Yates) then equal split
+      let mut shuffled = []
+      let mut sj = 0.0
+      while sj < n
+        push(shuffled, data[sj])
+        sj = sj + 1.0
+      end
+      let mut fj = n - 1.0
+      while fj > 0.0
+        let fk = floor(random() * (fj + 1.0))
+        let tmp = shuffled[fj]
+        shuffled[fj] = shuffled[fk]
+        shuffled[fk] = tmp
+        fj = fj - 1.0
+      end
+      let mut si = 0.0
+      while si < total
+        parts[si] = shuffled[si]
+        si = si + 1.0
+      end
+    end
+  end
+
+  return parts
+end
+
+// ── CPU presort (insertion sort on a chunk) ─────────────────────────
+
+fn cpu_presort_chunk(parts, offset, chunk)
+  // Skip presort for large chunks (too slow in interpreted mode)
+  if chunk > 256.0
+    return 0.0
+  end
+  let mut ii = 1.0
+  while ii < chunk
+    let key_val = parts[offset + ii]
+    let mut jj = ii - 1.0
+    let mut final_jj = -1.0
+    while jj >= 0.0
+      if parts[offset + jj] > key_val
+        parts[offset + jj + 1.0] = parts[offset + jj]
+        jj = jj - 1.0
+      else
+        final_jj = jj
+        jj = -1.0
+      end
+    end
+    parts[offset + final_jj + 1.0] = key_val
+    ii = ii + 1.0
+  end
+  return 0.0
+end
+
+// ── K-way merge from flat array ─────────────────────────────────────
+
+fn cpu_merge_kway(parts, n_vms, chunk)
+  let total = n_vms * chunk
+
+  let mut cursors = []
+  let mut cv = 0.0
+  while cv < n_vms
+    push(cursors, 0.0)
+    cv = cv + 1.0
+  end
+
+  let mut merged = []
+  while len(merged) < total
+    let mut best_val = 999999999.0
+    let mut best_v = -1.0
+    let mut mv = 0.0
+    while mv < n_vms
+      if cursors[mv] < chunk
+        let idx = mv * chunk + cursors[mv]
+        let mval = parts[idx]
+        if mval < best_val
+          best_val = mval
+          best_v = mv
+        end
+      end
+      mv = mv + 1.0
+    end
+    if best_v < 0.0
+      // All exhausted (shouldn't happen)
+      while len(merged) < total
+        push(merged, 0.0)
+      end
+    else
+      push(merged, best_val)
+      cursors[best_v] = cursors[best_v] + 1.0
+    end
+  end
+  return merged
+end
+
+// ── Pairwise merge helpers ──────────────────────────────────────────
+
+fn cpu_merge_pair_flat(parts, off_a, off_b, chunk)
+  let mut result = []
+  let mut ia = 0.0
+  let mut ib = 0.0
+  while ia < chunk
+    if ib < chunk
+      if parts[off_a + ia] <= parts[off_b + ib]
+        push(result, parts[off_a + ia])
+        ia = ia + 1.0
+      else
+        push(result, parts[off_b + ib])
+        ib = ib + 1.0
+      end
+    else
+      push(result, parts[off_a + ia])
+      ia = ia + 1.0
+    end
+  end
+  while ib < chunk
+    push(result, parts[off_b + ib])
+    ib = ib + 1.0
+  end
+  return result
+end
+
+fn cpu_merge_pairwise(parts, n_vms, chunk)
+  let total = n_vms * chunk
+
+  // Copy parts into working buffer
+  let mut buf = []
+  let mut ri = 0.0
+  while ri < total
+    push(buf, parts[ri])
+    ri = ri + 1.0
+  end
+
+  let mut active_chunks = n_vms
+  let mut cur_chunk = chunk
+
+  while active_chunks > 1.0
+    let mut next_buf = []
+    let mut pi = 0.0
+    while pi < active_chunks
+      if pi + 1.0 < active_chunks
+        // Merge pair
+        let pair_merged = cpu_merge_pair_flat(buf, pi * cur_chunk, (pi + 1.0) * cur_chunk, cur_chunk)
+        let mut mi = 0.0
+        while mi < len(pair_merged)
+          push(next_buf, pair_merged[mi])
+          mi = mi + 1.0
+        end
+        pi = pi + 2.0
+      else
+        // Odd one out: copy directly
+        let mut oi = 0.0
+        while oi < cur_chunk
+          push(next_buf, buf[pi * cur_chunk + oi])
+          oi = oi + 1.0
+        end
+        pi = pi + 1.0
+      end
+    end
+
+    // Copy next_buf back to buf (avoid array reassignment)
+    let mut ci = 0.0
+    while ci < total
+      buf[ci] = next_buf[ci]
+      ci = ci + 1.0
+    end
+
+    cur_chunk = cur_chunk * 2.0
+    active_chunks = ceil(active_chunks / 2.0)
+  end
+
+  return buf
+end
+
+// ── Core swarm sort orchestration ───────────────────────────────────
+
+fn run_swarm_sort(genome, data, sort_spv, data_len)
+  let params = decode_genome(genome)
+  let n_vms = params[0]
+  let part_strat = params[1]
+  let mut wg = params[2]
+  let stages = params[3]
+  let merge_strat = params[4]
+  let pass_count = params[5]
+  let presort = params[6]
+
+  let chunk = floor(data_len / n_vms)
+
+  // Clamp workgroup size to chunk (can't have more threads than data)
+  if wg > chunk
+    wg = chunk
+  end
+
+  // Emit sort kernel for this genome's parameters
+  emit_sort_kernel(wg, stages, sort_spv)
+
+  // Partition data
+  let mut parts = partition_data(data, n_vms, part_strat, data_len)
+
+  // Optional CPU presort of each partition
+  if presort > 0.5
+    let mut pv = 0.0
+    while pv < n_vms
+      cpu_presort_chunk(parts, pv * chunk, chunk)
+      pv = pv + 1.0
+    end
+  end
+
+  // Boot VMs
+  let mut vms = []
+  let mut bv = 0.0
+  while bv < n_vms
+    let vm = loom_boot(1.0, 2.0, chunk)
+    push(vms, vm)
+    bv = bv + 1.0
+  end
+
+  // Create zeros buffer for output register
+  let mut zeros = []
+  let mut zi = 0.0
+  while zi < chunk
+    push(zeros, 0.0)
+    zi = zi + 1.0
+  end
+
+  // Empty push constants array (loom_dispatch requires named array)
+  let no_pc = []
+
+  // Sort passes
+  let mut pass = 0.0
+  while pass < pass_count
+    let mut sv = 0.0
+    while sv < n_vms
+      let cur_vm = vms[sv]
+
+      // Extract this VM's chunk for register write
+      let mut vm_data = []
+      let mut dj = 0.0
+      while dj < chunk
+        push(vm_data, parts[sv * chunk + dj])
+        dj = dj + 1.0
+      end
+
+      // Write input and output registers
+      vm_write_register(cur_vm, 0.0, 0.0, vm_data)
+      vm_write_register(cur_vm, 0.0, 1.0, zeros)
+
+      // Dispatch sort kernel
+      let wg_count = ceil(chunk / wg)
+      loom_dispatch(cur_vm, sort_spv, no_pc, wg_count)
+      let prog = loom_build(cur_vm)
+      loom_run(prog)
+      loom_free(prog)
+
+      // Read sorted output back into parts array
+      let sorted = loom_read(cur_vm, 0.0, 1.0, chunk)
+      let sort_len = len(sorted)
+      let mut rj = 0.0
+      while rj < chunk
+        if rj < sort_len
+          parts[sv * chunk + rj] = sorted[rj]
+        end
+        rj = rj + 1.0
+      end
+
+      sv = sv + 1.0
+    end
+    pass = pass + 1.0
+  end
+
+  // Shutdown VMs
+  let mut xv = 0.0
+  while xv < n_vms
+    let xvm = vms[xv]
+    loom_shutdown(xvm)
+    xv = xv + 1.0
+  end
+
+  // Merge sorted partitions
+  if n_vms < 1.5
+    return parts
+  end
+
+  if merge_strat < 0.5
+    return cpu_merge_kway(parts, n_vms, chunk)
+  end
+  return cpu_merge_pairwise(parts, n_vms, chunk)
+end
+
+// ── Fitness evaluation ──────────────────────────────────────────────
+
+fn evaluate_swarm(genome, data, expected_arr, sort_spv, data_len)
+  let t0 = loom_elapsed_us()
+  let result = run_swarm_sort(genome, data, sort_spv, data_len)
+  let t1 = loom_elapsed_us()
+  let mut elapsed = t1 - t0
+  if elapsed < 1.0
+    elapsed = 1.0
+  end
+
+  // Correctness: count matching positions
+  let mut correct = 0.0
+  let mut ci = 0.0
+  while ci < data_len
+    if ci < len(result)
+      if abs(result[ci] - expected_arr[ci]) < 0.5
+        correct = correct + 1.0
+      end
+    end
+    ci = ci + 1.0
+  end
+  let correctness = correct / data_len
+
+  // Speed bonus (normalized to 0-1, max 2 seconds = 2M us)
+  let max_us = 2000000.0
+  let mut speed = 1.0 - (elapsed / max_us)
+  if speed < 0.0
+    speed = 0.0
+  end
+
+  // Combined fitness: 80% correctness, 20% speed
+  return 0.8 * correctness + 0.2 * speed
+end
+
+// ═══════════════════════════════════════════════════════════════════
+// MAIN
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Generate test data ──────────────────────────────────────────────
+// Reversed input: [1023, 1022, ..., 1, 0]. Expected: [0, 1, ..., 1023].
+let mut input_data = []
+let mut expected = []
+let mut di = 0.0
+while di < N
+  push(input_data, N - 1.0 - di)
+  push(expected, di)
+  di = di + 1.0
+end
+
+// ── Schema ──────────────────────────────────────────────────────────
+let schema = [0.0, 3.99, 0.0, 2.99, 0.0, 3.99, 1.0, 8.0, 0.0, 1.99, 1.0, 3.0, 0.0, 1.99, 0.0, 1.99]
+
+// ── Population (flat-array double-buffer) ───────────────────────────
+let total_genes = POP_SIZE * GENE_COUNT
+let mut pop = []
+let mut pop_buf = []
+let mut pi = 0.0
+while pi < total_genes
+  push(pop, 0.0)
+  push(pop_buf, 0.0)
+  pi = pi + 1.0
+end
+
+// Randomize initial population
+let mut rp = 0.0
+while rp < POP_SIZE
+  let mut rg = 0.0
+  while rg < GENE_COUNT
+    let lo = schema[rg * 2.0]
+    let hi = schema[rg * 2.0 + 1.0]
+    pop[rp * GENE_COUNT + rg] = lo + random() * (hi - lo)
+    rg = rg + 1.0
+  end
+  rp = rp + 1.0
+end
+
+let sort_spv = "swarm_sort_kernel.spv"
+
+// ── Evolution loop ──────────────────────────────────────────────────
+let mut gen = 0.0
+let mut converged = 0.0
+while gen < GENERATIONS
+  if converged < 0.5
+    let mut scores = []
+    let mut best_fit = -1.0
+    let mut best_p = 0.0
+
+    let mut ep = 0.0
+    while ep < POP_SIZE
+      // Extract genome from flat pop
+      let mut genome = []
+      let mut eg = 0.0
+      while eg < GENE_COUNT
+        push(genome, pop[ep * GENE_COUNT + eg])
+        eg = eg + 1.0
+      end
+
+      // Evaluate
+      let fit = evaluate_swarm(genome, input_data, expected, sort_spv, N)
+      push(scores, fit)
+
+      if fit > best_fit
+        best_fit = fit
+        best_p = ep
+      end
+
+      ep = ep + 1.0
+    end
+
+    // Print best genome's parameters
+    let mut best_genome = []
+    let mut bg = 0.0
+    while bg < GENE_COUNT
+      push(best_genome, pop[best_p * GENE_COUNT + bg])
+      bg = bg + 1.0
+    end
+    let bp = decode_genome(best_genome)
+    let bp_nvm = bp[0]
+    let bp_part = bp[1]
+    let bp_wg = bp[2]
+    let bp_stg = bp[3]
+    let bp_mrg = bp[4]
+    print("Gen {gen}: best={best_fit} (vms={bp_nvm} part={bp_part} wg={bp_wg} stg={bp_stg} merge={bp_mrg})")
+
+    if best_fit >= 0.95
+      print("CONVERGED at generation {gen}!")
+      converged = 1.0
+    end
+
+    // ── Selection + Crossover + Mutation ─────────────────────────
+    if converged < 0.5
+      // Sort by fitness (selection sort descending) using order array
+      let mut order = []
+      let mut oi = 0.0
+      while oi < POP_SIZE
+        push(order, oi)
+        oi = oi + 1.0
+      end
+      let mut si = 0.0
+      while si < POP_SIZE - 1.0
+        let mut best_j = si
+        let mut sj = si + 1.0
+        while sj < POP_SIZE
+          if scores[order[sj]] > scores[order[best_j]]
+            best_j = sj
+          end
+          sj = sj + 1.0
+        end
+        if best_j > si + 0.5
+          let tmp = order[si]
+          order[si] = order[best_j]
+          order[best_j] = tmp
+        end
+        si = si + 1.0
+      end
+
+      // Copy survivors to buf
+      let mut ki = 0.0
+      while ki < KEEP
+        let src = order[ki]
+        let mut kg = 0.0
+        while kg < GENE_COUNT
+          pop_buf[ki * GENE_COUNT + kg] = pop[src * GENE_COUNT + kg]
+          kg = kg + 1.0
+        end
+        ki = ki + 1.0
+      end
+
+      // Fill remaining with crossover + mutation
+      let mut fi = KEEP
+      while fi < POP_SIZE
+        let p1 = floor(random() * KEEP)
+        let p2 = floor(random() * KEEP)
+        let mut fg = 0.0
+        while fg < GENE_COUNT
+          // Uniform crossover
+          if random() < 0.5
+            pop_buf[fi * GENE_COUNT + fg] = pop_buf[p1 * GENE_COUNT + fg]
+          else
+            pop_buf[fi * GENE_COUNT + fg] = pop_buf[p2 * GENE_COUNT + fg]
+          end
+          // Mutation
+          if random() < MUT_RATE
+            let lo = schema[fg * 2.0]
+            let hi = schema[fg * 2.0 + 1.0]
+            pop_buf[fi * GENE_COUNT + fg] = lo + random() * (hi - lo)
+          end
+          fg = fg + 1.0
+        end
+        fi = fi + 1.0
+      end
+
+      // Swap buf → pop
+      let mut ci = 0.0
+      while ci < total_genes
+        pop[ci] = pop_buf[ci]
+        ci = ci + 1.0
+      end
+    end
+  end
+  gen = gen + 1.0
+end
+
+// ── Report winner ───────────────────────────────────────────────────
+print("")
+let mut winner_genome = []
+let mut wg_i = 0.0
+while wg_i < GENE_COUNT
+  push(winner_genome, pop[wg_i])
+  wg_i = wg_i + 1.0
+end
+let wp = decode_genome(winner_genome)
+let w_nvm = wp[0]
+let w_part = wp[1]
+let w_wg = wp[2]
+let w_stg = wp[3]
+let w_mrg = wp[4]
+let w_pass = wp[5]
+print("Winner: {w_nvm} VMs, partition={w_part}, wg={w_wg}, stages={w_stg}, merge={w_mrg}, passes={w_pass}")
+print("")

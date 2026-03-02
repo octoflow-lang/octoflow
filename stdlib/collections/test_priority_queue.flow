@@ -1,0 +1,126 @@
+// test_priority_queue.flow — Tests for stdlib/collections/priority_queue.flow
+use "priority_queue"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+// ── Creation ──────────────────────────────────────────────────
+
+fn test_pq_create()
+    let mut pq = pq_create()
+    check("create empty", pq_is_empty(pq) == 1.0)
+    check("create size", pq_size(pq) == 0.0)
+    return 0.0
+end
+
+// ── Push / Peek ───────────────────────────────────────────────
+
+fn test_pq_push()
+    let mut pq = pq_create()
+    pq_push(pq, 5.0, 500.0)
+    check("push size", pq_size(pq) == 1.0)
+    check("push priority", pq_peek_priority(pq) == 5.0)
+    check("push value", pq_peek_value(pq) == 500.0)
+    return 0.0
+end
+
+fn test_pq_ordering()
+    let mut pq = pq_create()
+    pq_push(pq, 3.0, 300.0)
+    pq_push(pq, 1.0, 100.0)
+    pq_push(pq, 2.0, 200.0)
+    check("order min priority", pq_peek_priority(pq) == 1.0)
+    check("order min value", pq_peek_value(pq) == 100.0)
+    return 0.0
+end
+
+// ── Pop ───────────────────────────────────────────────────────
+
+fn test_pq_pop()
+    let mut pq = pq_create()
+    pq_push(pq, 3.0, 300.0)
+    pq_push(pq, 1.0, 100.0)
+    pq_push(pq, 2.0, 200.0)
+    pq_push(pq, 5.0, 500.0)
+    pq_push(pq, 4.0, 400.0)
+
+    check("pop 1", pq_pop(pq) == 100.0)
+    check("pop 2", pq_pop(pq) == 200.0)
+    check("pop 3", pq_pop(pq) == 300.0)
+    check("pop 4", pq_pop(pq) == 400.0)
+    check("pop 5", pq_pop(pq) == 500.0)
+    check("pop empty", pq_is_empty(pq) == 1.0)
+    return 0.0
+end
+
+// ── Pop Empty ─────────────────────────────────────────────────
+
+fn test_pq_pop_empty()
+    let mut pq = pq_create()
+    check("pop empty val", pq_pop(pq) == -1.0)
+    check("peek empty priority", pq_peek_priority(pq) == -1.0)
+    check("peek empty value", pq_peek_value(pq) == -1.0)
+    return 0.0
+end
+
+// ── Clear ─────────────────────────────────────────────────────
+
+fn test_pq_clear()
+    let mut pq = pq_create()
+    pq_push(pq, 1.0, 10.0)
+    pq_push(pq, 2.0, 20.0)
+    pq_clear(pq)
+    check("clear", pq_is_empty(pq) == 1.0)
+    return 0.0
+end
+
+// ── Duplicate Priorities ──────────────────────────────────────
+
+fn test_pq_duplicates()
+    let mut pq = pq_create()
+    pq_push(pq, 1.0, 10.0)
+    pq_push(pq, 1.0, 20.0)
+    pq_push(pq, 1.0, 30.0)
+    check("dup size", pq_size(pq) == 3.0)
+    let v1 = pq_pop(pq)
+    let v2 = pq_pop(pq)
+    let v3 = pq_pop(pq)
+    // All should have priority 1, values should all be popped
+    check("dup all popped", pq_is_empty(pq) == 1.0)
+    return 0.0
+end
+
+// ── To Array ──────────────────────────────────────────────────
+
+fn test_pq_to_array()
+    let mut pq = pq_create()
+    pq_push(pq, 3.0, 30.0)
+    pq_push(pq, 1.0, 10.0)
+    pq_push(pq, 2.0, 20.0)
+    let arr = pq_to_array(pq)
+    check("to_array len", len(arr) == 3.0)
+    check("to_array order", arr[0] == 10.0 && arr[1] == 20.0 && arr[2] == 30.0)
+    // Original should be unmodified
+    check("original intact", pq_size(pq) == 3.0)
+    return 0.0
+end
+
+// ── Run all ─────────────────────────────────────────────────────
+
+test_pq_create()
+test_pq_push()
+test_pq_ordering()
+test_pq_pop()
+test_pq_pop_empty()
+test_pq_clear()
+test_pq_duplicates()
+test_pq_to_array()
+print("")
+print("All priority queue tests passed (8 tests)")

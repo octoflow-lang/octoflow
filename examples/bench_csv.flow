@@ -1,0 +1,36 @@
+// OctoFlow: 10K-row CSV in one script
+// GPU computes all 10,000 values in parallel
+// Run: octoflow run examples/bench_csv.flow --allow-write
+
+let N = 10000
+let t0 = now_ms()
+
+// All columns computed on GPU simultaneously
+let ids = gpu_range(1.0, N + 1, 1.0)
+let scaled = gpu_scale(ids, 0.1)
+let sinvals = gpu_sin(ids)
+let values = gpu_mul(scaled, sinvals)
+let cosvals = gpu_cos(ids)
+let flags_raw = gpu_clamp(cosvals, 0.0, 1.0)
+let half = gpu_fill(0.5, N)
+let shifted = gpu_add(flags_raw, half)
+let flags = gpu_floor(shifted)
+
+let t_gpu = int(now_ms() - t0)
+let sg = str(t_gpu)
+print("GPU: 10,000 x 3 columns in {sg}ms")
+
+// Write CSV
+let nl = chr(10)
+let mut csv = "id,value,flag" + nl
+for i in range(0, N)
+    let sid = str(int(ids[i]))
+    let sv = str(values[i])
+    let sf = str(int(flags[i]))
+    csv = csv + sid + "," + sv + "," + sf + nl
+end
+write_file("bench_output.csv", csv)
+
+let total = int(now_ms() - t0)
+let st = str(total)
+print("Total (GPU + CSV write): {st}ms")

@@ -1,0 +1,447 @@
+// stdlib/search/engine.flow — OctoSearch GPU Search Engine
+//
+// Loom-native: GPU is the primary compute path (Main Loom).
+// CPU handles trivial I/O only (Support Loom pattern).
+// Falls back to CPU BM25 when GPU unavailable.
+//
+// Run:
+//   octoflow run stdlib/search/engine.flow --allow-ffi --allow-read --allow-write
+//
+// Usage as module:
+//   use "engine"
+//   let _r = octosearch("loom_dispatch", "C:/OctoFlow", 5.0)
+
+use "indexer"
+use "persist"
+use "bm25_emit"
+
+// ── GPU VM State (module-level) ─────────────────────────────────
+// VM persists across queries, parked in VRAM between calls.
+// -1.0 = not booted. Positive = valid VM handle.
+
+let mut _os_vm = 0.0 - 1.0
+let mut _os_vm_n_docs = 0.0
+let mut _os_vm_vocab = 0.0
+
+// ── CPU BM25 Fallback ─────────────────────────────────────────────
+
+fn octosearch_cpu_bm25(query_term_ids, n_query, n_docs, vocab_size, top_k, out_results)
+    // CPU BM25 scoring — pushes [idx, score, idx, score, ...] into out_results
+    let k1 = 1.2
+    let b_param = 0.75
+
+    // Compute average document length
+    let mut total_len = 0.0
+    let mut di = 0.0
+    while di < n_docs
+        total_len = total_len + _os_doc_lengths[di]
+        di = di + 1.0
+    end
+    let avgdl = total_len / n_docs
+
+    // Score each document
+    let mut scores = []
+    di = 0.0
+    while di < n_docs
+        let dl = _os_doc_lengths[di]
+        let denom_base = k1 * (1.0 - b_param + b_param * dl / avgdl)
+        let k1_plus_1 = k1 + 1.0
+
+        let mut score = 0.0
+        let mut qi = 0.0
+        while qi < n_query
+            let term_id = query_term_ids[qi]
+            let tf = _os_tf_matrix[di * vocab_size + term_id]
+            let idf_val = _os_idf[term_id]
+
+            let num = tf * k1_plus_1
+            let denom = tf + denom_base
+            if denom > 0.0001
+                score = score + idf_val * (num / denom)
+            end
+            qi = qi + 1.0
+        end
+        push(scores, score)
+        di = di + 1.0
+    end
+
+    // Find top-K — zero-out selection (O(K x n_docs))
+    let mut ki = 0.0
+    while ki < top_k
+        if ki >= n_docs
+            ki = top_k
+        else
+            let mut best_idx = 0.0
+            let mut best_score = 0.0 - 1.0
+            let mut di2 = 0.0
+            while di2 < n_docs
+                if scores[di2] > best_score
+                    best_score = scores[di2]
+                    best_idx = di2
+                end
+                di2 = di2 + 1.0
+            end
+            if best_score > 0.0
+                push(out_results, best_idx)
+                push(out_results, best_score)
+                scores[best_idx] = 0.0 - 1.0
+            end
+            ki = ki + 1.0
+        end
+    end
+
+    return len(out_results) / 2.0
+end
+
+// ── GPU Load Phase ────────────────────────────────────────────────
+
+fn octosearch_load_gpu(n_docs, vocab_size)
+    // Boot Loom VM and upload persistent index data
+    // Register layout:
+    //   reg 0: tf_query  (written per query, n_docs x 8)
+    //   reg 1: doc_info  (n_docs x 2)
+    //   reg 2: params    (16 floats)
+    //   reg 3: output    (n_docs scores)
+
+    let mut reg_size = n_docs * 8.0
+    if reg_size < n_docs * 2.0
+        reg_size = n_docs * 2.0
+    end
+    if reg_size < 16.0
+        reg_size = 16.0
+    end
+
+    let vm = loom_boot(1.0, 4.0, reg_size)
+
+    if vm > 0.0 - 0.5
+        // Upload doc_info [length, 0, length, 0, ...]
+        let mut doc_info = []
+        let mut di = 0.0
+        while di < n_docs
+            push(doc_info, _os_doc_lengths[di])
+            push(doc_info, 0.0)
+            di = di + 1.0
+        end
+        loom_write(vm, 1.0, doc_info)
+        print("OctoSearch: Index loaded to GPU ({n_docs} docs)")
+    end
+
+    return vm
+end
+
+// ── GPU Boot + Kernel Emit ───────────────────────────────────────
+
+fn octosearch_boot_gpu(n_docs, vocab_size)
+    // Boot GPU VM, emit BM25 kernel if needed, prefetch SPIR-V
+    let vm = octosearch_load_gpu(n_docs, vocab_size)
+
+    if vm > 0.0 - 0.5
+        // Emit BM25 kernel if not cached on disk
+        if file_mtime("stdlib/search/bm25.spv") < 0.5
+            print("OctoSearch: Emitting BM25 kernel...")
+            emit_bm25_kernel("stdlib/search/bm25.spv", 8.0)
+        end
+
+        // Warm SPIR-V cache for first dispatch
+        loom_prefetch("stdlib/search/bm25.spv")
+
+        _os_vm = vm
+        _os_vm_n_docs = n_docs
+        _os_vm_vocab = vocab_size
+        print("OctoSearch: GPU ready (Main Loom)")
+    else
+        print("OctoSearch: GPU unavailable — CPU fallback active")
+    end
+
+    return vm
+end
+
+// ── GPU Query Phase ───────────────────────────────────────────────
+
+fn octosearch_query_gpu(vm, query_term_ids, n_query, n_docs, vocab_size, top_k)
+    // Dispatch BM25 kernel on GPU and rank results
+    let max_query = 8.0
+
+    // Extract TF columns for query terms → flat [n_docs x max_query]
+    let mut tf_query = []
+    let mut di = 0.0
+    while di < n_docs
+        let mut qi = 0.0
+        while qi < max_query
+            if qi < n_query
+                let term_id = query_term_ids[qi]
+                push(tf_query, _os_tf_matrix[di * vocab_size + term_id])
+            else
+                push(tf_query, 0.0)
+            end
+            qi = qi + 1.0
+        end
+        di = di + 1.0
+    end
+
+    // Build params: [n_docs, n_query, k1, b, avgdl, 0, 0, 0, idf0, ...]
+    let mut total_len = 0.0
+    di = 0.0
+    while di < n_docs
+        total_len = total_len + _os_doc_lengths[di]
+        di = di + 1.0
+    end
+    let avgdl = total_len / n_docs
+
+    let mut params = [n_docs, n_query, 1.2, 0.75, avgdl, 0.0, 0.0, 0.0]
+    let mut qi = 0.0
+    while qi < max_query
+        if qi < n_query
+            let term_id = query_term_ids[qi]
+            push(params, _os_idf[term_id])
+        else
+            push(params, 0.0)
+        end
+        qi = qi + 1.0
+    end
+
+    // Upload query-specific data (batched via T-06)
+    loom_write(vm, 0.0, tf_query)
+    loom_write(vm, 2.0, params)
+
+    // Dispatch BM25 kernel (SPIR-V cached via T-01)
+    let mut wg = ceil(n_docs / 256.0)
+    if wg < 1.0
+        wg = 1.0
+    end
+    loom_dispatch(vm, "stdlib/search/bm25.spv", [], wg)
+    let prog = loom_build(vm)
+    loom_run(prog)
+
+    // Read scores from output binding 3 (fence fast-path via T-02)
+    let raw_scores = loom_read(vm, 0.0, 3.0, n_docs)
+    let mut scores = []
+    let mut si = 0.0
+    while si < n_docs
+        push(scores, raw_scores[si])
+        si = si + 1.0
+    end
+
+    // Find top-K on CPU — zero-out selection (O(K × n_docs), trivial)
+    let mut results = []
+    let mut ki = 0.0
+    while ki < top_k
+        if ki >= n_docs
+            ki = top_k
+        else
+            let mut best_idx = 0.0
+            let mut best_score = 0.0 - 1.0
+            let mut di2 = 0.0
+            while di2 < n_docs
+                if scores[di2] > best_score
+                    best_score = scores[di2]
+                    best_idx = di2
+                end
+                di2 = di2 + 1.0
+            end
+            if best_score > 0.0
+                push(results, best_idx)
+                push(results, best_score)
+                scores[best_idx] = 0.0 - 1.0
+            end
+            ki = ki + 1.0
+        end
+    end
+
+    return results
+end
+
+// ── Display Results ───────────────────────────────────────────────
+
+fn octosearch_display(results, query, n_query, n_docs, tokens)
+    // Display search results with context lines
+    print("")
+    print("=== OctoSearch Results ===")
+    print("Query: {query}")
+    print("Terms: {n_query}, Docs searched: {n_docs}")
+    print("")
+
+    let mut ri = 0.0
+    while ri < len(results)
+        let idx = results[ri]
+        let score = results[ri + 1.0]
+        let path = _os_doc_paths[idx]
+        let rank = ri / 2.0 + 1.0
+        print("{rank}. [{score}]  {path}")
+
+        // Show context: find best matching line
+        let content = read_file(path)
+        let lines = split(content, "\n")
+        let mut best_line = 0.0
+        let mut best_line_score = 0.0
+        let mut li = 0.0
+        while li < len(lines)
+            let line_lower = to_lower(lines[li])
+            let mut line_score = 0.0
+            let mut qi = 0.0
+            while qi < n_query
+                if qi < len(tokens)
+                    let parts = split(line_lower, tokens[qi])
+                    if len(parts) > 1.0
+                        line_score = line_score + 1.0
+                    end
+                end
+                qi = qi + 1.0
+            end
+            if line_score > best_line_score
+                best_line_score = line_score
+                best_line = li
+            end
+            li = li + 1.0
+        end
+
+        if best_line_score > 0.0
+            let line_num = best_line + 1.0
+            let ctx = lines[best_line]
+            print("   line {line_num}: {ctx}")
+        end
+        print("")
+        ri = ri + 2.0
+    end
+    return len(results) / 2.0
+end
+
+// ── Main Entry Point ──────────────────────────────────────────────
+
+fn octosearch(query, directory, top_k)
+    // Main search entry point — GPU-first, CPU fallback
+    // Main Loom (GPU): BM25 kernel scoring
+    // Support Loom (CPU): tokenize, TF extraction, top-K
+    let extensions = [".flow"]
+
+    // ── I/O Phase: load or build index ──
+    let cache_path = directory + "/.octosearch_index"
+    let mut n_docs = 0.0
+    let mut vocab_size = 0.0
+    let mut idx = map()
+    let mut vocab = map()
+
+    if octosearch_index_exists(cache_path) > 0.5
+        // Load cached numeric arrays
+        let mut cached_tf = []
+        let mut cached_dl = []
+        let mut cached_idf = []
+        let mut out_meta = []
+        n_docs = octosearch_load_index_arrays(cache_path, cached_tf, cached_dl, cached_idf, out_meta)
+        if n_docs > 0.5
+            vocab_size = out_meta[1]
+            extend(_os_tf_matrix, cached_tf)
+            extend(_os_doc_lengths, cached_dl)
+            extend(_os_idf, cached_idf)
+            let _np = octosearch_load_paths(cache_path, _os_doc_paths)
+            let _nv = octosearch_load_vocab(cache_path, vocab, _os_vocab_words)
+            print("OctoSearch: Using cached index ({n_docs} docs)")
+        end
+    end
+
+    // Rebuild if no cache
+    if n_docs < 1.0
+        n_docs = octosearch_build_index(directory, extensions, idx, vocab)
+        vocab_size = map_get(idx, "vocab_size")
+        if n_docs > 0.5
+            let _s1 = octosearch_save_index(_os_tf_matrix, _os_doc_lengths, _os_idf, n_docs, vocab_size, cache_path)
+            let _s2 = octosearch_save_paths(_os_doc_paths, cache_path)
+            let _s3 = octosearch_save_vocab(_os_vocab_words, cache_path)
+        end
+    end
+
+    if n_docs < 1.0
+        print("OctoSearch: No documents found")
+        return 0.0
+    end
+
+    // ── Boot GPU if not already running ──
+    if _os_vm < 0.0 - 0.5
+        octosearch_boot_gpu(n_docs, vocab_size)
+    end
+
+    // ── Tokenize query (CPU — trivial, Rust builtin) ──
+    let tokens = tokenize(query)
+    if len(tokens) == 0.0
+        print("OctoSearch: Empty query")
+        return 0.0
+    end
+
+    // Map query tokens to term IDs
+    let max_query = 8.0
+    let mut query_term_ids = []
+    let mut qi = 0.0
+    while qi < len(tokens)
+        if qi < max_query
+            if map_has(vocab, tokens[qi]) > 0.5
+                let term_id = map_get(vocab, tokens[qi])
+                push(query_term_ids, term_id)
+            end
+        end
+        qi = qi + 1.0
+    end
+
+    let n_query = len(query_term_ids)
+    if n_query < 1.0
+        print("OctoSearch: No known terms in query")
+        return 0.0
+    end
+
+    print("OctoSearch: Query has {n_query} known terms")
+
+    // ── Score: GPU primary, CPU fallback ──
+    // Define results before control flow to avoid scope issues
+    let mut results = []
+    let mut used_gpu = 0.0
+
+    // GPU path — Main Loom
+    if _os_vm > 0.0 - 0.5
+        print("OctoSearch: GPU path (Main Loom)")
+        loom_unpark(_os_vm)
+        let gpu_res = octosearch_query_gpu(_os_vm, query_term_ids, n_query, n_docs, vocab_size, top_k)
+        extend(results, gpu_res)
+        loom_park(_os_vm)
+        used_gpu = 1.0
+    end
+
+    // CPU fallback — only when GPU unavailable
+    if used_gpu < 0.5
+        print("OctoSearch: CPU fallback (no GPU)")
+        let _n = octosearch_cpu_bm25(query_term_ids, n_query, n_docs, vocab_size, top_k, results)
+    end
+
+    let n_results = octosearch_display(results, query, n_query, n_docs, tokens)
+    print("Found {n_results} results")
+    return n_results
+end
+
+// ── Force Reindex ────────────────────────────────────────────────
+
+fn octosearch_reindex(directory, cache_path)
+    // Force rebuild — shutdown existing GPU VM
+    if _os_vm > 0.0 - 0.5
+        loom_shutdown(_os_vm)
+        _os_vm = 0.0 - 1.0
+        _os_vm_n_docs = 0.0
+        _os_vm_vocab = 0.0
+    end
+
+    let extensions = [".flow"]
+    let mut idx = map()
+    let mut vocab = map()
+    let n_docs = octosearch_build_index(directory, extensions, idx, vocab)
+    let vocab_size = map_get(idx, "vocab_size")
+    if n_docs > 0.5
+        let _s1 = octosearch_save_index(_os_tf_matrix, _os_doc_lengths, _os_idf, n_docs, vocab_size, cache_path)
+        let _s2 = octosearch_save_paths(_os_doc_paths, cache_path)
+        let _s3 = octosearch_save_vocab(_os_vocab_words, cache_path)
+    end
+    return n_docs
+end
+
+// ── Standalone Execution ──────────────────────────────────────────
+// When run directly, search the OctoFlow stdlib
+
+print("=== OctoSearch Engine ===")
+print("")
+let _r = octosearch("tokenize index search", "C:/OctoFlow/stdlib/search", 5.0)

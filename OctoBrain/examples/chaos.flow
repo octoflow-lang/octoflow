@@ -1,0 +1,117 @@
+// OctoBrain Chaos Demo
+// Attractor structure test: feeds logistic map in chaotic regime.
+// Logistic map: x(n+1) = r * x(n) * (1 - x(n)), r = 3.9
+// Uses 3D delay embedding: [x(n), x(n+1), x(n+2)]
+//
+// Expected behavior: Brain captures attractor structure with moderate
+// prototype count — not explosion (chaos managed) nor collapse (structure detected).
+
+use "../lib/octobrain"
+
+// ── Create brain with 2 actions ──────────────────────────────────
+let mut brain = octobrain_new(2.0)
+
+// Proto arrays
+let mut p_state = proto_new()
+let mut p_embs = []
+let mut p_mc = []
+
+// Embed arrays
+let mut e_state = embed_new()
+let mut W_embed = []
+let mut obs_buffer = []
+
+// Edge arrays
+let mut edge_state = edges_new()
+let mut en = []
+let mut ea = []
+let mut eo = []
+let mut ep = []
+let mut ew = []
+let mut eact = []
+
+// Context window
+let mut window = []
+
+// Action weights
+let mut W_score = []
+
+print("=== OctoBrain Chaos Demo ===")
+print("Logistic map (r=3.9) with 3D delay embedding [x(n), x(n+1), x(n+2)]")
+print("Generating 1050 points, feeding 1000 windowed observations...")
+print("")
+
+// ── Generate logistic map sequence ──────────────────────────────
+let r = 3.9
+let mut x = 0.1
+let mut seq = []
+let mut gi = 0.0
+while gi < 1050.0
+  push(seq, x)
+  x = r * x * (1.0 - x)
+  gi = gi + 1.0
+end
+
+// ── Feed windowed observations [x_n, x_{n+1}, x_{n+2}] ─────────
+let mut step = 0.0
+while step < 1000.0
+  let idx = step
+  let mut data = []
+  push(data, seq[idx])
+  push(data, seq[idx + 1.0])
+  push(data, seq[idx + 2.0])
+  let dummy = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, data)
+
+  // Print stats at milestones
+  if step == 99.0 || step == 249.0 || step == 499.0 || step == 749.0 || step == 999.0
+    let stats = octobrain_stats(brain, p_state, edge_state)
+    let pc = map_get(stats, "proto_count")
+    let ec = map_get(stats, "edge_count")
+    let tc = map_get(stats, "transition_count")
+    let oc = map_get(stats, "obs_count")
+    let report_step = step + 1.0
+    print("Step {report_step}: protos={pc}, edges={ec}, transitions={tc}, obs={oc}")
+  end
+
+  step = step + 1.0
+end
+
+print("")
+
+// ── Final analysis ───────────────────────────────────────────────
+let final_stats = octobrain_stats(brain, p_state, edge_state)
+let final_pc = map_get(final_stats, "proto_count")
+let final_ec = map_get(final_stats, "edge_count")
+let final_tc = map_get(final_stats, "transition_count")
+
+print("=== Final Results ===")
+print("Prototypes discovered: {final_pc}")
+print("Edges learned: {final_ec}")
+print("Transitions detected: {final_tc}")
+print("")
+
+print("=== Chaos Analysis ===")
+print("Logistic map (r=3.9) with 3D delay embedding")
+if final_pc >= 5.0 && final_pc <= 50.0
+  print("PASS: Moderate proto count ({final_pc}) — attractor structure captured")
+  print("  → Not explosion (chaos managed) nor collapse (structure detected)")
+elif final_pc > 50.0
+  print("NOTE: High proto count ({final_pc}) — brain may see chaos as high-dimensional noise")
+else
+  print("NOTE: Low proto count ({final_pc}) — brain collapsed chaotic signal to few states")
+end
+
+if final_tc > 50.0
+  print("PASS: High transitions ({final_tc}) — chaotic dynamics tracked")
+else
+  print("NOTE: Low transitions ({final_tc}) — may need parameter tuning")
+end
+
+if final_ec > 0.0
+  print("PASS: Edge structure learned ({final_ec} edges) — attractor topology emerging")
+else
+  print("NOTE: No edges — chaotic signal too irregular for edge learning")
+end
+
+print("")
+print("--- chaos demo complete ---")

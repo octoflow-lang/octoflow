@@ -1,0 +1,367 @@
+// stdlib/llm/logits_processor.flow — Logits processing pipeline
+//
+// Composable transformations applied to logits before sampling.
+// Implements: repetition penalty, frequency penalty, presence penalty,
+// temperature scaling, top-k filtering, top-p filtering, token banning,
+// token boosting, and pipeline composition.
+//
+// All processors modify logits in-place (flat array of vocab_size floats).
+// Pipeline: create → add processors → apply to logits each step.
+//
+// Functions: lp_repetition_penalty, lp_frequency_penalty, lp_presence_penalty,
+//            lp_temperature, lp_top_k_mask, lp_top_p_mask, lp_ban_tokens,
+//            lp_boost_tokens, lp_apply_penalties,
+//            lp_pipeline_create, lp_pipeline_add, lp_pipeline_run
+//
+// Usage:
+//   use "logits_processor"
+//   let mut logits = [2.0, 1.0, 0.5, -1.0, 3.0]
+//   let mut history = [4.0, 2.0, 4.0, 0.0]  // previously generated tokens
+//   lp_repetition_penalty(logits, history, 1.2)
+
+// ── Repetition penalty ──────────────────────────────────
+// Penalize tokens that appear in history.
+// penalty > 1.0: reduce probability of repeated tokens.
+// For positive logits: divide by penalty.
+// For negative logits: multiply by penalty.
+
+fn lp_repetition_penalty(logits, history, penalty)
+    let vocab = len(logits)
+    let n_hist = len(history)
+    if penalty <= 1.0 || n_hist == 0.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < n_hist
+        let tok = int(history[int(i)])
+        if tok >= 0.0 && tok < vocab
+            if logits[tok] > 0.0
+                logits[tok] = logits[tok] / penalty
+            else
+                logits[tok] = logits[tok] * penalty
+            end
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Frequency penalty ───────────────────────────────────
+// Subtract penalty * count(token) from logits.
+// Penalizes proportional to how many times token appeared.
+
+fn lp_frequency_penalty(logits, history, penalty)
+    let vocab = len(logits)
+    let n_hist = len(history)
+    if penalty == 0.0 || n_hist == 0.0
+        return 0.0
+    end
+    // Count frequencies
+    let mut counts = []
+    let mut ci = 0.0
+    while ci < vocab
+        push(counts, 0.0)
+        ci = ci + 1.0
+    end
+    let mut i = 0.0
+    while i < n_hist
+        let tok = int(history[int(i)])
+        if tok >= 0.0 && tok < vocab
+            counts[tok] = counts[tok] + 1.0
+        end
+        i = i + 1.0
+    end
+    // Apply
+    i = 0.0
+    while i < vocab
+        if counts[int(i)] > 0.0
+            logits[int(i)] = logits[int(i)] - penalty * counts[int(i)]
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Presence penalty ────────────────────────────────────
+// Subtract flat penalty from logits of tokens that appeared at all.
+// Unlike frequency penalty, doesn't scale with count.
+
+fn lp_presence_penalty(logits, history, penalty)
+    let vocab = len(logits)
+    let n_hist = len(history)
+    if penalty == 0.0 || n_hist == 0.0
+        return 0.0
+    end
+    // Track which tokens appeared
+    let mut seen = []
+    let mut ci = 0.0
+    while ci < vocab
+        push(seen, 0.0)
+        ci = ci + 1.0
+    end
+    let mut i = 0.0
+    while i < n_hist
+        let tok = int(history[int(i)])
+        if tok >= 0.0 && tok < vocab
+            seen[tok] = 1.0
+        end
+        i = i + 1.0
+    end
+    // Apply
+    i = 0.0
+    while i < vocab
+        if seen[int(i)] == 1.0
+            logits[int(i)] = logits[int(i)] - penalty
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Temperature scaling ─────────────────────────────────
+// Divide all logits by temperature. < 1.0 = sharper, > 1.0 = flatter.
+
+fn lp_temperature(logits, temp)
+    let vocab = len(logits)
+    let mut t = temp
+    if t <= 0.0
+        t = 1.0
+    end
+    if t == 1.0
+        return 0.0
+    end
+    let mut i = 0.0
+    while i < vocab
+        logits[int(i)] = logits[int(i)] / t
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Top-K masking ───────────────────────────────────────
+// Set all logits outside top-k to -infinity (very large negative).
+
+fn lp_top_k_mask(logits, k)
+    let vocab = len(logits)
+    if k <= 0.0 || k >= vocab
+        return 0.0
+    end
+    // Find k-th largest value
+    let kk = int(k)
+    // Simple approach: find threshold by partial sort
+    // Copy all values, sort descending, take k-th
+    let mut sorted = []
+    let mut i = 0.0
+    while i < vocab
+        push(sorted, logits[int(i)])
+        i = i + 1.0
+    end
+    // Selection: find k-th largest via partial bubble
+    let mut j = 0.0
+    while j < k
+        let mut max_idx = int(j)
+        let mut max_val = sorted[int(j)]
+        i = j + 1.0
+        while i < vocab
+            if sorted[int(i)] > max_val
+                max_val = sorted[int(i)]
+                max_idx = int(i)
+            end
+            i = i + 1.0
+        end
+        // Swap
+        let tmp = sorted[int(j)]
+        sorted[int(j)] = sorted[max_idx]
+        sorted[max_idx] = tmp
+        j = j + 1.0
+    end
+    let threshold = sorted[int(k - 1.0)]
+    // Mask below threshold
+    i = 0.0
+    while i < vocab
+        if logits[int(i)] < threshold
+            logits[int(i)] = -999999.0
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Top-P masking ───────────────────────────────────────
+// Keep smallest set of tokens whose cumulative probability >= p.
+// Set rest to -infinity. Requires softmax first.
+
+fn lp_top_p_mask(logits, p)
+    let vocab = len(logits)
+    if vocab == 0.0 || p >= 1.0 || p <= 0.0
+        return 0.0
+    end
+    // Softmax to get probabilities
+    let mut max_val = logits[0]
+    let mut i = 1.0
+    while i < vocab
+        if logits[int(i)] > max_val
+            max_val = logits[int(i)]
+        end
+        i = i + 1.0
+    end
+    let mut exp_sum = 0.0
+    let mut probs = []
+    i = 0.0
+    while i < vocab
+        let e = exp(logits[int(i)] - max_val)
+        push(probs, e)
+        exp_sum = exp_sum + e
+        i = i + 1.0
+    end
+    // Normalize
+    i = 0.0
+    while i < vocab
+        probs[int(i)] = probs[int(i)] / exp_sum
+        i = i + 1.0
+    end
+    // Sort indices by probability descending
+    // Use simple selection to find cumulative threshold
+    let mut mask = []
+    i = 0.0
+    while i < vocab
+        push(mask, 0.0)
+        i = i + 1.0
+    end
+    let mut cum = 0.0
+    while cum < p
+        // Find max unmasked prob
+        let mut best_idx = -1.0
+        let mut best_p = -1.0
+        i = 0.0
+        while i < vocab
+            if mask[int(i)] == 0.0 && probs[int(i)] > best_p
+                best_p = probs[int(i)]
+                best_idx = i
+            end
+            i = i + 1.0
+        end
+        if best_idx < 0.0
+            break
+        end
+        mask[int(best_idx)] = 1.0
+        cum = cum + best_p
+    end
+    // Apply mask
+    i = 0.0
+    while i < vocab
+        if mask[int(i)] == 0.0
+            logits[int(i)] = -999999.0
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Ban tokens ──────────────────────────────────────────
+// Set specified token logits to -infinity.
+
+fn lp_ban_tokens(logits, banned)
+    let vocab = len(logits)
+    let n = len(banned)
+    let mut i = 0.0
+    while i < n
+        let tok = int(banned[int(i)])
+        if tok >= 0.0 && tok < vocab
+            logits[tok] = -999999.0
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Boost tokens ────────────────────────────────────────
+// Add flat bonus to specified token logits.
+
+fn lp_boost_tokens(logits, boosted, bonus)
+    let vocab = len(logits)
+    let n = len(boosted)
+    let mut i = 0.0
+    while i < n
+        let tok = int(boosted[int(i)])
+        if tok >= 0.0 && tok < vocab
+            logits[tok] = logits[tok] + bonus
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+// ── Combined penalty application ────────────────────────
+// Apply all three penalties in one call.
+
+fn lp_apply_penalties(logits, history, rep_penalty, freq_penalty, pres_penalty)
+    if rep_penalty > 1.0
+        let _r = lp_repetition_penalty(logits, history, rep_penalty)
+    end
+    if freq_penalty != 0.0
+        let _f = lp_frequency_penalty(logits, history, freq_penalty)
+    end
+    if pres_penalty != 0.0
+        let _p = lp_presence_penalty(logits, history, pres_penalty)
+    end
+    return 0.0
+end
+
+// ── Pipeline (composable processor chain) ───────────────
+// Pipeline stores processor configs in flat arrays.
+// Processor types: 0=rep, 1=freq, 2=pres, 3=temp, 4=topk, 5=topp, 6=ban, 7=boost
+//
+// Pipeline storage: [type, param1, param2, ...]
+
+let mut _lp_pipe_types = []
+let mut _lp_pipe_start = []
+let mut _lp_pipe_count = []
+let mut _lp_pipe_params = []
+
+fn lp_pipeline_create()
+    // Create empty pipeline. Returns pipeline ID.
+    let id = len(_lp_pipe_start)
+    push(_lp_pipe_start, len(_lp_pipe_types))
+    push(_lp_pipe_count, 0.0)
+    return id
+end
+
+fn lp_pipeline_add(pipe_id, proc_type, param)
+    // Add processor to pipeline.
+    // proc_type: 0=rep_penalty, 1=freq_penalty, 2=pres_penalty,
+    //            3=temperature, 4=top_k, 5=top_p
+    // param: the penalty/temperature/k/p value
+    push(_lp_pipe_types, proc_type)
+    push(_lp_pipe_params, param)
+    _lp_pipe_count[int(pipe_id)] = _lp_pipe_count[int(pipe_id)] + 1.0
+    return 0.0
+end
+
+fn lp_pipeline_run(pipe_id, logits, history)
+    // Run all processors in pipeline order.
+    let pi = int(pipe_id)
+    let start = int(_lp_pipe_start[pi])
+    let count = int(_lp_pipe_count[pi])
+    let mut i = 0.0
+    while i < count
+        let idx = int(start + i)
+        let ptype = _lp_pipe_types[idx]
+        let param = _lp_pipe_params[idx]
+        if ptype == 0.0
+            let _r = lp_repetition_penalty(logits, history, param)
+        elif ptype == 1.0
+            let _r = lp_frequency_penalty(logits, history, param)
+        elif ptype == 2.0
+            let _r = lp_presence_penalty(logits, history, param)
+        elif ptype == 3.0
+            let _r = lp_temperature(logits, param)
+        elif ptype == 4.0
+            let _r = lp_top_k_mask(logits, param)
+        elif ptype == 5.0
+            let _r = lp_top_p_mask(logits, param)
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end

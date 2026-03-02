@@ -1,0 +1,563 @@
+// image_viewer.flow — Image viewing engine
+// Pan, zoom, fit-to-window, next/prev navigation.
+// Images are triplet arrays (r[], g[], b[]) with width/height.
+// Uses parallel-array storage for multiple viewer instances.
+
+// ── Fit modes ────────────────────────────────────────────
+let IV_FIT_NONE    = 0.0   // 1:1 pixels
+let IV_FIT_CONTAIN = 1.0   // Fit inside window (maintain aspect)
+let IV_FIT_COVER   = 2.0   // Cover window (maintain aspect, may crop)
+let IV_FIT_STRETCH = 3.0   // Stretch to window (distort)
+
+// ── Internal storage ─────────────────────────────────────
+let mut _iv_img_w    = []   // Image width
+let mut _iv_img_h    = []   // Image height
+let mut _iv_view_w   = []   // Viewport width
+let mut _iv_view_h   = []   // Viewport height
+let mut _iv_zoom     = []   // Zoom level (1.0 = 100%)
+let mut _iv_pan_x    = []   // Pan offset X (in image pixels)
+let mut _iv_pan_y    = []   // Pan offset Y (in image pixels)
+let mut _iv_fit_mode = []   // Fit mode
+let mut _iv_rotation = []   // Rotation in degrees (0, 90, 180, 270)
+let mut _iv_alive    = []   // 1.0 = active
+
+// ── Gallery storage (flat array, up to 256 entries per viewer) ───
+let mut _iv_gallery     = []   // Flat: [v0_count, v0_w0, v0_h0, v0_w1, v0_h1, ..., v1_count, ...]
+let mut _iv_gallery_idx = []   // Current index in gallery per viewer
+let mut _iv_gallery_off = []   // Offset into _iv_gallery per viewer
+let mut _iv_gallery_cnt = []   // Number of images in gallery per viewer
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn iv_create(img_w, img_h, view_w, view_h)
+    // Create a viewer for an image with given dimensions
+    let id = len(_iv_alive)
+    let mut iw = img_w
+    let mut ih = img_h
+    let mut vw = view_w
+    let mut vh = view_h
+    if iw < 1.0
+        iw = 1.0
+    end
+    if ih < 1.0
+        ih = 1.0
+    end
+    if vw < 1.0
+        vw = 1.0
+    end
+    if vh < 1.0
+        vh = 1.0
+    end
+    push(_iv_img_w, iw)
+    push(_iv_img_h, ih)
+    push(_iv_view_w, vw)
+    push(_iv_view_h, vh)
+    push(_iv_zoom, 1.0)
+    push(_iv_pan_x, 0.0)
+    push(_iv_pan_y, 0.0)
+    push(_iv_fit_mode, IV_FIT_CONTAIN)
+    push(_iv_rotation, 0.0)
+    push(_iv_alive, 1.0)
+    push(_iv_gallery_idx, 0.0)
+    push(_iv_gallery_off, len(_iv_gallery))
+    push(_iv_gallery_cnt, 0.0)
+    return id
+end
+
+fn iv_destroy(id)
+    if id < 0.0 || id >= len(_iv_alive)
+        return -1.0
+    end
+    _iv_alive[id] = 0.0
+    return 0.0
+end
+
+fn _iv_valid(id)
+    if id < 0.0 || id >= len(_iv_alive)
+        return 0.0
+    end
+    if _iv_alive[id] < 0.5
+        return 0.0
+    end
+    return 1.0
+end
+
+// ── Zoom ─────────────────────────────────────────────────
+
+fn iv_set_zoom(id, zoom)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let mut z = zoom
+    if z < 0.01
+        z = 0.01
+    end
+    if z > 100.0
+        z = 100.0
+    end
+    _iv_zoom[id] = z
+    return z
+end
+
+fn iv_get_zoom(id)
+    if _iv_valid(id) < 0.5
+        return 1.0
+    end
+    return _iv_zoom[id]
+end
+
+fn iv_zoom_in(id, factor)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let mut f = factor
+    if f < 1.01
+        f = 1.25
+    end
+    return iv_set_zoom(id, _iv_zoom[id] * f)
+end
+
+fn iv_zoom_out(id, factor)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let mut f = factor
+    if f < 1.01
+        f = 1.25
+    end
+    return iv_set_zoom(id, _iv_zoom[id] / f)
+end
+
+fn iv_zoom_to_fit(id)
+    // Calculate zoom to fit image in viewport
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let iw = _iv_img_w[id]
+    let ih = _iv_img_h[id]
+    let vw = _iv_view_w[id]
+    let vh = _iv_view_h[id]
+    let scale_x = vw / iw
+    let scale_y = vh / ih
+    let mut z = scale_x
+    if scale_y < z
+        z = scale_y
+    end
+    _iv_zoom[id] = z
+    _iv_pan_x[id] = 0.0
+    _iv_pan_y[id] = 0.0
+    return z
+end
+
+fn iv_zoom_to_fill(id)
+    // Calculate zoom to fill viewport (may crop)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let iw = _iv_img_w[id]
+    let ih = _iv_img_h[id]
+    let vw = _iv_view_w[id]
+    let vh = _iv_view_h[id]
+    let scale_x = vw / iw
+    let scale_y = vh / ih
+    let mut z = scale_x
+    if scale_y > z
+        z = scale_y
+    end
+    _iv_zoom[id] = z
+    _iv_pan_x[id] = 0.0
+    _iv_pan_y[id] = 0.0
+    return z
+end
+
+fn iv_zoom_100(id)
+    // Reset to 1:1 pixel mapping
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    _iv_zoom[id] = 1.0
+    _iv_pan_x[id] = 0.0
+    _iv_pan_y[id] = 0.0
+    return 1.0
+end
+
+// ── Pan ──────────────────────────────────────────────────
+
+fn iv_pan(id, dx, dy)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    _iv_pan_x[id] = _iv_pan_x[id] + dx
+    _iv_pan_y[id] = _iv_pan_y[id] + dy
+    return 0.0
+end
+
+fn iv_set_pan(id, x, y)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    _iv_pan_x[id] = x
+    _iv_pan_y[id] = y
+    return 0.0
+end
+
+fn iv_get_pan_x(id)
+    if _iv_valid(id) < 0.5
+        return 0.0
+    end
+    return _iv_pan_x[id]
+end
+
+fn iv_get_pan_y(id)
+    if _iv_valid(id) < 0.5
+        return 0.0
+    end
+    return _iv_pan_y[id]
+end
+
+fn iv_center(id)
+    // Center image in viewport
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    _iv_pan_x[id] = 0.0
+    _iv_pan_y[id] = 0.0
+    return 0.0
+end
+
+// ── Rotation ─────────────────────────────────────────────
+
+fn iv_rotate_cw(id)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let r = _iv_rotation[id] + 90.0
+    if r >= 360.0
+        _iv_rotation[id] = 0.0
+    else
+        _iv_rotation[id] = r
+    end
+    return _iv_rotation[id]
+end
+
+fn iv_rotate_ccw(id)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let r = _iv_rotation[id] - 90.0
+    if r < 0.0
+        _iv_rotation[id] = 270.0
+    else
+        _iv_rotation[id] = r
+    end
+    return _iv_rotation[id]
+end
+
+fn iv_get_rotation(id)
+    if _iv_valid(id) < 0.5
+        return 0.0
+    end
+    return _iv_rotation[id]
+end
+
+fn iv_set_rotation(id, deg)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    // Snap to nearest 90
+    let mut d = deg - floor(deg / 360.0) * 360.0
+    if d < 0.0
+        d = d + 360.0
+    end
+    // Snap to 0, 90, 180, 270
+    if d < 45.0
+        _iv_rotation[id] = 0.0
+    else
+        if d < 135.0
+            _iv_rotation[id] = 90.0
+        else
+            if d < 225.0
+                _iv_rotation[id] = 180.0
+            else
+                if d < 315.0
+                    _iv_rotation[id] = 270.0
+                else
+                    _iv_rotation[id] = 0.0
+                end
+            end
+        end
+    end
+    return _iv_rotation[id]
+end
+
+// ── Fit mode ─────────────────────────────────────────────
+
+fn iv_set_fit_mode(id, mode)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    if mode < 0.0 || mode > 3.0
+        return -1.0
+    end
+    _iv_fit_mode[id] = mode
+    return mode
+end
+
+fn iv_get_fit_mode(id)
+    if _iv_valid(id) < 0.5
+        return IV_FIT_CONTAIN
+    end
+    return _iv_fit_mode[id]
+end
+
+// ── Viewport resize ──────────────────────────────────────
+
+fn iv_resize_viewport(id, new_w, new_h)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let mut w = new_w
+    let mut h = new_h
+    if w < 1.0
+        w = 1.0
+    end
+    if h < 1.0
+        h = 1.0
+    end
+    _iv_view_w[id] = w
+    _iv_view_h[id] = h
+    return 0.0
+end
+
+// ── Image change ─────────────────────────────────────────
+
+fn iv_set_image(id, img_w, img_h)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let mut iw = img_w
+    let mut ih = img_h
+    if iw < 1.0
+        iw = 1.0
+    end
+    if ih < 1.0
+        ih = 1.0
+    end
+    _iv_img_w[id] = iw
+    _iv_img_h[id] = ih
+    _iv_pan_x[id] = 0.0
+    _iv_pan_y[id] = 0.0
+    return 0.0
+end
+
+// ── Coordinate mapping ──────────────────────────────────
+
+fn iv_effective_zoom(id)
+    // Get effective zoom considering fit mode
+    if _iv_valid(id) < 0.5
+        return 1.0
+    end
+    let mode = _iv_fit_mode[id]
+    if mode < 0.5
+        // FIT_NONE: use manual zoom
+        return _iv_zoom[id]
+    end
+    let iw = _iv_img_w[id]
+    let ih = _iv_img_h[id]
+    let vw = _iv_view_w[id]
+    let vh = _iv_view_h[id]
+    let sx = vw / iw
+    let sy = vh / ih
+    if mode < 1.5
+        // FIT_CONTAIN: min scale
+        if sx < sy
+            return sx
+        end
+        return sy
+    end
+    if mode < 2.5
+        // FIT_COVER: max scale
+        if sx > sy
+            return sx
+        end
+        return sy
+    end
+    // FIT_STRETCH: not a uniform zoom — return average
+    return (sx + sy) / 2.0
+end
+
+fn iv_screen_to_image(id, screen_x, screen_y, result)
+    // Convert screen coordinates to image coordinates
+    // result[0] = img_x, result[1] = img_y
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    if len(result) < 2.0
+        return -1.0
+    end
+    let z = iv_effective_zoom(id)
+    let vw = _iv_view_w[id]
+    let vh = _iv_view_h[id]
+    let iw = _iv_img_w[id]
+    let ih = _iv_img_h[id]
+    // Center of viewport maps to center of image + pan
+    let cx = iw / 2.0 + _iv_pan_x[id]
+    let cy = ih / 2.0 + _iv_pan_y[id]
+    let img_x = cx + (screen_x - vw / 2.0) / z
+    let img_y = cy + (screen_y - vh / 2.0) / z
+    result[0] = img_x
+    result[1] = img_y
+    return 0.0
+end
+
+fn iv_image_to_screen(id, img_x, img_y, result)
+    // Convert image coordinates to screen coordinates
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    if len(result) < 2.0
+        return -1.0
+    end
+    let z = iv_effective_zoom(id)
+    let vw = _iv_view_w[id]
+    let vh = _iv_view_h[id]
+    let iw = _iv_img_w[id]
+    let ih = _iv_img_h[id]
+    let cx = iw / 2.0 + _iv_pan_x[id]
+    let cy = ih / 2.0 + _iv_pan_y[id]
+    let sx = vw / 2.0 + (img_x - cx) * z
+    let sy = vh / 2.0 + (img_y - cy) * z
+    result[0] = sx
+    result[1] = sy
+    return 0.0
+end
+
+// ── Gallery (next/prev navigation) ──────────────────────
+
+fn iv_gallery_add(id, img_w, img_h)
+    // Add an image (dimensions) to the viewer's gallery
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _iv_gallery_cnt[id]
+    if cnt >= 256.0
+        return -1.0
+    end
+    push(_iv_gallery, img_w)
+    push(_iv_gallery, img_h)
+    _iv_gallery_cnt[id] = cnt + 1.0
+    return cnt
+end
+
+fn iv_gallery_count(id)
+    if _iv_valid(id) < 0.5
+        return 0.0
+    end
+    return _iv_gallery_cnt[id]
+end
+
+fn iv_gallery_index(id)
+    if _iv_valid(id) < 0.5
+        return 0.0
+    end
+    return _iv_gallery_idx[id]
+end
+
+fn iv_gallery_next(id)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _iv_gallery_cnt[id]
+    if cnt < 1.0
+        return -1.0
+    end
+    let mut idx = _iv_gallery_idx[id] + 1.0
+    if idx >= cnt
+        idx = 0.0   // Wrap around
+    end
+    _iv_gallery_idx[id] = idx
+    // Update image dimensions
+    let off = _iv_gallery_off[id]
+    let base = off + idx * 2.0
+    if base + 1.0 < len(_iv_gallery)
+        _iv_img_w[id] = _iv_gallery[base]
+        _iv_img_h[id] = _iv_gallery[base + 1.0]
+    end
+    _iv_pan_x[id] = 0.0
+    _iv_pan_y[id] = 0.0
+    return idx
+end
+
+fn iv_gallery_prev(id)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _iv_gallery_cnt[id]
+    if cnt < 1.0
+        return -1.0
+    end
+    let mut idx = _iv_gallery_idx[id] - 1.0
+    if idx < 0.0
+        idx = cnt - 1.0   // Wrap around
+    end
+    _iv_gallery_idx[id] = idx
+    let off = _iv_gallery_off[id]
+    let base = off + idx * 2.0
+    if base + 1.0 < len(_iv_gallery)
+        _iv_img_w[id] = _iv_gallery[base]
+        _iv_img_h[id] = _iv_gallery[base + 1.0]
+    end
+    _iv_pan_x[id] = 0.0
+    _iv_pan_y[id] = 0.0
+    return idx
+end
+
+fn iv_gallery_goto(id, index)
+    if _iv_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _iv_gallery_cnt[id]
+    if index < 0.0 || index >= cnt
+        return -1.0
+    end
+    _iv_gallery_idx[id] = index
+    let off = _iv_gallery_off[id]
+    let base = off + index * 2.0
+    if base + 1.0 < len(_iv_gallery)
+        _iv_img_w[id] = _iv_gallery[base]
+        _iv_img_h[id] = _iv_gallery[base + 1.0]
+    end
+    _iv_pan_x[id] = 0.0
+    _iv_pan_y[id] = 0.0
+    return index
+end
+
+// ── Query ────────────────────────────────────────────────
+
+fn iv_img_width(id)
+    if _iv_valid(id) < 0.5
+        return 0.0
+    end
+    return _iv_img_w[id]
+end
+
+fn iv_img_height(id)
+    if _iv_valid(id) < 0.5
+        return 0.0
+    end
+    return _iv_img_h[id]
+end
+
+fn iv_view_width(id)
+    if _iv_valid(id) < 0.5
+        return 0.0
+    end
+    return _iv_view_w[id]
+end
+
+fn iv_view_height(id)
+    if _iv_valid(id) < 0.5
+        return 0.0
+    end
+    return _iv_view_h[id]
+end

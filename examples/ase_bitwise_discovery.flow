@@ -1,0 +1,300 @@
+// ase_bitwise_discovery.flow — ASE Bitwise Function Discovery Demo
+//
+// Evolves a 3-gate boolean circuit (AND, OR, XOR, NOT) to match a target
+// truth table (XOR). Proves ASE core loop works end-to-end on CPU.
+//
+// Uses flat-array population to avoid nested-array runtime limitation.
+// Population: flat array of POP_SIZE * GENES contiguous floats.
+//
+// Run: octoflow run examples/ase_bitwise_discovery.flow
+
+print("=== ASE Bitwise Function Discovery ===")
+print("")
+
+let POP_SIZE = 16.0
+let GENES = 8.0
+let GENERATIONS = 50.0
+let KEEP = 4.0
+let MUT_RATE = 0.25
+
+// Target: XOR truth table (a=0,b=0)=0, (0,1)=1, (1,0)=1, (1,1)=0
+let target = [0.0, 1.0, 1.0, 0.0]
+
+// ── Gate logic ──────────────────────────────────────────────────────
+// op: 0=AND, 1=OR, 2=XOR, 3=NOT(a)
+
+fn apply_gate(op, a, b)
+  let iop = floor(op)
+  if iop == 0.0
+    return a * b
+  end
+  if iop == 1.0
+    let s = a + b
+    if s > 1.0
+      return 1.0
+    end
+    return s
+  end
+  if iop == 2.0
+    return abs(a - b)
+  end
+  return 1.0 - a
+end
+
+fn pick_signal(signals, idx)
+  let ii = floor(idx)
+  if ii == 0.0
+    return signals[0]
+  end
+  if ii == 1.0
+    return signals[1]
+  end
+  if ii == 2.0
+    return signals[2]
+  end
+  return signals[3]
+end
+
+fn modulo(val, div)
+  return val - floor(val / div) * div
+end
+
+fn run_circuit(op0, src0, op1, src1, op2, src2, a, b)
+  let mut signals = [a, b, 0.0, 0.0]
+
+  // Gate 0: pick two inputs
+  let s0a = modulo(floor(src0), 2.0)
+  let s0b = modulo(s0a + 1.0, 2.0)
+  let in0a = pick_signal(signals, s0a)
+  let in0b = pick_signal(signals, s0b)
+  signals[2] = apply_gate(floor(op0), in0a, in0b)
+
+  // Gate 1: pick from all 4 signals
+  let s1a = modulo(floor(src1), 4.0)
+  let s1b = modulo(s1a + 1.0, 4.0)
+  let in1a = pick_signal(signals, s1a)
+  let in1b = pick_signal(signals, s1b)
+  signals[3] = apply_gate(floor(op1), in1a, in1b)
+
+  // Gate 2 (output): pick from all 4 signals
+  let s2a = modulo(floor(src2), 4.0)
+  let s2b = modulo(s2a + 1.0, 4.0)
+  let in2a = pick_signal(signals, s2a)
+  let in2b = pick_signal(signals, s2b)
+  return apply_gate(floor(op2), in2a, in2b)
+end
+
+fn eval_fitness(pop, idx, tgt)
+  let base = idx * 8.0
+  let op0 = pop[base]
+  let src0 = pop[base + 1.0]
+  let op1 = pop[base + 2.0]
+  let src1 = pop[base + 3.0]
+  let op2 = pop[base + 4.0]
+  let src2 = pop[base + 5.0]
+
+  let mut correct = 0.0
+  let mut ia = 0.0
+  while ia < 2.0
+    let mut ib = 0.0
+    while ib < 2.0
+      let result = run_circuit(op0, src0, op1, src1, op2, src2, ia, ib)
+      let ti = ia * 2.0 + ib
+      let mut expected = tgt[0]
+      if ti > 0.5
+        if ti < 1.5
+          expected = tgt[1]
+        end
+      end
+      if ti > 1.5
+        if ti < 2.5
+          expected = tgt[2]
+        end
+      end
+      if ti > 2.5
+        expected = tgt[3]
+      end
+      if abs(result - expected) < 0.01
+        correct = correct + 1.0
+      end
+      ib = ib + 1.0
+    end
+    ia = ia + 1.0
+  end
+  return correct / 4.0
+end
+
+fn gate_name(op)
+  let iop = floor(op)
+  if iop == 0.0
+    return "AND"
+  end
+  if iop == 1.0
+    return "OR"
+  end
+  if iop == 2.0
+    return "XOR"
+  end
+  return "NOT"
+end
+
+// ── Initialize flat population ──────────────────────────────────────
+// pop[individual * 8 + gene] — 8 genes per individual, each in [0, 3.99]
+// buf = staging buffer for next generation (avoids array reassignment bug)
+let total = POP_SIZE * GENES
+let mut pop = []
+let mut buf = []
+let mut i = 0.0
+while i < total
+  push(pop, random() * 3.99)
+  push(buf, 0.0)
+  i = i + 1.0
+end
+
+// ── Evolution loop ──────────────────────────────────────────────────
+let mut gen = 0.0
+let mut solved = 0.0
+while gen < GENERATIONS
+  if solved < 0.5
+    // Evaluate fitness for each individual
+    let mut scores = []
+    let mut best_score = -1.0
+    let mut best_idx = 0.0
+    let mut p = 0.0
+    while p < POP_SIZE
+      let sc = eval_fitness(pop, p, target)
+      push(scores, sc)
+      if sc > best_score
+        best_score = sc
+        best_idx = p
+      end
+      p = p + 1.0
+    end
+
+    print("Gen {gen}: best = {best_score}")
+
+    if best_score > 0.99
+      solved = 1.0
+      print("")
+      print("SOLVED at generation {gen}!")
+      let bbase = best_idx * 8.0
+      let wop0 = gate_name(pop[bbase])
+      let wop1 = gate_name(pop[bbase + 2.0])
+      let wop2 = gate_name(pop[bbase + 4.0])
+      print("  Gate 0: {wop0}")
+      print("  Gate 1: {wop1}")
+      print("  Gate 2 (output): {wop2}")
+      print("")
+      // Verify
+      let mut va = 0.0
+      while va < 2.0
+        let mut vb = 0.0
+        while vb < 2.0
+          let vr = run_circuit(pop[bbase], pop[bbase + 1.0], pop[bbase + 2.0], pop[bbase + 3.0], pop[bbase + 4.0], pop[bbase + 5.0], va, vb)
+          print("  f({va}, {vb}) = {vr}")
+          vb = vb + 1.0
+        end
+        va = va + 1.0
+      end
+    end
+
+    // Selection: find top KEEP indices
+    if solved < 0.5
+      let mut top_indices = []
+      let mut used = []
+      let mut ui = 0.0
+      while ui < POP_SIZE
+        push(used, 0.0)
+        ui = ui + 1.0
+      end
+      let mut ki = 0.0
+      while ki < KEEP
+        let mut best_k = -1.0
+        let mut best_f = -999.0
+        let mut si = 0.0
+        while si < POP_SIZE
+          if used[si] < 0.5
+            if scores[si] > best_f
+              best_f = scores[si]
+              best_k = si
+            end
+          end
+          si = si + 1.0
+        end
+        if best_k > -0.5
+          push(top_indices, best_k)
+          used[best_k] = 1.0
+        end
+        ki = ki + 1.0
+      end
+
+      // Build next generation into buf (index writes)
+      let mut write_idx = 0.0
+
+      // Copy winners
+      let mut wi = 0.0
+      while wi < KEEP
+        let src_idx = top_indices[wi]
+        let src_base = src_idx * 8.0
+        let mut gi = 0.0
+        while gi < GENES
+          buf[write_idx] = pop[src_base + gi]
+          write_idx = write_idx + 1.0
+          gi = gi + 1.0
+        end
+        wi = wi + 1.0
+      end
+
+      // Fill rest with crossover + mutation
+      let mut ci = KEEP
+      while ci < POP_SIZE
+        let pa = floor(random() * KEEP)
+        let mut pb = floor(random() * KEEP)
+        if abs(pb - pa) < 0.5
+          pb = modulo(pa + 1.0, KEEP)
+        end
+        let pa_base = top_indices[pa] * 8.0
+        let pb_base = top_indices[pb] * 8.0
+
+        let cut = floor(random() * GENES)
+        let mut gi = 0.0
+        while gi < GENES
+          let mut gene_val = 0.0
+          if gi < cut
+            gene_val = pop[pa_base + gi]
+          end
+          if gi >= cut
+            gene_val = pop[pb_base + gi]
+          end
+          if random() < MUT_RATE
+            gene_val = gene_val + (random() - 0.5) * 1.6
+          end
+          if gene_val < 0.0
+            gene_val = 0.0
+          end
+          if gene_val > 3.99
+            gene_val = 3.99
+          end
+          buf[write_idx] = gene_val
+          write_idx = write_idx + 1.0
+          gi = gi + 1.0
+        end
+        ci = ci + 1.0
+      end
+
+      // Copy buf → pop
+      let mut cp = 0.0
+      while cp < total
+        pop[cp] = buf[cp]
+        cp = cp + 1.0
+      end
+    end
+  end
+  gen = gen + 1.0
+end
+
+if solved < 0.5
+  print("")
+  print("Did not solve in {GENERATIONS} generations")
+end
+print("")

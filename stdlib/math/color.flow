@@ -1,0 +1,296 @@
+// stdlib/math/color.flow — Color manipulation utilities
+//
+// Colors stored as [r, g, b] arrays with values in [0, 255].
+// Alpha channel via [r, g, b, a] where a is [0, 255].
+//
+// Functions: rgb, rgba, rgb_to_hex, hex_to_rgb,
+//            rgb_to_hsl, hsl_to_rgb, color_lerp, color_blend,
+//            color_brighten, color_darken, color_invert,
+//            color_grayscale, color_gradient, color_distance
+//
+// Usage:
+//   use "color"
+//   let mut red = rgb(255.0, 0.0, 0.0)
+//   let mut blue = rgb(0.0, 0.0, 255.0)
+//   let mut purple = color_lerp(red, blue, 0.5)
+//   let hex = rgb_to_hex(red)  // "ff0000"
+
+// ── Construction ────────────────────────────────────────────────
+
+fn rgb(r, g, b)
+    let mut c = [r, g, b]
+    return c
+end
+
+fn rgba(r, g, b, a)
+    let mut c = [r, g, b, a]
+    return c
+end
+
+fn _clamp_byte(v)
+    if v < 0.0
+        return 0.0
+    end
+    if v > 255.0
+        return 255.0
+    end
+    return floor(v)
+end
+
+// ── Hex Conversion ──────────────────────────────────────────────
+
+fn rgb_to_hex(c)
+    // Convert [r,g,b] to hex string like "ff8000".
+    let hex_chars = "0123456789abcdef"
+    let r = _clamp_byte(c[0])
+    let g = _clamp_byte(c[1])
+    let b = _clamp_byte(c[2])
+
+    let rh = char_at(hex_chars, floor(r / 16.0)) + char_at(hex_chars, r - floor(r / 16.0) * 16.0)
+    let gh = char_at(hex_chars, floor(g / 16.0)) + char_at(hex_chars, g - floor(g / 16.0) * 16.0)
+    let bh = char_at(hex_chars, floor(b / 16.0)) + char_at(hex_chars, b - floor(b / 16.0) * 16.0)
+
+    return rh + gh + bh
+end
+
+fn _hex_digit(c)
+    let code = ord(to_lower(c))
+    if code >= 48.0 && code <= 57.0
+        return code - 48.0
+    end
+    if code >= 97.0 && code <= 102.0
+        return code - 87.0
+    end
+    return 0.0
+end
+
+fn hex_to_rgb(hex)
+    // Convert hex string (e.g. "ff8000" or "#ff8000") to [r,g,b].
+    let mut s = hex
+    if char_at(s, 0.0) == "#"
+        s = substr(s, 1.0, len(s))
+    end
+
+    let r = _hex_digit(char_at(s, 0.0)) * 16.0 + _hex_digit(char_at(s, 1.0))
+    let g = _hex_digit(char_at(s, 2.0)) * 16.0 + _hex_digit(char_at(s, 3.0))
+    let b = _hex_digit(char_at(s, 4.0)) * 16.0 + _hex_digit(char_at(s, 5.0))
+
+    let mut c = [r, g, b]
+    return c
+end
+
+// ── HSL Conversion ──────────────────────────────────────────────
+
+fn rgb_to_hsl(c)
+    // Convert [r,g,b] (0-255) to [h,s,l] where h in [0,360), s,l in [0,1].
+    let r = c[0] / 255.0
+    let g = c[1] / 255.0
+    let b = c[2] / 255.0
+
+    let mut mx = r
+    if g > mx
+        mx = g
+    end
+    if b > mx
+        mx = b
+    end
+    let mut mn = r
+    if g < mn
+        mn = g
+    end
+    if b < mn
+        mn = b
+    end
+
+    let l = (mx + mn) / 2.0
+    let d = mx - mn
+
+    if d < 0.0001
+        let mut hsl = [0.0, 0.0, l]
+        return hsl
+    end
+
+    let mut s = d / (1.0 - abs(2.0 * l - 1.0))
+
+    let mut h = 0.0
+    if abs(mx - r) < 0.0001
+        h = (g - b) / d
+        if h < 0.0
+            h = h + 6.0
+        end
+    elif abs(mx - g) < 0.0001
+        h = (b - r) / d + 2.0
+    else
+        h = (r - g) / d + 4.0
+    end
+    h = h * 60.0
+
+    let mut hsl = [h, s, l]
+    return hsl
+end
+
+fn _hue_to_rgb(p, q, t)
+    let mut tt = t
+    if tt < 0.0
+        tt = tt + 1.0
+    end
+    if tt > 1.0
+        tt = tt - 1.0
+    end
+    if tt < 1.0 / 6.0
+        return p + (q - p) * 6.0 * tt
+    end
+    if tt < 0.5
+        return q
+    end
+    if tt < 2.0 / 3.0
+        return p + (q - p) * (2.0 / 3.0 - tt) * 6.0
+    end
+    return p
+end
+
+fn hsl_to_rgb(hsl)
+    // Convert [h,s,l] to [r,g,b] (0-255).
+    let h = hsl[0] / 360.0
+    let s = hsl[1]
+    let l = hsl[2]
+
+    if s < 0.0001
+        let v = _clamp_byte(l * 255.0)
+        let mut c = [v, v, v]
+        return c
+    end
+
+    let mut q = l * (1.0 + s)
+    if l >= 0.5
+        q = l + s - l * s
+    end
+    let p = 2.0 * l - q
+
+    let r = _clamp_byte(_hue_to_rgb(p, q, h + 1.0 / 3.0) * 255.0)
+    let g = _clamp_byte(_hue_to_rgb(p, q, h) * 255.0)
+    let b = _clamp_byte(_hue_to_rgb(p, q, h - 1.0 / 3.0) * 255.0)
+
+    let mut c = [r, g, b]
+    return c
+end
+
+// ── Color Operations ────────────────────────────────────────────
+
+fn color_lerp(a, b, t)
+    // Linear interpolation between two RGB colors.
+    let r = _clamp_byte(a[0] + (b[0] - a[0]) * t)
+    let g = _clamp_byte(a[1] + (b[1] - a[1]) * t)
+    let bl = _clamp_byte(a[2] + (b[2] - a[2]) * t)
+    let mut c = [r, g, bl]
+    return c
+end
+
+fn color_blend(a, b)
+    // Average blend of two colors.
+    return color_lerp(a, b, 0.5)
+end
+
+fn color_brighten(c, amount)
+    // Brighten by amount (0-255).
+    let r = _clamp_byte(c[0] + amount)
+    let g = _clamp_byte(c[1] + amount)
+    let b = _clamp_byte(c[2] + amount)
+    let mut result = [r, g, b]
+    return result
+end
+
+fn color_darken(c, amount)
+    // Darken by amount (0-255).
+    return color_brighten(c, 0.0 - amount)
+end
+
+fn color_invert(c)
+    // Invert (complement) color.
+    let mut result = [255.0 - c[0], 255.0 - c[1], 255.0 - c[2]]
+    return result
+end
+
+fn color_grayscale(c)
+    // Convert to grayscale using luminance weights.
+    let gray = _clamp_byte(c[0] * 0.299 + c[1] * 0.587 + c[2] * 0.114)
+    let mut result = [gray, gray, gray]
+    return result
+end
+
+fn color_distance(a, b)
+    // Euclidean distance between two colors in RGB space.
+    let dr = a[0] - b[0]
+    let dg = a[1] - b[1]
+    let db = a[2] - b[2]
+    return sqrt(dr * dr + dg * dg + db * db)
+end
+
+// ── Predefined Colors ───────────────────────────────────────────
+
+fn color_white()
+    let mut c = [255.0, 255.0, 255.0]
+    return c
+end
+
+fn color_black()
+    let mut c = [0.0, 0.0, 0.0]
+    return c
+end
+
+fn color_red()
+    let mut c = [255.0, 0.0, 0.0]
+    return c
+end
+
+fn color_green()
+    let mut c = [0.0, 255.0, 0.0]
+    return c
+end
+
+fn color_blue()
+    let mut c = [0.0, 0.0, 255.0]
+    return c
+end
+
+fn color_yellow()
+    let mut c = [255.0, 255.0, 0.0]
+    return c
+end
+
+fn color_cyan()
+    let mut c = [0.0, 255.0, 255.0]
+    return c
+end
+
+fn color_magenta()
+    let mut c = [255.0, 0.0, 255.0]
+    return c
+end
+
+// ── Gradient ────────────────────────────────────────────────────
+
+fn color_gradient(start, end_color, steps)
+    // Generate a gradient as flat array [r0,g0,b0, r1,g1,b1, ...].
+    // steps = number of color stops.
+    let mut result = []
+    if steps < 1.0
+        return result
+    end
+    if steps < 2.0
+        push(result, start[0])
+        push(result, start[1])
+        push(result, start[2])
+        return result
+    end
+    let mut i = 0.0
+    while i < steps
+        let t = i / (steps - 1.0)
+        let mut c = color_lerp(start, end_color, t)
+        push(result, c[0])
+        push(result, c[1])
+        push(result, c[2])
+        i = i + 1.0
+    end
+    return result
+end

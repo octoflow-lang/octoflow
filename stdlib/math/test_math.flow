@@ -1,0 +1,67 @@
+// test_math.flow — Tests for stdlib/math.flow
+use "../math"
+
+fn approx_eq(a, b, eps)
+  if abs(a - b) < eps
+    return 1.0
+  end
+  return 0.0
+end
+
+fn test_deg_to_rad()
+  let result = deg_to_rad(180.0)
+  assert(approx_eq(result, 3.14159265358979, 0.0001) == 1.0, "deg_to_rad(180) should be ~PI")
+  let result2 = deg_to_rad(90.0)
+  assert(approx_eq(result2, 1.5707963, 0.0001) == 1.0, "deg_to_rad(90) should be ~PI/2")
+  assert(deg_to_rad(0.0) == 0.0, "deg_to_rad(0) should be 0")
+  print("PASS: test_deg_to_rad")
+  return 0.0
+end
+
+fn test_rad_to_deg()
+  let result = rad_to_deg(3.14159265358979)
+  assert(approx_eq(result, 180.0, 0.001) == 1.0, "rad_to_deg(PI) should be ~180")
+  print("PASS: test_rad_to_deg")
+  return 0.0
+end
+
+fn test_gcd()
+  assert(gcd(12.0, 8.0) == 4.0, "gcd(12,8) should be 4")
+  assert(gcd(7.0, 3.0) == 1.0, "gcd(7,3) should be 1")
+  assert(gcd(100.0, 25.0) == 25.0, "gcd(100,25) should be 25")
+  assert(gcd(0.0, 5.0) == 5.0, "gcd(0,5) should be 5")
+  print("PASS: test_gcd")
+  return 0.0
+end
+
+fn test_clamp()
+  assert(clamp_val(5.0, 1.0, 3.0) == 3.0, "clamp(5,1,3) should be 3")
+  assert(clamp_val(0.0, 1.0, 3.0) == 1.0, "clamp(0,1,3) should be 1")
+  assert(clamp_val(2.0, 1.0, 3.0) == 2.0, "clamp(2,1,3) should be 2")
+  print("PASS: test_clamp")
+  return 0.0
+end
+
+fn test_map_range()
+  assert(map_range(5.0, 0.0, 10.0, 0.0, 100.0) == 50.0, "map_range(5,0,10,0,100) should be 50")
+  assert(map_range(0.0, 0.0, 10.0, 0.0, 100.0) == 0.0, "map_range(0,...) should be 0")
+  assert(map_range(10.0, 0.0, 10.0, 0.0, 100.0) == 100.0, "map_range(10,...) should be 100")
+  print("PASS: test_map_range")
+  return 0.0
+end
+
+fn test_lcm()
+  assert(lcm(4.0, 6.0) == 12.0, "lcm(4,6) should be 12")
+  assert(lcm(0.0, 5.0) == 0.0, "lcm(0,5) should be 0")
+  print("PASS: test_lcm")
+  return 0.0
+end
+
+// Run tests
+test_deg_to_rad()
+test_rad_to_deg()
+test_gcd()
+test_clamp()
+test_map_range()
+test_lcm()
+print("All math tests passed.")

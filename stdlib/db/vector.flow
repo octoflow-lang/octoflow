@@ -1,6 +1,6 @@
 // stdlib/db/vector.flow — GPU-accelerated vector/embedding database
 //
-// Tier 2: Loom DB — vector similarity search with persistence.
+// Tier 2: Loom State — vector similarity with persistence.
 // Stores embeddings as a flat f32 array, supports cosine/dot/euclidean metrics.
 // GPU path via gpu_matmul for large datasets (1000+ vectors).
 //

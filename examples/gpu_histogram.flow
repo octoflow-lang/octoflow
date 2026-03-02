@@ -1,23 +1,21 @@
 // gpu_histogram.flow — GPU Histogram (65536 elements, 16 bins)
 //
-// "65536 elements. 16 bins. 2 dispatches. 1 submit. 0 CPU iterations."
+// "65536 elements. 16 bins. 2 dispatches. 0 CPU iterations."
 //
 // Shared-memory atomic histogram: each workgroup bins locally,
 // then atomically accumulates into global output.
 //
 // Run: octoflow run examples/gpu_histogram.flow --allow-ffi --allow-read
 
-use "../stdlib/loom/ops/runtime"
-
 let N = 65536.0
 let NBINS = 16.0
 let MIN_VAL = 0.0
 let BIN_WIDTH = 4096.0
 
-rt_init()
-
-let pipe_hist = rt_load_pipeline("tests/gpu_shaders/34_histogram.spv", 2.0, 16.0)
-let pipe_conv = rt_load_pipeline("tests/gpu_shaders/35_uint_to_float.spv", 2.0, 4.0)
+let vm_hist = loom_boot(1.0, 2.0, N)
+let vm_conv = loom_boot(1.0, 2.0, NBINS)
+loom_prefetch("tests/gpu_shaders/34_histogram.spv")
+loom_prefetch("tests/gpu_shaders/35_uint_to_float.spv")
 
 // ── Input: [0, 1, 2, ..., 65535] — each of 16 bins should get 4096 ──
 let mut input = []
@@ -26,47 +24,53 @@ while i < N
   push(input, i)
   i = i + 1.0
 end
+vm_write_register(vm_hist, 0.0, 0.0, input)
 
-let buf_in = rt_create_buffer(N * 4.0)
-let buf_hist = rt_create_buffer(NBINS * 4.0)
-let buf_out = rt_create_buffer(NBINS * 4.0)
-rt_upload(buf_in, input)
-
-// Zero the histogram uint buffer
+// Zero the histogram output register
 let mut zeros = []
 let mut i = 0.0
-while i < NBINS
+while i < N
   push(zeros, 0.0)
   i = i + 1.0
 end
-rt_upload(buf_hist, zeros)
+vm_write_register(vm_hist, 0.0, 1.0, zeros)
 
-// ── Dispatch: histogram + uint_to_float ────────────────────────────
+// ── Dispatch histogram ──────────────────────────────────────────────
 let n_wgs = int((N + 255.0) / 256.0)
 let t0 = time()
 
-rt_chain_begin(2.0, 2.0)
-let mut pc1 = [N, NBINS, MIN_VAL, BIN_WIDTH]
-rt_chain_push_constants(pipe_hist, pc1)
-let mut bufs1 = [buf_in, buf_hist]
-rt_chain_dispatch(pipe_hist, bufs1, n_wgs)
-let mut pc2 = [NBINS]
-rt_chain_push_constants(pipe_conv, pc2)
-let mut bufs2 = [buf_hist, buf_out]
-rt_chain_dispatch(pipe_conv, bufs2, 1.0)
-rt_chain_end()
-rt_chain_submit_wait()
+loom_dispatch(vm_hist, "tests/gpu_shaders/34_histogram.spv", [N, NBINS, MIN_VAL, BIN_WIDTH], n_wgs)
+let prog1 = loom_build(vm_hist)
+loom_run(prog1)
+loom_free(prog1)
+
+// Read histogram uint results and convert via second VM
+let hist_raw = loom_read(vm_hist, 0.0, 1.0, NBINS)
+vm_write_register(vm_conv, 0.0, 0.0, hist_raw)
+
+let mut zeros_small = []
+let mut i = 0.0
+while i < NBINS
+  push(zeros_small, 0.0)
+  i = i + 1.0
+end
+vm_write_register(vm_conv, 0.0, 1.0, zeros_small)
+
+loom_dispatch(vm_conv, "tests/gpu_shaders/35_uint_to_float.spv", [NBINS], 1.0)
+let prog2 = loom_build(vm_conv)
+loom_run(prog2)
+loom_free(prog2)
 
 let t1 = time()
 let total_ms = (t1 - t0) * 1000.0
 
 // ── Verify ─────────────────────────────────────────────────────────
-rt_download(buf_out, NBINS)
+let result = loom_read(vm_conv, 0.0, 1.0, NBINS)
 
 let mut pass = 1.0
 let mut i = 0.0
 while i < NBINS
-  let got = rt_result[int(i)]
+  let got = result[int(i)]
   if got != 4096.0
     print("FAIL: bin {i} = {got}, expected 4096")
     pass = 0.0
@@ -75,9 +79,9 @@ while i < NBINS
 end
 
 // Extract boundary bins for display
-let first = rt_result[0]
-let mid = rt_result[7]
-let last = rt_result[15]
+let first = result[0]
+let mid = result[7]
+let last = result[15]
 
 // ── Report ─────────────────────────────────────────────────────────
 print("")
@@ -87,7 +91,6 @@ print("  Bins: {NBINS}")
 print("  Bin width: {BIN_WIDTH}")
 print("  Workgroups: {n_wgs}")
 print("  Dispatches: 2 (histogram + uint_to_float)")
-print("  Submissions: 1")
 print("  CPU element iterations: 0")
 print("  Total time: {total_ms} ms")
 print("")
@@ -103,4 +106,5 @@ else
 end
 
 print("")
-rt_cleanup()
+loom_shutdown(vm_hist)
+loom_shutdown(vm_conv)

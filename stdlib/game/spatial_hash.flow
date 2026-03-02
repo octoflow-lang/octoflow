@@ -1,0 +1,269 @@
+// stdlib/game/spatial_hash.flow — Grid-based spatial partitioning
+//
+// O(1) average-case spatial queries for collision detection and neighbor finding.
+// Divides 2D space into uniform grid cells. Entities register in cells they overlap.
+//
+// Cell storage: flat array. Each cell holds up to MAX_PER_CELL entity IDs.
+// Cell index = row * cols + col. Entity slot = cell_index * MAX_PER_CELL + slot.
+//
+// Functions: sh_create, sh_clear, sh_insert, sh_remove, sh_query_cell,
+//            sh_query_point, sh_query_rect, sh_query_radius,
+//            sh_move, sh_cell_count, sh_debug_stats
+//
+// Usage:
+//   use "spatial_hash"
+//   let sh = sh_create(800.0, 600.0, 50.0)
+//   let _i = sh_insert(sh, 0.0, 100.0, 150.0)
+//   let mut result = []
+//   let n = sh_query_point(sh, 100.0, 150.0, result)
+
+// Max entities per cell (overflow silently drops)
+let SH_MAX_PER_CELL = 16.0
+
+// Grid storage: parallel arrays
+// _sh_cells: flat [cell0_id0, cell0_id1, ..., cell0_count, cell1_id0, ...]
+// Layout per cell: [id0, id1, ..., id15, count] = 17 floats
+let SH_CELL_STRIDE = 17.0
+
+let mut _sh_cells = []
+let mut _sh_grid_w = []
+let mut _sh_grid_h = []
+let mut _sh_cell_size = []
+let mut _sh_cols = []
+let mut _sh_rows = []
+let mut _sh_start = []
+
+fn sh_create(world_w, world_h, cell_size)
+    // Create spatial hash grid. Returns grid ID.
+    let id = len(_sh_grid_w)
+    push(_sh_grid_w, world_w)
+    push(_sh_grid_h, world_h)
+    let mut cs = cell_size
+    if cs <= 0.0
+        cs = 50.0
+    end
+    push(_sh_cell_size, cs)
+    let cols = floor(world_w / cs) + 1.0
+    let rows = floor(world_h / cs) + 1.0
+    push(_sh_cols, cols)
+    push(_sh_rows, rows)
+    let start = len(_sh_cells)
+    push(_sh_start, start)
+    // Allocate cells (all zeroed, count at end of each cell = 0)
+    let total = cols * rows * SH_CELL_STRIDE
+    let mut i = 0.0
+    while i < total
+        push(_sh_cells, -1.0)
+        i = i + 1.0
+    end
+    // Set all counts to 0
+    let mut ci = 0.0
+    while ci < cols * rows
+        _sh_cells[int(start + ci * SH_CELL_STRIDE + SH_MAX_PER_CELL)] = 0.0
+        ci = ci + 1.0
+    end
+    return id
+end
+
+fn _sh_cell_idx(grid_id, x, y)
+    // Convert world position to cell index.
+    let gi = int(grid_id)
+    let cs = _sh_cell_size[gi]
+    let col = floor(x / cs)
+    let row = floor(y / cs)
+    let cols = _sh_cols[gi]
+    let rows = _sh_rows[gi]
+    if col < 0.0 || col >= cols || row < 0.0 || row >= rows
+        return -1.0
+    end
+    return row * cols + col
+end
+
+fn sh_clear(grid_id)
+    // Clear all entities from grid.
+    let gi = int(grid_id)
+    let start = int(_sh_start[gi])
+    let cols = _sh_cols[gi]
+    let rows = _sh_rows[gi]
+    let total = cols * rows
+    let mut ci = 0.0
+    while ci < total
+        _sh_cells[int(start + ci * SH_CELL_STRIDE + SH_MAX_PER_CELL)] = 0.0
+        ci = ci + 1.0
+    end
+    return 0.0
+end
+
+fn sh_insert(grid_id, entity_id, x, y)
+    // Insert entity at position. Returns 1.0 on success, 0.0 if cell full or out of bounds.
+    let ci = _sh_cell_idx(grid_id, x, y)
+    if ci < 0.0
+        return 0.0
+    end
+    let gi = int(grid_id)
+    let base = int(_sh_start[gi] + ci * SH_CELL_STRIDE)
+    let count_idx = int(base + SH_MAX_PER_CELL)
+    let count = _sh_cells[count_idx]
+    if count >= SH_MAX_PER_CELL
+        return 0.0
+    end
+    _sh_cells[int(base + count)] = entity_id
+    _sh_cells[count_idx] = count + 1.0
+    return 1.0
+end
+
+fn sh_remove(grid_id, entity_id, x, y)
+    // Remove entity from cell at position. Returns 1.0 if found.
+    let ci = _sh_cell_idx(grid_id, x, y)
+    if ci < 0.0
+        return 0.0
+    end
+    let gi = int(grid_id)
+    let base = int(_sh_start[gi] + ci * SH_CELL_STRIDE)
+    let count_idx = int(base + SH_MAX_PER_CELL)
+    let count = int(_sh_cells[count_idx])
+    let mut i = 0.0
+    while i < count
+        if _sh_cells[int(base + i)] == entity_id
+            // Swap with last
+            let last = int(count - 1.0)
+            _sh_cells[int(base + i)] = _sh_cells[int(base + last)]
+            _sh_cells[int(base + last)] = -1.0
+            _sh_cells[count_idx] = count - 1.0
+            return 1.0
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn sh_move(grid_id, entity_id, old_x, old_y, new_x, new_y)
+    // Move entity from old to new position. Only updates if cell changes.
+    let old_ci = _sh_cell_idx(grid_id, old_x, old_y)
+    let new_ci = _sh_cell_idx(grid_id, new_x, new_y)
+    if old_ci == new_ci
+        return 0.0
+    end
+    let _r = sh_remove(grid_id, entity_id, old_x, old_y)
+    let _i = sh_insert(grid_id, entity_id, new_x, new_y)
+    return 1.0
+end
+
+fn sh_query_cell(grid_id, cell_idx, result)
+    // Get all entity IDs in a specific cell. Pushes to result array.
+    // Returns count of entities found.
+    if cell_idx < 0.0
+        return 0.0
+    end
+    let gi = int(grid_id)
+    let max_cell = _sh_cols[gi] * _sh_rows[gi]
+    if cell_idx >= max_cell
+        return 0.0
+    end
+    let base = int(_sh_start[gi] + cell_idx * SH_CELL_STRIDE)
+    let count = int(_sh_cells[int(base + SH_MAX_PER_CELL)])
+    let mut i = 0.0
+    while i < count
+        push(result, _sh_cells[int(base + i)])
+        i = i + 1.0
+    end
+    return count
+end
+
+fn sh_query_point(grid_id, x, y, result)
+    // Get all entities in the cell containing point (x,y).
+    let ci = _sh_cell_idx(grid_id, x, y)
+    return sh_query_cell(grid_id, ci, result)
+end
+
+fn sh_query_rect(grid_id, rx, ry, rw, rh, result)
+    // Get all entities in cells overlapping rectangle.
+    // Returns total entities found (may contain duplicates if entity in multiple cells).
+    let gi = int(grid_id)
+    let cs = _sh_cell_size[gi]
+    let cols = _sh_cols[gi]
+    let rows = _sh_rows[gi]
+    let col_start = floor(rx / cs)
+    let col_end = floor((rx + rw) / cs)
+    let row_start = floor(ry / cs)
+    let row_end = floor((ry + rh) / cs)
+    let mut total = 0.0
+    let mut r = row_start
+    while r <= row_end
+        if r >= 0.0 && r < rows
+            let mut c = col_start
+            while c <= col_end
+                if c >= 0.0 && c < cols
+                    let ci = r * cols + c
+                    let n = sh_query_cell(grid_id, ci, result)
+                    total = total + n
+                end
+                c = c + 1.0
+            end
+        end
+        r = r + 1.0
+    end
+    return total
+end
+
+fn sh_query_radius(grid_id, cx, cy, radius, result)
+    // Get all entities in cells within radius of center point.
+    // Uses bounding rect to determine cells, so may include entities
+    // slightly outside radius. Caller should do precise distance check.
+    return sh_query_rect(grid_id, cx - radius, cy - radius, radius * 2.0, radius * 2.0, result)
+end
+
+fn sh_cell_count(grid_id, cell_idx)
+    // Get number of entities in a specific cell.
+    if cell_idx < 0.0
+        return 0.0
+    end
+    let gi = int(grid_id)
+    if cell_idx >= _sh_cols[gi] * _sh_rows[gi]
+        return 0.0
+    end
+    let count_idx = int(_sh_start[gi] + cell_idx * SH_CELL_STRIDE + SH_MAX_PER_CELL)
+    return _sh_cells[count_idx]
+end
+
+fn sh_debug_stats(grid_id)
+    // Return [total_entities, occupied_cells, max_per_cell] for debugging.
+    let gi = int(grid_id)
+    let cols = _sh_cols[gi]
+    let rows = _sh_rows[gi]
+    let total_cells = cols * rows
+    let start = int(_sh_start[gi])
+    let mut total_ents = 0.0
+    let mut occupied = 0.0
+    let mut max_count = 0.0
+    let mut ci = 0.0
+    while ci < total_cells
+        let count = _sh_cells[int(start + ci * SH_CELL_STRIDE + SH_MAX_PER_CELL)]
+        total_ents = total_ents + count
+        if count > 0.0
+            occupied = occupied + 1.0
+        end
+        if count > max_count
+            max_count = count
+        end
+        ci = ci + 1.0
+    end
+    let mut stats = [total_ents, occupied, max_count]
+    return stats
+end
+
+fn sh_world_width(grid_id)
+    return _sh_grid_w[int(grid_id)]
+end
+
+fn sh_world_height(grid_id)
+    return _sh_grid_h[int(grid_id)]
+end
+
+fn sh_grid_cols(grid_id)
+    return _sh_cols[int(grid_id)]
+end
+
+fn sh_grid_rows(grid_id)
+    return _sh_rows[int(grid_id)]
+end

@@ -1,0 +1,111 @@
+// test_coord.flow — Tests for stdlib/math/coord.flow
+use "coord"
+
+fn check(name, cond)
+    if cond
+        print("PASS: {name}")
+    else
+        print("FAIL: {name}")
+        assert(0.0 == 1.0, name)
+    end
+    return 0.0
+end
+
+fn approx(a, b)
+    if abs(a - b) < 0.1
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Polar ─────────────────────────────────────────────────
+
+fn test_polar()
+    let p = cartesian_to_polar(3.0, 4.0)
+    check("polar r", approx(p[0], 5.0) == 1.0)
+    check("polar theta", approx(p[1], 0.9273) == 1.0)
+    let c = polar_to_cartesian(5.0, 0.0)
+    check("polar->cart x", approx(c[0], 5.0) == 1.0)
+    check("polar->cart y", approx(c[1], 0.0) == 1.0)
+    // Roundtrip
+    let p2 = cartesian_to_polar(1.0, 1.0)
+    let c2 = polar_to_cartesian(p2[0], p2[1])
+    check("polar roundtrip x", approx(c2[0], 1.0) == 1.0)
+    check("polar roundtrip y", approx(c2[1], 1.0) == 1.0)
+    return 0.0
+end
+
+// ── Spherical ─────────────────────────────────────────────
+
+fn test_spherical()
+    let s = cartesian_to_spherical(0.0, 0.0, 5.0)
+    check("sph r", approx(s[0], 5.0) == 1.0)
+    check("sph theta", approx(s[1], 0.0) == 1.0)  // Along z-axis
+    let c = spherical_to_cartesian(5.0, 0.0, 0.0)
+    check("sph->cart z", approx(c[2], 5.0) == 1.0)
+    return 0.0
+end
+
+// ── Cylindrical ───────────────────────────────────────────
+
+fn test_cylindrical()
+    let c = cartesian_to_cylindrical(3.0, 4.0, 7.0)
+    check("cyl rho", approx(c[0], 5.0) == 1.0)
+    check("cyl z", c[2] == 7.0)
+    let cart = cylindrical_to_cartesian(5.0, 0.0, 10.0)
+    check("cyl->cart x", approx(cart[0], 5.0) == 1.0)
+    check("cyl->cart z", cart[2] == 10.0)
+    return 0.0
+end
+
+// ── Haversine ─────────────────────────────────────────────
+
+fn test_haversine()
+    // London to Paris: ~343 km
+    let d = haversine_distance(51.5074, -0.1278, 48.8566, 2.3522)
+    check("haversine london-paris", d > 340.0 && d < 350.0)
+    // Same point: 0 km
+    let d2 = haversine_distance(0.0, 0.0, 0.0, 0.0)
+    check("haversine same", d2 == 0.0)
+    return 0.0
+end
+
+// ── Bearing ───────────────────────────────────────────────
+
+fn test_bearing()
+    // Due east: bearing should be ~90
+    let b = bearing(0.0, 0.0, 0.0, 1.0)
+    check("bearing east", approx(b, 90.0) == 1.0)
+    return 0.0
+end
+
+// ── Midpoint ──────────────────────────────────────────────
+
+fn test_midpoint()
+    let m = midpoint_geo(0.0, 0.0, 0.0, 2.0)
+    check("midpoint lon", approx(m[1], 1.0) == 1.0)
+    check("midpoint lat", approx(m[0], 0.0) == 1.0)
+    return 0.0
+end
+
+// ── Distance metrics ──────────────────────────────────────
+
+fn test_distances()
+    check("manhattan 2d", manhattan_2d(0.0, 0.0, 3.0, 4.0) == 7.0)
+    check("manhattan 3d", manhattan_3d(0.0, 0.0, 0.0, 1.0, 2.0, 3.0) == 6.0)
+    check("chebyshev 2d", chebyshev_2d(0.0, 0.0, 3.0, 4.0) == 4.0)
+    check("chebyshev 3d", chebyshev_3d(0.0, 0.0, 0.0, 1.0, 5.0, 3.0) == 5.0)
+    return 0.0
+end
+
+// ── Run all ───────────────────────────────────────────────
+
+test_polar()
+test_spherical()
+test_cylindrical()
+test_haversine()
+test_bearing()
+test_midpoint()
+test_distances()
+print("")
+print("All coord tests passed (7 tests)")

@@ -1,0 +1,398 @@
+// stdlib/llm/generate_ocp.flow — OctoPress Inference Pipeline
+//
+// Transformer inference using OctoPress-compressed weights.
+// Weights loaded from per-tensor .ocp files (produced by decompose_ocp.flow).
+// GPU matvec via Loom VM + matvec.spv kernel. No GGUF dependency at inference.
+//
+// Architecture:
+//   Main Loom (GPU): matvec kernel for 7 projections per layer
+//   Support Loom (CPU): rmsnorm, rope, silu, attention, sampling
+//
+// Memory model: one layer at a time — decompress, compute, discard.
+// Peak VRAM = largest weight matrix + input/output vectors.
+//
+// For 0.5-3B models: all weights fit in 6GB VRAM.
+// For 70B: requires streaming upload (future optimization).
+//
+// Usage:
+//   use "generate_ocp"
+//   let _r = run_generate_ocp("model_ocp/", "Hello world")
+//
+// Prerequisites:
+//   1. Run decompose_ocp.flow to create per-tensor .ocp files
+//   2. octoflow run stdlib/llm/generate_ocp.flow --allow-read --allow-write --allow-ffi
+
+use "ocp_layer_loader"
+use "ops"
+use "sampling"
+
+// ── Loom Matvec ─────────────────────────────────────────────────
+
+fn ocp_matvec(vm, weight_data, input_vec, rows, cols)
+    // GPU matrix-vector multiply via Loom VM.
+    // weight_data: flat [rows * cols] float array (row-major)
+    // input_vec: [cols] float array
+    // Returns: [rows] float array
+    //
+    // Uses matvec.spv kernel: binding 0=A, 1=B, 2=C
+    // Push constants: [M, K] = [rows, cols]
+
+    loom_write(vm, 0.0, weight_data)
+    loom_write(vm, 1.0, input_vec)
+
+    let mut pc = [rows, cols]
+    let mut wg = ceil(rows / 256.0)
+    if wg < 1.0
+        wg = 1.0
+    end
+
+    loom_dispatch(vm, "stdlib/loom/kernels/nn/matvec.spv", pc, wg)
+    let prog = loom_build(vm)
+    loom_run(prog)
+
+    let raw = loom_read(vm, 0.0, 2.0, rows)
+    let mut result = []
+    let mut i = 0.0
+    while i < rows
+        push(result, raw[i])
+        i = i + 1.0
+    end
+    return result
+end
+
+// ── OctoPress Transformer Layer ─────────────────────────────────
+
+fn ocp_infer_layer(vm, weights, hidden, n_embd, n_head, n_kv_head, n_ff, eps, rope_theta, layer_idx, pos, max_seq, k_cache, v_cache)
+    // Run a single transformer layer using OctoPress-decompressed weights.
+    // weights: map from ocp_load_layer() with keys attn_norm, attn_q, etc.
+    // All matvec operations dispatched to Loom GPU via matvec.spv.
+
+    let head_dim = n_embd / n_head
+    let kv_dim = n_kv_head * head_dim
+    let heads_per_kv = n_head / n_kv_head
+    let inv_sqrt_dh = 1.0 / sqrt(head_dim)
+
+    // ── Attention sublayer ──────────────────────────────────────
+
+    // RMSNorm (CPU — trivial)
+    let attn_norm_w = map_get(weights, "attn_norm")
+    let normed = rmsnorm_cpu(hidden, attn_norm_w, n_embd, eps)
+
+    // Q/K/V projections (GPU matvec via Loom)
+    let q_w = map_get(weights, "attn_q")
+    let k_w = map_get(weights, "attn_k")
+    let v_w = map_get(weights, "attn_v")
+
+    let q_raw = ocp_matvec(vm, q_w, normed, n_embd, n_embd)
+    let k_raw = ocp_matvec(vm, k_w, normed, kv_dim, n_embd)
+    let v_raw = ocp_matvec(vm, v_w, normed, kv_dim, n_embd)
+
+    // Copy to mutable arrays
+    let mut q = []
+    let mut mq = 0.0
+    while mq < n_embd
+        push(q, q_raw[mq])
+        mq = mq + 1.0
+    end
+
+    let mut k = []
+    let mut mk = 0.0
+    while mk < kv_dim
+        push(k, k_raw[mk])
+        mk = mk + 1.0
+    end
+
+    let mut v = []
+    let mut mv = 0.0
+    while mv < kv_dim
+        push(v, v_raw[mv])
+        mv = mv + 1.0
+    end
+
+    // RoPE (CPU — trivial)
+    let q_r = rope_cpu(q, pos, head_dim, n_head, rope_theta)
+    let k_r = rope_cpu(k, pos, head_dim, n_kv_head, rope_theta)
+
+    // ── KV cache write ──────────────────────────────────────────
+
+    let cache_base = layer_idx * max_seq * kv_dim
+    let write_start = cache_base + pos * kv_dim
+    let mut di = 0.0
+    while di < kv_dim
+        let idx = write_start + di
+        k_cache[idx] = k_r[di]
+        v_cache[idx] = v[di]
+        di = di + 1.0
+    end
+
+    // ── Multi-head attention (CPU — GQA support) ────────────────
+
+    let seq_len = pos + 1.0
+    let mut attn_out = []
+    let mut h = 0.0
+    while h < n_head
+        let kvh = floor(h / heads_per_kv)
+        let q_start = h * head_dim
+
+        // Attention scores
+        let mut scores = []
+        let mut max_score = 0.0 - 99999.0
+        let mut t = 0.0
+        while t < seq_len
+            let k_start = cache_base + t * kv_dim + kvh * head_dim
+            let mut dot = 0.0
+            let mut dd = 0.0
+            while dd < head_dim
+                dot = dot + q_r[q_start + dd] * k_cache[k_start + dd]
+                dd = dd + 1.0
+            end
+            let score = dot * inv_sqrt_dh
+            push(scores, score)
+            if score > max_score
+                max_score = score
+            end
+            t = t + 1.0
+        end
+
+        // Softmax
+        let mut exp_sum = 0.0
+        let mut si = 0.0
+        while si < seq_len
+            let e = exp(scores[si] - max_score)
+            scores[si] = e
+            exp_sum = exp_sum + e
+            si = si + 1.0
+        end
+
+        // Weighted sum of V
+        let mut dd2 = 0.0
+        while dd2 < head_dim
+            let mut weighted = 0.0
+            let mut t2 = 0.0
+            while t2 < seq_len
+                let v_start = cache_base + t2 * kv_dim + kvh * head_dim
+                weighted = weighted + scores[t2] / exp_sum * v_cache[v_start + dd2]
+                t2 = t2 + 1.0
+            end
+            push(attn_out, weighted)
+            dd2 = dd2 + 1.0
+        end
+
+        h = h + 1.0
+    end
+
+    // O projection (GPU matvec)
+    let o_w = map_get(weights, "attn_output")
+    let projected = ocp_matvec(vm, o_w, attn_out, n_embd, n_embd)
+
+    // Residual connection
+    let mut hidden2 = []
+    let mut ri = 0.0
+    while ri < n_embd
+        push(hidden2, hidden[ri] + projected[ri])
+        ri = ri + 1.0
+    end
+
+    // ── FFN sublayer ────────────────────────────────────────────
+
+    // RMSNorm (CPU)
+    let ffn_norm_w = map_get(weights, "ffn_norm")
+    let normed2 = rmsnorm_cpu(hidden2, ffn_norm_w, n_embd, eps)
+
+    // Gate and Up (GPU matvec)
+    let gate_w = map_get(weights, "ffn_gate")
+    let up_w = map_get(weights, "ffn_up")
+    let gate = ocp_matvec(vm, gate_w, normed2, n_ff, n_embd)
+    let up = ocp_matvec(vm, up_w, normed2, n_ff, n_embd)
+
+    // SiLU(gate) * up (CPU — trivial)
+    let gate_act = silu_cpu(gate, n_ff)
+    let mut mid = []
+    let mut fi = 0.0
+    while fi < n_ff
+        push(mid, gate_act[fi] * up[fi])
+        fi = fi + 1.0
+    end
+
+    // Down projection (GPU matvec)
+    let down_w = map_get(weights, "ffn_down")
+    let ffn_out = ocp_matvec(vm, down_w, mid, n_embd, n_ff)
+
+    // Residual connection
+    let mut result = []
+    let mut ri2 = 0.0
+    while ri2 < n_embd
+        push(result, hidden2[ri2] + ffn_out[ri2])
+        ri2 = ri2 + 1.0
+    end
+
+    return result
+end
+
+// ── Main Generation Loop ────────────────────────────────────────
+
+fn run_generate_ocp(ocp_dir, prompt)
+    // Generate text from OctoPress-compressed model.
+    // ocp_dir: directory with .ocp files from decompose_ocp.flow
+    // prompt: input text
+
+    let max_tokens = 50.0
+    let max_seq = 64.0
+    let temperature = 0.8
+    let top_p = 0.9
+
+    print("=== OctoPress Inference ===")
+    print("Loading manifest...")
+
+    // Load model configuration
+    let manifest = ocp_load_manifest(ocp_dir)
+    let n_embd = ocp_manifest_float(manifest, "n_embd")
+    let n_head = ocp_manifest_float(manifest, "n_head")
+    let mut n_kv_head = ocp_manifest_float(manifest, "n_kv_head")
+    let n_ff = ocp_manifest_float(manifest, "n_ff")
+    let n_layer = ocp_manifest_float(manifest, "n_layer")
+    let vocab_size = ocp_manifest_float(manifest, "vocab_size")
+    let eps = ocp_manifest_float(manifest, "eps")
+    let rope_theta = ocp_manifest_float(manifest, "rope_theta")
+
+    if n_kv_head == 0.0
+        n_kv_head = n_head
+    end
+
+    let head_dim = n_embd / n_head
+    let kv_dim = n_kv_head * head_dim
+
+    let arch = map_get(manifest, "arch")
+    print("  {arch}: {n_layer} layers, {n_embd} dim, {vocab_size} vocab")
+    print("  Using OctoPress weights (GPU matvec via Loom)")
+
+    // ── Load persistent weights ─────────────────────────────────
+
+    print("Loading persistent weights...")
+    let embedding = ocp_load_embedding(ocp_dir)
+    let out_norm_w = ocp_load_output_norm(ocp_dir)
+    let output_weight = ocp_load_output_weight(ocp_dir)
+
+    // Use embedding as output weight if tied
+    let mut lm_weight = output_weight
+    if len(lm_weight) < 1.0
+        lm_weight = embedding
+    end
+
+    print("  Embedding: {vocab_size} x {n_embd}")
+
+    // ── Boot Loom VM for matvec ─────────────────────────────────
+
+    print("Booting Loom VM...")
+    // Register size = largest matrix: max(n_embd*n_embd, n_ff*n_embd)
+    let mut max_mat = n_embd * n_embd
+    if n_ff * n_embd > max_mat
+        max_mat = n_ff * n_embd
+    end
+    // 3 registers: weights (0), input (1), output (2)
+    let vm = loom_boot(1.0, 3.0, max_mat)
+
+    let mut gpu_ok = 0.0
+    if vm > 0.0 - 0.5
+        print("  Loom VM ready (Main Loom)")
+        loom_prefetch("stdlib/loom/kernels/nn/matvec.spv")
+        gpu_ok = 1.0
+    else
+        print("  GPU unavailable — cannot run OctoPress inference")
+        print("  (OctoPress inference requires Loom GPU for matvec)")
+        return 0.0
+    end
+
+    // ── Allocate KV cache ───────────────────────────────────────
+
+    print("Allocating KV cache...")
+    let kv_total = n_layer * max_seq * kv_dim
+    let mut k_cache = array_new(kv_total, 0.0)
+    let mut v_cache = array_new(kv_total, 0.0)
+    print("  KV cache: {kv_total} floats per cache")
+
+    // ── Tokenize prompt (simplified — integer token IDs) ────────
+    // For full tokenization, use gguf_load_vocab + build_chat_tokens.
+    // Here we use a simple space-split for demonstration.
+
+    print("")
+    print("Prompt: {prompt}")
+    print("Generating {max_tokens} tokens...")
+    print("")
+
+    // ── Inference loop ──────────────────────────────────────────
+
+    // Start with token 1 (common BOS) — for real use, load vocab and tokenize
+    let mut current_token = 1.0
+    let mut generated = ""
+    let mut seq_pos = 0.0
+    let mut gen_count = 0.0
+    let mut done = 0.0
+
+    while gen_count < max_tokens
+        if done > 0.5
+            gen_count = max_tokens
+        else
+            let t_start = time()
+
+            // 1. Load embedding for current token
+            let emb_offset = current_token * n_embd
+            let mut hidden = []
+            let mut ei = 0.0
+            while ei < n_embd
+                push(hidden, embedding[emb_offset + ei])
+                ei = ei + 1.0
+            end
+
+            // 2. Run transformer layers
+            let mut li = 0.0
+            while li < n_layer
+                // Load layer weights from .ocp (streaming decompression)
+                let weights = ocp_load_layer(ocp_dir, li)
+
+                // Run transformer layer
+                let layer_out = ocp_infer_layer(vm, weights, hidden, n_embd, n_head, n_kv_head, n_ff, eps, rope_theta, li, seq_pos, max_seq, k_cache, v_cache)
+
+                // Copy output to hidden
+                let mut hi = 0.0
+                while hi < n_embd
+                    hidden[hi] = layer_out[hi]
+                    hi = hi + 1.0
+                end
+
+                li = li + 1.0
+            end
+
+            // 3. Output norm + logits
+            let normed = rmsnorm_cpu(hidden, out_norm_w, n_embd, eps)
+
+            // Compute logits via matvec: lm_weight [vocab_size x n_embd] × normed [n_embd]
+            let logits = ocp_matvec(vm, lm_weight, normed, vocab_size, n_embd)
+
+            // 4. Sample next token
+            let sampled = sample_top_p(logits, top_p, temperature)
+            let t_elapsed = time() - t_start
+
+            print("  [gen {gen_count}] pos={seq_pos} token={sampled} ({t_elapsed}ms)")
+
+            current_token = sampled
+            seq_pos = seq_pos + 1.0
+            gen_count = gen_count + 1.0
+
+            // Simple EOS check (token 2 is common EOS)
+            if sampled < 1.5
+                done = 1.0
+            end
+        end
+    end
+
+    // ── Cleanup ─────────────────────────────────────────────────
+
+    loom_park(vm)
+    print("")
+    print("=== Generation Complete ===")
+    print("  Tokens generated: {gen_count}")
+    print("  Sequence length: {seq_pos}")
+
+    return gen_count
+end

@@ -1,0 +1,188 @@
+// OctoBrain NLP: English Text Pattern Discovery
+// Feeds real English text as 3-character n-gram windows into the brain,
+// then decodes all discovered prototypes back to text to see what
+// character patterns the brain learned.
+//
+// Expected behavior: Brain discovers 5-50 prototypes representing
+// common trigrams from the English text, with edges encoding
+// sequential character transitions.
+//
+// Technique: codes are zero-centered (subtract mean) before feeding,
+// giving better angular diversity in 3D for prototype separation.
+// Decoding reverses the centering to recover approximate characters.
+//
+// Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\OctoFlow\run_test.ps1" run --bin octoflow -- run "C:\OctoFlow\OctoBrain\examples\nlp_patterns.flow"
+
+use "../lib/octobrain"
+use "../lib/text"
+use "../lib/vecmath"
+
+// ── Create brain with 2 actions ──────────────────────────────────
+let mut brain = octobrain_new(2.0)
+
+// Proto arrays
+let mut p_state = proto_new()
+let mut p_embs = []
+let mut p_mc = []
+
+// Embed arrays
+let mut e_state = embed_new()
+let mut W_embed = []
+let mut obs_buffer = []
+
+// Edge arrays
+let mut edge_state = edges_new()
+let mut en = []
+let mut ea = []
+let mut eo = []
+let mut ep = []
+let mut ew = []
+let mut eact = []
+
+// Context window
+let mut window = []
+
+// Action weights
+let mut W_score = []
+
+// ── Text corpus ──────────────────────────────────────────────────
+let base_text = "the quick brown fox jumps over the lazy dog the cat sat on the mat the dog ran to the park the bird flew over the tree "
+
+// Repeat 10 times to get ~1200 characters
+let mut full_text = ""
+let mut rep = 0.0
+while rep < 10.0
+  full_text = full_text + base_text
+  rep = rep + 1.0
+end
+
+let text_len = len(full_text)
+
+print("=== OctoBrain NLP: English Text Pattern Discovery ===")
+print("Feeding base text x10 as 3-gram windows...")
+print("  base: the quick brown fox jumps over the lazy dog ...")
+
+// ── Convert text to numeric codes ────────────────────────────────
+let codes = text_to_codes(full_text)
+let codes_len = len(codes)
+let gram_size = 3.0
+
+// Compute mean code for zero-centering (better angular diversity in 3D)
+let mut code_sum = 0.0
+let mut ci = 0.0
+while ci < codes_len
+  code_sum = code_sum + codes[ci]
+  ci = ci + 1.0
+end
+let code_mean = code_sum / codes_len
+
+let max_pos = codes_len - gram_size + 1.0
+let max_pos_int = int(max_pos)
+let text_len_int = int(text_len)
+print("Total characters: {text_len_int}, observations: {max_pos_int}")
+print("")
+
+// ── Feed trigrams into the brain ─────────────────────────────────
+// Track average gram magnitude for decoding later
+let mut mag_sum = 0.0
+let mut pos = 0.0
+let mut obs_count = 0.0
+while pos < max_pos
+  // Extract raw trigram and zero-center for better prototype separation
+  let raw_gram = text_ngram(codes, pos, gram_size)
+  let c0 = raw_gram[0] - code_mean
+  let c1 = raw_gram[1] - code_mean
+  let c2 = raw_gram[2] - code_mean
+  let mut gram = []
+  push(gram, c0)
+  push(gram, c1)
+  push(gram, c2)
+
+  // Accumulate magnitude for later decode scaling
+  let mag = sqrt(c0 * c0 + c1 * c1 + c2 * c2)
+  mag_sum = mag_sum + mag
+
+  let dummy = octobrain_observe(brain, p_state, p_embs, p_mc, e_state, W_embed, obs_buffer, edge_state, en, ea, eo, ep, ew, eact, window, W_score, gram)
+  obs_count = obs_count + 1.0
+
+  // Print stats at milestones
+  if obs_count == 200.0 || obs_count == 500.0 || obs_count == 1000.0
+    let stats = octobrain_stats(brain, p_state, edge_state)
+    let pc = map_get(stats, "proto_count")
+    let ec = map_get(stats, "edge_count")
+    let tc = map_get(stats, "transition_count")
+    let oc_int = int(obs_count)
+    print("  Step {oc_int}: protos={pc}, edges={ec}, transitions={tc}")
+  end
+
+  pos = pos + 1.0
+end
+
+// Average magnitude of centered trigrams (used for decode scaling)
+let avg_mag = mag_sum / obs_count
+
+print("")
+
+// ── Final results ────────────────────────────────────────────────
+let final_stats = octobrain_stats(brain, p_state, edge_state)
+let final_pc = map_get(final_stats, "proto_count")
+let final_ec = map_get(final_stats, "edge_count")
+let final_tc = map_get(final_stats, "transition_count")
+let final_dim = map_get(final_stats, "embed_dim")
+
+print("=== Final Results ===")
+print("Prototypes: {final_pc}, Edges: {final_ec}, Transitions: {final_tc}")
+print("")
+
+// ── Decode discovered prototypes ─────────────────────────────────
+// Prototypes are normalized centered vectors. To decode:
+// 1. Scale unit vector by average gram magnitude (restores approximate centered codes)
+// 2. Add code_mean back (un-centers)
+// 3. Convert codes to characters
+print("=== Discovered Prototypes ===")
+let mut pi = 0.0
+while pi < final_pc
+  let emb = vec_extract(p_embs, pi, final_dim)
+  // Reverse: scale by avg magnitude, then un-center
+  let mut restored = []
+  let mut di = 0.0
+  while di < final_dim
+    let code_val = emb[di] * avg_mag + code_mean
+    push(restored, code_val)
+    di = di + 1.0
+  end
+  let decoded = codes_to_text(restored)
+  let mc = p_mc[pi]
+  let pi_int = int(pi)
+  let mc_int = int(mc)
+  print("  Proto {pi_int}: matches={mc_int}, pattern='{decoded}'")
+  pi = pi + 1.0
+end
+
+print("")
+
+// ── PASS/FAIL analysis ───────────────────────────────────────────
+print("=== Analysis ===")
+
+if final_pc >= 5.0 && final_pc <= 50.0
+  print("PASS: Proto count {final_pc} (meaningful clustering, range 5-50)")
+else
+  if final_pc < 5.0
+    print("FAIL: Proto count {final_pc} (too few, expected 5-50)")
+  else
+    print("FAIL: Proto count {final_pc} (too many, expected 5-50)")
+  end
+end
+
+if final_ec > 10.0
+  print("PASS: Edge count {final_ec} (sequential patterns learned)")
+else
+  print("FAIL: Edge count {final_ec} (too few, expected > 10)")
+end
+
+print("")
+let pc_int = int(final_pc)
+print("The brain discovered {pc_int} distinct character patterns from raw English text.")
+print("Common prototypes with high match counts represent frequent trigrams.")
+print("")
+print("--- nlp patterns demo complete ---")

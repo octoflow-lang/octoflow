@@ -1,0 +1,918 @@
+// test_kernel_edges.flow — GPU kernel boundary condition audit
+// Run: octoflow run tests/audit/test_kernel_edges.flow
+//
+// Tests native GPU builtins at size boundaries and value extremes.
+
+let mut pass = 0.0
+let mut fail = 0.0
+
+print("=== KERNEL EDGE CASE AUDIT ===")
+print(" ")
+
+// ── gpu_fill ─────────────────────────────────────────────────────
+print("--- gpu_fill ---")
+
+let f1 = gpu_fill(42.0, 1.0)
+if len(f1) == 1.0 && f1[0] == 42.0
+  pass = pass + 1.0
+  print("  PASS: gpu_fill N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_fill N=1")
+end
+
+let f256 = gpu_fill(7.0, 256.0)
+if len(f256) == 256.0 && f256[0] == 7.0 && f256[255] == 7.0
+  pass = pass + 1.0
+  print("  PASS: gpu_fill N=256")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_fill N=256")
+end
+
+let f257 = gpu_fill(3.0, 257.0)
+if len(f257) == 257.0 && f257[256] == 3.0
+  pass = pass + 1.0
+  print("  PASS: gpu_fill N=257 (cross-workgroup)")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_fill N=257")
+end
+
+let f1000 = gpu_fill(1.0, 1000.0)
+if len(f1000) == 1000.0
+  pass = pass + 1.0
+  print("  PASS: gpu_fill N=1000")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_fill N=1000")
+end
+
+// ── gpu_range ────────────────────────────────────────────────────
+print("--- gpu_range ---")
+
+let r1 = gpu_range(0.0, 1.0, 1.0)
+if len(r1) == 1.0 && r1[0] == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_range N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_range N=1")
+end
+
+let r256 = gpu_range(0.0, 256.0, 1.0)
+if len(r256) == 256.0 && r256[0] == 0.0 && r256[255] == 255.0
+  pass = pass + 1.0
+  print("  PASS: gpu_range N=256")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_range N=256")
+end
+
+let r257 = gpu_range(0.0, 257.0, 1.0)
+if len(r257) == 257.0 && r257[256] == 256.0
+  pass = pass + 1.0
+  print("  PASS: gpu_range N=257")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_range N=257")
+end
+
+// ── gpu_abs ──────────────────────────────────────────────────────
+print("--- gpu_abs ---")
+
+let mut t_neg = [-5.0]
+let abs1 = gpu_abs(t_neg)
+if len(abs1) == 1.0 && abs1[0] == 5.0
+  pass = pass + 1.0
+  print("  PASS: gpu_abs N=1 negative")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_abs N=1")
+end
+
+let mut t_zeros3 = [0.0, 0.0, 0.0]
+let abs_z = gpu_abs(t_zeros3)
+if abs_z[0] == 0.0 && abs_z[2] == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_abs all zeros")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_abs all zeros")
+end
+
+let mut t_neg4 = [-1.0, -2.0, -3.0, -4.0]
+let abs4 = gpu_abs(t_neg4)
+if abs4[0] == 1.0 && abs4[3] == 4.0
+  pass = pass + 1.0
+  print("  PASS: gpu_abs all negatives")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_abs all negatives")
+end
+
+// ── gpu_sqrt ─────────────────────────────────────────────────────
+print("--- gpu_sqrt ---")
+
+let mut t_4 = [4.0]
+let sq1 = gpu_sqrt(t_4)
+let sq_diff = abs(sq1[0] - 2.0)
+if sq_diff < 0.001
+  pass = pass + 1.0
+  print("  PASS: gpu_sqrt(4)=2")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sqrt(4)")
+end
+
+let mut t_z2 = [0.0, 0.0]
+let sqz = gpu_sqrt(t_z2)
+if sqz[0] == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_sqrt(0)=0")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sqrt(0)")
+end
+
+// ── gpu_add ──────────────────────────────────────────────────────
+print("--- gpu_add ---")
+
+let mut ta1 = [1.0]
+let mut tb1 = [2.0]
+let a1 = gpu_add(ta1, tb1)
+if a1[0] == 3.0
+  pass = pass + 1.0
+  print("  PASS: gpu_add N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_add N=1")
+end
+
+let mut aa = gpu_fill(1.0, 256.0)
+let mut ab = gpu_fill(2.0, 256.0)
+let a256 = gpu_add(aa, ab)
+if a256[0] == 3.0 && a256[255] == 3.0
+  pass = pass + 1.0
+  print("  PASS: gpu_add N=256")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_add N=256")
+end
+
+let mut aa2 = gpu_fill(10.0, 257.0)
+let mut ab2 = gpu_fill(5.0, 257.0)
+let a257 = gpu_add(aa2, ab2)
+if a257[0] == 15.0 && a257[256] == 15.0
+  pass = pass + 1.0
+  print("  PASS: gpu_add N=257 (cross-workgroup)")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_add N=257")
+end
+
+// ── gpu_sub ──────────────────────────────────────────────────────
+print("--- gpu_sub ---")
+
+let mut ts1 = [5.0]
+let mut ts2 = [3.0]
+let s1 = gpu_sub(ts1, ts2)
+if s1[0] == 2.0
+  pass = pass + 1.0
+  print("  PASS: gpu_sub N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sub N=1")
+end
+
+let mut tsa = [1.0, 2.0]
+let mut tsb = [3.0, 4.0]
+let s_neg = gpu_sub(tsa, tsb)
+if s_neg[0] == -2.0 && s_neg[1] == -2.0
+  pass = pass + 1.0
+  print("  PASS: gpu_sub negative result")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sub negative result")
+end
+
+// ── gpu_mul ──────────────────────────────────────────────────────
+print("--- gpu_mul ---")
+
+let mut tm1 = [3.0]
+let mut tm2 = [4.0]
+let m1 = gpu_mul(tm1, tm2)
+if m1[0] == 12.0
+  pass = pass + 1.0
+  print("  PASS: gpu_mul N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_mul N=1")
+end
+
+let mut tma = [5.0, 6.0]
+let mut tmb = [0.0, 0.0]
+let m0 = gpu_mul(tma, tmb)
+if m0[0] == 0.0 && m0[1] == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_mul by zero")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_mul by zero")
+end
+
+// ── gpu_div ──────────────────────────────────────────────────────
+print("--- gpu_div ---")
+
+let mut td1 = [10.0]
+let mut td2 = [2.0]
+let d1 = gpu_div(td1, td2)
+if d1[0] == 5.0
+  pass = pass + 1.0
+  print("  PASS: gpu_div N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_div N=1")
+end
+
+// ── gpu_negate ───────────────────────────────────────────────────
+print("--- gpu_negate ---")
+
+let mut tn1 = [5.0]
+let n1 = gpu_negate(tn1)
+if n1[0] == -5.0
+  pass = pass + 1.0
+  print("  PASS: gpu_negate positive")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_negate positive")
+end
+
+let mut tn2 = [-3.0]
+let n2 = gpu_negate(tn2)
+if n2[0] == 3.0
+  pass = pass + 1.0
+  print("  PASS: gpu_negate negative")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_negate negative")
+end
+
+let mut tnz = [0.0]
+let nz = gpu_negate(tnz)
+if nz[0] == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_negate zero")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_negate zero")
+end
+
+// ── gpu_scale ────────────────────────────────────────────────────
+print("--- gpu_scale ---")
+
+let mut tsc = [2.0, 4.0]
+let sc1 = gpu_scale(tsc, 3.0)
+if sc1[0] == 6.0 && sc1[1] == 12.0
+  pass = pass + 1.0
+  print("  PASS: gpu_scale basic")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_scale basic")
+end
+
+let mut tsc2 = [5.0, 10.0]
+let sc0 = gpu_scale(tsc2, 0.0)
+if sc0[0] == 0.0 && sc0[1] == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_scale by zero")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_scale by zero")
+end
+
+// ── gpu_clamp ────────────────────────────────────────────────────
+print("--- gpu_clamp ---")
+
+let mut tcl = [-5.0, 0.0, 5.0, 100.0]
+let cl1 = gpu_clamp(tcl, 0.0, 10.0)
+if cl1[0] == 0.0 && cl1[1] == 0.0 && cl1[2] == 5.0 && cl1[3] == 10.0
+  pass = pass + 1.0
+  print("  PASS: gpu_clamp basic")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_clamp basic")
+end
+
+// ── gpu_sum ──────────────────────────────────────────────────────
+print("--- gpu_sum ---")
+
+let mut ts42 = [42.0]
+let sum1 = gpu_sum(ts42)
+if sum1 == 42.0
+  pass = pass + 1.0
+  print("  PASS: gpu_sum N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sum N=1, got {sum1}")
+end
+
+let mut ts12 = [1.0, 2.0]
+let sum2 = gpu_sum(ts12)
+if sum2 == 3.0
+  pass = pass + 1.0
+  print("  PASS: gpu_sum N=2")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sum N=2, got {sum2}")
+end
+
+let mut tsz3 = [0.0, 0.0, 0.0]
+let sumz = gpu_sum(tsz3)
+if sumz == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_sum all zeros")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sum all zeros")
+end
+
+let mut t_f100 = gpu_fill(1.0, 100.0)
+let sum_same = gpu_sum(t_f100)
+let sd100 = abs(sum_same - 100.0)
+if sd100 < 0.1
+  pass = pass + 1.0
+  print("  PASS: gpu_sum N=100 all-ones")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sum N=100, got {sum_same}")
+end
+
+let mut t_f256 = gpu_fill(1.0, 256.0)
+let sum256 = gpu_sum(t_f256)
+let sd256 = abs(sum256 - 256.0)
+if sd256 < 0.5
+  pass = pass + 1.0
+  print("  PASS: gpu_sum N=256")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sum N=256, got {sum256}")
+end
+
+// ── gpu_min / gpu_max ────────────────────────────────────────────
+print("--- gpu_min / gpu_max ---")
+
+let mut tmm1 = [42.0]
+let gmin1 = gpu_min(tmm1)
+if gmin1 == 42.0
+  pass = pass + 1.0
+  print("  PASS: gpu_min N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_min N=1, got {gmin1}")
+end
+
+let mut tmm1b = [42.0]
+let gmax1 = gpu_max(tmm1b)
+if gmax1 == 42.0
+  pass = pass + 1.0
+  print("  PASS: gpu_max N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_max N=1, got {gmax1}")
+end
+
+let mut tmm2 = [3.0, 1.0]
+let gmin2 = gpu_min(tmm2)
+if gmin2 == 1.0
+  pass = pass + 1.0
+  print("  PASS: gpu_min N=2")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_min N=2, got {gmin2}")
+end
+
+let mut tmm2b = [3.0, 1.0]
+let gmax2 = gpu_max(tmm2b)
+if gmax2 == 3.0
+  pass = pass + 1.0
+  print("  PASS: gpu_max N=2")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_max N=2, got {gmax2}")
+end
+
+let mut tmm_neg = [5.0, -3.0, 2.0, -7.0]
+let gmin_neg = gpu_min(tmm_neg)
+if gmin_neg == -7.0
+  pass = pass + 1.0
+  print("  PASS: gpu_min negatives")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_min negatives, got {gmin_neg}")
+end
+
+let mut tmm_neg2 = [5.0, -3.0, 2.0, -7.0]
+let gmax_neg = gpu_max(tmm_neg2)
+if gmax_neg == 5.0
+  pass = pass + 1.0
+  print("  PASS: gpu_max with negatives")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_max with negatives, got {gmax_neg}")
+end
+
+let mut tmm_same = [42.0, 42.0, 42.0]
+let gmin_s = gpu_min(tmm_same)
+if gmin_s == 42.0
+  pass = pass + 1.0
+  print("  PASS: gpu_min all same")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_min all same, got {gmin_s}")
+end
+
+// ── gpu_mean ─────────────────────────────────────────────────────
+print("--- gpu_mean ---")
+
+let mut tme1 = [7.0]
+let mean1 = gpu_mean(tme1)
+if mean1 == 7.0
+  pass = pass + 1.0
+  print("  PASS: gpu_mean N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_mean N=1, got {mean1}")
+end
+
+let mut tme2 = [2.0, 4.0]
+let mean2 = gpu_mean(tme2)
+let md2 = abs(mean2 - 3.0)
+if md2 < 0.001
+  pass = pass + 1.0
+  print("  PASS: gpu_mean N=2")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_mean N=2, got {mean2}")
+end
+
+let mut tmez = [0.0, 0.0, 0.0]
+let meanz = gpu_mean(tmez)
+if meanz == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_mean all zeros")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_mean all zeros, got {meanz}")
+end
+
+// ── gpu_where ────────────────────────────────────────────────────
+print("--- gpu_where ---")
+
+let mut tw_cond1 = [1.0]
+let mut tw_a1 = [10.0]
+let mut tw_b1 = [20.0]
+let w1 = gpu_where(tw_cond1, tw_a1, tw_b1)
+if w1[0] == 10.0
+  pass = pass + 1.0
+  print("  PASS: gpu_where true")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_where true")
+end
+
+let mut tw_cond0 = [0.0]
+let mut tw_a0 = [10.0]
+let mut tw_b0 = [20.0]
+let w0 = gpu_where(tw_cond0, tw_a0, tw_b0)
+if w0[0] == 20.0
+  pass = pass + 1.0
+  print("  PASS: gpu_where false")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_where false")
+end
+
+let mut tw_cm = [1.0, 0.0, 1.0, 0.0]
+let mut tw_am = [1.0, 1.0, 1.0, 1.0]
+let mut tw_bm = [9.0, 9.0, 9.0, 9.0]
+let wm = gpu_where(tw_cm, tw_am, tw_bm)
+if wm[0] == 1.0 && wm[1] == 9.0 && wm[2] == 1.0 && wm[3] == 9.0
+  pass = pass + 1.0
+  print("  PASS: gpu_where mixed")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_where mixed")
+end
+
+// ── gpu_reverse ──────────────────────────────────────────────────
+print("--- gpu_reverse ---")
+
+let mut tr1 = [42.0]
+let rev1 = gpu_reverse(tr1)
+if rev1[0] == 42.0
+  pass = pass + 1.0
+  print("  PASS: gpu_reverse N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_reverse N=1")
+end
+
+let mut tr3 = [1.0, 2.0, 3.0]
+let rev3 = gpu_reverse(tr3)
+if rev3[0] == 3.0 && rev3[1] == 2.0 && rev3[2] == 1.0
+  pass = pass + 1.0
+  print("  PASS: gpu_reverse N=3")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_reverse N=3")
+end
+
+// ── gpu_cumsum ───────────────────────────────────────────────────
+print("--- gpu_cumsum ---")
+
+let mut tcs1 = [42.0]
+let cs1 = gpu_cumsum(tcs1)
+if cs1[0] == 42.0
+  pass = pass + 1.0
+  print("  PASS: gpu_cumsum N=1")
+else
+  fail = fail + 1.0
+  let v = cs1[0]
+  print("  FAIL: gpu_cumsum N=1, got {v}")
+end
+
+let mut tcs3 = [1.0, 2.0, 3.0]
+let cs3 = gpu_cumsum(tcs3)
+let cd0 = abs(cs3[0] - 1.0)
+let cd1 = abs(cs3[1] - 3.0)
+let cd2 = abs(cs3[2] - 6.0)
+if cd0 < 0.01 && cd1 < 0.01 && cd2 < 0.01
+  pass = pass + 1.0
+  print("  PASS: gpu_cumsum N=3")
+else
+  fail = fail + 1.0
+  let v0 = cs3[0]
+  let v1 = cs3[1]
+  let v2 = cs3[2]
+  print("  FAIL: gpu_cumsum N=3, [{v0}, {v1}, {v2}]")
+end
+
+let mut t_cs100 = gpu_fill(1.0, 100.0)
+let cs_ones = gpu_cumsum(t_cs100)
+let csd = abs(cs_ones[99] - 100.0)
+if csd < 0.5
+  pass = pass + 1.0
+  print("  PASS: gpu_cumsum N=100 all-ones")
+else
+  fail = fail + 1.0
+  let v = cs_ones[99]
+  print("  FAIL: gpu_cumsum N=100, last={v}")
+end
+
+// ── gpu_product ──────────────────────────────────────────────────
+print("--- gpu_product ---")
+
+let mut tp1 = [5.0]
+let prod1 = gpu_product(tp1)
+if prod1 == 5.0
+  pass = pass + 1.0
+  print("  PASS: gpu_product N=1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_product N=1, got {prod1}")
+end
+
+let mut tp3 = [2.0, 3.0, 4.0]
+let prod3 = gpu_product(tp3)
+let pd = abs(prod3 - 24.0)
+if pd < 0.1
+  pass = pass + 1.0
+  print("  PASS: gpu_product 2*3*4=24")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_product, got {prod3}")
+end
+
+let mut tp0 = [1.0, 0.0, 5.0]
+let prod0 = gpu_product(tp0)
+if prod0 == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_product with zero")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_product with zero, got {prod0}")
+end
+
+// ── gpu_pow ──────────────────────────────────────────────────────
+print("--- gpu_pow ---")
+
+let mut tpw = [2.0, 3.0]
+let pw1 = gpu_pow(tpw, 2.0)
+let pwd0 = abs(pw1[0] - 4.0)
+let pwd1 = abs(pw1[1] - 9.0)
+if pwd0 < 0.01 && pwd1 < 0.01
+  pass = pass + 1.0
+  print("  PASS: gpu_pow squares")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_pow squares")
+end
+
+let mut tpwz = [5.0, 10.0]
+let pw0 = gpu_pow(tpwz, 0.0)
+let pwd0b = abs(pw0[0] - 1.0)
+if pwd0b < 0.01
+  pass = pass + 1.0
+  print("  PASS: gpu_pow exponent=0 gives 1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_pow exponent=0")
+end
+
+// ── gpu_exp / gpu_log ────────────────────────────────────────────
+print("--- gpu_exp / gpu_log ---")
+
+let mut tex0 = [0.0]
+let exp0 = gpu_exp(tex0)
+let exd = abs(exp0[0] - 1.0)
+if exd < 0.001
+  pass = pass + 1.0
+  print("  PASS: gpu_exp(0) = 1")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_exp(0)")
+end
+
+let mut tl1 = [1.0]
+let log1 = gpu_log(tl1)
+let lgd = abs(log1[0])
+if lgd < 0.001
+  pass = pass + 1.0
+  print("  PASS: gpu_log(1) = 0")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_log(1)")
+end
+
+// roundtrip: exp(log(x)) = x
+let mut tel = [2.0, 5.0, 10.0]
+let el_log = gpu_log(tel)
+let el = gpu_exp(el_log)
+let eld0 = abs(el[0] - 2.0)
+let eld2 = abs(el[2] - 10.0)
+if eld0 < 0.01 && eld2 < 0.1
+  pass = pass + 1.0
+  print("  PASS: exp(log(x)) roundtrip")
+else
+  fail = fail + 1.0
+  print("  FAIL: exp(log(x)) roundtrip")
+end
+
+// ── gpu_sin / gpu_cos ────────────────────────────────────────────
+print("--- gpu_sin / gpu_cos ---")
+
+let mut tsin0 = [0.0]
+let sin0 = gpu_sin(tsin0)
+let sd0 = abs(sin0[0])
+if sd0 < 0.001
+  pass = pass + 1.0
+  print("  PASS: sin(0) = 0")
+else
+  fail = fail + 1.0
+  print("  FAIL: sin(0)")
+end
+
+let mut tcos0 = [0.0]
+let cos0 = gpu_cos(tcos0)
+let cd0b = abs(cos0[0] - 1.0)
+if cd0b < 0.001
+  pass = pass + 1.0
+  print("  PASS: cos(0) = 1")
+else
+  fail = fail + 1.0
+  print("  FAIL: cos(0)")
+end
+
+// sin^2 + cos^2 = 1
+let mut tph = [1.5707963]
+let sin_ph = gpu_sin(tph)
+let mut tph2 = [1.5707963]
+let cos_ph = gpu_cos(tph2)
+let s2 = sin_ph[0] * sin_ph[0]
+let c2 = cos_ph[0] * cos_ph[0]
+let pyth = s2 + c2
+let pythd = abs(pyth - 1.0)
+if pythd < 0.01
+  pass = pass + 1.0
+  print("  PASS: sin^2 + cos^2 = 1")
+else
+  fail = fail + 1.0
+  print("  FAIL: sin^2+cos^2, got {pyth}")
+end
+
+// ── gpu_floor / gpu_ceil / gpu_round ─────────────────────────────
+print("--- gpu_floor / gpu_ceil / gpu_round ---")
+
+let mut tfl = [1.7, -1.3, 2.0, 0.5]
+let fl = gpu_floor(tfl)
+if fl[0] == 1.0 && fl[1] == -2.0 && fl[2] == 2.0 && fl[3] == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_floor mixed")
+else
+  fail = fail + 1.0
+  let v0 = fl[0]
+  let v1 = fl[1]
+  print("  FAIL: gpu_floor, got {v0}, {v1}")
+end
+
+let mut tce = [1.1, -1.9, 2.0, 0.5]
+let ce = gpu_ceil(tce)
+if ce[0] == 2.0 && ce[1] == -1.0 && ce[2] == 2.0 && ce[3] == 1.0
+  pass = pass + 1.0
+  print("  PASS: gpu_ceil mixed")
+else
+  fail = fail + 1.0
+  let v0 = ce[0]
+  let v1 = ce[1]
+  print("  FAIL: gpu_ceil, got {v0}, {v1}")
+end
+
+let mut tro = [1.4, 1.6, -0.5, 2.5]
+let ro = gpu_round(tro)
+if ro[0] == 1.0 && ro[1] == 2.0
+  pass = pass + 1.0
+  print("  PASS: gpu_round basic")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_round basic")
+end
+
+// ── gpu_matmul ───────────────────────────────────────────────────
+print("--- gpu_matmul ---")
+
+// Identity 2x2 * vec2
+let mut tmid = [1.0, 0.0, 0.0, 1.0]
+let mut tmvec = [3.0, 7.0]
+let mv1 = gpu_matmul(tmid, tmvec, 2, 1, 2)
+let mvd0 = abs(mv1[0] - 3.0)
+let mvd1 = abs(mv1[1] - 7.0)
+if mvd0 < 0.01 && mvd1 < 0.01
+  pass = pass + 1.0
+  print("  PASS: gpu_matmul identity 2x2")
+else
+  fail = fail + 1.0
+  let v0 = mv1[0]
+  let v1 = mv1[1]
+  print("  FAIL: matmul identity, [{v0}, {v1}]")
+end
+
+// Zero matrix
+let mut tmz = [0.0, 0.0, 0.0, 0.0]
+let mut tmvz = [5.0, 6.0]
+let zr = gpu_matmul(tmz, tmvz, 2, 1, 2)
+if zr[0] == 0.0 && zr[1] == 0.0
+  pass = pass + 1.0
+  print("  PASS: gpu_matmul zero matrix")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_matmul zero matrix")
+end
+
+// ── gpu_variance / gpu_stddev ────────────────────────────────────
+print("--- gpu_variance / gpu_stddev ---")
+
+let mut tvs = [5.0, 5.0, 5.0, 5.0]
+let vars = gpu_variance(tvs)
+let vd = abs(vars)
+if vd < 0.01
+  pass = pass + 1.0
+  print("  PASS: gpu_variance all same = 0")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_variance all same, got {vars}")
+end
+
+let mut tsds = [5.0, 5.0, 5.0, 5.0]
+let stds = gpu_stddev(tsds)
+let std_d = abs(stds)
+if std_d < 0.01
+  pass = pass + 1.0
+  print("  PASS: gpu_stddev all same = 0")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_stddev all same, got {stds}")
+end
+
+// ── gpu_ema ──────────────────────────────────────────────────────
+print("--- gpu_ema ---")
+
+let mut tma1 = [10.0]
+let ema1 = gpu_ema(tma1, 0.5)
+let emad = abs(ema1[0] - 10.0)
+if emad < 0.01
+  pass = pass + 1.0
+  print("  PASS: gpu_ema N=1")
+else
+  fail = fail + 1.0
+  let v = ema1[0]
+  print("  FAIL: gpu_ema N=1, got {v}")
+end
+
+let mut tma_const = [5.0, 5.0, 5.0, 5.0]
+let ema_c = gpu_ema(tma_const, 0.5)
+let ecad = abs(ema_c[3] - 5.0)
+if ecad < 0.01
+  pass = pass + 1.0
+  print("  PASS: gpu_ema constant = constant")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_ema constant")
+end
+
+// ── LARGER SIZE TESTS ────────────────────────────────────────────
+print("--- Large sizes ---")
+
+// N=1000
+let big = gpu_fill(2.0, 1000.0)
+let big_sum = gpu_sum(big)
+let bsd = abs(big_sum - 2000.0)
+if bsd < 1.0
+  pass = pass + 1.0
+  print("  PASS: gpu_sum N=1000")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sum N=1000, got {big_sum}")
+end
+
+// N=65536
+let big64k = gpu_fill(1.0, 65536.0)
+let sum64k = gpu_sum(big64k)
+let s64d = abs(sum64k - 65536.0)
+if s64d < 10.0
+  pass = pass + 1.0
+  print("  PASS: gpu_sum N=65536")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sum N=65536, got {sum64k}")
+end
+
+// N=65537 (non-power-of-2 boundary)
+let big64k1 = gpu_fill(1.0, 65537.0)
+let sum64k1 = gpu_sum(big64k1)
+let s64d1 = abs(sum64k1 - 65537.0)
+if s64d1 < 10.0
+  pass = pass + 1.0
+  print("  PASS: gpu_sum N=65537")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_sum N=65537, got {sum64k1}")
+end
+
+// Large min/max
+let big_r = gpu_range(0.0, 1000.0, 1.0)
+let big_min = gpu_min(big_r)
+let big_max = gpu_max(big_r)
+if big_min == 0.0 && big_max == 999.0
+  pass = pass + 1.0
+  print("  PASS: gpu_min/max N=1000 range")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_min/max N=1000, min={big_min} max={big_max}")
+end
+
+// Large mean
+let mut t_r1000b = gpu_range(0.0, 1000.0, 1.0)
+let big_mean = gpu_mean(t_r1000b)
+let bmd = abs(big_mean - 499.5)
+if bmd < 0.5
+  pass = pass + 1.0
+  print("  PASS: gpu_mean N=1000 range")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_mean N=1000, got {big_mean}")
+end
+
+// Large element-wise
+let mut lba = gpu_fill(1.0, 10000.0)
+let mut lbb = gpu_fill(2.0, 10000.0)
+let lbc = gpu_add(lba, lbb)
+if lbc[0] == 3.0 && lbc[9999] == 3.0
+  pass = pass + 1.0
+  print("  PASS: gpu_add N=10000")
+else
+  fail = fail + 1.0
+  print("  FAIL: gpu_add N=10000")
+end
+
+// ── SUMMARY ──────────────────────────────────────────────────────
+let total = pass + fail
+print(" ")
+print("=== KERNEL EDGE CASE AUDIT SUMMARY ===")
+print("  pass: {pass}/{total}")
+print("  fail: {fail}")
+if fail == 0.0
+  print("  ALL PASS")
+else
+  print("  FAILURES DETECTED")
+end

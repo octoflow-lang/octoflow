@@ -1,0 +1,520 @@
+// video_player.flow — Frame-by-frame video playback engine
+// Synchronizes with timeline tracks, provides frame stepping,
+// playback speed, and A/V sync primitives.
+// Depends on: timeline.flow, pcm.flow
+
+// ── Player state ─────────────────────────────────────────
+let VP_STOPPED  = 0.0
+let VP_PLAYING  = 1.0
+let VP_PAUSED   = 2.0
+let VP_SEEKING  = 3.0
+
+// ── Sync mode ────────────────────────────────────────────
+let VP_SYNC_FREE   = 0.0   // No sync (video runs at its own rate)
+let VP_SYNC_AUDIO  = 1.0   // Video syncs to audio clock
+let VP_SYNC_VIDEO  = 2.0   // Audio syncs to video clock
+let VP_SYNC_EXTERN = 3.0   // External clock source
+
+// ── Internal storage ─────────────────────────────────────
+let mut _vp_state      = []   // VP_STOPPED/PLAYING/PAUSED/SEEKING
+let mut _vp_tl_id      = []   // Timeline ID
+let mut _vp_fps        = []   // Target FPS
+let mut _vp_cur_time   = []   // Current playback time (seconds)
+let mut _vp_cur_frame  = []   // Current frame number
+let mut _vp_speed      = []   // Playback speed (1.0 = normal)
+let mut _vp_volume     = []   // Audio volume
+let mut _vp_loop        = []   // Loop mode
+let mut _vp_start_time = []   // Playback start time (for region)
+let mut _vp_end_time   = []   // Playback end time (0 = full)
+let mut _vp_sync_mode  = []   // Sync mode
+let mut _vp_audio_time = []   // Audio clock time (for sync)
+let mut _vp_drop_count = []   // Frames dropped (late)
+let mut _vp_alive      = []   // 1.0 = active
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn vp_create(tl_id, fps)
+    let id = len(_vp_alive)
+    let mut f = fps
+    if f < 1.0
+        f = 30.0
+    end
+    if f > 240.0
+        f = 240.0
+    end
+    push(_vp_state, VP_STOPPED)
+    push(_vp_tl_id, tl_id)
+    push(_vp_fps, f)
+    push(_vp_cur_time, 0.0)
+    push(_vp_cur_frame, 0.0)
+    push(_vp_speed, 1.0)
+    push(_vp_volume, 1.0)
+    push(_vp_loop, 0.0)
+    push(_vp_start_time, 0.0)
+    push(_vp_end_time, 0.0)
+    push(_vp_sync_mode, VP_SYNC_FREE)
+    push(_vp_audio_time, 0.0)
+    push(_vp_drop_count, 0.0)
+    push(_vp_alive, 1.0)
+    return id
+end
+
+fn vp_destroy(id)
+    if id < 0.0 || id >= len(_vp_alive)
+        return -1.0
+    end
+    _vp_alive[id] = 0.0
+    _vp_state[id] = VP_STOPPED
+    return 0.0
+end
+
+fn _vp_valid(id)
+    if id < 0.0 || id >= len(_vp_alive)
+        return 0.0
+    end
+    if _vp_alive[id] < 0.5
+        return 0.0
+    end
+    return 1.0
+end
+
+// ── Transport controls ───────────────────────────────────
+
+fn vp_play(id)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    _vp_state[id] = VP_PLAYING
+    return 0.0
+end
+
+fn vp_pause(id)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    if _vp_state[id] > 0.5 && _vp_state[id] < 1.5
+        _vp_state[id] = VP_PAUSED
+    end
+    return 0.0
+end
+
+fn vp_stop(id)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    _vp_state[id] = VP_STOPPED
+    _vp_cur_time[id] = _vp_start_time[id]
+    _vp_cur_frame[id] = 0.0
+    return 0.0
+end
+
+fn vp_toggle(id)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    if _vp_state[id] > 0.5 && _vp_state[id] < 1.5
+        _vp_state[id] = VP_PAUSED
+    else
+        _vp_state[id] = VP_PLAYING
+    end
+    return _vp_state[id]
+end
+
+// ── Seek ─────────────────────────────────────────────────
+
+fn vp_seek(id, time_sec)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    let mut t = time_sec
+    if t < 0.0
+        t = 0.0
+    end
+    let tl = _vp_tl_id[id]
+    let dur = tl_duration(tl)
+    if dur > 0.0 && t > dur
+        t = dur
+    end
+    let prev_state = _vp_state[id]
+    _vp_state[id] = VP_SEEKING
+    _vp_cur_time[id] = t
+    _vp_cur_frame[id] = floor(t * _vp_fps[id])
+    // Restore previous state
+    if prev_state > 0.5 && prev_state < 1.5
+        _vp_state[id] = VP_PLAYING
+    else
+        if prev_state > 1.5 && prev_state < 2.5
+            _vp_state[id] = VP_PAUSED
+        else
+            _vp_state[id] = VP_STOPPED
+        end
+    end
+    return t
+end
+
+fn vp_seek_frame(id, frame)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    let fps = _vp_fps[id]
+    let t = frame / fps
+    return vp_seek(id, t)
+end
+
+fn vp_seek_percent(id, pct)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    let mut p = pct
+    if p < 0.0
+        p = 0.0
+    end
+    if p > 1.0
+        p = 1.0
+    end
+    let tl = _vp_tl_id[id]
+    let dur = tl_duration(tl)
+    return vp_seek(id, p * dur)
+end
+
+// ── Frame stepping ───────────────────────────────────────
+
+fn vp_step_forward(id)
+    // Advance by one frame (while paused)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    let fps = _vp_fps[id]
+    let dt = 1.0 / fps
+    let new_time = _vp_cur_time[id] + dt
+    _vp_cur_time[id] = new_time
+    _vp_cur_frame[id] = _vp_cur_frame[id] + 1.0
+    return _vp_cur_frame[id]
+end
+
+fn vp_step_backward(id)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    let fps = _vp_fps[id]
+    let dt = 1.0 / fps
+    let new_time = _vp_cur_time[id] - dt
+    if new_time < 0.0
+        _vp_cur_time[id] = 0.0
+        _vp_cur_frame[id] = 0.0
+    else
+        _vp_cur_time[id] = new_time
+        _vp_cur_frame[id] = _vp_cur_frame[id] - 1.0
+    end
+    return _vp_cur_frame[id]
+end
+
+// ── Advance (called each display frame) ──────────────────
+
+fn vp_advance(id, dt)
+    // Advance by dt seconds. Returns the new current time.
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    if _vp_state[id] < 0.5 || _vp_state[id] > 1.5
+        return _vp_cur_time[id]
+    end
+    if dt <= 0.0
+        return _vp_cur_time[id]
+    end
+
+    let speed = _vp_speed[id]
+    let advance = dt * speed
+    let mut new_time = _vp_cur_time[id] + advance
+
+    // Check end boundary
+    let tl = _vp_tl_id[id]
+    let dur = tl_duration(tl)
+    let mut eff_end = dur
+    if _vp_end_time[id] > 0.01 && _vp_end_time[id] < dur
+        eff_end = _vp_end_time[id]
+    end
+
+    if eff_end > 0.0 && new_time >= eff_end
+        if _vp_loop[id] > 0.5
+            let region = eff_end - _vp_start_time[id]
+            if region < 0.01
+                _vp_state[id] = VP_STOPPED
+                return _vp_cur_time[id]
+            end
+            let overflow = new_time - eff_end
+            new_time = _vp_start_time[id] + (overflow - floor(overflow / region) * region)
+        else
+            new_time = eff_end
+            _vp_state[id] = VP_STOPPED
+        end
+    end
+
+    _vp_cur_time[id] = new_time
+    _vp_cur_frame[id] = floor(new_time * _vp_fps[id])
+
+    // A/V sync check
+    if _vp_sync_mode[id] > 0.5 && _vp_sync_mode[id] < 1.5
+        // SYNC_AUDIO: check drift
+        let drift = _vp_cur_time[id] - _vp_audio_time[id]
+        if drift > 1.0 / _vp_fps[id]
+            // Video is behind audio — drop frame
+            _vp_drop_count[id] = _vp_drop_count[id] + 1.0
+        end
+    end
+
+    return new_time
+end
+
+// ── Properties ───────────────────────────────────────────
+
+fn vp_set_speed(id, spd)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    let mut s = spd
+    if s < 0.1
+        s = 0.1
+    end
+    if s > 16.0
+        s = 16.0
+    end
+    _vp_speed[id] = s
+    return s
+end
+
+fn vp_get_speed(id)
+    if _vp_valid(id) < 0.5
+        return 1.0
+    end
+    return _vp_speed[id]
+end
+
+fn vp_set_volume(id, vol)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    let mut v = vol
+    if v < 0.0
+        v = 0.0
+    end
+    if v > 1.0
+        v = 1.0
+    end
+    _vp_volume[id] = v
+    return v
+end
+
+fn vp_get_volume(id)
+    if _vp_valid(id) < 0.5
+        return 1.0
+    end
+    return _vp_volume[id]
+end
+
+fn vp_set_loop(id, loop_on)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    if loop_on > 0.5
+        _vp_loop[id] = 1.0
+    else
+        _vp_loop[id] = 0.0
+    end
+    return _vp_loop[id]
+end
+
+fn vp_get_loop(id)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    return _vp_loop[id]
+end
+
+// ── Region ───────────────────────────────────────────────
+
+fn vp_set_region(id, start_sec, end_sec)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    let mut s = start_sec
+    let mut e = end_sec
+    if s < 0.0
+        s = 0.0
+    end
+    if e < 0.0
+        e = 0.0
+    end
+    if e > 0.0 && e <= s
+        s = 0.0
+        e = 0.0
+    end
+    _vp_start_time[id] = s
+    _vp_end_time[id] = e
+    return 0.0
+end
+
+fn vp_clear_region(id)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    _vp_start_time[id] = 0.0
+    _vp_end_time[id] = 0.0
+    return 0.0
+end
+
+// ── Sync ─────────────────────────────────────────────────
+
+fn vp_set_sync_mode(id, mode)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    if mode < 0.0 || mode > 3.0
+        return -1.0
+    end
+    _vp_sync_mode[id] = mode
+    return mode
+end
+
+fn vp_set_audio_clock(id, audio_time)
+    // Update audio clock reference (for A/V sync)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    _vp_audio_time[id] = audio_time
+    return 0.0
+end
+
+fn vp_get_drift(id)
+    // Get A/V drift (video_time - audio_time)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    return _vp_cur_time[id] - _vp_audio_time[id]
+end
+
+fn vp_get_drop_count(id)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    return _vp_drop_count[id]
+end
+
+fn vp_reset_stats(id)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    _vp_drop_count[id] = 0.0
+    return 0.0
+end
+
+// ── Query state ──────────────────────────────────────────
+
+fn vp_state(id)
+    if _vp_valid(id) < 0.5
+        return VP_STOPPED
+    end
+    return _vp_state[id]
+end
+
+fn vp_current_time(id)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    return _vp_cur_time[id]
+end
+
+fn vp_current_frame(id)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    return _vp_cur_frame[id]
+end
+
+fn vp_fps(id)
+    if _vp_valid(id) < 0.5
+        return 30.0
+    end
+    return _vp_fps[id]
+end
+
+fn vp_duration(id)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    let tl = _vp_tl_id[id]
+    return tl_duration(tl)
+end
+
+fn vp_total_frames(id)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    return floor(vp_duration(id) * _vp_fps[id])
+end
+
+fn vp_position_percent(id)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    let dur = vp_duration(id)
+    if dur < 0.01
+        return 0.0
+    end
+    return _vp_cur_time[id] / dur
+end
+
+fn vp_remaining(id)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    return vp_duration(id) - _vp_cur_time[id]
+end
+
+fn vp_is_playing(id)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    if _vp_state[id] > 0.5 && _vp_state[id] < 1.5
+        return 1.0
+    end
+    return 0.0
+end
+
+fn vp_is_paused(id)
+    if _vp_valid(id) < 0.5
+        return 0.0
+    end
+    if _vp_state[id] > 1.5 && _vp_state[id] < 2.5
+        return 1.0
+    end
+    return 0.0
+end
+
+fn vp_is_stopped(id)
+    if _vp_valid(id) < 0.5
+        return 1.0
+    end
+    if _vp_state[id] < 0.5
+        return 1.0
+    end
+    return 0.0
+end
+
+// ── Timeline query helpers ──────────────────────────────
+
+fn vp_get_clip_at(id, track_idx)
+    // Get the clip ID at the current playback time on a track
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    let tl = _vp_tl_id[id]
+    return tl_get_clip_at(tl, track_idx, _vp_cur_time[id])
+end
+
+fn vp_timeline_id(id)
+    if _vp_valid(id) < 0.5
+        return -1.0
+    end
+    return _vp_tl_id[id]
+end

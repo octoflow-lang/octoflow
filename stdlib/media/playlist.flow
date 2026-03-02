@@ -1,0 +1,489 @@
+// playlist.flow — Playlist management
+// Add/remove items, shuffle, repeat modes, next/prev navigation.
+// Uses parallel-array storage. Items are numeric IDs (PCM buffer, timeline, etc).
+
+// ── Repeat modes ─────────────────────────────────────────
+let PL_REPEAT_NONE = 0.0   // Play once, stop at end
+let PL_REPEAT_ALL  = 1.0   // Loop entire playlist
+let PL_REPEAT_ONE  = 2.0   // Loop current item
+
+// ── Internal storage ─────────────────────────────────────
+// Each playlist has up to 1024 items stored in a flat segment of _pl_items.
+let PL_MAX_ITEMS = 1024.0
+
+let mut _pl_offset  = []   // Start offset in _pl_items
+let mut _pl_count   = []   // Number of items in playlist
+let mut _pl_index   = []   // Current item index
+let mut _pl_repeat  = []   // Repeat mode
+let mut _pl_shuffle = []   // 1.0 = shuffle on
+let mut _pl_alive   = []   // 1.0 = active
+let mut _pl_items   = []   // Flat storage for all playlists
+
+// Shuffle order (flat array, per playlist segment)
+let mut _pl_shuf_order = []
+let mut _pl_shuf_off   = []  // Offset into _pl_shuf_order per playlist
+
+// ── Create / Destroy ─────────────────────────────────────
+
+fn pl_create()
+    let id = len(_pl_alive)
+    push(_pl_offset, len(_pl_items))
+    push(_pl_count, 0.0)
+    push(_pl_index, 0.0)
+    push(_pl_repeat, PL_REPEAT_NONE)
+    push(_pl_shuffle, 0.0)
+    push(_pl_alive, 1.0)
+    push(_pl_shuf_off, len(_pl_shuf_order))
+    return id
+end
+
+fn pl_destroy(id)
+    if id < 0.0 || id >= len(_pl_alive)
+        return -1.0
+    end
+    _pl_alive[id] = 0.0
+    return 0.0
+end
+
+fn _pl_valid(id)
+    if id < 0.0 || id >= len(_pl_alive)
+        return 0.0
+    end
+    if _pl_alive[id] < 0.5
+        return 0.0
+    end
+    return 1.0
+end
+
+// ── Add / Remove ─────────────────────────────────────────
+
+fn pl_add(id, item_id)
+    // Add an item to the end of the playlist
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _pl_count[id]
+    if cnt >= PL_MAX_ITEMS
+        return -1.0
+    end
+    push(_pl_items, item_id)
+    push(_pl_shuf_order, cnt)  // Default order
+    _pl_count[id] = cnt + 1.0
+    return cnt
+end
+
+fn pl_remove(id, index)
+    // Remove item at index (mark as -1, don't shift)
+    // Note: In OctoFlow we can't easily splice arrays, so we mark removed
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _pl_count[id]
+    if index < 0.0 || index >= cnt
+        return -1.0
+    end
+    let off = _pl_offset[id]
+    _pl_items[off + index] = -1.0  // Mark as removed
+    // Adjust current index if needed
+    if _pl_index[id] == index
+        // Try to move to next valid item
+        let mut found = 0.0
+        let mut i = index + 1.0
+        while i < cnt
+            if _pl_items[off + i] > 0.0 - 0.5
+                _pl_index[id] = i
+                found = 1.0
+                i = cnt
+            end
+            i = i + 1.0
+        end
+        if found < 0.5
+            // Try backward
+            let mut j = index - 1.0
+            while j >= 0.0
+                if _pl_items[off + j] > 0.0 - 0.5
+                    _pl_index[id] = j
+                    found = 1.0
+                    j = -1.0
+                end
+                j = j - 1.0
+            end
+        end
+        if found < 0.5
+            _pl_index[id] = 0.0
+        end
+    end
+    return 0.0
+end
+
+fn pl_clear(id)
+    // Remove all items
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    let off = _pl_offset[id]
+    let cnt = _pl_count[id]
+    let mut i = 0.0
+    while i < cnt
+        _pl_items[off + i] = -1.0
+        i = i + 1.0
+    end
+    _pl_count[id] = 0.0
+    _pl_index[id] = 0.0
+    return 0.0
+end
+
+// ── Navigation ───────────────────────────────────────────
+
+fn _pl_find_next_valid(id, start_idx, direction)
+    // Find next valid (non-removed) item starting from start_idx
+    // direction: 1.0 = forward, -1.0 = backward
+    let off = _pl_offset[id]
+    let cnt = _pl_count[id]
+    if cnt < 1.0
+        return -1.0
+    end
+    let mut idx = start_idx
+    let mut checked = 0.0
+    while checked < cnt
+        if idx < 0.0
+            idx = cnt - 1.0
+        end
+        if idx >= cnt
+            idx = 0.0
+        end
+        if _pl_items[off + idx] > 0.0 - 0.5
+            return idx
+        end
+        idx = idx + direction
+        checked = checked + 1.0
+    end
+    return -1.0
+end
+
+fn pl_next(id)
+    // Move to next item. Returns new index or -1 if at end.
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _pl_count[id]
+    if cnt < 1.0
+        return -1.0
+    end
+    let repeat = _pl_repeat[id]
+
+    // Repeat one → stay
+    if repeat > 1.5 && repeat < 2.5
+        return _pl_index[id]
+    end
+
+    let cur = _pl_index[id]
+    let mut next_idx = -1.0
+
+    if _pl_shuffle[id] > 0.5
+        // Shuffle: use shuffle order
+        let shuf_off = _pl_shuf_off[id]
+        // Find current position in shuffle order
+        let mut shuf_pos = -1.0
+        let mut i = 0.0
+        while i < cnt
+            if shuf_off + i < len(_pl_shuf_order)
+                if _pl_shuf_order[shuf_off + i] == cur
+                    shuf_pos = i
+                    i = cnt
+                end
+            end
+            i = i + 1.0
+        end
+        let next_shuf = shuf_pos + 1.0
+        if next_shuf >= cnt
+            if repeat > 0.5 && repeat < 1.5
+                // Repeat all → wrap
+                next_idx = _pl_shuf_order[shuf_off]
+            else
+                return -1.0  // End of playlist
+            end
+        else
+            if shuf_off + next_shuf < len(_pl_shuf_order)
+                next_idx = _pl_shuf_order[shuf_off + next_shuf]
+            end
+        end
+    else
+        // Sequential
+        next_idx = _pl_find_next_valid(id, cur + 1.0, 1.0)
+        if next_idx < 0.0 || next_idx <= cur
+            // Wrapped or no more
+            if repeat > 0.5 && repeat < 1.5
+                next_idx = _pl_find_next_valid(id, 0.0, 1.0)
+            else
+                return -1.0
+            end
+        end
+    end
+
+    if next_idx >= 0.0
+        _pl_index[id] = next_idx
+    end
+    return next_idx
+end
+
+fn pl_prev(id)
+    // Move to previous item
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _pl_count[id]
+    if cnt < 1.0
+        return -1.0
+    end
+
+    let repeat = _pl_repeat[id]
+    if repeat > 1.5 && repeat < 2.5
+        return _pl_index[id]
+    end
+
+    let cur = _pl_index[id]
+    let mut prev_idx = -1.0
+
+    if _pl_shuffle[id] > 0.5
+        let shuf_off = _pl_shuf_off[id]
+        let mut shuf_pos = -1.0
+        let mut i = 0.0
+        while i < cnt
+            if shuf_off + i < len(_pl_shuf_order)
+                if _pl_shuf_order[shuf_off + i] == cur
+                    shuf_pos = i
+                    i = cnt
+                end
+            end
+            i = i + 1.0
+        end
+        let prev_shuf = shuf_pos - 1.0
+        if prev_shuf < 0.0
+            if repeat > 0.5 && repeat < 1.5
+                if shuf_off + cnt - 1.0 < len(_pl_shuf_order)
+                    prev_idx = _pl_shuf_order[shuf_off + cnt - 1.0]
+                end
+            else
+                return -1.0
+            end
+        else
+            if shuf_off + prev_shuf < len(_pl_shuf_order)
+                prev_idx = _pl_shuf_order[shuf_off + prev_shuf]
+            end
+        end
+    else
+        prev_idx = _pl_find_next_valid(id, cur - 1.0, -1.0)
+        if prev_idx < 0.0 || prev_idx >= cur
+            if repeat > 0.5 && repeat < 1.5
+                prev_idx = _pl_find_next_valid(id, cnt - 1.0, -1.0)
+            else
+                return -1.0
+            end
+        end
+    end
+
+    if prev_idx >= 0.0
+        _pl_index[id] = prev_idx
+    end
+    return prev_idx
+end
+
+fn pl_goto(id, index)
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _pl_count[id]
+    if index < 0.0 || index >= cnt
+        return -1.0
+    end
+    let off = _pl_offset[id]
+    if _pl_items[off + index] < 0.0 - 0.5
+        return -1.0  // Removed item
+    end
+    _pl_index[id] = index
+    return index
+end
+
+// ── Shuffle ──────────────────────────────────────────────
+
+fn pl_set_shuffle(id, on)
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    if on > 0.5
+        _pl_shuffle[id] = 1.0
+        // Generate shuffle order using Fisher-Yates with simple PRNG
+        let cnt = _pl_count[id]
+        let shuf_off = _pl_shuf_off[id]
+        // Init order
+        let mut i = 0.0
+        while i < cnt && shuf_off + i < len(_pl_shuf_order)
+            _pl_shuf_order[shuf_off + i] = i
+            i = i + 1.0
+        end
+        // Fisher-Yates shuffle (deterministic with index-based seed)
+        let mut j = cnt - 1.0
+        while j > 0.0
+            // Simple hash-based random: (j * 2654435761) mod (j+1)
+            let hash = j * 2654435761.0
+            let k = hash - floor(hash / (j + 1.0)) * (j + 1.0)
+            let ki = floor(k)
+            // Swap
+            if shuf_off + j < len(_pl_shuf_order) && shuf_off + ki < len(_pl_shuf_order)
+                let tmp = _pl_shuf_order[shuf_off + j]
+                _pl_shuf_order[shuf_off + j] = _pl_shuf_order[shuf_off + ki]
+                _pl_shuf_order[shuf_off + ki] = tmp
+            end
+            j = j - 1.0
+        end
+    else
+        _pl_shuffle[id] = 0.0
+    end
+    return _pl_shuffle[id]
+end
+
+fn pl_get_shuffle(id)
+    if _pl_valid(id) < 0.5
+        return 0.0
+    end
+    return _pl_shuffle[id]
+end
+
+// ── Repeat mode ──────────────────────────────────────────
+
+fn pl_set_repeat(id, mode)
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    if mode < 0.0 || mode > 2.0
+        return -1.0
+    end
+    _pl_repeat[id] = mode
+    return mode
+end
+
+fn pl_get_repeat(id)
+    if _pl_valid(id) < 0.5
+        return PL_REPEAT_NONE
+    end
+    return _pl_repeat[id]
+end
+
+fn pl_cycle_repeat(id)
+    // Cycle: none → all → one → none
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    let cur = _pl_repeat[id]
+    if cur < 0.5
+        _pl_repeat[id] = PL_REPEAT_ALL
+    else
+        if cur < 1.5
+            _pl_repeat[id] = PL_REPEAT_ONE
+        else
+            _pl_repeat[id] = PL_REPEAT_NONE
+        end
+    end
+    return _pl_repeat[id]
+end
+
+// ── Query ────────────────────────────────────────────────
+
+fn pl_count(id)
+    if _pl_valid(id) < 0.5
+        return 0.0
+    end
+    return _pl_count[id]
+end
+
+fn pl_index(id)
+    if _pl_valid(id) < 0.5
+        return 0.0
+    end
+    return _pl_index[id]
+end
+
+fn pl_current_item(id)
+    // Get current item ID
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _pl_count[id]
+    if cnt < 1.0
+        return -1.0
+    end
+    let off = _pl_offset[id]
+    let idx = _pl_index[id]
+    if idx >= cnt
+        return -1.0
+    end
+    return _pl_items[off + idx]
+end
+
+fn pl_item_at(id, index)
+    // Get item at specific index
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _pl_count[id]
+    if index < 0.0 || index >= cnt
+        return -1.0
+    end
+    let off = _pl_offset[id]
+    return _pl_items[off + index]
+end
+
+fn pl_has_next(id)
+    if _pl_valid(id) < 0.5
+        return 0.0
+    end
+    let repeat = _pl_repeat[id]
+    if repeat > 0.5
+        return 1.0  // Always has next in repeat modes
+    end
+    let cnt = _pl_count[id]
+    let cur = _pl_index[id]
+    // Check if there's a valid item after current
+    let next = _pl_find_next_valid(id, cur + 1.0, 1.0)
+    if next > cur
+        return 1.0
+    end
+    return 0.0
+end
+
+fn pl_has_prev(id)
+    if _pl_valid(id) < 0.5
+        return 0.0
+    end
+    let repeat = _pl_repeat[id]
+    if repeat > 0.5
+        return 1.0
+    end
+    let cur = _pl_index[id]
+    if cur > 0.0
+        let prev = _pl_find_next_valid(id, cur - 1.0, -1.0)
+        if prev >= 0.0 && prev < cur
+            return 1.0
+        end
+    end
+    return 0.0
+end
+
+// ── Move item ────────────────────────────────────────────
+
+fn pl_swap(id, idx_a, idx_b)
+    // Swap two items in the playlist
+    if _pl_valid(id) < 0.5
+        return -1.0
+    end
+    let cnt = _pl_count[id]
+    if idx_a < 0.0 || idx_a >= cnt || idx_b < 0.0 || idx_b >= cnt
+        return -1.0
+    end
+    let off = _pl_offset[id]
+    let tmp = _pl_items[off + idx_a]
+    _pl_items[off + idx_a] = _pl_items[off + idx_b]
+    _pl_items[off + idx_b] = tmp
+    return 0.0
+end

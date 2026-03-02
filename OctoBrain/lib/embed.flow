@@ -1,0 +1,214 @@
+// OctoBrain Adaptive Embedding Module
+// Discovers embedding dimensions from data variance and projects
+// raw input into a learned embedding space.
+//
+// State map holds scalar config: input_dim, embed_dim, obs_count, buffer_size, max_buffer.
+// W_embed (weight matrix) and obs_buffer are separate mutable arrays passed by the caller.
+// All state is modified in-place via shared mutation semantics.
+
+use "vecmath"
+use "gpu_embed"
+
+// ── embed_new ──────────────────────────────────────────────────
+// Create an empty embed state map with default configuration.
+// The caller must also create separate mutable arrays:
+//   let mut W_embed = []
+//   let mut obs_buffer = []
+fn embed_new()
+  let mut state = map()
+  map_set(state, "input_dim", 0.0)
+  map_set(state, "embed_dim", 0.0)
+  map_set(state, "obs_count", 0.0)
+  map_set(state, "buffer_size", 0.0)
+  map_set(state, "max_buffer", 100.0)
+  return state
+end
+
+// ── compute_variance ───────────────────────────────────────────
+// Pure function. Takes a flattened observation buffer containing
+// num_obs observations each of input_dim dimensions (row-major).
+// Returns an array of per-dimension variances [input_dim].
+//
+// Step 1: Compute mean per dimension
+// Step 2: Compute sum of squared differences / num_obs
+fn compute_variance(obs_flat, num_obs, input_dim)
+  // Step 1: means
+  let mut means = []
+  let mut d = 0.0
+  while d < input_dim
+    let mut sum = 0.0
+    let mut r = 0.0
+    while r < num_obs
+      sum = sum + obs_flat[r * input_dim + d]
+      r = r + 1.0
+    end
+    push(means, sum / num_obs)
+    d = d + 1.0
+  end
+
+  // Step 2: variances
+  let mut variances = []
+  d = 0.0
+  while d < input_dim
+    let mut sq_sum = 0.0
+    let mut r = 0.0
+    while r < num_obs
+      let diff = obs_flat[r * input_dim + d] - means[d]
+      sq_sum = sq_sum + diff * diff
+      r = r + 1.0
+    end
+    push(variances, sq_sum / num_obs)
+    d = d + 1.0
+  end
+
+  return variances
+end
+
+// ── discover_dim ───────────────────────────────────────────────
+// Pure function. Counts dimensions with variance > 1% of the
+// maximum variance. Returns the count (minimum 1.0).
+fn discover_dim(variances, input_dim)
+  // Find max variance
+  let mut max_var = 0.0
+  let mut i = 0.0
+  while i < input_dim
+    if variances[i] > max_var
+      max_var = variances[i]
+    end
+    i = i + 1.0
+  end
+
+  // Threshold = 1% of max
+  let threshold = max_var * 0.01
+
+  // Count significant dimensions
+  let mut count = 0.0
+  i = 0.0
+  while i < input_dim
+    if variances[i] > threshold
+      count = count + 1.0
+    end
+    i = i + 1.0
+  end
+
+  // Minimum 1
+  if count < 1.0
+    count = 1.0
+  end
+
+  return count
+end
+
+// ── embed_set_dims ─────────────────────────────────────────────
+// In-place mutation. Sets input_dim and embed_dim in state map.
+// Populates W_embed with identity-like matrix [input_dim x embed_dim]
+// stored row-major (flattened). W[r][c] = 1.0 if r==c else 0.0.
+// Returns 0.0 (state and W_embed are mutated in-place).
+fn embed_set_dims(state, W_embed, input_dim, embed_dim)
+  map_set(state, "input_dim", input_dim)
+  map_set(state, "embed_dim", embed_dim)
+
+  // Build identity-like matrix flattened: input_dim rows, embed_dim cols
+  let mut r = 0.0
+  while r < input_dim
+    let mut c = 0.0
+    while c < embed_dim
+      if r == c
+        push(W_embed, 1.0)
+      else
+        push(W_embed, 0.0)
+      end
+      c = c + 1.0
+    end
+    r = r + 1.0
+  end
+
+  return 0.0
+end
+
+// ── embed_project ──────────────────────────────────────────────
+// Pure function. Matrix multiply raw_data [input_dim] by
+// W_embed [input_dim x embed_dim] to produce result [embed_dim].
+// Then normalize the result.
+// W_embed is stored row-major: W[r][c] = W_embed[r * embed_dim + c]
+// result[c] = sum over r of raw_data[r] * W[r][c]
+//
+// GPU path: when GPU_EMBED_READY and dimensions are large enough,
+// delegates to gpu_embed_project for GPU-accelerated matmul.
+fn embed_project(W_embed, raw_data, input_dim, embed_dim)
+  // GPU path: delegate to gpu_embed_project when GPU is ready and dimensions are large
+  if GPU_EMBED_READY[0] > 0.5 && input_dim * embed_dim >= GPU_EMBED_THRESHOLD
+    let gpu_result = gpu_embed_project(W_embed, raw_data, input_dim, embed_dim)
+    return gpu_result
+  end
+
+  // CPU path: manual matrix-vector multiply
+  let mut result = []
+  let mut c = 0.0
+  while c < embed_dim
+    let mut sum = 0.0
+    let mut r = 0.0
+    while r < input_dim
+      sum = sum + raw_data[r] * W_embed[r * embed_dim + c]
+      r = r + 1.0
+    end
+    push(result, sum)
+    c = c + 1.0
+  end
+
+  // Normalize the projection
+  let normed = normalize(result, embed_dim)
+  return normed
+end
+
+// ── embed_buffer_obs ───────────────────────────────────────────
+// In-place mutation. Appends data (length input_dim) to obs_buffer
+// (flat array). Increments buffer_size and obs_count in state.
+// If buffer exceeds max_buffer, removes the oldest observation
+// (first input_dim elements). Returns 0.0.
+fn embed_buffer_obs(state, obs_buffer, data, input_dim)
+  // Append data elements to buffer
+  let mut i = 0.0
+  while i < input_dim
+    push(obs_buffer, data[i])
+    i = i + 1.0
+  end
+
+  // Increment counts
+  let bs = map_get(state, "buffer_size")
+  let oc = map_get(state, "obs_count")
+  map_set(state, "buffer_size", bs + 1.0)
+  map_set(state, "obs_count", oc + 1.0)
+
+  // Eviction: if buffer exceeds max_buffer, remove oldest observation
+  let max_buf = map_get(state, "max_buffer")
+  let new_bs = bs + 1.0
+  if new_bs > max_buf
+    // Remove first input_dim elements (oldest observation)
+    let mut new_buffer = []
+    let start = input_dim
+    let total = len(obs_buffer)
+    let mut j = start
+    while j < total
+      push(new_buffer, obs_buffer[j])
+      j = j + 1.0
+    end
+    // Clear and refill obs_buffer in-place
+    // Since we can't reassign the caller's array, we pop all and push new
+    let old_len = len(obs_buffer)
+    let mut k = 0.0
+    while k < old_len
+      pop(obs_buffer)
+      k = k + 1.0
+    end
+    let new_len = len(new_buffer)
+    k = 0.0
+    while k < new_len
+      push(obs_buffer, new_buffer[k])
+      k = k + 1.0
+    end
+    map_set(state, "buffer_size", new_bs - 1.0)
+  end
+
+  return 0.0
+end

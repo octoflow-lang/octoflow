@@ -1,7 +1,19 @@
 // stdlib/collections/stack.flow — Stack (LIFO) data structure
 //
+// Simple last-in-first-out stack backed by a flat array.
+// Uses push()/pop() builtins directly on the underlying array.
+//
 // Functions: stack_create, stack_push, stack_pop, stack_peek, stack_size,
-//            stack_is_empty, stack_clear
+//            stack_is_empty, stack_clear, stack_to_array, stack_contains,
+//            stack_dup, stack_swap, stack_rotate
+//
+// Usage:
+//   use "stack"
+//   let mut st = stack_create()
+//   stack_push(st, 10.0)
+//   stack_push(st, 20.0)
+//   stack_peek(st)       // 20.0
+//   stack_pop(st)        // 20.0
 
 fn stack_create()
   let mut s = []
@@ -43,4 +55,67 @@ fn stack_clear(s)
     pop(s)
   end
   return 0.0
+end
+
+fn stack_to_array(s)
+    // Return elements bottom-to-top as a new array.
+    let n = len(s)
+    let mut result = []
+    let mut i = 0.0
+    while i < n
+        push(result, s[i])
+        i = i + 1.0
+    end
+    return result
+end
+
+fn stack_contains(s, value)
+    // Check if value exists in stack. Returns 1.0 or 0.0.
+    let n = len(s)
+    let mut i = 0.0
+    while i < n
+        if s[i] == value
+            return 1.0
+        end
+        i = i + 1.0
+    end
+    return 0.0
+end
+
+fn stack_dup(s)
+    // Duplicate the top element.
+    let n = len(s)
+    if n == 0.0
+        return 0.0
+    end
+    push(s, s[n - 1.0])
+    return 0.0
+end
+
+fn stack_swap(s)
+    // Swap the top two elements.
+    let n = len(s)
+    if n < 2.0
+        return 0.0
+    end
+    let a = s[n - 1.0]
+    let b = s[n - 2.0]
+    s[n - 1.0] = b
+    s[n - 2.0] = a
+    return 0.0
+end
+
+fn stack_rotate(s)
+    // Rotate top three: (a b c -- b c a). Top c goes below a and b.
+    let n = len(s)
+    if n < 3.0
+        return 0.0
+    end
+    let c = s[n - 1.0]
+    let b = s[n - 2.0]
+    let a = s[n - 3.0]
+    s[n - 1.0] = a
+    s[n - 2.0] = c
+    s[n - 3.0] = b
+    return 0.0
 end
