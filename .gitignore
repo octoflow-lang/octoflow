@@ -1,10 +1,17 @@
+# Rust / compiler (not published)
+/compiler/
+/apps/
+/Cargo.toml
+/Cargo.lock
+/target/
+*.rs
+
 # Build artifacts
-/target
-.worktrees/
 *.spv
 !stdlib/loom/kernels/**/*.spv
 !stdlib/llm/kernels/**/*.spv
 !stdlib/game/kernels/**/*.spv
+!stdlib/gui/kernels/**/*.spv
 
 # IDE / Editor
 .claude/
@@ -13,7 +20,7 @@
 *.swp
 *~
 
-# Windows build artifacts
+# Binaries
 *.exe
 *.lib
 *.exp
@@ -25,17 +32,31 @@
 *.pyc
 __pycache__/
 *.egg-info/
+*.py
+*.ps1
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Models & large data (not source)
-models/
+# Internal directories
+/OctoBrain/
+/training/
+/benchmark/
+/release-staging/
+/test_data/
+/tests/
+/scripts/
+/tools/
+/models/
 *.gguf
 
-# Release staging (binary distribution)
-release-staging/
+# CI / GitHub Actions
+/.github/workflows/
+
+# Internal docs / AI instructions / decision-making
+/SKILL.md
+/CLAUDE.md
 
 # Logs
 *.log
@@ -44,14 +65,14 @@ release-staging/
 _test_*
 hello
 *.bak
-pytorch_results.txt
-showcase_err.txt
 
-# Root-level debug/test scripts and data
+# Root-level temp files
 /*.flow
-/test_data/
+/*.gif
+/*.jpg
+/*.zip
 
-# Internal session notes (archived to docs/archive/)
+# Internal session notes
 /ATOMIC_IMPLEMENTATION.md
 /CONSOLIDATION_TODO.md
 /HONEST_ASSESSMENT.md
@@ -64,19 +85,7 @@ showcase_err.txt
 /PATH_TO_100_PERCENT_SELF_HOSTED.md
 /BATCH*_SUMMARY.md
 
-# Root-level temp images
-/*.gif
-/*.jpg
-
-# Tools
-/tools/
-
 # Test artifacts
-compiler/test.png
 examples/high_scores.csv
 stdlib/db/__test_*
-
-# Large data files
 examples/test_data/bench_10m.csv
-models/*.gguf
-models/*/embed.bin

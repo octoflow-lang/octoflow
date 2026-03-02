@@ -8,9 +8,7 @@ OctoFlow is built from scratch for this reality. The GPU is the primary executio
 
 **CPU on demand, not GPU on demand.**
 
-> **On building this.** OctoFlow is AI-assisted — designed and developed with LLMs generating the bulk of the code. But every architectural decision is human: Rust at the OS boundary, Vulkan for cross-vendor GPU, the Loom Engine's main/support split, JIT kernel emission via IR builder, the self-hosted compiler direction. AI writes the code; a human decides what code to write and why.
->
-> The entire stdlib and everything in this repo is MIT-licensed. The compiler source is private for now, but we're willing to open-source all of it once a team is established to develop and sustain it long-term. If that sounds interesting, [get in touch](https://github.com/octoflow-lang/octoflow/issues).
+**Works on any GPU.** NVIDIA, AMD, Intel — no CUDA required, no vendor SDK, no driver headaches. Just Vulkan.
 
 ---
 
@@ -62,19 +60,21 @@ Deferred dispatch batches chained GPU operations into a single Vulkan command bu
 OctoFlow includes a GPU-resident virtual machine called the Loom Engine:
 
 ```flow
-let vm = loom_boot(1.0, 8.0, 16.0)
+let vm = loom_boot(1.0, 0.0, 16.0)
 
-// Load data, dispatch compute kernels, read results
+// Load data, dispatch compute kernel, read results
 let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-let _w = loom_write_register(vm, 0.0, 0.0, data)
-let pc = [0.0, 3.0, 8.0]
-let _d = loom_dispatch(vm, "stdlib/gpu/kernels/loom_scale.spv", pc, 1.0)
+loom_write(vm, 0.0, data)
+loom_dispatch(vm, "stdlib/loom/kernels/ops/loom_scale.spv", [0.0, 3.0, 8.0], 1.0)
 
 let prog = loom_build(vm)
-let _e = loom_execute(prog)
+loom_run(prog)
 
-let result = loom_read_register(vm, 0.0, 0.0, 8.0)
+let result = loom_read_globals(vm, 0.0, 8.0)
 // result = [3, 6, 9, 12, 15, 18, 21, 24]
+
+loom_free(prog)
+loom_shutdown(vm)
 ```
 
 - **Main Loom** = GPU-only compute. Receives dispatches. Never initiates I/O.
@@ -183,16 +183,27 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 
 Zero external dependencies. Only system libraries (vulkan-1, ws2_32).
 
+## Supported GPUs
+
+Any GPU with Vulkan 1.0+ support:
+
+- **NVIDIA** — GeForce, Quadro, Tesla (all modern cards)
+- **AMD** — Radeon, Radeon Pro, Instinct
+- **Intel** — Arc, integrated (Gen 9+)
+- **Apple** — via MoltenVK
+
+No CUDA required. No vendor lock-in. No SDK to install.
+
 ## Contributing
 
-The compiler source is currently private. Contributions are welcome for:
+Contributions are welcome:
 
 - **stdlib modules** — `.flow` files in `stdlib/`
 - **examples** — `.flow` files in `examples/`
 - **documentation** — `docs/`
 - **bug reports and feature requests** — [open an issue](https://github.com/octoflow-lang/octoflow/issues)
 
-We're looking for contributors who want to help build a GPU-native language from the ground up. The compiler will be open-sourced once a sustainable team is in place. If you're interested in GPU computing, language design, or runtime engineering, reach out.
+If you're interested in GPU computing, language design, or runtime engineering — [get in touch](https://github.com/octoflow-lang/octoflow/issues).
 
 ## License
 
