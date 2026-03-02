@@ -1,9 +1,0 @@
-# HN full workflow: navigate, scroll, extract, save
-navigate https://news.ycombinator.com
-title
-url
-scroll 800
-sleep 500
-extract a[href*=item]
-save hn-links.txt
-print Workflow complete

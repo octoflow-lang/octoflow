@@ -7,3 +7,10 @@
 
 # SPIR-V binary kernels
 *.spv binary linguist-generated
+
+# Vendor/asset files (don't count in language stats)
+*.csv linguist-vendored
+*.json linguist-vendored
+*.ttf binary linguist-vendored
+*.bin binary linguist-vendored
+*.vsix binary linguist-vendored

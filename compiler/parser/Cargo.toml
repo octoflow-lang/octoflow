@@ -1,8 +1,0 @@
-[package]
-name = "octoflow-parser"
-version = "1.3.0"
-edition = "2021"
-description = "Hand-written recursive descent parser for OctoFlow — no dependencies"
-
-[dependencies]
-# None — pure Rust parser

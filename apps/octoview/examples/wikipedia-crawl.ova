@@ -1,9 +1,0 @@
-# Wikipedia Article Crawler
-# Navigates to a topic, extracts the article, follows See Also links
-
-navigate https://en.wikipedia.org/wiki/GPU
-sleep 500
-title
-extract p
-save wiki-gpu-content.txt
-print GPU article extracted

@@ -1,5 +1,0 @@
-# HN with assert + screenshot
-navigate https://news.ycombinator.com
-assert .hnname
-screenshot hn-action-test.png
-print Screenshot captured
