@@ -8,6 +8,8 @@ OctoFlow is built from scratch for this reality. The GPU is the primary executio
 
 **CPU on demand, not GPU on demand.**
 
+> **On building this.** OctoFlow is AI-assisted — every architectural decision is human, LLMs generate the bulk of the code. Rust at the OS boundary, Vulkan for cross-vendor GPU, the Loom Engine's main/support split, JIT kernel emission via IR builder — all human decisions. AI writes the code; a human decides what code to write and why.
+
 **Works on any GPU.** NVIDIA, AMD, Intel — no CUDA required, no vendor SDK, no driver headaches. Just Vulkan.
 
 ---
