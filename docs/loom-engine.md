@@ -192,28 +192,354 @@ The IR builder emits valid SPIR-V binary that runs on any Vulkan GPU.
 | `gpu_prime_count(N)` | Sieve | Count primes below N (exact) |
 | `gpu_matmul(A, B, m, n, k)` | MatMul | Matrix multiply: A is m×k, B is k×n, result is m×n |
 
+### Complete Loom VM API
+
+#### VM Lifecycle
+
+| Function | Description |
+|---|---|
+| `loom_boot(mode, flags, globals_size)` | Create VM. mode=1.0 (GPU), flags=0.0 (no heap) or 1.0 (with heap). Returns vm_id |
+| `loom_shutdown(vm)` | Destroy VM, release all VRAM |
+| `loom_status(vm)` | Query VM lifecycle status |
+| `loom_prefetch(spv_path)` | Pre-load SPIR-V file into cache on background thread |
+| `loom_pace(vm, target_us)` | Homeostasis pacing — auto-adjust dispatch rate |
+
+#### Dispatch (Queue GPU Kernels)
+
+| Function | Description |
+|---|---|
+| `loom_dispatch(vm, kernel, params, wg)` | Stage a SPIR-V kernel dispatch from file |
+| `loom_dispatch_jit(vm, spirv_bytes, params, wg)` | Stage a JIT-compiled kernel dispatch from memory |
+
+#### Build + Execute
+
+| Function | Description |
+|---|---|
+| `loom_build(vm)` | Compile all queued dispatches into VkCommandBuffer. Returns prog_id |
+| `loom_run(prog)` | Submit and block until GPU completes (synchronous) |
+| `loom_launch(prog)` | Submit async, returns immediately. Pair with loom_wait |
+| `loom_wait(prog)` | Block until async program completes |
+| `loom_poll(prog)` | Non-blocking completion check (1.0 = done) |
+| `loom_free(prog)` | Release command buffer after run/wait |
+
+#### Data Transfer: CPU to GPU
+
+| Function | Description |
+|---|---|
+| `loom_write(vm, offset, array)` | Write float array to globals SSBO at offset |
+| `loom_set_heap(vm, array)` | Upload array as VM heap (shared data, binding 1) |
+| `loom_write_metrics(vm, offset, array)` | Write to metrics SSBO |
+| `loom_write_control(vm, offset, array)` | Write to control SSBO |
+| `loom_copy(src_vm, src_off, dst_vm, dst_off, count)` | GPU-side copy between two VMs' globals |
+
+#### Data Transfer: GPU to CPU
+
+| Function | Description |
+|---|---|
+| `loom_read(vm, instance, reg_idx, count)` | Read from VM register (per-instance) |
+| `loom_read_globals(vm, offset, count)` | Download from globals SSBO |
+| `loom_read_metrics(vm, offset, count)` | Download from metrics SSBO |
+| `loom_read_control(vm, offset, count)` | Download from control SSBO |
+
+#### Presentation
+
+| Function | Description |
+|---|---|
+| `loom_present(vm, total)` | Blit GPU framebuffer (globals) to window |
+
+### VM Pool Management
+
+Reuse VMs across frames/queries. Avoid boot/shutdown overhead.
+
+| Function | Description |
+|---|---|
+| `loom_park(vm)` | Move VM to parked (idle) pool. VRAM stays allocated |
+| `loom_unpark(vm)` | Move VM back to active |
+| `loom_auto_spawn(mode, flags, size)` | Reuse compatible parked VM, or boot new if none available |
+| `loom_auto_release(vm)` | Park instead of destroy. Evicts oldest if pool > 8 |
+| `loom_pool_warm(count, mode, flags, size)` | Pre-boot and park count VMs |
+| `loom_pool_size()` | Number of parked VMs |
+| `loom_vm_count()` | Number of active (non-parked) VMs |
+| `loom_pool_info()` | Pool occupancy details |
+
+```flow
+// Warm the pool, then reuse VMs across queries
+loom_pool_warm(4, 1.0, 0.0, 8192.0)
+let vm = loom_auto_spawn(1.0, 0.0, 8192.0) // reuses parked VM
+// ... dispatch, build, run, read ...
+loom_auto_release(vm)                        // parks instead of destroying
+```
+
+### Mailbox (Inter-VM Messaging)
+
+GPU-side ring buffer for cross-VM communication in multi-loom architectures.
+
+| Function | Description |
+|---|---|
+| `loom_mailbox(capacity, msg_size)` | Create shared mailbox. Returns mailbox VM handle |
+| `loom_mail_send(src_vm, mailbox, instance, reg)` | Copy data from source VM register into mailbox |
+| `loom_mail_recv(mailbox, dst_vm, instance)` | Copy from mailbox into destination VM register |
+| `loom_mail_poll(mailbox)` | Non-blocking: 1.0 if message available |
+| `loom_mail_depth(mailbox)` | Current messages in the mailbox |
+
+```flow
+let mb = loom_mailbox(16, 256)
+loom_mail_send(physics_vm, mb, 0, 0)   // physics → mailbox
+if loom_mail_poll(mb) > 0.5
+    loom_mail_recv(mb, render_vm, 0)    // mailbox → render
+end
+```
+
+### Resource Budget and Telemetry
+
+| Function | Description |
+|---|---|
+| `loom_max_vms(limit)` | Set max active+parked VMs |
+| `loom_vram_budget(bytes)` | Set VRAM budget (soft cap) |
+| `loom_vram_used()` | Current VRAM usage in bytes |
+| `loom_vm_info(vm)` | Per-VM info (instances, registers, etc.) |
+| `loom_elapsed_us()` | Microseconds since last dispatch |
+| `loom_dispatch_time()` | Last dispatch execution time in microseconds |
+
+### CPU Thread Pool
+
+Support Loom multi-threading for file I/O on background threads.
+
+| Function | Description |
+|---|---|
+| `loom_threads(n)` | Init thread pool (0 = auto: cpu_count - 1) |
+| `loom_cpu_count()` | Available CPU cores |
+| `loom_async_read(path)` | Dispatch async file read, returns handle |
+| `loom_await(handle)` | Block and get result array |
+
+```flow
+loom_threads(0)                           // auto thread pool
+let h = loom_async_read("weights.bin")    // non-blocking
+// ... do other work ...
+let data = loom_await(h)                  // get result when ready
+```
+
+### Staging Pipeline (Async File to GPU)
+
+Low-level async I/O for large data (GGUF model weights, datasets).
+
+| Function | Description |
+|---|---|
+| `rt_staging_alloc(size_bytes)` | Allocate staging buffer, returns handle |
+| `rt_staging_load(handle, path, offset, count)` | Async load file region into staging |
+| `rt_staging_ready(handle)` | 1.0 if async load is complete |
+| `rt_staging_wait(handle)` | Block until load completes, returns float count |
+| `rt_staging_upload(handle, cache_key)` | Upload staging buffer to GPU cache |
+| `rt_staging_free(handle)` | Free staging buffer |
+| `rt_load_file_to_buffer(path, offset, count)` | Synchronous file-to-array load |
+
+```flow
+let h = rt_staging_alloc(4194304)
+rt_staging_load(h, "model.gguf", layer_off, layer_len)
+while rt_staging_ready(h) < 0.5
+end
+rt_staging_upload(h, "layer_0")
+rt_staging_free(h)
+```
+
+### VM Legacy Functions (vm_ prefix only)
+
+These have no `loom_` alias and are accessed via the `vm_` prefix.
+
+| Function | Description |
+|---|---|
+| `vm_dispatch_indirect(vm, spv, pc, ctrl_off)` | Indirect dispatch (workgroups from control buffer) |
+| `vm_dispatch_indirect_mem(vm, bytes, pc, ctrl_off)` | Indirect dispatch from in-memory SPIR-V |
+| `vm_write_register(vm, inst, reg, array)` | Write to instance register directly |
+| `vm_write_control_live(vm, off, array)` | Write control buffer without sync |
+| `vm_write_control_u32(vm, off, array)` | Write u32 values to control buffer |
+| `vm_load_weights(vm, tensor_name, array)` | Load GGUF tensor into VRAM |
+| `vm_poll_status(vm, timeout_ms)` | Poll with timeout |
+| `vm_layer_resident(layer_idx)` | 1.0 if layer is in VRAM |
+| `vm_layer_estimate(model_map, n_layers)` | Estimate VRAM cost |
+| `vm_gpu_usage()` | GPU utilization percentage |
+
+### Pattern Functions
+
+| Function | Pattern | Description |
+|---|---|---|
+| `gpu_sum(data)` | Reduce | Sum all elements |
+| `gpu_min(data)` | Reduce | Find minimum element |
+| `gpu_max(data)` | Reduce | Find maximum element |
+| `gpu_map(data, op, ...)` | Map | Apply operation to every element |
+| `gpu_sort(data)` | Sort | Parallel radix sort |
+| `gpu_scan(data)` | Scan | Prefix sum (inclusive) |
+| `gpu_prime_count(N)` | Sieve | Count primes below N (exact) |
+| `gpu_matmul(A, B, m, n, k)` | MatMul | Matrix multiply: A is m*k, B is k*n |
+
 ### IR Builder Functions (Tier 3)
 
-| Function | SPIR-V | Purpose |
+The IR builder is self-hosted OctoFlow code (`stdlib/compiler/ir.flow`) that emits
+SPIR-V binary. All `ir_` names are whitelisted by the compiler. 89 functions total.
+
+#### Session
+
+| Function | Description |
+|---|---|
+| `ir_new()` | Reset IR state, start new kernel |
+| `ir_block(label)` | Create basic block, returns block index |
+| `ir_emit_spirv(path)` | Finalize and write .spv file |
+| `ir_get_buf()` | Return SPIR-V byte array (for JIT dispatch) |
+
+#### Configuration Variables
+
+| Variable | Default | Description |
 |---|---|---|
-| `ir_begin()` | — | Start a new kernel program |
-| `ir_entry(prog)` | OpFunction | Create entry point |
-| `ir_block(prog)` | OpLabel | Create a basic block |
-| `ir_global_id(block)` | BuiltIn GlobalInvocationId | Get thread ID |
-| `ir_const(block, val)` | OpConstant | Float constant |
-| `ir_const_u(block, val)` | OpConstant | Uint32 constant |
-| `ir_buf_load(block, bind, idx)` | OpAccessChain + OpLoad | Load from buffer |
-| `ir_buf_store(block, bind, idx, val)` | OpAccessChain + OpStore | Store to buffer |
-| `ir_fadd`, `ir_fsub`, `ir_fmul`, `ir_fdiv` | OpFAdd/Sub/Mul/Div | Float arithmetic |
-| `ir_iadd`, `ir_isub`, `ir_imul` | OpIAdd/Sub/Mul | Integer arithmetic |
-| `ir_shl`, `ir_shr`, `ir_not` | OpShift/OpNot | Bitwise operations |
-| `ir_bitcount(block, val)` | OpBitCount | Hardware popcount |
-| `ir_buf_atomic_and(block, bind, idx, mask)` | OpAtomicAnd | Atomic bit-clear |
-| `ir_barrier(block)` | OpControlBarrier | Workgroup sync |
-| `ir_shared_load`, `ir_shared_store` | Workgroup memory | Shared memory ops |
-| `ir_u32_to_u64`, `ir_u64_to_u32` | OpUConvert | 64-bit widening/narrowing |
-| `ir_imul64`, `ir_iadd64`, `ir_udiv64` | 64-bit OpIMul/IAdd/UDiv | 64-bit arithmetic |
-| `ir_finalize(prog)` | — | Emit SPIR-V binary |
+| `ir_workgroup_size` | `256.0` | Local size X (threads per workgroup) |
+| `ir_shared_size` | `0.0` | Shared memory float count |
+| `ir_input_count` | `1.0` | Number of input SSBO bindings |
+| `ir_uint_bindings` | `[]` | Which bindings are uint typed |
+| `ir_uses_uint64` | `[0.0]` | Set `[1.0]` for 64-bit ops |
+
+#### Thread Identity
+
+| Function | Description |
+|---|---|
+| `ir_load_gid(block)` | Global invocation ID (uint) |
+| `ir_load_local_id(block)` | Local ID within workgroup |
+| `ir_load_workgroup_id(block)` | Workgroup ID |
+| `ir_push_const(block, idx)` | Load push constant at index |
+
+#### Float Arithmetic
+
+| Function | Description |
+|---|---|
+| `ir_fadd(b, a, b)` | Add |
+| `ir_fsub(b, a, b)` | Subtract |
+| `ir_fmul(b, a, b)` | Multiply |
+| `ir_fdiv(b, a, b)` | Divide |
+| `ir_fneg(b, a)` | Negate |
+| `ir_fabs(b, a)` | Absolute value |
+| `ir_fmin(b, a, b)` | Minimum |
+| `ir_fmax(b, a, b)` | Maximum |
+| `ir_pow(b, base, exp)` | Power |
+| `ir_exp(b, a)` | Exponential |
+| `ir_dot(b, a, b)` | Dot product |
+
+#### Math Intrinsics
+
+| Function | Description |
+|---|---|
+| `ir_sqrt(b, a)` | Square root |
+| `ir_invsqrt(b, a)` | Inverse square root |
+| `ir_floor(b, a)` | Floor |
+| `ir_sin(b, a)` | Sine |
+| `ir_cos(b, a)` | Cosine |
+| `ir_atan2(b, y, x)` | Two-argument arctangent |
+
+#### Integer Arithmetic (u32)
+
+| Function | Description |
+|---|---|
+| `ir_iadd(b, a, b)` | Add |
+| `ir_isub(b, a, b)` | Subtract |
+| `ir_imul(b, a, b)` | Multiply |
+| `ir_udiv(b, a, b)` | Unsigned divide |
+| `ir_umod(b, a, b)` | Unsigned modulo |
+
+#### Integer Arithmetic (u64)
+
+| Function | Description |
+|---|---|
+| `ir_iadd64(b, a, b)` | 64-bit add |
+| `ir_isub64(b, a, b)` | 64-bit subtract |
+| `ir_imul64(b, a, b)` | 64-bit multiply |
+| `ir_udiv64(b, a, b)` | 64-bit unsigned divide |
+| `ir_umod64(b, a, b)` | 64-bit unsigned modulo |
+| `ir_u32_to_u64(b, a)` | Zero-extend u32 to u64 |
+| `ir_u64_to_u32(b, a)` | Truncate u64 to u32 |
+
+#### Comparisons
+
+| Function | Description |
+|---|---|
+| `ir_folt(b, a, b)` | Float ordered less-than |
+| `ir_fogt(b, a, b)` | Float ordered greater-than |
+| `ir_fole(b, a, b)` | Float ordered less-equal |
+| `ir_foge(b, a, b)` | Float ordered greater-equal |
+| `ir_foeq(b, a, b)` | Float ordered equal |
+| `ir_fone(b, a, b)` | Float ordered not-equal |
+| `ir_ulte(b, a, b)` | Uint less-than-equal |
+| `ir_ugte(b, a, b)` | Uint greater-than-equal |
+| `ir_uequ(b, a, b)` | Uint equal |
+| `ir_ugte64(b, a, b)` | Uint64 greater-than-equal |
+| `ir_ulte64(b, a, b)` | Uint64 less-than-equal |
+| `ir_uequ64(b, a, b)` | Uint64 equal |
+
+#### Bitwise
+
+| Function | Description |
+|---|---|
+| `ir_bit_and(b, a, b)` | Bitwise AND |
+| `ir_bit_or(b, a, b)` | Bitwise OR |
+| `ir_bit_xor(b, a, b)` | Bitwise XOR |
+| `ir_shl(b, a, n)` | Shift left |
+| `ir_shr(b, a, n)` | Shift right |
+| `ir_not(b, a)` | Bitwise NOT |
+| `ir_bitcount(b, a)` | Hardware popcount |
+| `ir_popcount(b, a)` | Popcount (alias) |
+| `ir_iand`, `ir_ior`, `ir_ixor` | Integer aliases for bit_and/or/xor |
+| `ir_ishl`, `ir_ishr` | Integer aliases for shl/shr |
+| `ir_land(b, a, b)` | Logical AND |
+| `ir_lor(b, a, b)` | Logical OR |
+
+#### Type Conversion
+
+| Function | Description |
+|---|---|
+| `ir_ftou(b, a)` | Float to uint |
+| `ir_utof(b, a)` | Uint to float |
+
+#### Constants
+
+| Function | Description |
+|---|---|
+| `ir_const_f(b, val)` | Float constant |
+| `ir_const_u(b, val)` | Uint constant |
+
+#### Memory / Buffer Access
+
+| Function | Description |
+|---|---|
+| `ir_load_input(b)` | Load f32 from binding 0 at GID |
+| `ir_load_input_at(b, bind, idx)` | Load f32 from binding at index |
+| `ir_store_output(b, val)` | Store f32 to output at GID |
+| `ir_store_output_at(b, idx, val)` | Store f32 to output at index |
+| `ir_load_output_at(b, idx)` | Load f32 from output at index |
+| `ir_buf_load_u(b, bind, idx)` | Load u32 from uint binding |
+| `ir_buf_store_u(b, bind, idx, val)` | Store u32 to uint binding |
+| `ir_buf_store_f(b, bind, idx, val)` | Store f32 to buffer |
+| `ir_buf_atomic_load(b, bind, idx)` | Atomic load u32 |
+| `ir_buf_atomic_store(b, bind, idx, val)` | Atomic store u32 |
+| `ir_buf_atomic_iadd(b, bind, idx, val)` | Atomic add u32 |
+| `ir_buf_atomic_and(b, bind, idx, val)` | Atomic AND u32 |
+| `ir_atomic_iadd(b, ptr, val)` | Atomic add via pointer |
+
+#### Shared Memory
+
+| Function | Description |
+|---|---|
+| `ir_barrier(b)` | Workgroup memory barrier |
+| `ir_shared_load(b, idx)` | Load from shared memory |
+| `ir_shared_store(b, idx, val)` | Store to shared memory |
+
+#### Control Flow
+
+| Function | Description |
+|---|---|
+| `ir_select(b, typ, cond, a, b)` | Ternary select |
+| `ir_phi(b, typ)` | Create phi node (SSA merge) |
+| `ir_phi_add(phi, val, parent)` | Add incoming edge to phi |
+| `ir_term_branch(b, target)` | Unconditional jump |
+| `ir_term_cond_branch(b, cond, t, f)` | Conditional branch |
+| `ir_term_return(b)` | Return from function |
+| `ir_loop_merge(b, merge, cont)` | Loop structure annotation |
+| `ir_selection_merge(b, merge)` | If/else structure annotation |
 
 ---
 

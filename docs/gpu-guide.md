@@ -63,6 +63,7 @@ numbers for element-wise operations on warm runs.
 |----------|-------------|
 | `gpu_fill(val, n)` | N elements, all set to val |
 | `gpu_range(start, end, step)` | Arithmetic sequence |
+| `gpu_random(n, lo, hi)` | N random values in [lo, hi) |
 
 ### Element-wise (Binary)
 
@@ -97,6 +98,24 @@ numbers for element-wise operations on warm runs.
 | `gpu_min(a)` | Minimum element |
 | `gpu_max(a)` | Maximum element |
 | `gpu_mean(a)` | Arithmetic mean |
+| `gpu_product(a)` | Product of all elements |
+| `gpu_variance(a)` | Variance |
+| `gpu_stddev(a)` | Standard deviation |
+| `gpu_dot(a, b)` | Dot product |
+| `gpu_count(a)` | Element count |
+| `gpu_cumsum(a)` | Cumulative sum (prefix scan) |
+
+### Transformations
+
+| Function | Description |
+|----------|-------------|
+| `gpu_sort(a)` | Parallel radix sort |
+| `gpu_concat(a, b)` | Concatenate two arrays |
+| `gpu_gather(data, indices)` | Gather elements by index |
+| `gpu_scatter(vals, indices, n)` | Scatter values by index into array of size n |
+| `gpu_topk(arr, k)` | Top-K values (sorted descending) |
+| `gpu_topk_indices(arr, k)` | Indices of top-K values |
+| `gpu_ema(arr, alpha)` | Exponential moving average |
 
 ### Conditional
 
@@ -109,6 +128,23 @@ numbers for element-wise operations on warm runs.
 | Function | Description |
 |----------|-------------|
 | `gpu_matmul(a, b, m, n, k)` | Matrix multiply: A is m×k, B is k×n, result is m×n |
+
+### GPU I/O
+
+| Function | Description |
+|----------|-------------|
+| `gpu_load_csv(path)` | Load CSV file directly to GPU array |
+| `gpu_load_binary(path)` | Load raw f32 binary to GPU array |
+| `gpu_save_csv(arr, path)` | Save GPU array to CSV file |
+| `gpu_save_binary(arr, path)` | Save GPU array to raw f32 binary |
+
+### Timing
+
+| Function | Description |
+|----------|-------------|
+| `gpu_timer_start()` | Start GPU timer |
+| `gpu_timer_end()` | End GPU timer, returns microseconds |
+| `gpu_info()` | GPU device information string |
 
 ## Checking GPU Status
 
