@@ -2,6 +2,7 @@
 /target
 .worktrees/
 *.spv
+!stdlib/loom/kernels/**/*.spv
 
 # IDE / Editor
 .claude/
@@ -77,4 +78,3 @@ stdlib/db/__test_*
 examples/test_data/bench_10m.csv
 models/*.gguf
 models/*/embed.bin
-*.bin.gz
