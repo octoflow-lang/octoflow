@@ -13,18 +13,17 @@ env:
 jobs:
   build-windows:
     runs-on: windows-latest
-    env:
-      VULKAN_SDK: C:\VulkanSDK\1.4.341.1
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Vulkan SDK
         run: |
-          $url = "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/VulkanSDK-1.4.341.1-Installer.exe"
+          $url = "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe"
           Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe
           .\VulkanSDK.exe --accept-licenses --default-answer --confirm-command install
-          echo "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" >> $env:GITHUB_ENV
-          echo "C:\VulkanSDK\1.4.341.1\Bin" >> $env:GITHUB_PATH
+          $sdkDir = Get-ChildItem "C:\VulkanSDK" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          echo "VULKAN_SDK=$($sdkDir.FullName)" >> $env:GITHUB_ENV
+          echo "$($sdkDir.FullName)\Bin" >> $env:GITHUB_PATH
         shell: pwsh
 
       - name: Build compiler

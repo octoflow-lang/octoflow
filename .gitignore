@@ -3,6 +3,8 @@
 .worktrees/
 *.spv
 !stdlib/loom/kernels/**/*.spv
+!stdlib/llm/kernels/**/*.spv
+!stdlib/game/kernels/**/*.spv
 
 # IDE / Editor
 .claude/
