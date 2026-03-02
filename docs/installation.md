@@ -6,9 +6,9 @@ OctoFlow is a single binary. No installer, no dependencies, no SDK.
 
 Get the latest release for your platform:
 
-- **Windows x64:** [octoflow-v1.3.0-windows-x64.zip](https://github.com/octoflow-lang/octoflow/releases/latest)
-- **Linux x64:** [octoflow-v1.3.0-linux-x64.tar.gz](https://github.com/octoflow-lang/octoflow/releases/latest)
-- **macOS aarch64:** [octoflow-v1.3.0-aarch64-macos.tar.gz](https://github.com/octoflow-lang/octoflow/releases/latest) (Apple Silicon)
+- **Windows x64:** [octoflow-v1.4.0-windows-x64.zip](https://github.com/octoflow-lang/octoflow/releases/latest)
+- **Linux x64:** [octoflow-v1.4.0-linux-x64.tar.gz](https://github.com/octoflow-lang/octoflow/releases/latest)
+- **macOS aarch64:** [octoflow-v1.4.0-aarch64-macos.tar.gz](https://github.com/octoflow-lang/octoflow/releases/latest) (Apple Silicon)
 
 ## Windows
 
@@ -26,7 +26,7 @@ Click "More info" then "Run anyway". The binary is unsigned.
 ## Linux
 
 ```bash
-tar xzf octoflow-v1.3.0-linux-x64.tar.gz
+tar xzf octoflow-v1.4.0-linux-x64.tar.gz
 chmod +x octoflow
 sudo mv octoflow /usr/local/bin/
 octoflow --version
@@ -35,7 +35,7 @@ octoflow --version
 ## macOS (Apple Silicon)
 
 ```bash
-tar xzf octoflow-v1.3.0-aarch64-macos.tar.gz
+tar xzf octoflow-v1.4.0-aarch64-macos.tar.gz
 chmod +x octoflow
 mv octoflow /usr/local/bin/
 octoflow --version
@@ -50,9 +50,9 @@ OctoFlow auto-detects Vulkan-capable GPUs. Verify in the REPL:
 
 ```
 $ octoflow repl
-OctoFlow v1.3.0 — GPU-native language
+OctoFlow v1.4.0 — GPU-native language
 GPU: NVIDIA GeForce GTX 1660 SUPER     <-- your GPU here
-246 stdlib modules | :help | :time
+423 stdlib modules | :help | :time
 
 >>> :gpu
 Device: NVIDIA GeForce GTX 1660 SUPER
@@ -77,5 +77,5 @@ octoflow update --check  # check for updates without installing
 
 - **GPU:** Any Vulkan 1.0+ GPU (optional — CPU fallback for all operations)
 - **OS:** Windows 10+, Linux (glibc 2.17+), macOS 12+ (Apple Silicon)
-- **Disk:** ~3.7 MB for the binary
+- **Disk:** ~4.1 MB for the binary
 - **RAM:** 64 MB minimum, more for large GPU arrays

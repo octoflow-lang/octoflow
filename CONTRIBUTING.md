@@ -10,11 +10,17 @@ Open an issue on GitHub with:
 
 ## Contributing Code
 
-The compiler source is not currently public. Contributions are welcome for:
+The compiler source is currently private. Contributions are welcome for:
 - **stdlib modules** (`.flow` files in `stdlib/`)
 - **examples** (`.flow` files in `examples/`)
 - **documentation** (`docs/`)
 - **bug reports and feature requests**
+
+## Sustainability
+
+OctoFlow is looking for contributors who want to help build a GPU-native language from the ground up. The compiler will be open-sourced once a sustainable development team is in place.
+
+If you're interested in GPU computing, language design, or runtime engineering — [open an issue](https://github.com/octoflow-lang/octoflow/issues) or reach out.
 
 ## Running Tests
 

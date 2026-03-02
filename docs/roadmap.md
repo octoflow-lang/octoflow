@@ -34,7 +34,7 @@ More building blocks for your AI to compose with.
 
 The big one. GPU runs autonomously — entire dispatch chains in a single submission. The compiler is 69% written in OctoFlow. LLM inference runs natively on your GPU.
 
-**What a vibe coder can do:** Run Qwen 2.5 1.5B on your GPU from a .flow script. Build GPU database queries. Train neural networks. Compose 246 stdlib modules across 18 domains. Everything in one 2.8 MB binary.
+**What a vibe coder can do:** Run Qwen 2.5 1.5B on your GPU from a .flow script. Build GPU database queries. Train neural networks. Compose 423 stdlib modules across 18 domains. Everything in one 4.1 MB binary.
 
 **Under the hood:**
 - Loom Engine: 40 GPU kernels, boot-once runtime, indirect dispatch, timeline semaphores, push constants, pipeline composition
@@ -174,7 +174,7 @@ The endgame: `octoflow chat` with octo-llm generates correct .flow code on the f
 | Vulkan runtime | 6,811 | Rust | GPU device, memory, dispatch |
 | Parser | 4,077 | Rust | Hand-written recursive descent |
 | Self-hosted compiler | 24,212 | .flow | Lexer, parser, preflight, eval, IR, 5 SPIR-V emitters |
-| Standard library | 90,844 | .flow | 246 modules across 18 domains |
+| Standard library | 90,844 | .flow | 423 modules across 18 domains |
 | Examples | 15,199 | .flow | 134 runnable demos |
 | OctoUI (native stdlib) | 15,251 | .flow | Built-in GUI toolkit (like tkinter) |
 | OctoBrain | 22,113 | .flow | GPU-native ML brain |

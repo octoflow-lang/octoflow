@@ -1,4 +1,4 @@
-# OctoFlow Feature Status (v1.3.0)
+# OctoFlow Feature Status (v1.4.0)
 
 Last updated: February 28, 2026
 

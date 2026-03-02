@@ -10,7 +10,7 @@ octoflow chat
 ```
 
 ```
-OctoFlow v1.3.0 — Chat Mode (type :help for commands)
+OctoFlow v1.4.0 — Chat Mode (type :help for commands)
 Model: Qwen3-1.7B (Q5_K_M)
 
 > Write a fibonacci function that prints the first 20 numbers

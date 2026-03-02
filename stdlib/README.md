@@ -1,6 +1,6 @@
 # OctoFlow Standard Library
 
-246 modules across 18 domains. All written in `.flow`. Ships with every OctoFlow binary.
+423 modules across 18 domains. All written in `.flow`. Ships with every OctoFlow binary.
 
 ```flow
 use csv           // use <module> to import

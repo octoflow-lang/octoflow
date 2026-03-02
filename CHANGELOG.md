@@ -4,6 +4,71 @@ All notable changes to OctoFlow are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.4.0] - 2026-03-02
+
+Codename: **"The Library"**
+
+### Added
+
+#### Standard Library Expansion (57 new modules)
+- **algo/**: sort, search, pathfinding (A*, manhattan), geometry, graph algorithms
+- **math/**: matrix, vector, complex numbers, probability, noise, fractals, interpolation
+- **collections/**: stack, queue, heap, trie, skip list, ring buffer, LRU cache, bitset
+- **string/**: regex, format, diff, fuzzy match
+- **formats/**: GGUF parser, JSON
+- **data/**: CSV, pipeline, transform, validate
+
+#### Multimedia Stack (18 modules)
+- **Audio DSP**: PCM buffers, oscillator (sine/square/saw/tri/noise/FM), ADSR envelope, FFT (Cooley-Tukey radix-2, STFT)
+- **Audio FX**: biquad filters (LPF/HPF/BPF/notch), delay line, Schroeder reverb, distortion, bitcrush, tremolo, chorus, compressor
+- **Audio Mixer**: multi-track, per-track volume/pan, mute/solo, stereo mixdown, master gain
+- **WAV Encoder**: RIFF PCM writer (8/16-bit, mono/stereo)
+- **Image Transform**: nearest/bilinear resize, rotation (90/180/270 + arbitrary), scale, translate
+- **Color Spaces**: RGB to/from YUV, YCbCr, XYZ, LAB, CMYK + Delta-E distance
+- **Video Timeline**: tracks, clips, transitions (cut/fade/dissolve/wipe), keyframes (lerp/step/smooth)
+- **Players**: audio_player, image_viewer, video_player, playlist, media_player
+- **Editors**: audio_editor, image_editor, video_editor
+
+#### LoomView v0.1
+- GPU visualization toolkit: 10 renderers, data fingerprinting, palette system
+- 3 recipes: heat diffusion, wave propagation, N-body gravity
+
+#### OctoSearch
+- GPU-first full-text search with BM25 scoring
+- Index persistence via OctoPress `.ocp` files
+- Self-hosted BM25 kernel via IR builder
+
+### Fixed
+- 5 compiler language fixes (R-01 through R-05): implicit return, auto-promote arrays on push, inline array literal args, nested import scope, mutable scalar writeback
+- 14 edge-case hardening fixes across 9 files
+- probability.flow normal_cdf wrong erf argument
+- matrix_ext.flow eigenvalue Rayleigh quotient
+
+## [1.3.0] - 2026-03-01
+
+Codename: **"The Foundation"**
+
+### Added
+
+#### Loom Engine Phase 4A — Adaptive Computing Fabric
+- JIT Adaptive Kernels: IR builder with 80+ ops, runtime SPIR-V emission
+- On-Demand Main Looms: park/unpark, auto_spawn, VM reuse
+- Mailbox IPC: ring buffer inter-VM communication
+- OctoPress: analysis + raw/delta/fractal encode/decode + `.ocp` persistence + GPU fractal compression
+- CPU Thread Pool: `loom_threads`, `async_read`, `await` builtins
+
+#### Algorithm Space Exploration Engine (ASE)
+- Genome create/randomize/read, evolution (selection + crossover + mutation), fitness evaluation
+- 3 demos: sort discovery, bitwise circuit evolution, hash parameter evolution
+- Swarm Sort: multi-VM cooperative sorting (721 lines, 8-gene genome)
+
+#### GPU ML
+- 17 GPU-accelerated ML functions in `stdlib/ml/gpu_ml.flow`
+
+### Changed
+- Support Loom threading: SPIR-V file cache, non-blocking fence, queue mutex, batch pacing, async present
+- Array builtins: `extend(dest, src)`, `array_copy()`, `array_extract()`
+
 ## [1.2.0] - 2026-02-28
 
 Codename: **"The Ship"**

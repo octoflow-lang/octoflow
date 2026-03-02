@@ -1,20 +1,31 @@
 # OctoFlow
 
-OctoFlow is a general-purpose programming language where the GPU is the primary execution target. Data born on the GPU stays on the GPU. The CPU handles I/O — file reads, network, console — and nothing else. Zero external dependencies.
+The languages at the frontier of computing — C (1972), C++ (1979), Python (1991) — were designed when the CPU was the only processor. They still work. But accessing a GPU, which is 10–100x faster for parallel workloads, requires CUDA (NVIDIA-only, 4 GB SDK), OpenCL (effectively abandoned), or shader languages designed for graphics, not general compute.
+
+Every computer sold today has a GPU. Most of it sits idle.
+
+OctoFlow is built from scratch for this reality. The GPU is the primary execution target. Data born on VRAM stays on VRAM. The CPU handles I/O — files, network, console — and nothing else. Single binary, any GPU vendor, zero dependencies.
 
 **CPU on demand, not GPU on demand.**
 
-3.7 MB binary. 246 stdlib modules. 1,209 tests.
-Any GPU vendor. One file download. No CUDA. No Python. No pip.
+> **On building this.** OctoFlow is AI-assisted — designed and developed with LLMs generating the bulk of the code. But every architectural decision is human: Rust at the OS boundary, Vulkan for cross-vendor GPU, the Loom Engine's main/support split, JIT kernel emission via IR builder, the self-hosted compiler direction. AI writes the code; a human decides what code to write and why.
+>
+> The entire stdlib and everything in this repo is MIT-licensed. The compiler source is private for now, but we're willing to open-source all of it once a team is established to develop and sustain it long-term. If that sounds interesting, [get in touch](https://github.com/octoflow-lang/octoflow/issues).
+
+---
+
+4.1 MB binary. 423 stdlib modules. 1,394 tests. 113 GPU kernels.
+
+---
 
 ## Quickstart
 
 ```
 $ octoflow --version
-OctoFlow 1.3.0
+OctoFlow 1.4.0
 
 $ octoflow repl
-OctoFlow 1.3.0 — GPU-native language (246 stdlib modules)
+OctoFlow 1.4.0 — GPU-native language (423 stdlib modules)
 GPU: NVIDIA GeForce GTX 1660 SUPER
 >>> let a = gpu_fill(1.0, 10000000)
 >>> let b = gpu_fill(2.0, 10000000)
@@ -25,17 +36,6 @@ GPU: NVIDIA GeForce GTX 1660 SUPER
 
 Download the binary. Unzip. Run. GPU detected automatically.
 
-## Performance
-
-| Operation (10M elements) | CUDA 12.4 | OctoFlow (Vulkan) | Notes |
-|---|---|---|---|
-| gpu_add | 0.40 ms | 0.46 ms (deferred) | Batched command buffer |
-| gpu_mul | 0.53 ms | 3.27 ms (deferred) | Single fence per chain |
-| 5-step pipeline | 2.57 ms | 75 ms | Upload + compute + reduce |
-| Install size | ~4 GB SDK | **3.7 MB** binary | Zero dependencies |
-
-Deferred dispatch batches chained GPU operations into a single Vulkan command buffer submission. Per-operation overhead drops from ~12ms (synchronous) to ~4ms (batched) as chains grow.
-
 ## What Makes OctoFlow Different
 
 | | CUDA/OpenCL | GLSL/HLSL/WGSL | OctoFlow |
@@ -43,12 +43,23 @@ Deferred dispatch batches chained GPU operations into a single Vulkan command bu
 | **Primary target** | CPU (with GPU kernels) | GPU (shaders only) | **GPU (general purpose)** |
 | **Built-in LLM** | No | No | **Yes** (local GGUF inference) |
 | **External deps** | NVIDIA SDK / vendor SDK | Graphics API | **None** |
-| **GPU VM** | N/A | N/A | **Built-in** (5 SSBOs, indirect dispatch) |
-| **Install** | Multi-GB SDK | Driver-only | **3.7 MB binary** |
+| **GPU VM** | N/A | N/A | **Built-in** (Loom Engine) |
+| **Install** | Multi-GB SDK | Driver-only | **4.1 MB binary** |
 
-## GPU Virtual Machine
+## Performance
 
-OctoFlow includes a GPU-resident virtual machine with 5 memory regions:
+| Operation (10M elements) | CUDA 12.4 | OctoFlow (Vulkan) | Notes |
+|---|---|---|---|
+| gpu_add | 0.40 ms | 0.46 ms (deferred) | Batched command buffer |
+| gpu_mul | 0.53 ms | 3.27 ms (deferred) | Single fence per chain |
+| 5-step pipeline | 2.57 ms | 75 ms | Upload + compute + reduce |
+| Install size | ~4 GB SDK | **4.1 MB** binary | Zero dependencies |
+
+Deferred dispatch batches chained GPU operations into a single Vulkan command buffer submission. Per-operation overhead drops from ~12ms (synchronous) to ~4ms (batched) as chains grow.
+
+## GPU Virtual Machine — Loom Engine
+
+OctoFlow includes a GPU-resident virtual machine called the Loom Engine:
 
 ```flow
 let vm = loom_boot(1.0, 8.0, 16.0)
@@ -66,17 +77,14 @@ let result = loom_read_register(vm, 0.0, 0.0, 8.0)
 // result = [3, 6, 9, 12, 15, 18, 21, 24]
 ```
 
-- **HOST_VISIBLE polling**: CPU reads GPU status in ~1us (zero-copy)
-- **Dormant VMs**: Over-provisioned command buffers with indirect dispatch
-- **I/O streaming**: CPU feeds data batches, GPU processes with reusable command buffers
-- **Homeostasis**: GPU self-regulates via maxnorm + regulator kernels
-- **102 compute kernels**: Scale, affine, matvec, reduce, WHERE, delta encode/decode, dictionary lookup
+- **Main Loom** = GPU-only compute. Receives dispatches. Never initiates I/O.
+- **Support Loom** = CPU–GPU I/O bridge. Owns boot, state, double buffer, presentation.
+- **Park/unpark**: Suspend and resume GPU VMs with zero reallocation.
+- **JIT kernels**: Emit SPIR-V at runtime via the IR builder (80+ ops).
+- **Homeostasis**: GPU self-regulates dispatch pacing via timing feedback.
+- **113 compute kernels**: Scale, affine, matvec, reduce, sort, compress, ML ops.
 
-**Loom State** — GPU-resident state log for undo/redo and snapshots. Vector similarity search (cosine, dot, euclidean) runs entirely in VRAM. Async persistence to OctoDB — your main compute pipeline never touches disk.
-
-**OctoDB** — Embedded database with CRUD, multi-condition queries, indexing, `.odb` persistence. Serves as Loom State's cold storage tier.
-
-> [Loom Engine Guide](docs/loom-engine.md) — chain dispatch, Loom State, OctoDB, API reference
+> [Loom Engine Guide](docs/loom-engine.md) — architecture, dispatch chains, API reference
 
 ## Language
 
@@ -109,38 +117,59 @@ emit(warm, "output.png")
 
 Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 
-## Standard Library — 246 Modules
+## Standard Library — 423 Modules
 
-| Domain | Modules | Coverage |
+| Domain | Modules | Highlights |
 |---|---|---|
-| **ai** | transformer, inference, generate, weight_loader | GGUF model loading, tokenization |
-| **collections** | stack, queue, heap, graph | Data structures |
-| **compiler** | lexer, eval, parser, preflight, codegen, ir | Compiler modules (written in .flow) |
-| **crypto** | hash, encoding, random | SHA-256, base64, CSPRNG |
-| **data** | csv, io, pipeline, transform, validate | ETL and data processing |
-| **db** | core, engine, vector, persist | OctoDB (CRUD, indexing, .odb) + Loom State (GPU-resident, vector search) |
-| **devops** | config, fs, log, process, template | System automation |
-| **formats** | gguf, json | GGUF tensor files, JSON |
-| **gpu** | VM, emitters, runtime, kernels | 102 GPU compute kernels |
-| **gui** | widgets, layout, canvas, plot, themes, buffer_view | 16 widget types, 3 layouts, 5 chart types, canvas drawing (Windows) |
-| **llm** | generate, stream, chat, decompose | LLM inference (Qwen3-1.7B) |
-| **media** | image (PNG/JPEG/GIF/BMP), audio (WAV), video (MP4 stills) | Native codecs |
-| **ml** | nn, regression, classify, cluster, tree, linalg | Machine learning primitives |
-| **science** | calculus, physics, signal, matrix, optimize | Scientific computing |
-| **stats** | descriptive, distribution, correlation, risk | Statistical analysis |
-| **string** | string, regex, format | Text processing |
-| **sys** | args, env, memory, platform, timer | System interfaces |
-| **terminal** | term_image, colors | Kitty/Sixel/halfblock graphics |
-| **web** | http, json_util, url | HTTP client, JSON, URLs |
+| **loom** | GPU VM, JIT kernels, OctoPress compression, ASE | Loom Engine runtime + IR builder |
+| **llm** | GGUF loader, transformer, tokenizer, sampling | Local LLM inference on GPU |
+| **game** | ECS, sprite, physics, collision, AI, scene | Parallel-array game engine |
+| **gui** | Widgets, layout, canvas, chart, themes | 16 widget types, canvas drawing |
+| **media** | Audio DSP, image, video, codecs, timeline | WAV/BMP/GIF/H.264/MP4/AVI/TTF |
+| **compiler** | Lexer, parser, eval, preflight, codegen, IR | Self-hosted compiler (written in .flow) |
+| **collections** | Stack, queue, heap, graph, trie, skip list | Data structures |
+| **math** | Matrix, vector, complex, probability, noise | Scientific computing |
+| **algo** | Sort, search, pathfinding, geometry | Algorithms + A* pathfinding |
+| **ml** | Neural nets, regression, clustering, GPU ML | Machine learning primitives |
+| **viz** | LoomView renderer, data fingerprinting | GPU visualization toolkit |
+| **ai** | Transformer blocks, weight loading | AI model components |
+| **data** | CSV, I/O, pipeline, transform, validate | ETL and data processing |
+| **db** | CRUD, indexing, vector search, persistence | Embedded database + Loom State |
+| **search** | OctoSearch — GPU-first full-text search | BM25 scoring on GPU |
+| **stats** | Descriptive, distribution, correlation, risk | Statistical analysis |
+| **science** | Calculus, physics, signal, optimize | Scientific computing |
+| **agent** | Tool use, planning, memory | AI agent framework |
+| **string** | String ops, regex, formatting | Text processing |
+| **devops** | Config, filesystem, logging, templates | System automation |
+| **crypto** | Hashing, encoding, random, UUID | Cryptographic primitives |
+| **web** | HTTP client, JSON utilities, URL parsing | Web stack |
+| **sys** | Args, env, memory, platform, timer | System interfaces |
+| **terminal** | Kitty/Sixel/halfblock image rendering | Terminal graphics |
+| **formats** | GGUF, JSON parsers | File format support |
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md) — five minutes from download to GPU compute
+- [Quickstart](docs/quickstart.md) — download to GPU compute in five minutes
+- [Installation](docs/installation.md) — Windows, Linux, macOS setup
+- [Language Guide](docs/language-guide.md) — complete language reference
+- [Builtins](docs/builtins.md) — all built-in functions
+- [GPU Guide](docs/gpu-guide.md) — GPU compute operations
+- [GPU Recipes](docs/gpu-recipes.md) — common GPU patterns
+- [Loom Engine](docs/loom-engine.md) — GPU VM architecture and API
+- [Loom Use Cases](docs/loom-engine-use-cases.md) — real-world Loom patterns
+- [GPU Sieve](docs/gpu-sieve.md) — prime sieve benchmark walkthrough
+- [GPU Benchmarks](docs/benchmark-gpu.md) — performance measurements
+- [GUI Toolkit](docs/gui.md) — widget system and canvas drawing
 - [Chat Mode](docs/chat.md) — AI code generation from natural language
 - [MCP Server](docs/mcp.md) — connect to Claude Desktop, Cursor, VS Code
+- [Streams](docs/streams.md) — stream processing pipelines
 - [Permissions](docs/permissions.md) — Deno-style security model
-- [Installation](docs/installation.md) — Windows, Linux, macOS setup
-- [Feature Status](docs/features.md) — what's stable, beta, planned
+- [REPL](docs/repl.md) — interactive GPU computing
+- [Features](docs/features.md) — what's stable, beta, planned
+- [Web Builtins](docs/web-builtins.md) — HTTP and web functions
+- [Stdlib Reference](docs/stdlib.md) — full standard library documentation
+- [Vibe Coding](docs/vibe-coding.md) — AI-assisted development with OctoFlow
+- [Roadmap](docs/roadmap.md) — what's next
 - [All docs](docs/README.md)
 
 ## Architecture
@@ -149,13 +178,22 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 .flow source -> Parser -> Preflight -> Compiler -> GPU VM / Vulkan Dispatch -> GPU
                                           |
                               SPIR-V emitters (written in .flow)
-                              102 pre-built compute kernels
+                              113 pre-built compute kernels
 ```
 
-Four crates. Zero external Rust dependencies. Only system libraries (vulkan-1, ws2_32).
+Zero external dependencies. Only system libraries (vulkan-1, ws2_32).
 
-~252K lines total: ~72K Rust + ~180K .flow (stdlib + examples). Zero external dependencies.
+## Contributing
+
+The compiler source is currently private. Contributions are welcome for:
+
+- **stdlib modules** — `.flow` files in `stdlib/`
+- **examples** — `.flow` files in `examples/`
+- **documentation** — `docs/`
+- **bug reports and feature requests** — [open an issue](https://github.com/octoflow-lang/octoflow/issues)
+
+We're looking for contributors who want to help build a GPU-native language from the ground up. The compiler will be open-sourced once a sustainable team is in place. If you're interested in GPU computing, language design, or runtime engineering, reach out.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details. Your .flow programs are yours entirely.
+MIT — see [LICENSE](LICENSE) for details. Your `.flow` programs are yours entirely.

@@ -1,6 +1,6 @@
 # OctoFlow Standard Library Reference
 
-The OctoFlow stdlib provides **246 modules** across **22 domains** with **945+ functions** — all written in pure `.flow`. Import any module with `use <path>`:
+The OctoFlow stdlib provides **423 modules** across **22 domains** with **945+ functions** — all written in pure `.flow`. Import any module with `use <path>`:
 
 ```flow
 use array_utils
@@ -1811,4 +1811,4 @@ Key modules:
 | Loom Engine | 40+ | 100+ |
 | Compiler | 30+ | 200+ |
 
-**Total: 246 modules, 945+ functions**
+**Total: 423 modules, 945+ functions**
