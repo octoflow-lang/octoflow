@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OctoFlow — GPU-Native Programming Language</title>
-<meta name="description" content="A GPU-native general-purpose programming language. 3.2 MB binary. 246 stdlib modules. Zero dependencies. Any GPU vendor. One file download.">
+<meta name="description" content="A GPU-native general-purpose programming language. 4.1 MB binary. 423 stdlib modules. Zero dependencies. Any GPU vendor. One file download.">
 <meta property="og:title" content="OctoFlow — GPU-Native Programming Language">
 <meta property="og:description" content="Designed for the GPU from scratch. Compiled by itself. Run on any GPU.">
 <meta property="og:image" content="https://octoflow-lang.github.io/octoflow/assets/logo.png">
@@ -709,11 +709,11 @@ footer a:hover { color: var(--text); }
   <div class="hero">
     <img class="mascot" src="assets/logo.png" alt="OctoFlow mascot">
     <h1>GPU-native.<br><span class="accent">General-purpose.</span></h1>
-    <p class="subtitle">A programming language where the GPU is the primary execution target. Designed from scratch. Compiled by itself.</p>
+    <p class="subtitle">A programming language where the GPU is the primary execution target. AI-assisted. Zero dependencies. Any GPU vendor.</p>
     <div class="badges">
       <div class="badge">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M13 2v7h7"/></svg>
-        <strong>3.2 MB</strong> binary
+        <strong>4.1 MB</strong> binary
       </div>
       <div class="badge">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 12l2 2 4-4"/></svg>
@@ -727,7 +727,7 @@ footer a:hover { color: var(--text); }
     <div class="cta">
       <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn-hero primary">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Download v1.3.0
+        Download v1.4.0
       </a>
       <a href="https://github.com/octoflow-lang/octoflow" class="btn-hero secondary">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
@@ -751,15 +751,15 @@ footer a:hover { color: var(--text); }
 <!-- Stats Strip -->
 <div class="stats-strip reveal">
   <div class="stat-item">
-    <div class="stat-number">246</div>
+    <div class="stat-number">423</div>
     <div class="stat-label">Stdlib Modules</div>
   </div>
   <div class="stat-item">
-    <div class="stat-number">1,128</div>
+    <div class="stat-number">1,394</div>
     <div class="stat-label">Tests Passing</div>
   </div>
   <div class="stat-item">
-    <div class="stat-number">102</div>
+    <div class="stat-number">113</div>
     <div class="stat-label">GPU Kernels</div>
   </div>
   <div class="stat-item">
@@ -771,6 +771,28 @@ footer a:hover { color: var(--text); }
     <div class="stat-label">Dependencies</div>
   </div>
 </div>
+
+<!-- Thesis -->
+<section class="reveal">
+  <div class="centered" style="max-width:720px; margin:0 auto;">
+    <span class="section-label">Why OctoFlow</span>
+    <h2>The frontier languages were built for a different era.</h2>
+    <p style="color:var(--text-secondary); font-size:1.05rem; line-height:1.8; margin-bottom:24px;">
+      C (1972), C++ (1979), Python (1991) &mdash; designed when the CPU was the only processor. They still work, but accessing a GPU requires CUDA (NVIDIA-only, 4&nbsp;GB SDK), OpenCL (effectively abandoned), or shader languages designed for graphics. Every computer sold today has a GPU. Most of it sits idle.
+    </p>
+    <p style="color:var(--text-secondary); font-size:1.05rem; line-height:1.8; margin-bottom:24px;">
+      OctoFlow is built from scratch for this reality. GPU is primary. Single binary, any vendor, zero dependencies.
+    </p>
+    <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:12px; padding:24px 28px; text-align:left; margin-bottom:24px;">
+      <p style="color:var(--text-secondary); font-size:0.95rem; line-height:1.7; margin-bottom:12px;">
+        <strong style="color:var(--text);">On building this.</strong> OctoFlow is AI-assisted &mdash; designed and developed with LLMs generating the bulk of the code. But every architectural decision is human: Rust at the OS boundary, Vulkan for cross-vendor GPU, the Loom Engine&rsquo;s main/support split, JIT kernel emission via IR builder, the self-hosted compiler direction.
+      </p>
+      <p style="color:var(--text-secondary); font-size:0.95rem; line-height:1.7;">
+        The entire stdlib and everything in this repo is <strong style="color:var(--text);">MIT-licensed</strong>. The compiler source is private for now, but we&rsquo;re willing to open-source all of it once a team is established to develop and sustain it long-term. If that sounds interesting, <a href="https://github.com/octoflow-lang/octoflow/issues" style="font-weight:600;">get in touch</a>.
+      </p>
+    </div>
+  </div>
+</section>
 
 <!-- Features -->
 <section id="features" class="reveal">
@@ -798,7 +820,7 @@ footer a:hover { color: var(--text); }
       <div class="icon-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
       </div>
-      <h3>3.2 MB. Zero Deps.</h3>
+      <h3>4.1 MB. Zero Deps.</h3>
       <p>The entire compiler, runtime, GPU dispatch, and standard library in one binary. No SDK, no package manager, no runtime to install.</p>
     </div>
     <div class="feature-card">
@@ -952,7 +974,7 @@ footer a:hover { color: var(--text); }
 <section id="stdlib" class="reveal">
   <div class="centered">
     <span class="section-label">Batteries Included</span>
-    <h2>246 stdlib modules.</h2>
+    <h2>423 stdlib modules.</h2>
     <p class="section-desc">AI, media, GPU, ML, stats, science, data, and more. All written in OctoFlow itself.</p>
   </div>
   <div class="stdlib-grid">
@@ -962,11 +984,11 @@ footer a:hover { color: var(--text); }
     </div>
     <div class="stdlib-card">
       <h4>GPU Compute</h4>
-      <p>102 kernels, Loom Engine, SPIR-V codegen, dispatch chains, resident buffers, deferred execution</p>
+      <p>113 kernels, Loom Engine, SPIR-V codegen, dispatch chains, resident buffers, deferred execution</p>
     </div>
     <div class="stdlib-card">
-      <h4>Media Codecs</h4>
-      <p>PNG, JPEG, GIF, BMP, AVI, MP4/H.264, WAV &mdash; all native. No ffmpeg. Terminal graphics (Kitty/Sixel)</p>
+      <h4>Multimedia</h4>
+      <p>Audio DSP (oscillator, FFT, ADSR, effects, mixer), image transforms, video timeline, WAV/BMP/GIF/H.264/MP4/AVI/TTF codecs. No ffmpeg.</p>
     </div>
     <div class="stdlib-card">
       <h4>Machine Learning</h4>
@@ -981,8 +1003,12 @@ footer a:hover { color: var(--text); }
       <p>Calculus, physics (RK4, spring-damper), signal processing (FIR, convolution), interpolation, matrices</p>
     </div>
     <div class="stdlib-card">
+      <h4>Game Engine</h4>
+      <p>Parallel-array ECS, sprite rendering, physics, spatial hash collision, AI behaviors, scene management, debug draw</p>
+    </div>
+    <div class="stdlib-card">
       <h4>GUI Toolkit</h4>
-      <p>Native windowing, 19+ widgets (button, textbox, dropdown, tabs, table, treeview), themes, layout engine, event system</p>
+      <p>16 widgets, canvas drawing, 5 chart types, themes, layout engine, event system (Windows)</p>
     </div>
     <div class="stdlib-card">
       <h4>Self-Hosted Compiler</h4>
@@ -1007,36 +1033,36 @@ footer a:hover { color: var(--text); }
   </div>
 </section>
 
-<!-- What's in v1.3.0 -->
+<!-- What's in v1.4.0 -->
 <section class="reveal">
   <div class="next-section">
     <span class="section-label" style="position:relative;">Now Shipping</span>
-    <h2 style="position:relative;">What's in v1.3.0</h2>
-    <p class="section-desc" style="margin-left:auto;margin-right:auto;position:relative;">The Brain. MCP server for AI agents, context engine with persistent memory, macOS support. 3.2 MB. Zero dependencies. Any GPU.</p>
+    <h2 style="position:relative;">What's in v1.4.0</h2>
+    <p class="section-desc" style="margin-left:auto;margin-right:auto;position:relative;">57 new stdlib modules. 18-module multimedia stack. 5 compiler language fixes. LoomView GPU visualization. OctoSearch full-text search on GPU. 4.1 MB. Zero dependencies.</p>
     <div class="next-items">
-      <div class="next-item">
-        <div class="next-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 8h3M7 11h2" opacity="0.6"/></svg>
-        </div>
-        <h3>MCP Server</h3>
-        <p>7 structured tools via JSON-RPC 2.0. Add one line to OpenClaw, Claude, or Cursor &mdash; your agent gets GPU compute, stats, ML, and data analysis. <a href="mcp.html" style="font-weight:600;">Learn more &rarr;</a></p>
-      </div>
       <div class="next-item">
         <div class="next-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
         </div>
-        <h3>Context Engine</h3>
-        <p>169-file knowledge tree (L0-L3). Auto-skill loading. Persistent memory across sessions. GRPO training with compiler as reward model.</p>
+        <h3>57 New Stdlib Modules</h3>
+        <p>Algorithms, math, collections, string processing, data pipelines, formats. From A* pathfinding to skip lists to FFT.</p>
       </div>
       <div class="next-item">
         <div class="next-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20.94c1.5 0 2.75 1.06 4 1.06 3 0 6-8 6-12.22A4.91 4.91 0 0017 5c-2.22 0-4 1.44-5 2-1-.56-2.78-2-5-2a4.9 4.9 0 00-5 4.78C2 14 5 22 8 22c1.25 0 2.5-1.06 4-1.06z"/><path d="M10 2c1 .5 2 2 2 5"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
         </div>
-        <h3>macOS Support</h3>
-        <p>Apple Silicon (M1-M4) via MoltenVK. Windows, Linux, macOS &mdash; any GPU vendor. CPU fallback everywhere.</p>
+        <h3>Multimedia Stack</h3>
+        <p>18 modules: audio DSP (oscillator, envelope, FFT, effects, mixer), image transforms, color spaces, video timeline, players, editors.</p>
+      </div>
+      <div class="next-item">
+        <div class="next-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
+        </div>
+        <h3>5 Compiler Fixes</h3>
+        <p>Implicit return, auto-promote arrays on push, inline array literal args, nested import scope, mutable scalar writeback. 1,394 tests pass.</p>
       </div>
     </div>
-    <div class="next-version">v1.3.0 &mdash; MCP Server + Context Engine + macOS</div>
+    <div class="next-version">v1.4.0 &mdash; The Library</div>
   </div>
 </section>
 
@@ -1045,7 +1071,7 @@ footer a:hover { color: var(--text); }
   <div class="download-section" style="margin-bottom: 0;">
     <span class="section-label">AI-Native Development</span>
     <h2>Built-in AI code generation.</h2>
-    <p class="section-desc" style="margin-left:auto;margin-right:auto;">Run <code style="background:var(--code-bg);padding:2px 8px;border-radius:4px;">octoflow chat</code> and describe what you want. Built-in Qwen3-1.7B with grammar-constrained decoding. 169-file context engine, GRPO training (compiler as reward model), 69 structured error codes, persistent memory.</p>
+    <p class="section-desc" style="margin-left:auto;margin-right:auto;">Run <code style="background:var(--code-bg);padding:2px 8px;border-radius:4px;">octoflow chat</code> and describe what you want. The entire language fits in one LLM prompt. Grammar-constrained decoding and 69 structured error codes for the auto-repair loop.</p>
     <div class="download-platforms">
       <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/language-guide.md" class="dl-card" style="flex-direction:row; padding: 20px 28px; min-width: auto;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:24px;height:24px;flex-shrink:0;"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
@@ -1068,22 +1094,22 @@ footer a:hover { color: var(--text); }
   <div class="download-section">
     <span class="section-label">Get Started</span>
     <h2>Download OctoFlow</h2>
-    <p class="section-desc" style="margin-left:auto;margin-right:auto;">3.2 MB binary. Unzip. Run. That's it. No installer, no SDK, no account.</p>
+    <p class="section-desc" style="margin-left:auto;margin-right:auto;">4.1 MB binary. Unzip. Run. That's it. No installer, no SDK, no account.</p>
     <div class="download-platforms">
       <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="dl-card">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
         <span class="dl-label">Windows x64</span>
-        <span class="dl-size">3.2 MB &middot; .zip</span>
+        <span class="dl-size">4.1 MB &middot; .zip</span>
       </a>
       <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="dl-card">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.504 0c-.155 0-.311.015-.466.046C8.756.684 6.26 3.576 5.552 5.263c-.354.84-.515 1.77-.422 2.662.052.472.18.9.38 1.285-.236.076-.474.166-.71.267C3.547 10.042 2.8 11.034 2.8 12.303c0 .782.287 1.508.77 2.073.325.38.736.689 1.2.91-.014.124-.02.25-.02.376 0 1.016.413 1.93 1.08 2.598.492.492 1.12.852 1.822 1.03.106.028.214.05.324.066-.028.184-.042.372-.042.563 0 .855.29 1.641.783 2.269.608.773 1.563 1.245 2.614 1.363.216.024.435.036.655.036 1.468 0 2.823-.607 3.783-1.594.85-.875 1.393-2.003 1.487-3.25.017-.221.017-.443.001-.664.463-.142.874-.377 1.21-.677.534-.476.87-1.136.94-1.845.033-.33.018-.663-.044-.99.34-.282.62-.633.82-1.033.304-.61.406-1.305.298-1.98-.044-.27-.122-.53-.232-.778.372-.378.655-.844.82-1.375.22-.705.19-1.466-.083-2.14-.147-.362-.367-.69-.647-.968-.124-.124-.26-.237-.406-.34.044-.334.045-.672.003-1.01C18.395 3.242 15.87.24 13.066.013 12.88 0 12.692 0 12.504 0z"/></svg>
         <span class="dl-label">Linux x64</span>
-        <span class="dl-size">3.2 MB &middot; .tar.gz</span>
+        <span class="dl-size">4.1 MB &middot; .tar.gz</span>
       </a>
       <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="dl-card">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 5.523 4.477 10 10 10s10-4.477 10-10C22 6.477 17.523 2 12 2zm4.89 13.89c-.07.07-.15.12-.24.15-.09.04-.19.06-.29.06s-.2-.02-.29-.06c-.09-.04-.17-.09-.24-.15L12 12.06 8.17 15.89c-.07.07-.15.12-.24.15-.09.04-.19.06-.29.06s-.2-.02-.29-.06c-.09-.04-.17-.09-.24-.15-.07-.07-.12-.15-.15-.24C7.02 15.56 7 15.46 7 15.36s.02-.2.06-.29c.04-.09.09-.17.15-.24L11.06 11 7.17 7.11c-.3-.3-.3-.77 0-1.06.3-.3.77-.3 1.06 0L12 9.94l3.83-3.83c.3-.3.77-.3 1.06 0 .3.3.3.77 0 1.06L13.06 11l3.83 3.83c.3.3.3.77 0 1.06z"/></svg>
         <span class="dl-label">macOS (Apple Silicon)</span>
-        <span class="dl-size">3.2 MB &middot; .tar.gz</span>
+        <span class="dl-size">4.1 MB &middot; .tar.gz</span>
       </a>
     </div>
     <p class="download-note">Requires any GPU with Vulkan driver (NVIDIA, AMD, Intel) &middot; macOS via MoltenVK</p>
@@ -1187,7 +1213,7 @@ const seq = [
   { act: 'wait', ms: 300 },
   { act: 'print', text: '\n', cls: 'output' },
   { act: 'wait', ms: 180 },
-  { act: 'print', text: 'OctoFlow 1.3.0 \u2014 GPU-native language (246 stdlib modules)\n', cls: 'output' },
+  { act: 'print', text: 'OctoFlow 1.4.0 \u2014 GPU-native language (423 stdlib modules)\n', cls: 'output' },
   { act: 'wait', ms: 80 },
   { act: 'print', text: 'GPU: NVIDIA GeForce RTX 4090\n', cls: 'output' },
   { act: 'wait', ms: 500 },
