@@ -58,6 +58,53 @@ Thumbs.db
 /SKILL.md
 /CLAUDE.md
 
+# Internal docs (design, strategy, planning — stay in dev kitchen)
+docs/archive/
+docs/plans/
+docs/octoflow-docs/
+docs/annex-*.md
+docs/AUDIT_AND_HARDENING.md
+docs/COMPILER_ON_GPU.md
+docs/GPU_VIRTUAL_MACHINE.md
+docs/LAUNCH_CHECKLIST.md
+docs/OCTOFLOW_CORE_ROADMAP.md
+docs/OCTOFLOW_LAYER_STREAMING.md
+docs/OCTOFLOW_LLM_SUPPORT.md
+docs/blueprint.md
+docs/domain-audit-2026.md
+docs/domain-foundation-map.md
+docs/ffi-design.md
+docs/gpu-native-strategy.md
+docs/gpu-use-cases.md
+docs/gpu-vm-learnings.md
+docs/loom-engine-phase4.md
+docs/loom-showcase-roadmap.md
+docs/milestone-zero-deps.md
+docs/octoflow-coding-bible.md
+docs/octoflow-strategic-vision.md
+docs/octoview-browser.md
+docs/octoview-stealth-engine.md
+docs/phase-41-42-pain-points.md
+docs/phase43-integration-plan.md
+docs/positioning.md
+docs/public-release-readiness.md
+docs/rust-dependency-audit.md
+docs/zero-dependency-vision.md
+docs/llm/CONTEXT.md
+*.zip
+
+# Non-OctoFlow code (no other languages in public repo)
+*.cu
+*.csv
+*.mp4
+*.png
+*.jpg
+*.PNG
+*.bat
+*.octo
+!docs/demo.gif
+examples/test_data/
+
 # Logs
 *.log
 
