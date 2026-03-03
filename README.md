@@ -16,7 +16,7 @@ OctoFlow is built from scratch for this reality. The GPU is the primary executio
 
 ---
 
-4.3 MB binary. 436 stdlib modules. 966 tests. 133 GPU compute kernels.
+4.3 MB binary. 436 stdlib modules. 966 tests. 134 GPU compute kernels.
 
 ---
 
@@ -24,10 +24,10 @@ OctoFlow is built from scratch for this reality. The GPU is the primary executio
 
 ```
 $ octoflow --version
-OctoFlow 1.5.7
+OctoFlow 1.5.8
 
 $ octoflow repl
-OctoFlow 1.5.7 — GPU-native language (436 stdlib modules)
+OctoFlow 1.5.8 — GPU-native language (436 stdlib modules)
 GPU: NVIDIA GeForce GTX 1660 SUPER
 >>> let a = gpu_fill(1.0, 10000000)
 >>> let b = gpu_fill(2.0, 10000000)
@@ -86,7 +86,7 @@ loom_shutdown(vm)
 - **Park/unpark**: Suspend and resume GPU VMs with zero reallocation.
 - **JIT kernels**: Emit SPIR-V at runtime via the IR builder (80+ ops).
 - **Homeostasis**: GPU self-regulates dispatch pacing via timing feedback.
-- **133 compute kernels**: Scale, affine, matvec, reduce, sort (3 algorithms), compress, ML ops.
+- **134 compute kernels**: Scale, affine, matvec (tiled), reduce, sort (3 algorithms), compress, ML ops.
 
 > [Loom Engine Guide](docs/loom-engine.md) — architecture, dispatch chains, API reference
 
@@ -183,7 +183,7 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 .flow source -> Parser -> Preflight -> Compiler -> GPU VM / Vulkan Dispatch -> GPU
                                           |
                               SPIR-V emitters (written in .flow)
-                              133 pre-built compute kernels
+                              134 pre-built compute kernels
 ```
 
 Zero external dependencies. Only system libraries (vulkan-1, ws2_32).

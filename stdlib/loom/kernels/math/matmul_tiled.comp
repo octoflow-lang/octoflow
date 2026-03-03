@@ -1,0 +1,64 @@
+#version 450
+// Tiled matrix multiplication: C = A * B using shared memory
+// A is m×k, B is k×n, C is m×n (row-major)
+// Each workgroup processes a TILE×TILE block of C
+// Shared memory tiles reduce global memory reads by TILE×
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set=0, binding=0) buffer MatrixA { float data[]; } a;
+layout(set=0, binding=1) buffer MatrixB { float data[]; } b;
+layout(set=0, binding=2) buffer MatrixC { float data[]; } c;
+
+layout(push_constant) uniform PC {
+    float m;
+    float k;
+    float n;
+} pc;
+
+shared float tile_a[16][16];
+shared float tile_b[16][16];
+
+void main() {
+    uint row = gl_GlobalInvocationID.x;
+    uint col = gl_GlobalInvocationID.y;
+    uint lr = gl_LocalInvocationID.x;
+    uint lc = gl_LocalInvocationID.y;
+
+    uint M = uint(pc.m);
+    uint K = uint(pc.k);
+    uint N = uint(pc.n);
+    uint n_tiles = (K + 15u) / 16u;
+
+    float sum = 0.0;
+
+    for (uint t = 0u; t < n_tiles; t++) {
+        // Load tile of A: row from global, column within tile
+        uint a_col = t * 16u + lc;
+        if (row < M && a_col < K) {
+            tile_a[lr][lc] = a.data[row * K + a_col];
+        } else {
+            tile_a[lr][lc] = 0.0;
+        }
+
+        // Load tile of B: row within tile, column from global
+        uint b_row = t * 16u + lr;
+        if (b_row < K && col < N) {
+            tile_b[lr][lc] = b.data[b_row * N + col];
+        } else {
+            tile_b[lr][lc] = 0.0;
+        }
+
+        barrier();
+
+        // Accumulate partial dot product from shared memory
+        for (uint i = 0u; i < 16u; i++) {
+            sum += tile_a[lr][i] * tile_b[i][lc];
+        }
+
+        barrier();
+    }
+
+    if (row < M && col < N) {
+        c.data[row * N + col] = sum;
+    }
+}
