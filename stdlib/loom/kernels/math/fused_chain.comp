@@ -1,0 +1,89 @@
+#version 450
+// fused_chain — Generic fused element-wise kernel
+//
+// Applies up to 8 chained map/binop ops in a single dispatch.
+// Reads input data ONCE, applies all ops in sequence, writes each
+// intermediate result to a separate output binding.
+//
+// 10 bindings: 2 inputs (in_a, in_b) + 8 outputs (out0-out7)
+// 104 bytes push constants: actual_n, num_ops, ops[8], params[16]
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer InA  { float data[]; } in_a;
+layout(set=0, binding=1) buffer InB  { float data[]; } in_b;
+layout(set=0, binding=2) buffer Out0 { float data[]; } out0;
+layout(set=0, binding=3) buffer Out1 { float data[]; } out1;
+layout(set=0, binding=4) buffer Out2 { float data[]; } out2;
+layout(set=0, binding=5) buffer Out3 { float data[]; } out3;
+layout(set=0, binding=6) buffer Out4 { float data[]; } out4;
+layout(set=0, binding=7) buffer Out5 { float data[]; } out5;
+layout(set=0, binding=8) buffer Out6 { float data[]; } out6;
+layout(set=0, binding=9) buffer Out7 { float data[]; } out7;
+
+layout(push_constant) uniform PC {
+    uint actual_n;       // element count
+    uint num_ops;        // ops in chain (1-8)
+    uint ops[8];         // op codes per step
+    float params[16];    // 2 params per op (p1, p2)
+} pc;
+
+// Op codes:
+//  0-3:   binop using in_b (add/sub/mul/div) — only valid as first op
+//  5-14:  unary no-param (abs, sqrt, negate, exp, log, floor, ceil, round, sin, cos)
+//  15-19: unary with params (mod, pow, min, max, clamp)
+//  20-23: scalar map (multiply, add, subtract, divide by scalar param)
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.actual_n) return;
+
+    float val = in_a.data[gid];
+
+    for (uint i = 0; i < pc.num_ops && i < 8; i++) {
+        uint op = pc.ops[i];
+        float p1 = pc.params[i * 2];
+        float p2 = pc.params[i * 2 + 1];
+
+        switch (op) {
+            // binop (uses in_b, only valid as first op)
+            case 0: val = val + in_b.data[gid]; break;
+            case 1: val = val - in_b.data[gid]; break;
+            case 2: val = val * in_b.data[gid]; break;
+            case 3: val = val / in_b.data[gid]; break;
+            // unary no-param
+            case 5:  val = abs(val); break;
+            case 6:  val = sqrt(abs(val)); break;
+            case 7:  val = -val; break;
+            case 8:  val = exp(val); break;
+            case 9:  val = log(abs(val)); break;
+            case 10: val = floor(val); break;
+            case 11: val = ceil(val); break;
+            case 12: val = round(val); break;
+            case 13: val = sin(val); break;
+            case 14: val = cos(val); break;
+            // unary with params
+            case 15: val = mod(val, p1); break;
+            case 16: val = pow(abs(val), p1); break;
+            case 17: val = min(val, p1); break;
+            case 18: val = max(val, p1); break;
+            case 19: val = clamp(val, p1, p2); break;
+            // scalar map
+            case 20: val = val * p1; break;
+            case 21: val = val + p1; break;
+            case 22: val = val - p1; break;
+            case 23: val = val / p1; break;
+        }
+
+        // Write intermediate result to output binding
+        switch (i) {
+            case 0: out0.data[gid] = val; break;
+            case 1: out1.data[gid] = val; break;
+            case 2: out2.data[gid] = val; break;
+            case 3: out3.data[gid] = val; break;
+            case 4: out4.data[gid] = val; break;
+            case 5: out5.data[gid] = val; break;
+            case 6: out6.data[gid] = val; break;
+            case 7: out7.data[gid] = val; break;
+        }
+    }
+}

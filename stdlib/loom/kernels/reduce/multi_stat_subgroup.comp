@@ -1,0 +1,83 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+// Subgroup-accelerated multi-stat reduction kernel.
+// Computes sum, min, max, sum_of_squares in ONE pass with 4 accumulators.
+// Hybrid: subgroup intrinsics for intra-warp, shared memory for cross-warp.
+// Goes from 8 barriers to 1 barrier.
+// Push constants: actual_n (uint), subgroup_size (uint) — 8 bytes
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Input { float data[]; } in_buf;
+layout(set=0, binding=1) buffer OutSum { float data[]; } out_sum;
+layout(set=0, binding=2) buffer OutMin { float data[]; } out_min;
+layout(set=0, binding=3) buffer OutMax { float data[]; } out_max;
+layout(set=0, binding=4) buffer OutSumSq { float data[]; } out_sumsq;
+
+layout(push_constant) uniform PC {
+    uint actual_n;
+    uint subgroup_size;
+} pc;
+
+// Max 64 subgroups per workgroup (256 / 4 min subgroup size)
+shared float s_sum[64];
+shared float s_min[64];
+shared float s_max[64];
+shared float s_sumsq[64];
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+
+    // Bounds-checked load
+    float v_sum, v_min, v_max, v_sumsq;
+    if (gid < pc.actual_n) {
+        float val = in_buf.data[gid];
+        v_sum = val;
+        v_min = val;
+        v_max = val;
+        v_sumsq = val * val;
+    } else {
+        v_sum = 0.0;
+        v_min = 1.0 / 0.0;      // +INF
+        v_max = -1.0 / 0.0;     // -INF
+        v_sumsq = 0.0;
+    }
+
+    // Phase 1: subgroup-level reduce (warp-synchronous, no barriers)
+    v_sum = subgroupAdd(v_sum);
+    v_min = subgroupMin(v_min);
+    v_max = subgroupMax(v_max);
+    v_sumsq = subgroupAdd(v_sumsq);
+
+    // Phase 2: lane 0 of each subgroup writes to shared memory
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0u) {
+        s_sum[sg_id] = v_sum;
+        s_min[sg_id] = v_min;
+        s_max[sg_id] = v_max;
+        s_sumsq[sg_id] = v_sumsq;
+    }
+    barrier(); // ONE barrier (was 8 in tree reduction)
+
+    // Phase 3: first subgroup reduces the partial results from all subgroups
+    uint num_subgroups = (256u + pc.subgroup_size - 1u) / pc.subgroup_size;
+    if (sg_id == 0u) {
+        float p_sum = (sg_lane < num_subgroups) ? s_sum[sg_lane] : 0.0;
+        float p_min = (sg_lane < num_subgroups) ? s_min[sg_lane] : (1.0 / 0.0);
+        float p_max = (sg_lane < num_subgroups) ? s_max[sg_lane] : (-1.0 / 0.0);
+        float p_sumsq = (sg_lane < num_subgroups) ? s_sumsq[sg_lane] : 0.0;
+
+        p_sum = subgroupAdd(p_sum);
+        p_min = subgroupMin(p_min);
+        p_max = subgroupMax(p_max);
+        p_sumsq = subgroupAdd(p_sumsq);
+
+        if (sg_lane == 0u) {
+            uint wg = gl_WorkGroupID.x;
+            out_sum.data[wg] = p_sum;
+            out_min.data[wg] = p_min;
+            out_max.data[wg] = p_max;
+            out_sumsq.data[wg] = p_sumsq;
+        }
+    }
+}

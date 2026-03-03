@@ -1,0 +1,60 @@
+#version 450
+// Single-pass multi-stat reduction kernel.
+// Computes sum, min, max, sum_of_squares in ONE pass (4 accumulators).
+// Eliminates 4 separate reduce dispatches for statistical analysis.
+// Push constants: actual_n (uint)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Input { float data[]; } in_buf;
+layout(set=0, binding=1) buffer OutSum { float data[]; } out_sum;
+layout(set=0, binding=2) buffer OutMin { float data[]; } out_min;
+layout(set=0, binding=3) buffer OutMax { float data[]; } out_max;
+layout(set=0, binding=4) buffer OutSumSq { float data[]; } out_sumsq;
+
+layout(push_constant) uniform PC {
+    uint actual_n;
+} pc;
+
+shared float s_sum[256];
+shared float s_min[256];
+shared float s_max[256];
+shared float s_sumsq[256];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint gid = gl_GlobalInvocationID.x;
+
+    // Bounds-checked load
+    if (gid < pc.actual_n) {
+        float val = in_buf.data[gid];
+        s_sum[tid] = val;
+        s_min[tid] = val;
+        s_max[tid] = val;
+        s_sumsq[tid] = val * val;
+    } else {
+        s_sum[tid] = 0.0;
+        s_min[tid] = 1.0 / 0.0;      // +INF
+        s_max[tid] = -1.0 / 0.0;     // -INF
+        s_sumsq[tid] = 0.0;
+    }
+    barrier();
+
+    // Tree reduction with 4 accumulators
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            s_sum[tid] += s_sum[tid + s];
+            s_min[tid] = min(s_min[tid], s_min[tid + s]);
+            s_max[tid] = max(s_max[tid], s_max[tid + s]);
+            s_sumsq[tid] += s_sumsq[tid + s];
+        }
+        barrier();
+    }
+
+    if (tid == 0u) {
+        uint wg = gl_WorkGroupID.x;
+        out_sum.data[wg] = s_sum[0];
+        out_min.data[wg] = s_min[0];
+        out_max.data[wg] = s_max[0];
+        out_sumsq.data[wg] = s_sumsq[0];
+    }
+}

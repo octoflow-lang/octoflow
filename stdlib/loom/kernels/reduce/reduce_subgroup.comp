@@ -1,0 +1,63 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+// Subgroup-accelerated reduction kernel.
+// Hybrid approach: subgroup intrinsics for intra-warp reduce, shared memory for cross-warp.
+// Goes from 8 barriers (tree reduction) to 1 barrier.
+// Push constants: actual_n (uint), identity (float), op (uint), subgroup_size (uint) — 16 bytes
+// Op codes: 0=sum, 1=min, 2=max, 3=mul
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Input { float data[]; } in_buf;
+layout(set=0, binding=1) buffer Output { float data[]; } out_buf;
+
+layout(push_constant) uniform PC {
+    uint actual_n;
+    float identity;
+    uint op;
+    uint subgroup_size;
+} pc;
+
+// Max subgroups per workgroup: 256 / 4 (min subgroup size) = 64
+shared float sdata[64];
+
+float reduce_op(float a, float b) {
+    if (pc.op == 0u) return a + b;
+    if (pc.op == 1u) return min(a, b);
+    if (pc.op == 2u) return max(a, b);
+    return a * b;
+}
+
+float subgroup_reduce(float val) {
+    if (pc.op == 0u) return subgroupAdd(val);
+    if (pc.op == 1u) return subgroupMin(val);
+    if (pc.op == 2u) return subgroupMax(val);
+    return subgroupMul(val);
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+
+    // Bounds-checked load — identity for out-of-range elements
+    float val = (gid < pc.actual_n) ? in_buf.data[gid] : pc.identity;
+
+    // Phase 1: subgroup-level reduce (warp-synchronous, no barriers)
+    val = subgroup_reduce(val);
+
+    // Phase 2: lane 0 of each subgroup writes to shared memory
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0u) {
+        sdata[sg_id] = val;
+    }
+    barrier(); // ONE barrier (was 8 in tree reduction)
+
+    // Phase 3: first subgroup reduces the partial results from all subgroups
+    uint num_subgroups = (256u + pc.subgroup_size - 1u) / pc.subgroup_size;
+    if (sg_id == 0u) {
+        float partial = (sg_lane < num_subgroups) ? sdata[sg_lane] : pc.identity;
+        partial = subgroup_reduce(partial);
+        if (sg_lane == 0u) {
+            out_buf.data[gl_WorkGroupID.x] = partial;
+        }
+    }
+}

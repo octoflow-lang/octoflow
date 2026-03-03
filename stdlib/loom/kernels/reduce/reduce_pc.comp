@@ -1,0 +1,45 @@
+#version 450
+// GPU-resident reduction kernel with push constants.
+// Handles arbitrary input sizes (no padding needed) and all 4 reduce ops.
+// Push constants: actual_n (uint), identity (float), op (uint)
+// Op codes: 0=sum, 1=min, 2=max, 3=mul
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Input { float data[]; } in_buf;
+layout(set=0, binding=1) buffer Output { float data[]; } out_buf;
+
+layout(push_constant) uniform PC {
+    uint actual_n;
+    float identity;
+    uint op;
+} pc;
+
+shared float sdata[256];
+
+float reduce_op(float a, float b) {
+    if (pc.op == 0u) return a + b;
+    if (pc.op == 1u) return min(a, b);
+    if (pc.op == 2u) return max(a, b);
+    return a * b;
+}
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint gid = gl_GlobalInvocationID.x;
+
+    // Bounds-checked load — identity for out-of-range elements
+    sdata[tid] = (gid < pc.actual_n) ? in_buf.data[gid] : pc.identity;
+    barrier();
+
+    // Tree reduction in shared memory
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            sdata[tid] = reduce_op(sdata[tid], sdata[tid + s]);
+        }
+        barrier();
+    }
+
+    if (tid == 0u) {
+        out_buf.data[gl_WorkGroupID.x] = sdata[0];
+    }
+}
