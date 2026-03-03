@@ -1,0 +1,78 @@
+#version 450
+// bitonic_merge — Shared-memory optimized bitonic sort step
+//
+// Two modes controlled by push constants:
+//   Mode 0 (local sort): Full bitonic sort of 256 elements in shared memory.
+//     Each workgroup loads 256 elements, sorts them completely using shared
+//     memory (no global barriers needed), writes back sorted block.
+//   Mode 1 (global merge): One step of the global bitonic merge network.
+//     Like the basic bitonic sort but operates on already-sorted 256-element blocks.
+//
+// Push constants: mode (0=local, 1=global), k, j, N
+// Binding 0: data[] (in-place, read-write)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Data { float data[]; } arr;
+
+layout(push_constant) uniform PC {
+    float mode_f;     // 0.0 = local sort, 1.0 = global merge step
+    float step_k_f;   // k: outer loop (power of 2) — only used in mode 1
+    float step_j_f;   // j: inner loop (power of 2) — only used in mode 1
+    float n_f;        // N: total array length
+} pc;
+
+shared float local_data[256];
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint lid = gl_LocalInvocationID.x;
+    uint N = uint(pc.n_f);
+    uint mode = uint(pc.mode_f);
+
+    if (mode == 0u) {
+        // ── Mode 0: Local sort — full 256-element bitonic sort in shared memory ──
+        // Load into shared memory
+        local_data[lid] = (gid < N) ? arr.data[gid] : uintBitsToFloat(0x7F800000u); // +inf
+        barrier();
+
+        // Full bitonic sort network within shared memory
+        for (uint k = 2u; k <= 256u; k <<= 1u) {
+            for (uint j = k >> 1u; j >= 1u; j >>= 1u) {
+                uint partner = lid ^ j;
+                if (partner > lid && partner < 256u) {
+                    bool ascending = ((lid & k) == 0u);
+                    float a = local_data[lid];
+                    float b = local_data[partner];
+                    if ((ascending && a > b) || (!ascending && a < b)) {
+                        local_data[lid] = b;
+                        local_data[partner] = a;
+                    }
+                }
+                barrier();
+            }
+        }
+
+        // Write back
+        if (gid < N) {
+            arr.data[gid] = local_data[lid];
+        }
+    } else {
+        // ── Mode 1: Global merge step ──
+        uint k = uint(pc.step_k_f);
+        uint j = uint(pc.step_j_f);
+
+        if (gid >= N) return;
+
+        uint partner = gid ^ j;
+        if (partner <= gid || partner >= N) return;
+
+        bool ascending = ((gid & k) == 0u);
+        float a = arr.data[gid];
+        float b = arr.data[partner];
+
+        if ((ascending && a > b) || (!ascending && a < b)) {
+            arr.data[gid] = b;
+            arr.data[partner] = a;
+        }
+    }
+}

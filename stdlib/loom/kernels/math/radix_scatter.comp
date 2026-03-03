@@ -1,0 +1,61 @@
+#version 450
+// radix_scatter — Stable scatter for 4-bit radix sort
+//
+// Each workgroup reads its elements, computes the 4-bit bucket for each,
+// determines the stable rank (position within same-bucket elements in this WG),
+// and writes the element to: output[prefix[bucket * num_wg + wg_id] + rank]
+//
+// Stability: rank is computed by counting threads with lower lid that share
+// the same bucket. Since lid ordering is deterministic, this produces a
+// stable sort (equal-key elements preserve their relative input order).
+//
+// 3 bindings (input data, prefix-summed histogram, output data)
+// 3 push constants (n, bit_shift, num_wg) = 12 bytes
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Input { float data[]; } inp;
+layout(set=0, binding=1) buffer Prefix { uint prefix_sums[]; } pfx;
+layout(set=0, binding=2) buffer Output { float out_data[]; } outp;
+
+layout(push_constant) uniform PC {
+    float n_f;
+    float bit_shift_f;
+    float num_wg_f;
+} pc;
+
+shared uint local_buckets[256];
+
+uint float_to_sortable(float f) {
+    uint bits = floatBitsToUint(f);
+    uint mask = (bits >> 31) != 0u ? 0xFFFFFFFFu : 0x80000000u;
+    return bits ^ mask;
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint lid = gl_LocalInvocationID.x;
+    uint wg_id = gl_WorkGroupID.x;
+    uint n = uint(pc.n_f);
+    uint bit_shift = uint(pc.bit_shift_f);
+    uint num_wg = uint(pc.num_wg_f);
+
+    // Compute bucket for this thread (sentinel 16 for out-of-range)
+    uint my_bucket = 16u;
+    if (gid < n) {
+        uint sortable = float_to_sortable(inp.data[gid]);
+        my_bucket = (sortable >> bit_shift) & 0xFu;
+    }
+    local_buckets[lid] = my_bucket;
+    barrier();
+
+    if (gid < n) {
+        // Stable rank: count threads before me with same bucket
+        uint rank = 0u;
+        for (uint j = 0u; j < lid; j++) {
+            if (local_buckets[j] == my_bucket) rank++;
+        }
+        // Global write position
+        uint pos = pfx.prefix_sums[my_bucket * num_wg + wg_id] + rank;
+        outp.out_data[pos] = inp.data[gid];
+    }
+}

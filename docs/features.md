@@ -1,4 +1,4 @@
-# OctoFlow Feature Status (v1.5.6)
+# OctoFlow Feature Status (v1.5.7)
 
 Last updated: March 3, 2026
 
@@ -6,7 +6,7 @@ Last updated: March 3, 2026
 
 | Feature | Status | Notes |
 |---|---|---|
-| GPU compute (Vulkan) | **Stable** | Any GPU vendor, 128 kernels, GPU-only (no CPU fallback) |
+| GPU compute (Vulkan) | **Stable** | Any GPU vendor, 133 kernels, GPU-only (no CPU fallback) |
 | Loom Engine (GPU VM) | **Stable** | 5 SSBOs, indirect dispatch, timeline semaphores |
 | f16 GPU paths | **Stable** | 50% VRAM savings, auto-detected |
 | macOS GPU (MoltenVK) | **Stable** | Apple Silicon (M1-M4) via MoltenVK |

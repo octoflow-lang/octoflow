@@ -1,0 +1,77 @@
+#version 450
+// merge_global — One pass of bottom-up merge sort
+//
+// Merges pairs of sorted segments of size `seg_size` into segments of size `2*seg_size`.
+// Each thread is responsible for one element: it determines which merged segment it
+// belongs to, which half (left or right) of the merge pair, and uses binary search
+// to find its correct position in the merged output.
+//
+// Input: data (sorted in blocks of seg_size)
+// Output: out (sorted in blocks of 2*seg_size)
+// Push constants: seg_size, n
+//
+// 2 bindings (input, output), 2 push constants (seg_size, N) = 8 bytes
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Input { float data[]; } inp;
+layout(set=0, binding=1) buffer Output { float out_data[]; } outp;
+
+layout(push_constant) uniform PC {
+    float seg_size_f;  // current sorted segment size (256, 512, 1024, ...)
+    float n_f;         // total array length
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint N = uint(pc.n_f);
+    uint seg = uint(pc.seg_size_f);
+
+    if (gid >= N) return;
+
+    // Which merge group does this element belong to?
+    // Each merge group merges two consecutive segments of size `seg`.
+    uint merge_group = gid / (2u * seg);
+    uint merge_start = merge_group * 2u * seg;
+    uint left_start = merge_start;
+    uint left_end = min(merge_start + seg, N);    // exclusive
+    uint right_start = left_end;
+    uint right_end = min(merge_start + 2u * seg, N); // exclusive
+
+    // Am I in the left half or right half?
+    float my_val = inp.data[gid];
+    uint pos_in_merge;
+
+    if (gid < right_start) {
+        // I'm in the left segment. My base position is (gid - left_start).
+        // Binary search in right segment: how many right elements are < my_val?
+        uint lo = right_start;
+        uint hi = right_end;
+        while (lo < hi) {
+            uint mid = (lo + hi) / 2u;
+            if (inp.data[mid] < my_val) {
+                lo = mid + 1u;
+            } else {
+                hi = mid;
+            }
+        }
+        // Position = my rank in left + count of right elements < me
+        pos_in_merge = (gid - left_start) + (lo - right_start);
+    } else {
+        // I'm in the right segment. My base position is (gid - right_start).
+        // Binary search in left segment: how many left elements are <= my_val?
+        uint lo = left_start;
+        uint hi = left_end;
+        while (lo < hi) {
+            uint mid = (lo + hi) / 2u;
+            if (inp.data[mid] <= my_val) {
+                lo = mid + 1u;
+            } else {
+                hi = mid;
+            }
+        }
+        // Position = count of left elements <= me + my rank in right
+        pos_in_merge = (lo - left_start) + (gid - right_start);
+    }
+
+    outp.out_data[merge_start + pos_in_merge] = my_val;
+}

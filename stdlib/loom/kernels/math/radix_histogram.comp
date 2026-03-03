@@ -1,0 +1,59 @@
+#version 450
+// radix_histogram — Per-workgroup 4-bit radix histogram
+//
+// For each workgroup of 256 elements, counts how many elements fall into
+// each of 16 buckets (4-bit radix digit at the given bit offset).
+// Writes histogram in column-major layout: hist[bucket * num_wg + wg_id]
+// so that a flat exclusive prefix sum gives correct scatter offsets.
+//
+// Floats are converted to sortable unsigned integers:
+//   positive: flip sign bit (0x80000000)
+//   negative: flip all bits (0xFFFFFFFF)
+// This makes the uint representation monotonically increasing with float value.
+//
+// 2 bindings (input data, output histogram), 3 push constants (n, bit_shift, num_wg)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Input { float data[]; } inp;
+layout(set=0, binding=1) buffer Histogram { uint hist[]; } out_hist;
+
+layout(push_constant) uniform PC {
+    float n_f;          // array length
+    float bit_shift_f;  // which 4 bits to examine (0, 4, 8, ..., 28)
+    float num_wg_f;     // total number of workgroups
+} pc;
+
+shared uint local_hist[16];
+
+uint float_to_sortable(float f) {
+    uint bits = floatBitsToUint(f);
+    // Negative: flip all bits. Positive: flip sign bit only.
+    uint mask = (bits >> 31) != 0u ? 0xFFFFFFFFu : 0x80000000u;
+    return bits ^ mask;
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint lid = gl_LocalInvocationID.x;
+    uint wg_id = gl_WorkGroupID.x;
+    uint n = uint(pc.n_f);
+    uint bit_shift = uint(pc.bit_shift_f);
+    uint num_wg = uint(pc.num_wg_f);
+
+    // Zero shared histogram
+    if (lid < 16u) local_hist[lid] = 0u;
+    barrier();
+
+    // Count this workgroup's elements per bucket
+    if (gid < n) {
+        uint sortable = float_to_sortable(inp.data[gid]);
+        uint bucket = (sortable >> bit_shift) & 0xFu;
+        atomicAdd(local_hist[bucket], 1u);
+    }
+    barrier();
+
+    // Write column-major: hist[bucket * num_wg + wg_id]
+    if (lid < 16u) {
+        out_hist.hist[lid * num_wg + wg_id] = local_hist[lid];
+    }
+}

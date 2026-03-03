@@ -1,0 +1,49 @@
+#version 450
+// merge_sort_local — Sort 256 elements locally within each workgroup
+//
+// Uses shared memory insertion sort (O(N^2) but N=256 so only 65K ops per WG).
+// Actually uses bitonic sort in shared memory for better GPU efficiency.
+// Output: each 256-element block is fully sorted.
+//
+// 1 binding (data, in-place), 1 push constant (N)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Data { float data[]; } arr;
+
+layout(push_constant) uniform PC {
+    float n_f;  // total array length
+} pc;
+
+shared float local_data[256];
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint lid = gl_LocalInvocationID.x;
+    uint N = uint(pc.n_f);
+
+    // Load into shared memory (pad with +inf for out-of-bounds)
+    local_data[lid] = (gid < N) ? arr.data[gid] : uintBitsToFloat(0x7F800000u);
+    barrier();
+
+    // Bitonic sort in shared memory — ascending order
+    for (uint k = 2u; k <= 256u; k <<= 1u) {
+        for (uint j = k >> 1u; j >= 1u; j >>= 1u) {
+            uint partner = lid ^ j;
+            if (partner > lid && partner < 256u) {
+                bool ascending = ((lid & k) == 0u);
+                float a = local_data[lid];
+                float b = local_data[partner];
+                if ((ascending && a > b) || (!ascending && a < b)) {
+                    local_data[lid] = b;
+                    local_data[partner] = a;
+                }
+            }
+            barrier();
+        }
+    }
+
+    // Write back sorted block
+    if (gid < N) {
+        arr.data[gid] = local_data[lid];
+    }
+}
