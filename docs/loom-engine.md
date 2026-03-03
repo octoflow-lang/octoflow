@@ -737,7 +737,7 @@ let main_vm = loom_boot(1.0, 1.0, 360000.0)     // Main: GPU compute
 
 while running == 1.0
   loom_write(support_vm, offset, snapshot)       // Support: state
-  let val = loom_read(support_vm, cursor)        // Support: undo
+  let val = loom_read_globals(support_vm, cursor, 1.0)  // Support: undo
   loom_wait(prev)                                // Support: sync Main
   loom_present(main_vm, total)                   // Support: present Main
   loom_dispatch(main_vm, "shader.spv", p, wg)   // Main: dispatch
@@ -769,7 +769,7 @@ GPU and CPU work in parallel. The `loom_wait` at frame start is usually instant 
 | Direction | Mechanism | Who Initiates | Example |
 |-----------|-----------|---------------|---------|
 | CPU → Support | `loom_write(vm, offset, data)` | App logic | Write state snapshot |
-| Support → CPU | `loom_read(vm, offset, count)` | App logic | Read undo state |
+| Support → CPU | `loom_read_globals(vm, offset, count)` | App logic | Read undo state |
 | CPU → Main | `loom_dispatch(vm, kernel, params, n)` | App logic | Submit shader work |
 | Main → window | `loom_present(vm, total)` | Support orchestrates | Present framebuffer |
 | Main sync | `loom_wait(prog_id)` | Support orchestrates | Wait for GPU completion |

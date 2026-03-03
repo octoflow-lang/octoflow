@@ -1,5 +1,5 @@
 // test_b64_gpu.flow — Test GPU base64 encoding kernel
-use "../gpu/b64_emit"
+use "../loom/emit/misc/b64_emit"
 
 // Compile kernel
 emit_b64_kernel()

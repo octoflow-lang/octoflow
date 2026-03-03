@@ -11,7 +11,7 @@
 // Supports GQA: n_kv_head <= n_head, each KV head serves multiple Q heads.
 // When n_kv_head == n_head (standard MHA), behaves identically.
 
-use "../../gpu/runtime"
+use "../../loom/ops/runtime"
 
 fn gpu_attention(hidden, wq, wk, wv, wo, pos, n_head, n_kv_head, n_embd)
   let head_dim = n_embd / n_head

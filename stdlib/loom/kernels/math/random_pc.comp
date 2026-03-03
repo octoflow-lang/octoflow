@@ -1,0 +1,37 @@
+#version 450
+// random_pc — GPU-native PRNG using PCG hash per thread
+//
+// Each thread gets a unique state from (seed XOR (gid * golden_ratio_prime)),
+// applies PCG hash steps, and maps to [lo, hi) range.
+//
+// 1 output binding, 4 push constants (seed, lo, hi, n)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Output { float data[]; } out_;
+
+layout(push_constant) uniform PC {
+    float seed;
+    float lo;
+    float hi;
+    float n;
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint N = uint(pc.n);
+    if (gid >= N) return;
+
+    // PCG-style hash: unique state per thread
+    uint state = uint(pc.seed) ^ (gid * 2654435761u);
+
+    // Three rounds of xorshift mixing for quality
+    state ^= state << 13u;
+    state ^= state >> 17u;
+    state ^= state << 5u;
+    state *= 1597334677u;
+    state ^= state >> 16u;
+
+    // Map to [0, 1) then scale to [lo, hi)
+    float t = float(state) / 4294967296.0;
+    out_.data[gid] = pc.lo + t * (pc.hi - pc.lo);
+}

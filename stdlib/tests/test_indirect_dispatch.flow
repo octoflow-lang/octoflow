@@ -3,7 +3,7 @@
 // One indirect dispatch doubles 256 elements using that workgroup count.
 // Verify: [2, 4, 6, 8] — exact, no floating-point ambiguity.
 
-use "../gpu/runtime"
+use "../loom/ops/runtime"
 
 let N = 256.0
 let BUF_BYTES = N * 4.0

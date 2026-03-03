@@ -10,7 +10,7 @@
 //
 // Run: octoflow run stdlib/tests/test_gpu_scan.flow --allow-ffi --allow-read
 
-use "../gpu/runtime"
+use "../loom/ops/runtime"
 
 rt_init()
 

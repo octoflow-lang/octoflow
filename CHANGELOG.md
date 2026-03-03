@@ -4,6 +4,82 @@ All notable changes to OctoFlow are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.5] - 2026-03-03
+
+Codename: **"GPU-Real"**
+
+### Changed
+
+#### GPU-Real: All CPU Fallbacks Eliminated
+Every `gpu_*` function now runs on GPU — no silent CPU fallback. The `gpu_` prefix is a contract: if it says GPU, it executes on GPU. When no Vulkan device is available, functions return a clear error instead of silently degrading to CPU.
+
+**13 functions converted from CPU fallback to real GPU dispatch:**
+
+| Function | Before (CPU) | After (GPU) |
+|---|---|---|
+| `gpu_fill` | `vec![val; n]` + PCIe upload | GLSL fill kernel (push constants) |
+| `gpu_range` | CPU while-loop + upload | GLSL range kernel (push constants) |
+| `gpu_random` | CPU xorshift + upload | GLSL PCG hash per thread |
+| `gpu_reverse` | `iter().rev()` | GLSL reverse kernel |
+| `gpu_gather` | CPU index loop | GLSL gather kernel (OOB → 0.0) |
+| `gpu_scatter` | CPU index loop | GLSL scatter kernel (OOB ignored) |
+| `gpu_concat` | `extend_from_slice` | `vkCmdCopyBuffer` (DMA, no shader) |
+| `gpu_matmul` | CPU triple-loop | GLSL 2D tiled matmul (16x16 workgroups) |
+| `gpu_sort` | CPU `sort_by` | GLSL bitonic sort (multi-pass, single command buffer) |
+| `gpu_topk` | CPU O(n*k) scan | GPU sort + truncate |
+| `gpu_topk_indices` | CPU O(n*k) scan | GPU sort + index extraction |
+| `gpu_cumsum` | CPU prefix sum | GLSL Blelloch scan (512-element blocks) |
+| `gpu_ema` | CPU temporal loop | GLSL sequential kernel (data stays in VRAM) |
+
+### Added
+
+#### 11 New SPIR-V Compute Kernels
+- `fill_pc.spv` — GPU-native array fill with push constants
+- `range_pc.spv` — GPU-native arithmetic sequence generation
+- `random_pc.spv` — GPU-native PRNG (PCG hash per thread)
+- `reverse_pc.spv` — GPU-native array reversal
+- `gather_simple.spv` — GPU-native indexed read with OOB safety
+- `scatter.spv` — GPU-native indexed write with bounds checking
+- `sort_bitonic.spv` — In-place bitonic merge sort step
+- `matmul_standalone.spv` — 2D tiled matrix multiplication (16x16)
+- `scan_sum.spv` — Blelloch parallel prefix sum (512-element blocks)
+- `scan_add_offset.spv` — Multi-block scan fixup kernel
+- `ema_sequential.spv` — Exponential moving average (VRAM-resident)
+
+#### New GPU Dispatch Functions
+- `dispatch_fill_pc`, `dispatch_range_pc`, `dispatch_random_pc` — data generation on GPU
+- `dispatch_reverse_pc`, `dispatch_gather`, `dispatch_scatter` — array manipulation on GPU
+- `dispatch_concat` — DMA buffer copy (no compute shader)
+- `dispatch_sort` — bitonic sort network (all passes in single command buffer)
+- `dispatch_matmul_resident` — GPU-resident matrix multiplication
+- `dispatch_cumsum` — Blelloch parallel prefix sum
+- `dispatch_ema` — exponential moving average on GPU
+- `dispatch_resident_2d_pc` — 2D workgroup dispatch with push constants (internal)
+
+#### Edge Case Hardening
+- Empty array inputs return `[]` without GPU allocation (prevents 0-byte buffer errors)
+- Out-of-bounds gather returns 0.0 (not crash)
+- Out-of-bounds scatter silently ignored (not crash)
+- `gpu_topk` with k > array length returns full array
+- `gpu_ema` with alpha=0 and alpha=1 produce correct boundary results
+- `gpu_sort` handles single elements, duplicates, and pre-sorted arrays
+- `gpu_fill(_, 0)` and `gpu_range(x, x, _)` return empty arrays
+
+### Removed
+
+- **CPU fallback for all `gpu_*` functions** — `gpu_` prefix now guarantees GPU execution
+- CPU-based `gpu_matmul` triple-loop replaced by GPU tiled matmul
+- CPU-based random/sort/cumsum/ema implementations removed from `gpu_*` paths
+
+### Stats
+
+- 128 GPU compute kernels (was 91)
+- 436 stdlib modules (was 423)
+- 966 tests passing (was 951)
+- 4.3 MB binary (was 4.2 MB)
+
+---
+
 ## [1.4.0] - 2026-03-02
 
 Codename: **"The Library"**
@@ -129,7 +205,7 @@ Codename: **"The Ship"**
 - Fields: `code`, `message`, `line`, `suggestion`, `context`
 - Preflight errors also emit structured JSON
 
-#### CPU Fallback
+#### CPU Fallback *(removed in v1.5.5 — gpu_* functions now require GPU)*
 - `gpu_matmul` and all GPU operations fall back to CPU when no GPU is available
 - Startup message: `[note] No GPU detected — using CPU fallback`
 - `sort()` and `gpu_sort()` builtins added

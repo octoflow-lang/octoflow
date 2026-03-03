@@ -1,0 +1,114 @@
+// emit_vm_rmsnorm_g.flow — VM RMSNorm Kernel (Globals variant)
+//
+// Computes RMS Normalization entirely within globals (binding 2).
+//
+//   RMS(x) = sqrt(mean(x²) + eps)
+//   globals[out_off + gid] = (globals[in_off + gid] / RMS(x)) * globals[wgt_off + gid]
+//
+// Same per-thread full reduction pattern as vm_rmsnorm.spv, but reads input
+// and writes output to globals instead of registers. Weights also from globals.
+// Used in Loom-native LLM inference where all data lives in globals + heap.
+//
+// DESIGN NOTE — per-thread full reduction + store in loop_merge:
+//   See vm_rmsnorm.flow for the NVIDIA NVVM workaround explanation.
+//
+// Push constants:
+//   pc[0] = in_off  (float → uint, input vector offset in globals)
+//   pc[1] = out_off (float → uint, output vector offset in globals)
+//   pc[2] = wgt_off (float → uint, weight vector offset in globals)
+//   pc[3] = count   (float, number of elements; also float divisor for mean)
+//   pc[4] = eps     (float, epsilon for numerical stability, e.g. 1e-5)
+//
+// Binding layout (VM 4-SSBO, ir_input_count=3):
+//   Binding 0: registers (unused)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (read input + weights, write output)
+//   Binding 3: control   (unused)
+//
+// Dispatch: ceil(count / 256) workgroups
+//
+// Run: octoflow run stdlib/loom/emit/nn/emit_vm_rmsnorm_g.flow --allow-read --allow-write
+
+use "../../../compiler/ir"
+
+fn emit_vm_rmsnorm_g(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry = ir_block("entry")
+  let pre_loop = ir_block("pre_loop")
+  let loop_header = ir_block("loop_header")
+  let loop_body = ir_block("loop_body")
+  let loop_cont = ir_block("loop_cont")
+  let loop_merge = ir_block("loop_merge")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──
+  let gid = ir_load_gid(entry)
+  let pc_in = ir_push_const(entry, 0.0)
+  let pc_out = ir_push_const(entry, 1.0)
+  let pc_wgt = ir_push_const(entry, 2.0)
+  let pc_cnt = ir_push_const(entry, 3.0)
+  let pc_eps = ir_push_const(entry, 4.0)
+  let in_off_u = ir_ftou(entry, pc_in)
+  let out_off_u = ir_ftou(entry, pc_out)
+  let wgt_off_u = ir_ftou(entry, pc_wgt)
+  let count_u = ir_ftou(entry, pc_cnt)
+  let oob = ir_ugte(entry, gid, count_u)
+  let _sm_e = ir_selection_merge(entry, exit_block)
+  let _br_e = ir_term_cond_branch(entry, oob, exit_block, pre_loop)
+
+  // ── Pre-loop: init j=0, sum_sq=0 ──
+  let zero_u1 = ir_const_u(pre_loop, 0.0)
+  let zero_f1 = ir_const_f(pre_loop, 0.0)
+  let _bpl = ir_term_branch(pre_loop, loop_header)
+
+  // ── Loop header: phi(j, sum_sq), check j >= count ──
+  let phi_j = ir_phi(loop_header, 2.0)
+  let phi_sum = ir_phi(loop_header, 1.0)
+  let _pj0 = ir_phi_add(phi_j, zero_u1, pre_loop)
+  let _ps0 = ir_phi_add(phi_sum, zero_f1, pre_loop)
+  let j_done = ir_ugte(loop_header, phi_j, count_u)
+  let _lm_inst = ir_loop_merge(loop_header, loop_merge, loop_cont)
+  let _bc = ir_term_cond_branch(loop_header, j_done, loop_merge, loop_body)
+
+  // ── Loop body: load x[j] from globals, square, accumulate — NO STORE ──
+  let in_idx_j = ir_iadd(loop_body, in_off_u, phi_j)
+  let val_j = ir_load_input_at(loop_body, 2.0, in_idx_j)
+  let sq_j = ir_fmul(loop_body, val_j, val_j)
+  let new_sum = ir_fadd(loop_body, phi_sum, sq_j)
+  let _blb = ir_term_branch(loop_body, loop_cont)
+
+  // ── Loop continue: j++ ──
+  let one_u = ir_const_u(loop_cont, 1.0)
+  let new_j = ir_iadd(loop_cont, phi_j, one_u)
+  let _blc = ir_term_branch(loop_cont, loop_header)
+  let _pj1 = ir_phi_add(phi_j, new_j, loop_cont)
+  let _ps1 = ir_phi_add(phi_sum, new_sum, loop_cont)
+
+  // ── Loop merge: compute scale, normalize, weight, store to globals ──
+  let f_one = ir_const_f(loop_merge, 1.0)
+  let mean_sq = ir_fdiv(loop_merge, phi_sum, pc_cnt)
+  let var_eps = ir_fadd(loop_merge, mean_sq, pc_eps)
+  let var_sqrt = ir_sqrt(loop_merge, var_eps)
+  let rms_scale = ir_fdiv(loop_merge, f_one, var_sqrt)
+  let in_idx_g = ir_iadd(loop_merge, in_off_u, gid)
+  let out_idx = ir_iadd(loop_merge, out_off_u, gid)
+  let wgt_idx = ir_iadd(loop_merge, wgt_off_u, gid)
+  let x_gid = ir_load_input_at(loop_merge, 2.0, in_idx_g)
+  let w_gid = ir_load_input_at(loop_merge, 2.0, wgt_idx)
+  let normed = ir_fmul(loop_merge, x_gid, rms_scale)
+  let out_val = ir_fmul(loop_merge, normed, w_gid)
+  let _store = ir_buf_store_f(loop_merge, 2.0, out_idx, out_val)
+  let _blm = ir_term_branch(loop_merge, exit_block)
+
+  // ── Exit ──
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/nn/vm_rmsnorm_g.spv"
+let _r = emit_vm_rmsnorm_g(out)
+print("Emitted: {out}")

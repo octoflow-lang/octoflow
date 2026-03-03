@@ -279,51 +279,6 @@ kernel emitters. Weight loading for multiple models needs testing.
 
 ---
 
-### GPU Training with Compiler-as-Reward (GRPO)
-
-Train the LLM using GPU compute, where the OctoFlow compiler itself is the reward model.
-No human labeling needed — generate code, compile, score.
-
-**Loom Architecture:**
-```
-Main Loom 1: Forward pass (transformer layers — matmul + attention)
-Main Loom 2: Backward pass (gradient computation — reverse matmul chain)
-Main Loom 3: Optimizer (Adam/SGD weight updates — element-wise GPU parallel)
-Support Loom: Training data loading, checkpoint saving, metrics logging, compiler reward
-```
-
-**The innovation:**
-```
-┌────────────────────────────────────────────────────────────┐
-│                     TRAINING LOOP                          │
-│                                                            │
-│  Prompt: "calculate fibonacci"                             │
-│       ↓                                                    │
-│  Main Loom 1 (Forward) → generates: "fn fib(n)..."       │
-│       ↓                                                    │
-│  Support Loom: octoflow check generated.flow              │
-│       ↓                                                    │
-│  Reward = compiles? + runs? + correct output?             │
-│       ↓                                                    │
-│  Main Loom 2 (Backward) → gradients from reward           │
-│       ↓                                                    │
-│  Main Loom 3 (Optimizer) → update weights                 │
-│       ↓                                                    │
-│  Repeat (the compiler IS the reward model — free, exact)  │
-└────────────────────────────────────────────────────────────┘
-```
-
-**Why Loom wins:**
-- Forward, backward, and optimizer are three independent GPU workloads
-- The compiler provides exact binary reward (compiles/doesn't, runs/doesn't) — no RLHF
-- Support Loom handles weight checkpointing and training data shuffling
-- No Python, no PyTorch, no CUDA — the entire training stack is one OctoFlow binary
-
-**Feasibility:** PHASE 4 — needs backward pass kernels and optimizer kernels.
-Forward pass (LLM inference) already works.
-
----
-
 ## 3. Real-Time Data Processing
 
 ### GPU-Accelerated Analytics Pipeline
@@ -667,7 +622,6 @@ already exist. Network I/O builtins exist (HTTP). LoomDB exists for persistence.
 | | Fluid dynamics (LBM) | NOW | IR builder has all ops | LBM kernel emitters |
 | | Molecular dynamics | NEAR | Spatial hash, force fields | LJ/Coulomb kernel emitters |
 | **AI/ML** | Multi-model inference | SOON | LLM inference works | Vision + TTS kernels |
-| | GRPO training | PHASE 4 | Forward pass works | Backward + optimizer kernels |
 | **Data** | GPU analytics | NOW | Reduction kernels exist | CSV parse kernel |
 | | Monte Carlo | NOW | RNG exists | GBM path kernel |
 | | Streaming analytics | NOW | LoomDB, network I/O | Window aggregation kernel |

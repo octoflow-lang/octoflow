@@ -1,0 +1,56 @@
+// S6: Data Transform — OctoFlow
+// Revenue calc + conditional discount + top-K (5M records)
+// GPU ops: random, mul, sub, clamp, ceil, scale, fill, topk, sum, mean
+
+let N = 5000000.0
+
+fn data_transform(n)
+  // Simulated business data
+  let prices = gpu_random(n, 10.0, 100.0)
+  let quantities = gpu_random(n, 1.0, 50.0)
+
+  // Revenue = price * quantity
+  let revenue = gpu_mul(prices, quantities)
+
+  // Discount: 10% off for revenue > 1000
+  let threshold = gpu_fill(1000.0, n)
+  let diff = gpu_sub(revenue, threshold)
+  let above = gpu_clamp(diff, 0.0, 1.0)
+  let mask = gpu_ceil(above)
+
+  // discount_factor = 1.0 - mask * 0.1
+  let penalty = gpu_scale(mask, 0.1)
+  let ones = gpu_fill(1.0, n)
+  let discount = gpu_sub(ones, penalty)
+  let final_rev = gpu_mul(revenue, discount)
+
+  // Aggregate metrics
+  let total = gpu_sum(final_rev)
+  let avg = gpu_mean(final_rev)
+  let top100 = gpu_topk(final_rev, 100.0)
+  let top_avg = gpu_mean(top100)
+
+  return total
+end
+
+// Warmup
+let warm = data_transform(N)
+
+// Timed: best of 3
+let mut best = 99999999.0
+let mut result = 0.0
+for i in range(0, 3)
+  let t0 = loom_elapsed_us()
+  result = data_transform(N)
+  let t1 = loom_elapsed_us()
+  let dt = t1 - t0
+  if dt < best
+    best = dt
+  end
+end
+
+print("BENCH|s6_data_transform|time_us|{best}|us")
+print("BENCH|s6_data_transform|total_revenue|{result}|")
+print("BENCH|s6_data_transform|records|5000000|count")
+print("BENCH|s6_data_transform|loc|34|lines")
+print("BENCH|s6_data_transform|framework|octoflow|")

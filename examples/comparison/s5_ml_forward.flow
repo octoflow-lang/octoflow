@@ -1,0 +1,52 @@
+// S5: ML Forward Pass — OctoFlow
+// 2-layer neural net: 32x1024 -> 512 -> 10
+// matmul + bias + ReLU (via clamp)
+// GPU ops: random, fill, matmul, add, clamp, mean
+
+let BATCH = 32.0
+let INPUT = 1024.0
+let HIDDEN = 512.0
+let OUTPUT = 10.0
+
+fn forward_pass(batch, input_dim, hidden_dim, output_dim)
+  // Random input and weights
+  let x = gpu_random(batch * input_dim, -1.0, 1.0)
+  let w1 = gpu_random(input_dim * hidden_dim, -0.05, 0.05)
+  let b1 = gpu_fill(0.01, batch * hidden_dim)
+  let w2 = gpu_random(hidden_dim * output_dim, -0.05, 0.05)
+  let b2 = gpu_fill(0.01, batch * output_dim)
+
+  // Layer 1: matmul + bias + ReLU
+  let h = gpu_matmul(x, w1, batch, hidden_dim, input_dim)
+  let h_bias = gpu_add(h, b1)
+  let h_relu = gpu_clamp(h_bias, 0.0, 999999.0)
+
+  // Layer 2: matmul + bias
+  let out = gpu_matmul(h_relu, w2, batch, output_dim, hidden_dim)
+  let out_bias = gpu_add(out, b2)
+
+  let out_mean = gpu_mean(out_bias)
+  return out_mean
+end
+
+// Warmup
+let warm = forward_pass(BATCH, INPUT, HIDDEN, OUTPUT)
+
+// Timed: best of 3
+let mut best = 99999999.0
+let mut result = 0.0
+for i in range(0, 3)
+  let t0 = loom_elapsed_us()
+  result = forward_pass(BATCH, INPUT, HIDDEN, OUTPUT)
+  let t1 = loom_elapsed_us()
+  let dt = t1 - t0
+  if dt < best
+    best = dt
+  end
+end
+
+print("BENCH|s5_ml_forward|time_us|{best}|us")
+print("BENCH|s5_ml_forward|output_mean|{result}|")
+print("BENCH|s5_ml_forward|batch_size|32|count")
+print("BENCH|s5_ml_forward|loc|30|lines")
+print("BENCH|s5_ml_forward|framework|octoflow|")

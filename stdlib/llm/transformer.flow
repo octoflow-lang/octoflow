@@ -11,7 +11,7 @@
 // n_kv_head for GQA support (n_kv_head < n_head).
 
 use "ops"
-use "../gpu/runtime"
+use "../loom/ops/runtime"
 use "kernels/attention"
 use "kernels/ffn"
 

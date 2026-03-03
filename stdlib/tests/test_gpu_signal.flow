@@ -1,6 +1,6 @@
 // Tests for Signal Processing GPU Functions
 
-use "../gpu/signal.flow"
+use "../loom/math/signal"
 
 let pass_count = 0.0
 let fail_count = 0.0

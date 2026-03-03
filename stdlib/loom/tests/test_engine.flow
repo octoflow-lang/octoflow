@@ -1,0 +1,176 @@
+// stdlib/loom/tests/test_engine.flow — Loom Engine Formalization Tests
+//
+// Tests the full Loom Engine architecture:
+//   - Main Loom: core dispatch, precision selection, micro-homeostasis
+//   - Engine: lifecycle, topology, polling, adapt
+//   - Topology: parallel, sequential, hierarchical auto-select
+//   - Homeostasis: meso-level split/merge/re-precision heuristics
+//   - Swarm: multi-engine create/shutdown
+//
+// These are parse-check + logic tests. GPU-dependent tests require Vulkan.
+
+use "../main_loom"
+use "../engine"
+use "../topology"
+use "../ops/homeostasis"
+
+print("=== Loom Engine Formalization Tests ===")
+print("")
+
+// ── TEST 1: Precision selection (sieve-pattern kernel dispatch) ──
+
+print("TEST 1: Precision kernel selection")
+
+let d_q4k = main_select_dequant("Q4_K")
+assert(d_q4k == "stdlib/loom/kernels/ops/vm_dequant_q4k.spv")
+print("  Q4_K -> correct kernel")
+
+let d_q6k = main_select_dequant("Q6_K")
+assert(d_q6k == "stdlib/llm/kernels/dequant_q6k.spv")
+print("  Q6_K -> correct kernel")
+
+let d_f32 = main_select_dequant("F32")
+assert(d_f32 == "none")
+print("  F32 -> no dequant needed")
+
+let d_1bit = main_select_dequant("1bit")
+assert(d_1bit == "jit")
+print("  1bit -> JIT emission required")
+
+let d_q5k = main_select_dequant("Q5_K")
+assert(d_q5k == "jit")
+print("  Q5_K -> JIT (CPU-only dequant)")
+
+print("  PASS: All precision tiers correctly routed")
+print("")
+
+// ── TEST 2: Precision needs-dequant check ────────────────────────
+
+print("TEST 2: Needs-dequant check")
+
+assert(main_needs_dequant("Q4_K") == 1.0)
+assert(main_needs_dequant("Q6_K") == 1.0)
+assert(main_needs_dequant("1bit") == 1.0)
+assert(main_needs_dequant("F32") == 0.0)
+print("  PASS: F32 skips dequant, others require it")
+print("")
+
+// ── TEST 3: Dequant workgroup calculation ────────────────────────
+
+print("TEST 3: Dequant workgroups")
+
+let wg_256 = main_dequant_workgroups("Q4_K", 256.0)
+assert(wg_256 == 1.0)
+
+let wg_1024 = main_dequant_workgroups("Q4_K", 1024.0)
+assert(wg_1024 == 4.0)
+
+let wg_q6k = main_dequant_workgroups("Q6_K", 512.0)
+assert(wg_q6k == 2.0)
+
+print("  PASS: Workgroup counts correct for all precisions")
+print("")
+
+// ── TEST 4: Topology auto-select heuristic ───────────────────────
+
+print("TEST 4: Topology auto-select")
+
+let t1 = topo_auto_select(4.0, 100000.0, 1.0)
+assert(t1 == "parallel")
+print("  1 kernel + large data -> parallel")
+
+let t2 = topo_auto_select(4.0, 100.0, 3.0)
+assert(t2 == "sequential")
+print("  3 kernels -> sequential")
+
+let t3 = topo_auto_select(4.0, 100.0, 1.0)
+assert(t3 == "hierarchical")
+print("  1 kernel + small data -> hierarchical")
+
+print("  PASS: Topology heuristic correct")
+print("")
+
+// ── TEST 5: Meso homeostasis precision demotion chain ────────────
+
+print("TEST 5: Meso precision demotion chain")
+
+let mut test_precs = ["F32", "Q6_K", "Q4_K"]
+
+let d1 = meso_demote_precision(test_precs, 0.0)
+assert(d1 == "Q6_K")
+assert(test_precs[0] == "Q6_K")
+print("  F32 -> Q6_K")
+
+let d2 = meso_demote_precision(test_precs, 0.0)
+assert(d2 == "Q5_K")
+print("  Q6_K -> Q5_K")
+
+let d3 = meso_demote_precision(test_precs, 0.0)
+assert(d3 == "Q4_K")
+print("  Q5_K -> Q4_K")
+
+let d4 = meso_demote_precision(test_precs, 0.0)
+assert(d4 == "1bit")
+print("  Q4_K -> 1bit")
+
+print("  PASS: Full demotion chain works")
+print("")
+
+// ── TEST 6: Meso homeostasis precision promotion chain ───────────
+
+print("TEST 6: Meso precision promotion chain")
+
+let mut test_precs2 = ["1bit", "Q4_K"]
+
+let p1 = meso_promote_precision(test_precs2, 0.0)
+assert(p1 == "Q4_K")
+print("  1bit -> Q4_K")
+
+let p2 = meso_promote_precision(test_precs2, 0.0)
+assert(p2 == "Q5_K")
+print("  Q4_K -> Q5_K")
+
+let p3 = meso_promote_precision(test_precs2, 0.0)
+assert(p3 == "Q6_K")
+print("  Q5_K -> Q6_K")
+
+let p4 = meso_promote_precision(test_precs2, 0.0)
+assert(p4 == "F32")
+print("  Q6_K -> F32")
+
+print("  PASS: Full promotion chain works")
+print("")
+
+// ── TEST 7: Engine topology get/set (logic only) ─────────────────
+
+print("TEST 7: Engine topology management")
+
+// Create a mock engine map (no GPU needed)
+let mut mock_engine = map()
+map_set(mock_engine, "id", 1.0)
+map_set(mock_engine, "globals_size", 8192.0)
+map_set(mock_engine, "topology", "parallel")
+map_set(mock_engine, "n_main", 0.0)
+map_set(mock_engine, "mailbox_id", 0.0)
+
+assert(engine_get_topology(mock_engine) == "parallel")
+engine_set_topology(mock_engine, "sequential")
+assert(engine_get_topology(mock_engine) == "sequential")
+engine_set_topology(mock_engine, "hierarchical")
+assert(engine_get_topology(mock_engine) == "hierarchical")
+
+print("  PASS: Topology get/set works correctly")
+print("")
+
+// ── SUMMARY ──────────────────────────────────────────────────────
+
+print("=== All Loom Engine Tests PASSED ===")
+print("")
+print("Tested:")
+print("  - Precision kernel selection (sieve pattern)")
+print("  - Needs-dequant routing")
+print("  - Dequant workgroup calculation")
+print("  - Topology auto-select heuristic")
+print("  - Meso demotion chain (F32 -> 1bit)")
+print("  - Meso promotion chain (1bit -> F32)")
+print("  - Engine topology management")

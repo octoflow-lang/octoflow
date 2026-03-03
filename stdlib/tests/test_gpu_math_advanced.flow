@@ -1,6 +1,6 @@
 // Tests for Advanced Math GPU Functions
 
-use "../gpu/math_advanced.flow"
+use "../loom/math/advanced"
 
 let pass_count = 0.0
 let fail_count = 0.0

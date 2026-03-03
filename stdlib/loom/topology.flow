@@ -1,0 +1,200 @@
+// stdlib/loom/topology.flow — Adaptive Topology for Loom Engine
+//
+// Decides how Main Looms are organized at runtime:
+//   parallel     — all dispatch same kernel, different data slices
+//   sequential   — pipeline: Loom N output -> Loom N+1 input
+//   hierarchical — tree reduction pattern
+//
+// The Support Loom (brain) calls these to orchestrate Main Looms (arms).
+// Topology can change at runtime based on workload characteristics.
+//
+// Pattern: prime sieve v7's dual-kernel architecture generalized —
+// CPU-side branching selects dispatch strategy, GPU runs unhinged.
+
+use "main_loom"
+
+// ═══════════════════════════════════════════════════════════════════
+//  PARALLEL TOPOLOGY — Same kernel, different data
+// ═══════════════════════════════════════════════════════════════════
+//
+// Each Main Loom processes a chunk of the input.
+// Example: 4 Looms × 1024 elements = 4096 total elements.
+
+fn topo_parallel_dispatch(main_ids, n_looms, kernel, base_pc, chunk_size, wg)
+  // Dispatch same kernel to all Looms with offset push constants.
+  // base_pc[0] is overwritten with chunk offset per Loom.
+  let mut i = 0.0
+  while i < n_looms
+    let offset = i * chunk_size
+    // Push constant 0 = data offset for this Loom's chunk
+    let pc = [offset, chunk_size, base_pc[2]]
+    main_dispatch(main_ids[i], kernel, pc, wg)
+    i = i + 1.0
+  end
+  return n_looms
+end
+
+fn topo_parallel_exec(main_ids, n_looms)
+  // Build + run all Looms (go unhinged in parallel).
+  let mut progs = []
+  let mut i = 0.0
+  while i < n_looms
+    let prog = main_build(main_ids[i])
+    push(progs, prog)
+    i = i + 1.0
+  end
+
+  // Submit all
+  i = 0.0
+  while i < n_looms
+    main_run_prog(progs[i])
+    i = i + 1.0
+  end
+
+  // Free all
+  i = 0.0
+  while i < n_looms
+    main_free_prog(progs[i])
+    i = i + 1.0
+  end
+  return n_looms
+end
+
+fn topo_parallel_write(main_ids, n_looms, data, chunk_size)
+  // Scatter data chunks across Looms.
+  let mut i = 0.0
+  while i < n_looms
+    let start = i * chunk_size
+    let chunk = array_extract(data, start, chunk_size)
+    main_write(main_ids[i], 0.0, chunk)
+    i = i + 1.0
+  end
+  return n_looms
+end
+
+fn topo_parallel_gather(main_ids, n_looms, offset, count)
+  // Gather results from all Looms into a flat array.
+  let mut results = []
+  let mut i = 0.0
+  while i < n_looms
+    let r = main_read(main_ids[i], offset, count)
+    extend(results, r)
+    i = i + 1.0
+  end
+  return results
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  SEQUENTIAL TOPOLOGY — Pipeline: Loom N -> Loom N+1
+// ═══════════════════════════════════════════════════════════════════
+//
+// Each Loom runs a different kernel. Output of Loom N is copied to
+// Loom N+1 via loom_copy (GPU-to-GPU, no CPU roundtrip).
+// Example: dequant -> matvec -> rmsnorm -> silu (4-stage pipeline).
+
+fn topo_sequential_dispatch(main_ids, n_looms, kernels, pcs, wgs, globals_size)
+  // Pipeline dispatch: kernel[i] on Loom[i], copy output to Loom[i+1].
+  // n_looms must be >= len(kernels).
+  let n_kernels = len(kernels)
+
+  let mut i = 0.0
+  while i < n_kernels
+    if i >= n_looms
+      return i
+    end
+
+    let vm = main_ids[i]
+    main_dispatch(vm, kernels[i], pcs[i], wgs[i])
+    main_exec(vm)
+
+    // Copy output to next Loom (if not last stage)
+    if i + 1.0 < n_kernels
+      if i + 1.0 < n_looms
+        loom_copy(main_ids[i], main_ids[i + 1.0], 0.0, 0.0, globals_size)
+      end
+    end
+
+    i = i + 1.0
+  end
+  return n_kernels
+end
+
+fn topo_sequential_read_last(main_ids, n_looms, n_stages, offset, count)
+  // Read result from the last pipeline stage.
+  let mut last_idx = n_stages - 1.0
+  if last_idx < 0.0
+    return []
+  end
+  if last_idx >= n_looms
+    last_idx = n_looms - 1.0
+  end
+  return main_read(main_ids[last_idx], offset, count)
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  HIERARCHICAL TOPOLOGY — Tree Reduction
+// ═══════════════════════════════════════════════════════════════════
+//
+// Pairs of Looms reduce, winners advance. Final result on Loom[0].
+// Example: 4 Looms → round 1: Loom[0]+Loom[1], Loom[2]+Loom[3]
+//                   → round 2: Loom[0]+Loom[2]
+//                   → result on Loom[0]
+
+fn topo_hierarchical_reduce(main_ids, n_looms, kernel, pc, wg, globals_size)
+  // Tree reduction: pairs reduce, winners advance.
+  // Each round: copy Loom[i+stride] output to Loom[i], dispatch reduce kernel.
+  // Final result is on Loom[0].
+  let mut stride = 1.0
+  while stride < n_looms
+    let mut i = 0.0
+    while i + stride < n_looms
+      // Copy right neighbor's output to left Loom's secondary region
+      let src = main_ids[i + stride]
+      let dst = main_ids[i]
+      let half = globals_size / 2.0
+      loom_copy(src, dst, 0.0, half, half)
+
+      // Dispatch reduce kernel on left Loom
+      // pc[0] = offset A (0), pc[1] = offset B (half), pc[2] = count
+      let reduce_pc = [0.0, half, half]
+      main_dispatch(dst, kernel, reduce_pc, wg)
+      main_exec(dst)
+
+      i = i + stride * 2.0
+    end
+    stride = stride * 2.0
+  end
+  return 0.0
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  AUTO-SELECT — Heuristic topology decision
+// ═══════════════════════════════════════════════════════════════════
+
+fn topo_auto_select(n_looms, workload_size, n_kernels)
+  // Heuristic: choose topology based on workload characteristics.
+  //
+  // Returns: "parallel" | "sequential" | "hierarchical"
+  //
+  // Rules:
+  //   1 kernel  + large data      → parallel (data-parallel split)
+  //   N kernels + dependencies    → sequential (pipeline)
+  //   1 kernel  + reduction shape → hierarchical (tree reduce)
+  //   Default                     → parallel
+
+  if n_kernels == 1.0
+    // Single kernel — parallel or hierarchical
+    if workload_size > n_looms * 1024.0
+      return "parallel"
+    end
+    // Small workload with single kernel → hierarchical reduction
+    return "hierarchical"
+  end
+
+  // Multiple kernels → sequential pipeline
+  if n_kernels > 1.0
+    return "sequential"
+  end
+
+  return "parallel"
+end

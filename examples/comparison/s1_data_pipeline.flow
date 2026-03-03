@@ -1,0 +1,54 @@
+// S1: CSV Data Pipeline — OctoFlow
+// Normalize -> clamp outliers -> denormalize (1M floats)
+// Simulates sensor data cleaning / feature engineering
+// GPU ops: random, mean, stddev, fill, sub, div, clamp, mul, add
+
+let N = 1000000.0
+
+fn data_pipeline(n)
+  // Simulated sensor readings (50-150 range)
+  let data = gpu_random(n, 50.0, 150.0)
+
+  // Compute statistics
+  let mn = gpu_mean(data)
+  let sd = gpu_stddev(data)
+
+  // Normalize: z = (x - mean) / stddev
+  let mean_arr = gpu_fill(mn, n)
+  let sd_arr = gpu_fill(sd, n)
+  let centered = gpu_sub(data, mean_arr)
+  let normalized = gpu_div(centered, sd_arr)
+
+  // Clamp outliers to [-3, 3] sigma
+  let clamped = gpu_clamp(normalized, -3.0, 3.0)
+
+  // Denormalize back to original scale
+  let scaled = gpu_mul(clamped, sd_arr)
+  let result = gpu_add(scaled, mean_arr)
+
+  // Verify: output mean should be close to input mean
+  let out_mean = gpu_mean(result)
+  return out_mean
+end
+
+// Warmup
+let warm = data_pipeline(N)
+
+// Timed: best of 3
+let mut best = 99999999.0
+let mut result = 0.0
+for i in range(0, 3)
+  let t0 = loom_elapsed_us()
+  result = data_pipeline(N)
+  let t1 = loom_elapsed_us()
+  let dt = t1 - t0
+  if dt < best
+    best = dt
+  end
+end
+
+print("BENCH|s1_data_pipeline|time_us|{best}|us")
+print("BENCH|s1_data_pipeline|output_mean|{result}|")
+print("BENCH|s1_data_pipeline|elements|1000000|count")
+print("BENCH|s1_data_pipeline|loc|30|lines")
+print("BENCH|s1_data_pipeline|framework|octoflow|")

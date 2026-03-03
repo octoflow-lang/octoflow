@@ -1,0 +1,41 @@
+// S4: Monte Carlo Pi Estimation — OctoFlow
+// 10M random points, estimate pi via area ratio
+// GPU ops: random, mul, add, fill, sub, clamp, ceil, sum
+
+let N = 10000000.0
+
+fn estimate_pi(n)
+  let x = gpu_random(n, 0.0, 1.0)
+  let y = gpu_random(n, 0.0, 1.0)
+  let x2 = gpu_mul(x, x)
+  let y2 = gpu_mul(y, y)
+  let r2 = gpu_add(x2, y2)
+  let ones = gpu_fill(1.0, n)
+  let diff = gpu_sub(ones, r2)
+  let pos = gpu_clamp(diff, 0.0, 1.0)
+  let mask = gpu_ceil(pos)
+  let inside = gpu_sum(mask)
+  return inside / n * 4.0
+end
+
+// Warmup (prime Vulkan caches)
+let warm = estimate_pi(N)
+
+// Timed: best of 3
+let mut best = 99999999.0
+let mut result = 0.0
+for i in range(0, 3)
+  let t0 = loom_elapsed_us()
+  result = estimate_pi(N)
+  let t1 = loom_elapsed_us()
+  let dt = t1 - t0
+  if dt < best
+    best = dt
+  end
+end
+
+print("BENCH|s4_monte_carlo|time_us|{best}|us")
+print("BENCH|s4_monte_carlo|pi_estimate|{result}|")
+print("BENCH|s4_monte_carlo|points|10000000|count")
+print("BENCH|s4_monte_carlo|loc|24|lines")
+print("BENCH|s4_monte_carlo|framework|octoflow|")

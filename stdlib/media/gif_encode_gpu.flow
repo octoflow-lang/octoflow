@@ -9,7 +9,7 @@
 //
 // Requirements: --allow-ffi --allow-read --allow-write
 
-use "../gpu/runtime"
+use "../loom/ops/runtime"
 use "gif_encode"
 
 // ── GPU-Accelerated RGB→Palette Quantization ─────────────────────────

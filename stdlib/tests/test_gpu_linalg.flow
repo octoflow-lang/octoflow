@@ -1,8 +1,8 @@
 // test_gpu_linalg.flow — GPU Linear Algebra Tests
 // Tests GPU-accelerated matrix and vector operations
 
-use "../gpu/linalg"
-use "../gpu/runtime"
+use "../loom/math/linalg"
+use "../loom/ops/runtime"
 
 print("=== GPU Linear Algebra Tests ===")
 

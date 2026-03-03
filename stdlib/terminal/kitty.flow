@@ -7,7 +7,7 @@
 // Data chunked at 4096 base64 chars
 // m=1 = more chunks, m=0 = last chunk
 
-use "../gpu/b64_emit"
+use "../loom/emit/misc/b64_emit"
 
 fn kitty_render(w, h, r, g, b)
   let esc = chr(27)

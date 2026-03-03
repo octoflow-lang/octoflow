@@ -7,7 +7,7 @@
 //
 // Upload weights once, download result once.
 
-use "../../gpu/runtime"
+use "../../loom/ops/runtime"
 
 fn gpu_ffn(hidden, w_gate, w_up, w_down, n_embd, n_ff)
   let m = 16.0

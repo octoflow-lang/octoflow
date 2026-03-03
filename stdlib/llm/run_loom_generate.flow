@@ -1,0 +1,133 @@
+// stdlib/llm/run_loom_generate.flow — Loom-Native LLM Inference Runner
+//
+// End-to-end: Loom VM with DEVICE_LOCAL weights via vm_set_heap.
+// Clean implementation — no workarounds needed (Bug 1/2/3 fixed).
+//
+// Supports both F16 models (Qwen2.5-1.5B) and Q5_K models (Qwen3-1.7B).
+//
+// Usage:
+//   cd C:/OctoFlow
+//   octoflow run stdlib/llm/run_loom_generate.flow --allow-read --allow-ffi --max-iters 50000000
+
+use "gguf"
+use "ops"
+use "sampling"
+use "chat"
+use "loom_infer"
+
+fn run_loom_generate(model_path, prompt)
+  let max_tokens = 20.0
+  let temperature = 0.7
+
+  print("=== OctoFlow Loom-Native Inference ===")
+  print("Model: {model_path}")
+  print("Prompt: {prompt}")
+
+  // ── Load model ─────────────────────────────────────────────────
+  print("Loading model...")
+  let model = gguf_load_from_file(model_path)
+
+  let n_embd = map_get(model, "n_embd")
+  let n_layer = map_get(model, "n_layer")
+  let n_head = map_get(model, "n_head")
+  let n_kv_head = map_get(model, "n_kv_head")
+  let n_ff = map_get(model, "n_ff")
+  let vocab_size = map_get(model, "vocab_size")
+  let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+  let arch = map_get(model, "arch")
+
+  print("  {arch} -- {n_layer}L, {n_embd}D, {n_ff}FF, {vocab_size}V")
+
+  // ── Tokenize ───────────────────────────────────────────────────
+  print("Tokenizing...")
+  let vocab = gguf_load_vocab(model_path)
+  let chat_tokens = resolve_chat_tokens(model_path, model, vocab)
+  let prompt_ids = build_chat_tokens(model_path, model, vocab, prompt)
+  let n_prompt = len(prompt_ids)
+  print("  {n_prompt} prompt tokens")
+
+  // ── KV dimensions ──────────────────────────────────────────────
+  let head_dim = n_embd / n_head
+  let mut kv_h = n_kv_head
+  if kv_h == 0.0
+    kv_h = n_head
+  end
+  let kv_dim = kv_h * head_dim
+  let max_seq = n_prompt + max_tokens + 16.0
+
+  // ── Boot Loom VM ───────────────────────────────────────────────
+  print("Booting Loom VM...")
+  let vm = loom_infer_boot(model)
+
+  // ── KV cache ───────────────────────────────────────────────────
+  let cache_size = n_layer * max_seq * kv_dim
+  print("Allocating KV cache: {cache_size} floats...")
+  let mut k_cache = array_new(int(cache_size), 0.0)
+  let mut v_cache = array_new(int(cache_size), 0.0)
+  print("  KV cache ready")
+
+  // ── Persistent weights ─────────────────────────────────────────
+  let output_norm_w = gguf_load_tensor(model_path, model, "output_norm.weight")
+
+  // ── EOS token ──────────────────────────────────────────────────
+  let mut eos = 2.0
+  if map_has(model, "kv.tokenizer.ggml.eos_token_id")
+    eos = map_get(model, "kv.tokenizer.ggml.eos_token_id")
+  end
+  let stop_toks = get_stop_tokens(model, chat_tokens)
+
+  // ── Main inference loop ────────────────────────────────────────
+  let total = n_prompt + max_tokens
+  let mut generated = []
+  let mut pos = 0.0
+  let mut token_id = 0.0
+
+  print("--- Prefill {n_prompt} + Generate {max_tokens} tokens ---")
+
+  while pos < total
+    // Current token
+    if pos < n_prompt
+      token_id = prompt_ids[int(pos)]
+    end
+    if pos >= n_prompt
+      token_id = generated[int(len(generated) - 1)]
+    end
+
+    // Embedding — direct assign works (Bug 1 fix)
+    let mut hidden = gguf_load_tensor(model_path, model, "token_embd.weight", token_id)
+
+    // All transformer layers — returns array directly (Bug 2 fix)
+    let mut layer = 0.0
+    while layer < n_layer
+      hidden = loom_infer_layer(vm, model_path, model, hidden, layer, pos, max_seq, k_cache, v_cache)
+      layer = layer + 1.0
+    end
+
+    // Output head (generation phase only)
+    if pos >= n_prompt - 1.0
+      let normed = rmsnorm_cpu(hidden, output_norm_w, n_embd, eps)
+      let logits = loom_matvec(vm, model_path, model, "token_embd.weight", normed, vocab_size, n_embd)
+      let next_token = sample_top_p(logits, 0.9, temperature)
+      push(generated, next_token)
+
+      let text = vocab[int(next_token)]
+      print(text)
+
+      if is_stop_token(stop_toks, next_token) == 1.0
+        pos = total
+      end
+    end
+
+    pos = pos + 1.0
+  end
+
+  let gen_count = str(int(len(generated)))
+  print(" ")
+  print("---")
+  print("Generated {gen_count} tokens")
+  loom_shutdown(vm)
+  print("=== Done ===")
+  return 0.0
+end
+
+let _r = run_loom_generate("models/qwen2.5-1.5b.gguf", "What is 2 + 2?")

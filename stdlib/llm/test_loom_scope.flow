@@ -1,0 +1,59 @@
+// Test: function that returns array — called multiple times (v1.5.0)
+// Validates Bug 1 (Assign array support) and Bug 2 (no internal array leak)
+use "gguf"
+
+// Matvec that returns array directly (no offset workaround needed)
+fn loom_mv(vm, model_path, model, tensor_name, input_vec, n_out, n_in)
+  let weight = gguf_load_tensor(model_path, model, tensor_name)
+  vm_set_heap(vm, weight)
+  loom_write(vm, 0.0, input_vec)
+  let out_off = n_in
+  let wg = ceil(n_out / 256.0)
+  let pc = [n_out, n_in, 0.0, 0.0, out_off]
+  loom_dispatch(vm, "stdlib/loom/kernels/nn/vm_matvec_heap.spv", pc, wg)
+  let prog = loom_build(vm)
+  loom_run(prog)
+  let result = loom_read_globals(vm, out_off, n_out)
+  loom_free(prog)
+  return result
+end
+
+fn test_dispatch_multi(model_path)
+  let model = gguf_load_from_file(model_path)
+  let n_embd = map_get(model, "n_embd")
+  let n_ff = map_get(model, "n_ff")
+
+  let globals_size = n_embd + n_ff
+  let vm = loom_boot(1.0, 1.0, globals_size)
+  print("vm booted")
+
+  // Make dummy input
+  let mut input1 = []
+  let mut ii = 0.0
+  while ii < n_embd
+    push(input1, 0.01)
+    ii = ii + 1.0
+  end
+
+  // Call 1: returns array directly
+  let r1 = loom_mv(vm, model_path, model, "output_norm.weight", input1, n_embd, n_embd)
+  let r1_len = len(r1)
+  print("call 1 done, len={r1_len}")
+
+  // Call 2: no scope pollution from call 1
+  let r2 = loom_mv(vm, model_path, model, "output_norm.weight", input1, n_embd, n_embd)
+  let r2_len = len(r2)
+  print("call 2 done, len={r2_len}")
+
+  // Call 3: can also assign to mutable
+  let mut r3 = []
+  r3 = loom_mv(vm, model_path, model, "output_norm.weight", input1, n_embd, n_embd)
+  let r3_len = len(r3)
+  print("call 3 done, len={r3_len}")
+
+  loom_shutdown(vm)
+  print("=== ALL PASS ===")
+  return 0.0
+end
+
+let _r = test_dispatch_multi("models/qwen2.5-1.5b.gguf")

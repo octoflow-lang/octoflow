@@ -1,0 +1,278 @@
+// Loom Engine Benchmark — Tier 1: GPU Express
+// Validates: gpu_* builtins (zero-boilerplate GPU compute)
+// Run: octoflow run examples/bench_loom_t1_express.flow
+//
+// What this proves:
+//   The GPU Express API (gpu_fill, gpu_add, gpu_scale, gpu_abs, gpu_sum,
+//   gpu_matmul) handles everything automatically — VRAM allocation, kernel
+//   dispatch, result retrieval. Zero setup, zero teardown.
+//   Data stays GPU-resident between operations (no CPU round-trip).
+
+print("=== OctoFlow Loom Benchmark — Tier 1: GPU Express ===")
+print("")
+
+let n_large = 10000000.0
+
+// ─── Warmup (prime the GPU + Vulkan pipeline) ───
+let w1 = gpu_fill(1.0, 1000)
+let w2 = gpu_fill(2.0, 1000)
+let w3 = gpu_add(w1, w2)
+
+// ════════════════════════════════════════════════════════════
+// TEST 1: gpu_fill — allocate 10M floats on GPU
+// ════════════════════════════════════════════════════════════
+print("[T1.1] gpu_fill — 10M elements")
+
+let mut fill_best = 99999.0
+for i in range(1, 4)
+    let t0 = loom_elapsed_us()
+    let f1 = gpu_fill(3.0, n_large)
+    let dt = loom_elapsed_us() - t0
+    if i == 1
+        let v = f1[0]
+        let cnt = len(f1)
+        print("  correctness: f1[0]={v} (expected 3.0), len={cnt}")
+    end
+    print("  run {i}: {dt:.0} us")
+    if dt < fill_best
+        fill_best = dt
+    end
+end
+print("  best: {fill_best:.0} us")
+print("")
+
+// ════════════════════════════════════════════════════════════
+// TEST 2: gpu_add — element-wise add, 10M
+// ════════════════════════════════════════════════════════════
+print("[T1.2] gpu_add — 10M elements")
+
+let a2 = gpu_fill(1.5, n_large)
+let b2 = gpu_fill(2.5, n_large)
+let add_warm = gpu_add(a2, b2)
+
+let mut add_best = 99999.0
+for i in range(1, 4)
+    let t0 = loom_elapsed_us()
+    let c2 = gpu_add(a2, b2)
+    let dt = loom_elapsed_us() - t0
+    if i == 1
+        let v = c2[0]
+        if v == 4.0
+            print("  correctness: OK (1.5 + 2.5 = {v})")
+        else
+            print("  correctness: FAIL (expected 4.0, got {v})")
+        end
+    end
+    print("  run {i}: {dt:.0} us")
+    if dt < add_best
+        add_best = dt
+    end
+end
+print("  best: {add_best:.0} us")
+print("")
+
+// ════════════════════════════════════════════════════════════
+// TEST 3: gpu_mul — element-wise multiply, 10M
+// ════════════════════════════════════════════════════════════
+print("[T1.3] gpu_mul — 10M elements")
+
+let a3 = gpu_fill(3.0, n_large)
+let b3 = gpu_fill(4.0, n_large)
+let mul_warm = gpu_mul(a3, b3)
+
+let mut mul_best = 99999.0
+for i in range(1, 4)
+    let t0 = loom_elapsed_us()
+    let c3 = gpu_mul(a3, b3)
+    let dt = loom_elapsed_us() - t0
+    if i == 1
+        let v = c3[0]
+        if v == 12.0
+            print("  correctness: OK (3.0 * 4.0 = {v})")
+        else
+            print("  correctness: FAIL (expected 12.0, got {v})")
+        end
+    end
+    print("  run {i}: {dt:.0} us")
+    if dt < mul_best
+        mul_best = dt
+    end
+end
+print("  best: {mul_best:.0} us")
+print("")
+
+// ════════════════════════════════════════════════════════════
+// TEST 4: gpu_scale — scalar multiply, 10M
+// ════════════════════════════════════════════════════════════
+print("[T1.4] gpu_scale — 10M elements")
+
+let a4 = gpu_fill(5.0, n_large)
+let scale_warm = gpu_scale(a4, 3.0)
+
+let mut scale_best = 99999.0
+for i in range(1, 4)
+    let t0 = loom_elapsed_us()
+    let c4 = gpu_scale(a4, 3.0)
+    let dt = loom_elapsed_us() - t0
+    if i == 1
+        let v = c4[0]
+        if v == 15.0
+            print("  correctness: OK (5.0 * 3.0 = {v})")
+        else
+            print("  correctness: FAIL (expected 15.0, got {v})")
+        end
+    end
+    print("  run {i}: {dt:.0} us")
+    if dt < scale_best
+        scale_best = dt
+    end
+end
+print("  best: {scale_best:.0} us")
+print("")
+
+// ════════════════════════════════════════════════════════════
+// TEST 5: gpu_abs — absolute value, 10M
+// ════════════════════════════════════════════════════════════
+print("[T1.5] gpu_abs — 10M elements")
+
+let a5 = gpu_fill(0.0 - 7.5, n_large)
+let abs_warm = gpu_abs(a5)
+
+let mut abs_best = 99999.0
+for i in range(1, 4)
+    let t0 = loom_elapsed_us()
+    let c5 = gpu_abs(a5)
+    let dt = loom_elapsed_us() - t0
+    if i == 1
+        let v = c5[0]
+        if v == 7.5
+            print("  correctness: OK (|-7.5| = {v})")
+        else
+            print("  correctness: FAIL (expected 7.5, got {v})")
+        end
+    end
+    print("  run {i}: {dt:.0} us")
+    if dt < abs_best
+        abs_best = dt
+    end
+end
+print("  best: {abs_best:.0} us")
+print("")
+
+// ════════════════════════════════════════════════════════════
+// TEST 6: gpu_sum — reduction, 10M
+// ════════════════════════════════════════════════════════════
+print("[T1.6] gpu_sum — 10M elements")
+
+let a6 = gpu_fill(1.0, n_large)
+let sum_warm = gpu_sum(a6)
+
+let mut sum_best = 99999.0
+for i in range(1, 4)
+    let t0 = loom_elapsed_us()
+    let s6 = gpu_sum(a6)
+    let dt = loom_elapsed_us() - t0
+    if i == 1
+        print("  correctness: sum={s6} (expected 10000000)")
+    end
+    print("  run {i}: {dt:.0} us")
+    if dt < sum_best
+        sum_best = dt
+    end
+end
+print("  best: {sum_best:.0} us")
+print("")
+
+// ════════════════════════════════════════════════════════════
+// TEST 7: gpu_matmul — 256x256, 512x512, 1024x1024
+// ════════════════════════════════════════════════════════════
+print("[T1.7] gpu_matmul — square matrices")
+
+// 256x256
+let n256 = 256.0
+let sz256 = n256 * n256
+let a256 = gpu_fill(1.0, sz256)
+let b256 = gpu_fill(1.0, sz256)
+let mat_warm = gpu_matmul(a256, b256, n256, n256, n256)
+
+let t7a = loom_elapsed_us()
+let c256 = gpu_matmul(a256, b256, n256, n256, n256)
+let dt7a = loom_elapsed_us() - t7a
+let v256 = c256[0]
+print("  256x256:  {dt7a:.0} us  c[0]={v256} (expected {n256})")
+
+// 512x512
+let n512 = 512.0
+let sz512 = n512 * n512
+let a512 = gpu_fill(1.0, sz512)
+let b512 = gpu_fill(1.0, sz512)
+let t7b = loom_elapsed_us()
+let c512 = gpu_matmul(a512, b512, n512, n512, n512)
+let dt7b = loom_elapsed_us() - t7b
+let v512 = c512[0]
+print("  512x512:  {dt7b:.0} us  c[0]={v512} (expected {n512})")
+
+// 1024x1024
+let n1024 = 1024.0
+let sz1024 = n1024 * n1024
+let a1024 = gpu_fill(1.0, sz1024)
+let b1024 = gpu_fill(1.0, sz1024)
+let t7c = loom_elapsed_us()
+let c1024 = gpu_matmul(a1024, b1024, n1024, n1024, n1024)
+let dt7c = loom_elapsed_us() - t7c
+let v1024 = c1024[0]
+print("  1024x1024: {dt7c:.0} us  c[0]={v1024} (expected {n1024})")
+print("")
+
+// ════════════════════════════════════════════════════════════
+// TEST 8: 5-step pipeline (GPU-resident chain)
+// add → mul → scale → abs → sum — data stays on GPU
+// ════════════════════════════════════════════════════════════
+print("[T1.8] 5-step pipeline — 10M elements (GPU-resident)")
+
+let pa = gpu_fill(3.0, n_large)
+let pb = gpu_fill(2.0, n_large)
+// warmup
+let pw1 = gpu_add(pa, pb)
+let pw2 = gpu_mul(pw1, pa)
+let pw3 = gpu_scale(pw2, 0.1)
+let pw4 = gpu_abs(pw3)
+let pw5 = gpu_sum(pw4)
+
+let mut pipe_best = 99999.0
+for i in range(1, 4)
+    let t0 = loom_elapsed_us()
+    let s1 = gpu_add(pa, pb)
+    let s2 = gpu_mul(s1, pa)
+    let s3 = gpu_scale(s2, 0.1)
+    let s4 = gpu_abs(s3)
+    let s5 = gpu_sum(s4)
+    let dt = loom_elapsed_us() - t0
+    if i == 1
+        // (3+2)*3*0.1 = 1.5, abs(1.5) = 1.5, sum = 1.5 * 10M = 15M
+        print("  correctness: sum={s5} (expected 15000000)")
+    end
+    print("  run {i}: {dt:.0} us (5 GPU ops, 0 CPU round-trips)")
+    if dt < pipe_best
+        pipe_best = dt
+    end
+end
+print("  best: {pipe_best:.0} us")
+print("")
+
+// ════════════════════════════════════════════════════════════
+// SUMMARY
+// ════════════════════════════════════════════════════════════
+print("── Tier 1 Summary (10M elements, best of 3) ──")
+print("  gpu_fill:    {fill_best:.0} us")
+print("  gpu_add:     {add_best:.0} us")
+print("  gpu_mul:     {mul_best:.0} us")
+print("  gpu_scale:   {scale_best:.0} us")
+print("  gpu_abs:     {abs_best:.0} us")
+print("  gpu_sum:     {sum_best:.0} us")
+print("  matmul 256:  {dt7a:.0} us")
+print("  matmul 512:  {dt7b:.0} us")
+print("  matmul 1024: {dt7c:.0} us")
+print("  5-step pipe: {pipe_best:.0} us")
+print("")
+print("--- Tier 1 complete ---")

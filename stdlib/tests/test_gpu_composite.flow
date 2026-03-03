@@ -1,6 +1,6 @@
 // Tests for Composite GPU Functions
 
-use "../gpu/composite.flow"
+use "../loom/data/composite"
 
 let pass_count = 0.0
 let fail_count = 0.0

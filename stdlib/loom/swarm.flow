@@ -1,0 +1,185 @@
+// stdlib/loom/swarm.flow — Multiple Loom Engines as Swarm
+//
+// Each engine is an independent "octopus" with its own Support Loom.
+// A swarm is a colony of octopuses — foundation for swarm intelligence.
+//
+// Swarm-level coordination happens through:
+//   - Broadcast: same work to all engines
+//   - Scatter/Gather: distribute data, collect results
+//   - Channels: mailbox bridges between engines
+//
+// State layout:
+//   swarm map fields: n_engines, globals_size
+//   engines[i]          → engine map for each engine
+//   all_main_ids[i]     → main_ids array for each engine
+//   all_precisions[i]   → precisions array for each engine
+
+use "engine"
+
+// ═══════════════════════════════════════════════════════════════════
+//  SWARM LIFECYCLE
+// ═══════════════════════════════════════════════════════════════════
+
+fn swarm_create(n_engines, main_per_engine, globals_size, default_precision, engines, all_main_ids, all_precisions)
+  // Create N Loom Engines, each with main_per_engine Main Looms.
+  //
+  // engines:         empty array — populated with engine maps
+  // all_main_ids:    empty array — populated with main_ids arrays
+  // all_precisions:  empty array — populated with precisions arrays
+  //
+  // Returns swarm map.
+  let mut i = 0.0
+  while i < n_engines
+    let mut mids = []
+    let mut precs = []
+    let eng = engine_create(main_per_engine, globals_size, default_precision, mids, precs)
+    push(engines, eng)
+    push(all_main_ids, mids)
+    push(all_precisions, precs)
+    i = i + 1.0
+  end
+
+  let mut swarm = map()
+  map_set(swarm, "n_engines", n_engines)
+  map_set(swarm, "globals_size", globals_size)
+  return swarm
+end
+
+fn swarm_shutdown(swarm, engines, all_main_ids)
+  // Clean shutdown of all engines in swarm.
+  let n = map_get(swarm, "n_engines")
+  let mut i = 0.0
+  while i < n
+    engine_shutdown(engines[i], all_main_ids[i])
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  BROADCAST — Same work to all engines
+// ═══════════════════════════════════════════════════════════════════
+
+fn swarm_broadcast_dispatch(swarm, engines, all_main_ids, kernel, pc, wg)
+  // Dispatch same kernel to ALL Main Looms across ALL engines.
+  let n = map_get(swarm, "n_engines")
+  let mut i = 0.0
+  while i < n
+    engine_dispatch_all(engines[i], all_main_ids[i], kernel, pc, wg)
+    i = i + 1.0
+  end
+  return n
+end
+
+fn swarm_exec_all(swarm, engines, all_main_ids)
+  // Build + run + free all engines (entire swarm goes unhinged).
+  let n = map_get(swarm, "n_engines")
+  let mut i = 0.0
+  while i < n
+    engine_exec_all(engines[i], all_main_ids[i])
+    i = i + 1.0
+  end
+  return n
+end
+
+fn swarm_write_all(swarm, engines, all_main_ids, offset, data)
+  // Write same data to ALL Main Looms across ALL engines.
+  let n = map_get(swarm, "n_engines")
+  let mut i = 0.0
+  while i < n
+    engine_write_all(engines[i], all_main_ids[i], offset, data)
+    i = i + 1.0
+  end
+  return n
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  SCATTER / GATHER — Data distribution across engines
+// ═══════════════════════════════════════════════════════════════════
+
+fn swarm_scatter(swarm, engines, all_main_ids, data, chunk_per_engine)
+  // Distribute data across engines (each engine gets a chunk).
+  // Each engine's Main Looms all get the same chunk (engine-level broadcast).
+  let n = map_get(swarm, "n_engines")
+  let mut i = 0.0
+  while i < n
+    let start = i * chunk_per_engine
+    let chunk = array_extract(data, start, chunk_per_engine)
+    engine_write_all(engines[i], all_main_ids[i], 0.0, chunk)
+    i = i + 1.0
+  end
+  return n
+end
+
+fn swarm_gather(swarm, engines, all_main_ids, offset, count)
+  // Collect results from Loom[0] of each engine into a flat array.
+  // (Loom[0] is the primary result holder per engine.)
+  let n = map_get(swarm, "n_engines")
+  let mut results = []
+  let mut i = 0.0
+  while i < n
+    let mids = all_main_ids[i]
+    let r = main_read(mids[0], offset, count)
+    extend(results, r)
+    i = i + 1.0
+  end
+  return results
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  CHANNELS — Cross-engine mailbox bridges
+// ═══════════════════════════════════════════════════════════════════
+
+fn swarm_create_channel(engine_a, engine_b, slot_size, slot_count)
+  // Create mailbox bridge between two engines.
+  // Both engines share the same mailbox for inter-engine communication.
+  // Returns mailbox ID.
+  let mailbox = loom_mailbox(slot_size, slot_count)
+  map_set(engine_a, "mailbox_id", mailbox)
+  map_set(engine_b, "mailbox_id", mailbox)
+  return mailbox
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  SWARM HEALTH — Aggregate status
+// ═══════════════════════════════════════════════════════════════════
+
+fn swarm_health(swarm, engines, all_main_ids)
+  // Aggregate health across all engines.
+  // Returns map: n_engines, total_main, total_stable, total_pace
+  let n = map_get(swarm, "n_engines")
+  let mut total_main = 0.0
+  let mut total_stable = 0.0
+  let mut total_pace = 0.0
+
+  let mut i = 0.0
+  while i < n
+    let h = engine_health(engines[i], all_main_ids[i])
+    total_main = total_main + map_get(h, "n_main")
+    total_stable = total_stable + map_get(h, "n_stable")
+    total_pace = total_pace + map_get(h, "total_pace")
+    i = i + 1.0
+  end
+
+  let mut health = map()
+  map_set(health, "n_engines", n)
+  map_set(health, "total_main", total_main)
+  map_set(health, "total_stable", total_stable)
+  map_set(health, "total_pace", total_pace)
+  map_set(health, "vram_used", loom_vram_used())
+  return health
+end
+
+fn swarm_all_stable(swarm, engines, all_main_ids)
+  // Quick check: are all engines stable?
+  let n = map_get(swarm, "n_engines")
+  let mut i = 0.0
+  while i < n
+    let stable = engine_all_stable(engines[i], all_main_ids[i])
+    if stable < 0.5
+      return 0.0
+    end
+    i = i + 1.0
+  end
+  return 1.0
+end

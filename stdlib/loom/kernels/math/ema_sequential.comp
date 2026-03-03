@@ -1,0 +1,31 @@
+#version 450
+// ema_sequential — Exponential moving average (sequential on GPU)
+//
+// out[0] = in[0]
+// out[i] = alpha * in[i] + (1 - alpha) * out[i-1]
+//
+// Single-thread kernel (local_size_x = 1). GPU benefit: data stays
+// resident in VRAM — no PCIe round-trip when chained with other GPU ops.
+//
+// 1 input binding, 1 output binding, 2 push constants (alpha, n)
+layout(local_size_x = 1) in;
+
+layout(set=0, binding=0) buffer Input  { float data[]; } inp;
+layout(set=0, binding=1) buffer Output { float data[]; } out_;
+
+layout(push_constant) uniform PC {
+    float alpha;
+    float n;
+} pc;
+
+void main() {
+    uint N = uint(pc.n);
+    if (N == 0u) return;
+
+    out_.data[0] = inp.data[0];
+    float one_minus_alpha = 1.0 - pc.alpha;
+
+    for (uint i = 1u; i < N; i++) {
+        out_.data[i] = pc.alpha * inp.data[i] + one_minus_alpha * out_.data[i - 1u];
+    }
+}

@@ -1,0 +1,19 @@
+#version 450
+// fill_pc — Fill array with constant value (GPU-native, no CPU upload)
+//
+// 1 output binding, 2 push constants (value, n)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Output { float data[]; } out_;
+
+layout(push_constant) uniform PC {
+    float value;
+    float n;
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint N = uint(pc.n);
+    if (gid >= N) return;
+    out_.data[gid] = pc.value;
+}

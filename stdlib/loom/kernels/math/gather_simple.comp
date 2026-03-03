@@ -1,0 +1,27 @@
+#version 450
+// gather_simple — Indexed read: out[gid] = data[int(indices[gid])]
+//
+// Out-of-bounds indices produce 0.0 (safe default).
+//
+// 2 input bindings (data, indices), 1 output binding, 2 push constants (data_len, n)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Data    { float data[]; } src;
+layout(set=0, binding=1) buffer Indices { float data[]; } idx;
+layout(set=0, binding=2) buffer Output  { float data[]; } out_;
+
+layout(push_constant) uniform PC {
+    float data_len;
+    float n;
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint N = uint(pc.n);
+    if (gid >= N) return;
+
+    uint i = uint(idx.data[gid]);
+    uint data_n = uint(pc.data_len);
+
+    out_.data[gid] = (i < data_n) ? src.data[i] : 0.0;
+}

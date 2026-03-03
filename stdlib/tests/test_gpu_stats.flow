@@ -4,8 +4,8 @@
 //
 // Run: octoflow run stdlib/tests/test_gpu_stats.flow --allow-ffi --allow-read
 
-use "../gpu/stats"
-use "../gpu/runtime"
+use "../loom/math/stats"
+use "../loom/ops/runtime"
 
 let mut test_counts = [0.0, 0.0]
 

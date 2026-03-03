@@ -1,0 +1,31 @@
+#version 450
+// scatter — Indexed write: dest[int(indices[gid])] = values[gid]
+//
+// Out-of-bounds indices are silently ignored (safe).
+// Dest buffer should be pre-filled with zeros via fill_pc before scatter.
+// Note: concurrent writes to same index are undefined (last-writer-wins).
+//
+// 2 input bindings (values, indices), 1 output binding, 2 push constants (dest_size, n)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Values  { float data[]; } vals;
+layout(set=0, binding=1) buffer Indices { float data[]; } idx;
+layout(set=0, binding=2) buffer Output  { float data[]; } dest;
+
+layout(push_constant) uniform PC {
+    float dest_size;
+    float n;
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint N = uint(pc.n);
+    if (gid >= N) return;
+
+    uint i = uint(idx.data[gid]);
+    uint dest_n = uint(pc.dest_size);
+
+    if (i < dest_n) {
+        dest.data[i] = vals.data[gid];
+    }
+}

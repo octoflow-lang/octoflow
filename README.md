@@ -8,13 +8,15 @@ OctoFlow is built from scratch for this reality. The GPU is the primary executio
 
 **CPU on demand, not GPU on demand.**
 
+![OctoFlow Demo](docs/demo.gif)
+
 > **On building this.** OctoFlow is AI-assisted — every architectural decision is human, LLMs generate the bulk of the code. Rust at the OS boundary, Vulkan for cross-vendor GPU, the Loom Engine's main/support split, JIT kernel emission via IR builder — all human decisions. AI writes the code; a human decides what code to write and why.
 
 **Works on any GPU.** NVIDIA, AMD, Intel — no CUDA required, no vendor SDK, no driver headaches. Just Vulkan.
 
 ---
 
-4.1 MB binary. 423 stdlib modules. 1,394 tests. 113 GPU kernels.
+4.3 MB binary. 436 stdlib modules. 966 tests. 128 GPU compute kernels.
 
 ---
 
@@ -22,10 +24,10 @@ OctoFlow is built from scratch for this reality. The GPU is the primary executio
 
 ```
 $ octoflow --version
-OctoFlow 1.4.0
+OctoFlow 1.5.5
 
 $ octoflow repl
-OctoFlow 1.4.0 — GPU-native language (423 stdlib modules)
+OctoFlow 1.5.5 — GPU-native language (436 stdlib modules)
 GPU: NVIDIA GeForce GTX 1660 SUPER
 >>> let a = gpu_fill(1.0, 10000000)
 >>> let b = gpu_fill(2.0, 10000000)
@@ -44,7 +46,7 @@ Download the binary. Unzip. Run. GPU detected automatically.
 | **Built-in LLM** | No | No | **Yes** (local GGUF inference) |
 | **External deps** | NVIDIA SDK / vendor SDK | Graphics API | **None** |
 | **GPU VM** | N/A | N/A | **Built-in** (Loom Engine) |
-| **Install** | Multi-GB SDK | Driver-only | **4.1 MB binary** |
+| **Install** | Multi-GB SDK | Driver-only | **4.3 MB binary** |
 
 ## Performance
 
@@ -53,7 +55,7 @@ Download the binary. Unzip. Run. GPU detected automatically.
 | gpu_add | 0.40 ms | 0.46 ms (deferred) | Batched command buffer |
 | gpu_mul | 0.53 ms | 3.27 ms (deferred) | Single fence per chain |
 | 5-step pipeline | 2.57 ms | 75 ms | Upload + compute + reduce |
-| Install size | ~4 GB SDK | **4.1 MB** binary | Zero dependencies |
+| Install size | ~4 GB SDK | **4.3 MB** binary | Zero dependencies |
 
 Deferred dispatch batches chained GPU operations into a single Vulkan command buffer submission. Per-operation overhead drops from ~12ms (synchronous) to ~4ms (batched) as chains grow.
 
@@ -84,7 +86,7 @@ loom_shutdown(vm)
 - **Park/unpark**: Suspend and resume GPU VMs with zero reallocation.
 - **JIT kernels**: Emit SPIR-V at runtime via the IR builder (80+ ops).
 - **Homeostasis**: GPU self-regulates dispatch pacing via timing feedback.
-- **113 compute kernels**: Scale, affine, matvec, reduce, sort, compress, ML ops.
+- **128 compute kernels**: Scale, affine, matvec, reduce, sort, compress, ML ops.
 
 > [Loom Engine Guide](docs/loom-engine.md) — architecture, dispatch chains, API reference
 
@@ -119,7 +121,7 @@ emit(warm, "output.png")
 
 Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 
-## Standard Library — 423 Modules
+## Standard Library — 436 Modules
 
 | Domain | Modules | Highlights |
 |---|---|---|
@@ -158,6 +160,7 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 - [GPU Guide](docs/gpu-guide.md) — GPU compute operations
 - [GPU Recipes](docs/gpu-recipes.md) — common GPU patterns
 - [Loom Engine](docs/loom-engine.md) — GPU VM architecture and API
+- [Loom Engine Architecture](docs/loom-engine-architecture.md) — the octopus model: brain + arms
 - [Loom Use Cases](docs/loom-engine-use-cases.md) — real-world Loom patterns
 - [GPU Sieve](docs/gpu-sieve.md) — prime sieve benchmark walkthrough
 - [GPU Benchmarks](docs/benchmark-gpu.md) — performance measurements
@@ -180,7 +183,7 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 .flow source -> Parser -> Preflight -> Compiler -> GPU VM / Vulkan Dispatch -> GPU
                                           |
                               SPIR-V emitters (written in .flow)
-                              113 pre-built compute kernels
+                              128 pre-built compute kernels
 ```
 
 Zero external dependencies. Only system libraries (vulkan-1, ws2_32).

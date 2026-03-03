@@ -160,3 +160,182 @@ fn homeo_sleep(ms)
   end
   return 0.0
 end
+
+// ═══════════════════════════════════════════════════════════════════
+//  MESO-LEVEL HOMEOSTASIS — Engine-Wide (v1.5.0)
+// ═══════════════════════════════════════════════════════════════════
+//
+// Micro:  per-VM self-tuning (regulator kernel + pacing) — in main_loom.flow
+// Meso:   cross-VM fairness, split/merge, re-precision, OctoPress balance
+// Macro:  thermal + VRAM budget (homeo_check_and_pace above)
+//
+// Meso tier is called by engine_adapt() in engine.flow.
+// Support Loom polls all arms, makes engine-wide decisions.
+
+fn meso_should_split(main_ids, n_looms)
+  // Returns 1.0 if workload justifies adding a Main Loom.
+  // Heuristic: if all Looms have high dispatch utilization,
+  // the engine is saturated and could benefit from more arms.
+  let mut saturated = 0.0
+  let mut i = 0.0
+  while i < n_looms
+    let status = loom_status(main_ids[i])
+    let pace = map_get(status, "pace")
+    // If pacing is active (> 0), this Loom is throttled
+    if pace > 0.0
+      saturated = saturated + 1.0
+    end
+    i = i + 1.0
+  end
+  // If > 75% of Looms are throttled, recommend split
+  if saturated > n_looms * 0.75
+    return 1.0
+  end
+  return 0.0
+end
+
+fn meso_should_merge(main_ids, n_looms)
+  // Returns 1.0 if idle Main Looms should be consolidated.
+  // Heuristic: if > 50% of Looms have zero dispatch count recently.
+  let mut idle = 0.0
+  let mut i = 0.0
+  while i < n_looms
+    let status = loom_status(main_ids[i])
+    let dispatches = map_get(status, "dispatches")
+    if dispatches < 1.0
+      idle = idle + 1.0
+    end
+    i = i + 1.0
+  end
+  if idle > n_looms * 0.5
+    return 1.0
+  end
+  return 0.0
+end
+
+fn meso_reprecision_check(main_ids, precisions, n_looms, vram_budget)
+  // Check if any Looms should be re-precisioned due to VRAM pressure.
+  // Returns index of Loom to demote, or -1.0 if none.
+  let vram_used = loom_vram_used()
+  let ratio = vram_used / vram_budget
+  if ratio < 0.9
+    // Under budget — no action needed
+    return 0.0 - 1.0
+  end
+  // Over 90% VRAM — find highest-precision Loom to demote
+  let mut best_idx = 0.0 - 1.0
+  let mut best_score = 0.0
+  let mut i = 0.0
+  while i < n_looms
+    let p = precisions[i]
+    let mut score = 0.0
+    if p == "F32"
+      score = 4.0
+    end
+    if p == "Q6_K"
+      score = 3.0
+    end
+    if p == "Q5_K"
+      score = 2.0
+    end
+    if p == "Q4_K"
+      score = 1.0
+    end
+    if score > best_score
+      best_score = score
+      best_idx = i
+    end
+    i = i + 1.0
+  end
+  return best_idx
+end
+
+fn meso_demote_precision(precisions, index)
+  // Demote a Loom's precision one tier lower.
+  // F32 -> Q6_K -> Q5_K -> Q4_K -> 1bit
+  let p = precisions[index]
+  if p == "F32"
+    precisions[index] = "Q6_K"
+    return "Q6_K"
+  end
+  if p == "Q6_K"
+    precisions[index] = "Q5_K"
+    return "Q5_K"
+  end
+  if p == "Q5_K"
+    precisions[index] = "Q4_K"
+    return "Q4_K"
+  end
+  if p == "Q4_K"
+    precisions[index] = "1bit"
+    return "1bit"
+  end
+  return p
+end
+
+fn meso_promote_precision(precisions, index)
+  // Promote a Loom's precision one tier higher.
+  // 1bit -> Q4_K -> Q5_K -> Q6_K -> F32
+  let p = precisions[index]
+  if p == "1bit"
+    precisions[index] = "Q4_K"
+    return "Q4_K"
+  end
+  if p == "Q4_K"
+    precisions[index] = "Q5_K"
+    return "Q5_K"
+  end
+  if p == "Q5_K"
+    precisions[index] = "Q6_K"
+    return "Q6_K"
+  end
+  if p == "Q6_K"
+    precisions[index] = "F32"
+    return "F32"
+  end
+  return p
+end
+
+fn meso_thermal_budget(main_ids, n_looms, target_temp)
+  // Distribute thermal budget across Main Looms.
+  // If GPU hot: throttle ALL Main Looms equally.
+  // If cool: release throttle, allow unhinged.
+  let temp = query_gpu_temp()
+  let headroom = target_temp - temp
+
+  if headroom < TEMP_MARGIN
+    // GPU hot — apply pacing to all Looms
+    let pace_us = (TEMP_MARGIN - headroom) * 100.0
+    let mut i = 0.0
+    while i < n_looms
+      loom_pace(main_ids[i], pace_us)
+      i = i + 1.0
+    end
+    return pace_us
+  end
+
+  // GPU cool — release all pacing
+  let mut i = 0.0
+  while i < n_looms
+    loom_pace(main_ids[i], 0.0)
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn meso_octopress_balance(main_ids, n_looms)
+  // Balance OctoPress tiers across all Main Looms.
+  // Reports which Looms have warm/cold weights that could be rebalanced.
+  // Returns count of Looms with warm data (candidates for promotion).
+  let mut warm_count = 0.0
+  let mut i = 0.0
+  while i < n_looms
+    let info = loom_vm_info(main_ids[i])
+    let heap_size = map_get(info, "heap_size")
+    if heap_size > 0.0
+      warm_count = warm_count + 1.0
+    end
+    i = i + 1.0
+  end
+  return warm_count
+end

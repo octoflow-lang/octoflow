@@ -1,0 +1,22 @@
+#version 450
+// range_pc — Generate arithmetic sequence on GPU (no CPU upload)
+//
+// out[gid] = start + float(gid) * step
+//
+// 1 output binding, 3 push constants (start, step, n)
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0) buffer Output { float data[]; } out_;
+
+layout(push_constant) uniform PC {
+    float start;
+    float step;
+    float n;
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint N = uint(pc.n);
+    if (gid >= N) return;
+    out_.data[gid] = pc.start + float(gid) * pc.step;
+}

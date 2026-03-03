@@ -1,0 +1,49 @@
+// S3: Signal Processing — OctoFlow
+// EMA smoothing on 2M time series points
+// OctoFlow has built-in gpu_ema — PyTorch must use a CPU loop
+// GPU ops: random, ema, mean, stddev, sub, abs
+
+let N = 2000000.0
+
+fn signal_process(n)
+  // Noisy signal: random values simulating sensor data
+  let signal = gpu_random(n, -1.0, 1.0)
+
+  // Fast EMA (alpha=0.1 — responsive smoothing)
+  let fast_ema = gpu_ema(signal, 0.1)
+
+  // Slow EMA (alpha=0.01 — heavy smoothing)
+  let slow_ema = gpu_ema(signal, 0.01)
+
+  // Crossover signal: fast - slow (trend detection)
+  let crossover = gpu_sub(fast_ema, slow_ema)
+  let cross_abs = gpu_abs(crossover)
+
+  // Statistics on the smoothed output
+  let smooth_mean = gpu_mean(fast_ema)
+  let smooth_std = gpu_stddev(fast_ema)
+  let cross_mean = gpu_mean(cross_abs)
+  return cross_mean
+end
+
+// Warmup
+let warm = signal_process(N)
+
+// Timed: best of 3
+let mut best = 99999999.0
+let mut result = 0.0
+for i in range(0, 3)
+  let t0 = loom_elapsed_us()
+  result = signal_process(N)
+  let t1 = loom_elapsed_us()
+  let dt = t1 - t0
+  if dt < best
+    best = dt
+  end
+end
+
+print("BENCH|s3_signal_processing|time_us|{best}|us")
+print("BENCH|s3_signal_processing|crossover_mean|{result}|")
+print("BENCH|s3_signal_processing|points|2000000|count")
+print("BENCH|s3_signal_processing|loc|30|lines")
+print("BENCH|s3_signal_processing|framework|octoflow|")

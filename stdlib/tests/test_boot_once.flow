@@ -3,7 +3,7 @@
 // GPU runs all 10 doublings autonomously. CPU passive until fence.
 // Verify: 1.0 * 2^10 = 1024.0
 
-use "../gpu/runtime"
+use "../loom/ops/runtime"
 
 let N = 256.0
 let BUF_BYTES = N * 4.0

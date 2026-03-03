@@ -1,0 +1,67 @@
+// emit_vm_residual_add.flow — VM Residual Add Kernel (Globals)
+//
+// Computes: globals[dst_off + gid] = globals[src_off + gid] + globals[res_off + gid]
+//
+// Element-wise vector addition in globals. Used for skip connections in
+// transformer layers: hidden_out = layer_output + residual_input
+//
+// Push constants:
+//   pc[0] = src_off (float → uint, source vector offset in globals)
+//   pc[1] = res_off (float → uint, residual vector offset in globals)
+//   pc[2] = dst_off (float → uint, destination offset in globals)
+//   pc[3] = count   (float → uint, number of elements)
+//
+// Binding layout (VM 4-SSBO, ir_input_count=3):
+//   Binding 0: registers (unused)
+//   Binding 1: metrics   (unused)
+//   Binding 2: globals   (read src + residual, write dst)
+//   Binding 3: control   (unused)
+//
+// Dispatch: ceil(count / 256) workgroups
+//
+// Run: octoflow run stdlib/loom/emit/nn/emit_vm_residual_add.flow --allow-read --allow-write
+
+use "../../../compiler/ir"
+
+fn emit_vm_residual_add(out_path)
+  ir_new()
+  ir_input_count = 3.0
+
+  let entry = ir_block("entry")
+  let body = ir_block("body")
+  let exit_block = ir_block("exit")
+
+  // ── Entry: gid, push constants, bounds check ──
+  let gid = ir_load_gid(entry)
+  let pc_src = ir_push_const(entry, 0.0)
+  let pc_res = ir_push_const(entry, 1.0)
+  let pc_dst = ir_push_const(entry, 2.0)
+  let pc_cnt = ir_push_const(entry, 3.0)
+  let cnt_u = ir_ftou(entry, pc_cnt)
+  let oob = ir_ugte(entry, gid, cnt_u)
+  let _sm = ir_selection_merge(entry, exit_block)
+  let _br = ir_term_cond_branch(entry, oob, exit_block, body)
+
+  // ── Body: load src + residual from globals, add, store to globals ──
+  let src_off_u = ir_ftou(body, pc_src)
+  let res_off_u = ir_ftou(body, pc_res)
+  let dst_off_u = ir_ftou(body, pc_dst)
+  let src_idx = ir_iadd(body, src_off_u, gid)
+  let res_idx = ir_iadd(body, res_off_u, gid)
+  let dst_idx = ir_iadd(body, dst_off_u, gid)
+  let src_val = ir_load_input_at(body, 2.0, src_idx)
+  let res_val = ir_load_input_at(body, 2.0, res_idx)
+  let result = ir_fadd(body, src_val, res_val)
+  let _s = ir_buf_store_f(body, 2.0, dst_idx, result)
+  let _br2 = ir_term_branch(body, exit_block)
+
+  // ── Exit ──
+  let _ret = ir_term_return(exit_block)
+
+  ir_emit_spirv(out_path)
+  return 0.0
+end
+
+let out = "stdlib/loom/kernels/nn/vm_residual_add.spv"
+let _r = emit_vm_residual_add(out)
+print("Emitted: {out}")

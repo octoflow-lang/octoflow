@@ -1,0 +1,401 @@
+// Loom Engine Benchmark — Tier 2: Single Arm (Main Loom)
+// Validates: dispatch chains, pipeline reuse, data round-trip
+// Run: octoflow run examples/bench_loom_t2_single_arm.flow --allow-read
+//
+// What this proves:
+//   A single Main Loom (GPU VM) runs multi-kernel dispatch chains.
+//   Queue N kernels → build once → submit once = faster than N individual execs.
+//   SPIR-V caching makes subsequent runs faster (no disk I/O).
+//
+// Uses Loom register API:
+//   loom_boot, loom_write_register, loom_read, loom_dispatch,
+//   loom_build, loom_run, loom_free, loom_shutdown
+//
+// Kernel: vm_scale.spv — registers[off + gid] *= scale
+//   Push constants: [offset, scale, count]
+
+print("=== OctoFlow Loom Benchmark — Tier 2: Single Arm ===")
+print("")
+
+// ─── Warmup (prime GPU + Vulkan pipeline) ───
+let w1 = gpu_fill(1.0, 1000)
+let w2 = gpu_fill(2.0, 1000)
+let w3 = gpu_add(w1, w2)
+
+let n = 1000000.0
+let wg = loom_workgroups(n)
+
+// ─── Push constant arrays (loom_dispatch requires named arrays) ───
+let pc_x2 = [0.0, 2.0, n]
+let pc_x3 = [0.0, 3.0, n]
+let pc_x05 = [0.0, 0.5, n]
+let pc_x01 = [0.0, 0.1, n]
+let pc_x10 = [0.0, 10.0, n]
+let pc_x25 = [0.0, 2.5, n]
+let pc_x4 = [0.0, 4.0, n]
+let pc_x025 = [0.0, 0.25, n]
+
+let kernel = "stdlib/loom/kernels/ops/vm_scale.spv"
+
+// ════════════════════════════════════════════════════════════
+// TEST 1: Single kernel dispatch — baseline timing
+// Boot VM → write register → dispatch scale → exec → read
+// ════════════════════════════════════════════════════════════
+print("[T2.1] Single kernel dispatch — 1M elements")
+
+let fill1 = gpu_fill(3.0, n)
+
+// Phase breakdown
+let t_boot0 = loom_elapsed_us()
+let vm1 = loom_boot(1.0, n, 0.0)
+let t_boot1 = loom_elapsed_us()
+let boot_us = t_boot1 - t_boot0
+
+let t_write0 = loom_elapsed_us()
+loom_write_register(vm1, 0.0, 0.0, fill1)
+let t_write1 = loom_elapsed_us()
+let write_us = t_write1 - t_write0
+
+// Dispatch: vm_scale kernel — scale by 2.0
+let t_dispatch0 = loom_elapsed_us()
+let _d1 = loom_dispatch(vm1, kernel, pc_x2, wg)
+let p1 = loom_build(vm1)
+let _e1 = loom_run(p1)
+loom_free(p1)
+let t_dispatch1 = loom_elapsed_us()
+let dispatch_us = t_dispatch1 - t_dispatch0
+
+let t_read0 = loom_elapsed_us()
+let result1 = loom_read(vm1, 0.0, 0.0, 10.0)
+let t_read1 = loom_elapsed_us()
+let read_us = t_read1 - t_read0
+
+let v1 = result1[0]
+if v1 == 6.0
+    print("  correctness: OK (3.0 * 2.0 = {v1})")
+else
+    print("  correctness: FAIL (expected 6.0, got {v1})")
+end
+print("  boot:     {boot_us:.0} us")
+print("  write:    {write_us:.0} us (1M floats → register)")
+print("  dispatch: {dispatch_us:.0} us (dispatch+build+exec+free)")
+print("  read:     {read_us:.0} us (10 floats)")
+let total1 = boot_us + write_us + dispatch_us + read_us
+print("  total:    {total1:.0} us")
+print("")
+
+loom_shutdown(vm1)
+
+// ════════════════════════════════════════════════════════════
+// TEST 2: 3-kernel dispatch chain vs 3 individual execs
+// Chain: scale(x2) → scale(x3) → scale(x0.5)
+// Expected: 3.0 * 2 * 3 * 0.5 = 9.0
+// ════════════════════════════════════════════════════════════
+print("[T2.2] 3-kernel chain vs 3 individual execs — 1M elements")
+
+// Method A: chained (queue 3, build once, submit once)
+let vm2a = loom_boot(1.0, n, 0.0)
+let fill2 = gpu_fill(3.0, n)
+
+let mut chain3_best = 99999.0
+for run in range(1, 4)
+    loom_write_register(vm2a, 0.0, 0.0, fill2)
+    let t0 = loom_elapsed_us()
+    let _da1 = loom_dispatch(vm2a, kernel, pc_x2, wg)
+    let _da2 = loom_dispatch(vm2a, kernel, pc_x3, wg)
+    let _da3 = loom_dispatch(vm2a, kernel, pc_x05, wg)
+    let pa = loom_build(vm2a)
+    let _ea = loom_run(pa)
+    loom_free(pa)
+    let dt = loom_elapsed_us() - t0
+    if run == 1
+        let r2a = loom_read(vm2a, 0.0, 0.0, 1.0)
+        let v2a = r2a[0]
+        if v2a == 9.0
+            print("  chain correctness: OK ({v2a})")
+        else
+            print("  chain correctness: FAIL (expected 9.0, got {v2a})")
+        end
+    end
+    print("  chain run {run}: {dt:.0} us")
+    if dt < chain3_best
+        chain3_best = dt
+    end
+end
+
+// Method B: 3 individual execs (build+submit 3 separate times)
+let vm2b = loom_boot(1.0, n, 0.0)
+
+let mut indiv3_best = 99999.0
+for run in range(1, 4)
+    loom_write_register(vm2b, 0.0, 0.0, fill2)
+    let t0 = loom_elapsed_us()
+    let _db1 = loom_dispatch(vm2b, kernel, pc_x2, wg)
+    let pb1 = loom_build(vm2b)
+    let _eb1 = loom_run(pb1)
+    loom_free(pb1)
+    let _db2 = loom_dispatch(vm2b, kernel, pc_x3, wg)
+    let pb2 = loom_build(vm2b)
+    let _eb2 = loom_run(pb2)
+    loom_free(pb2)
+    let _db3 = loom_dispatch(vm2b, kernel, pc_x05, wg)
+    let pb3 = loom_build(vm2b)
+    let _eb3 = loom_run(pb3)
+    loom_free(pb3)
+    let dt = loom_elapsed_us() - t0
+    if run == 1
+        let r2b = loom_read(vm2b, 0.0, 0.0, 1.0)
+        let v2b = r2b[0]
+        if v2b == 9.0
+            print("  individual correctness: OK ({v2b})")
+        else
+            print("  individual correctness: FAIL (expected 9.0, got {v2b})")
+        end
+    end
+    print("  individual run {run}: {dt:.0} us")
+    if dt < indiv3_best
+        indiv3_best = dt
+    end
+end
+
+print("  ── 3-kernel comparison ──")
+print("  chain (1 submit):       {chain3_best:.0} us")
+print("  individual (3 submits): {indiv3_best:.0} us")
+print("")
+
+loom_shutdown(vm2a)
+loom_shutdown(vm2b)
+
+// ════════════════════════════════════════════════════════════
+// TEST 3: 5-kernel dispatch chain
+// scale(x2) → scale(x3) → scale(x0.1) → scale(x10) → scale(x0.5)
+// Expected: 3.0 * 2 * 3 * 0.1 * 10 * 0.5 = 9.0
+// ════════════════════════════════════════════════════════════
+print("[T2.3] 5-kernel dispatch chain — 1M elements")
+
+let vm3 = loom_boot(1.0, n, 0.0)
+let fill3 = gpu_fill(3.0, n)
+
+let mut chain5_best = 99999.0
+for run in range(1, 4)
+    loom_write_register(vm3, 0.0, 0.0, fill3)
+    let t0 = loom_elapsed_us()
+    let _d3a = loom_dispatch(vm3, kernel, pc_x2, wg)
+    let _d3b = loom_dispatch(vm3, kernel, pc_x3, wg)
+    let _d3c = loom_dispatch(vm3, kernel, pc_x01, wg)
+    let _d3d = loom_dispatch(vm3, kernel, pc_x10, wg)
+    let _d3e = loom_dispatch(vm3, kernel, pc_x05, wg)
+    let p3 = loom_build(vm3)
+    let _e3 = loom_run(p3)
+    loom_free(p3)
+    let dt = loom_elapsed_us() - t0
+    if run == 1
+        let r3 = loom_read(vm3, 0.0, 0.0, 1.0)
+        let v3 = r3[0]
+        print("  correctness: result[0] = {v3} (expected ~9.0)")
+    end
+    print("  run {run}: {dt:.0} us (5 kernels, 1 submit)")
+    if dt < chain5_best
+        chain5_best = dt
+    end
+end
+print("  best: {chain5_best:.0} us")
+print("")
+
+loom_shutdown(vm3)
+
+// ════════════════════════════════════════════════════════════
+// TEST 4: Repeated chain execution (SPIR-V caching)
+// Same 3-kernel chain executed 5 times
+// 2nd+ runs should be faster (SPIR-V cached, no disk I/O)
+// Expected: 2.0 * 3 * 2 * 0.5 = 6.0
+// ════════════════════════════════════════════════════════════
+print("[T2.4] Repeated chain execution — 3 kernels, 5 runs")
+
+let vm4 = loom_boot(1.0, n, 0.0)
+let fill4 = gpu_fill(2.0, n)
+
+for run in range(1, 6)
+    loom_write_register(vm4, 0.0, 0.0, fill4)
+    let t0 = loom_elapsed_us()
+    let _d4a = loom_dispatch(vm4, kernel, pc_x3, wg)
+    let _d4b = loom_dispatch(vm4, kernel, pc_x2, wg)
+    let _d4c = loom_dispatch(vm4, kernel, pc_x05, wg)
+    let p4 = loom_build(vm4)
+    let _e4 = loom_run(p4)
+    loom_free(p4)
+    let dt = loom_elapsed_us() - t0
+    if run == 1
+        let r4 = loom_read(vm4, 0.0, 0.0, 1.0)
+        let v4 = r4[0]
+        if v4 == 6.0
+            print("  correctness: OK ({v4})")
+        else
+            print("  correctness: FAIL (expected 6.0, got {v4})")
+        end
+    end
+    print("  run {run}: {dt:.0} us")
+end
+print("  (run 1 loads .spv from disk; runs 2-5 use cached SPIR-V)")
+print("")
+
+loom_shutdown(vm4)
+
+// ════════════════════════════════════════════════════════════
+// TEST 5: Data round-trip — write/compute/read breakdown
+// Write 1M floats → scale → read 1M floats back
+// ════════════════════════════════════════════════════════════
+print("[T2.5] Data round-trip — 1M floats")
+
+let vm5 = loom_boot(1.0, n, 0.0)
+let fill5 = gpu_fill(4.0, n)
+
+// Warmup
+loom_write_register(vm5, 0.0, 0.0, fill5)
+let _dw = loom_dispatch(vm5, kernel, pc_x2, wg)
+let pw = loom_build(vm5)
+let _ew = loom_run(pw)
+loom_free(pw)
+
+let mut rt_write_best = 99999.0
+let mut rt_compute_best = 99999.0
+let mut rt_read_best = 99999.0
+
+for run in range(1, 4)
+    // Write
+    let tw0 = loom_elapsed_us()
+    loom_write_register(vm5, 0.0, 0.0, fill5)
+    let tw1 = loom_elapsed_us()
+    let wt = tw1 - tw0
+
+    // Compute
+    let tc0 = loom_elapsed_us()
+    let _d5 = loom_dispatch(vm5, kernel, pc_x25, wg)
+    let p5 = loom_build(vm5)
+    let _e5 = loom_run(p5)
+    loom_free(p5)
+    let tc1 = loom_elapsed_us()
+    let ct = tc1 - tc0
+
+    // Read (full 1M)
+    let tr0 = loom_elapsed_us()
+    let r5 = loom_read(vm5, 0.0, 0.0, n)
+    let tr1 = loom_elapsed_us()
+    let rt = tr1 - tr0
+
+    if run == 1
+        let v5 = r5[0]
+        print("  correctness: 4.0 * 2.5 = {v5} (expected 10.0)")
+        let read_count = len(r5)
+        print("  read back: {read_count} floats")
+    end
+    print("  run {run}:  write={wt:.0}  compute={ct:.0}  read={rt:.0} us")
+
+    if wt < rt_write_best
+        rt_write_best = wt
+    end
+    if ct < rt_compute_best
+        rt_compute_best = ct
+    end
+    if rt < rt_read_best
+        rt_read_best = rt
+    end
+end
+
+let rt_total_best = rt_write_best + rt_compute_best + rt_read_best
+print("  best:  write={rt_write_best:.0}  compute={rt_compute_best:.0}  read={rt_read_best:.0} us")
+print("  total: {rt_total_best:.0} us")
+print("")
+
+loom_shutdown(vm5)
+
+// ════════════════════════════════════════════════════════════
+// TEST 6: Chain depth scaling — 1/3/5/10 kernels
+// ════════════════════════════════════════════════════════════
+print("[T2.6] Chain depth scaling — 1/3/5/10 kernels")
+
+let vm6 = loom_boot(1.0, n, 0.0)
+let fill6 = gpu_fill(1.0, n)
+
+// 1 kernel
+loom_write_register(vm6, 0.0, 0.0, fill6)
+let t_1k = loom_elapsed_us()
+let _d6a1 = loom_dispatch(vm6, kernel, pc_x2, wg)
+let p6a = loom_build(vm6)
+let _e6a = loom_run(p6a)
+loom_free(p6a)
+let dt_1k = loom_elapsed_us() - t_1k
+print("  1 kernel:  {dt_1k:.0} us")
+
+// 3 kernels
+loom_write_register(vm6, 0.0, 0.0, fill6)
+let t_3k = loom_elapsed_us()
+let _d6b1 = loom_dispatch(vm6, kernel, pc_x2, wg)
+let _d6b2 = loom_dispatch(vm6, kernel, pc_x3, wg)
+let _d6b3 = loom_dispatch(vm6, kernel, pc_x05, wg)
+let p6b = loom_build(vm6)
+let _e6b = loom_run(p6b)
+loom_free(p6b)
+let dt_3k = loom_elapsed_us() - t_3k
+print("  3 kernels: {dt_3k:.0} us")
+
+// 5 kernels
+loom_write_register(vm6, 0.0, 0.0, fill6)
+let t_5k = loom_elapsed_us()
+let _d6c1 = loom_dispatch(vm6, kernel, pc_x2, wg)
+let _d6c2 = loom_dispatch(vm6, kernel, pc_x3, wg)
+let _d6c3 = loom_dispatch(vm6, kernel, pc_x05, wg)
+let _d6c4 = loom_dispatch(vm6, kernel, pc_x2, wg)
+let _d6c5 = loom_dispatch(vm6, kernel, pc_x05, wg)
+let p6c = loom_build(vm6)
+let _e6c = loom_run(p6c)
+loom_free(p6c)
+let dt_5k = loom_elapsed_us() - t_5k
+print("  5 kernels: {dt_5k:.0} us")
+
+// 10 kernels: net = 1.0 * 2 * 0.5 * 3 * 0.5 * 2 * 0.5 * 4 * 0.25 * 2 * 0.5 = 1.5
+loom_write_register(vm6, 0.0, 0.0, fill6)
+let t_10k = loom_elapsed_us()
+let _d6d1 = loom_dispatch(vm6, kernel, pc_x2, wg)
+let _d6d2 = loom_dispatch(vm6, kernel, pc_x05, wg)
+let _d6d3 = loom_dispatch(vm6, kernel, pc_x3, wg)
+let _d6d4 = loom_dispatch(vm6, kernel, pc_x05, wg)
+let _d6d5 = loom_dispatch(vm6, kernel, pc_x2, wg)
+let _d6d6 = loom_dispatch(vm6, kernel, pc_x05, wg)
+let _d6d7 = loom_dispatch(vm6, kernel, pc_x4, wg)
+let _d6d8 = loom_dispatch(vm6, kernel, pc_x025, wg)
+let _d6d9 = loom_dispatch(vm6, kernel, pc_x2, wg)
+let _d6d10 = loom_dispatch(vm6, kernel, pc_x05, wg)
+let p6d = loom_build(vm6)
+let _e6d = loom_run(p6d)
+loom_free(p6d)
+let dt_10k = loom_elapsed_us() - t_10k
+let r6_10 = loom_read(vm6, 0.0, 0.0, 1.0)
+let v6_10 = r6_10[0]
+print("  10 kernels: {dt_10k:.0} us (result={v6_10}, expected=1.5)")
+
+print("")
+print("  Scaling (ratio to 1-kernel):")
+let ratio_3 = dt_3k / dt_1k
+let ratio_5 = dt_5k / dt_1k
+let ratio_10 = dt_10k / dt_1k
+print("  3/1:  {ratio_3:.2}x")
+print("  5/1:  {ratio_5:.2}x")
+print("  10/1: {ratio_10:.2}x")
+print("  (sub-linear = dispatch chain is efficient)")
+print("")
+
+loom_shutdown(vm6)
+
+// ════════════════════════════════════════════════════════════
+// SUMMARY
+// ════════════════════════════════════════════════════════════
+print("── Tier 2 Summary (1M elements, best of 3) ──")
+print("  Single dispatch:       {dispatch_us:.0} us")
+print("  3-kernel chain:        {chain3_best:.0} us")
+print("  3-kernel individual:   {indiv3_best:.0} us")
+print("  5-kernel chain:        {chain5_best:.0} us")
+print("  Data round-trip:       {rt_total_best:.0} us (write+compute+read)")
+print("  Chain scaling 10/1:    {ratio_10:.2}x")
+print("")
+print("--- Tier 2 complete ---")

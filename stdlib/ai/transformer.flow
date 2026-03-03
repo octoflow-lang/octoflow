@@ -10,9 +10,9 @@
 // eps parameter for adaptive RMSNorm (read from GGUF metadata).
 // n_kv_head for GQA support (n_kv_head < n_head).
 
-use "../gpu/runtime"
-use "../gpu/attention"
-use "../gpu/ffn"
+use "../loom/ops/runtime"
+use "../loom/nn/attention"
+use "../loom/nn/ffn"
 
 fn transformer_layer(hidden, attn_norm_w, wq, wk, wv, wo, ffn_norm_w, w_gate, w_up, w_down, pos, n_head, n_kv_head, n_embd, n_ff, eps)
   // 1. Pre-attention RMSNorm (CPU — adaptive eps)

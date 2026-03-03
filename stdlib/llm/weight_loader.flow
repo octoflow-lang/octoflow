@@ -10,6 +10,8 @@
 //   - F32 tensors (norm weights, small tensors)
 //   - F16 tensors (embedding, output)
 //   - Q4_K_M tensors (bulk weights) — CPU dequant, GPU dequant later
+//   - Q5_K tensors — use gguf_load_tensor() Rust builtin (v1.5.0+)
+//   - Q6_K tensors — file-based functions only (load_tensor_from_file, etc.)
 //
 // Functions:
 //   load_layer_weights(file_bytes, model, layer_idx) → weight map
@@ -182,7 +184,8 @@ fn load_tensor_named(file_bytes, model, tname)
   end
 
   // Unsupported type — return zeros
-  print("WARNING: Unsupported tensor type {ttype}, returning zeros")
+  // Q5_K (type 13) and Q6_K (type 14) require gguf_load_tensor() Rust builtin
+  print("WARNING: Unsupported tensor type {ttype} for {tname} — use gguf_load_tensor() for Q5_K/Q6_K")
   let mut _ltn_zeros = []
   let mut i2 = 0.0
   while i2 < count
@@ -288,8 +291,8 @@ fn load_embedding_row(file_bytes, model, token_id, n_embd)
     return row
   end
 
-  // Unsupported type
-  print("WARNING: Unsupported embedding type {ttype}")
+  // Unsupported type — Q5_K/Q6_K embeddings need gguf_load_tensor()
+  print("WARNING: Unsupported embedding type {ttype} — use gguf_load_tensor() for Q5_K/Q6_K")
   let mut zeros = []
   let mut zi = 0.0
   while zi < n_embd
@@ -1189,8 +1192,9 @@ fn load_tensor_row_from_file(file_path, model, tname, row_idx, row_size)
 end
 
 // ══════════════════════════════════════════════════════════════════════
-// FAST TENSOR LOADING — Rust OS-boundary dequant (v1.22)
+// FAST TENSOR LOADING — Rust OS-boundary dequant (v1.5.0)
 // Use gguf_load_tensor(file_path, model, tensor_name) directly.
 // It's a Rust builtin: returns GpuFloats array (never cloned).
+// Supports: F32, F16, Q4_K, Q5_K (v1.5.0+), Q6_K
 // API: gguf_load_tensor(file_path, model_map, "blk.0.attn_q.weight")
 // ══════════════════════════════════════════════════════════════════════

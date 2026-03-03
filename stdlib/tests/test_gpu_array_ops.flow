@@ -2,8 +2,8 @@
 //
 // Phase 92 Batch 2: Test array transformation, filtering, and mapping operations.
 
-use "../gpu/runtime"
-use "../gpu/array_ops"
+use "../loom/ops/runtime"
+use "../loom/data/array_ops"
 
 fn test_gpu_filter()
   print("test_gpu_filter...")

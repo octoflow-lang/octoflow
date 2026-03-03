@@ -1,6 +1,6 @@
 // Tests for Data Aggregation GPU Functions
 
-use "../gpu/aggregate.flow"
+use "../loom/data/aggregate"
 
 let pass_count = 0.0
 let fail_count = 0.0

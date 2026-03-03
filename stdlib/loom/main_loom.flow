@@ -1,0 +1,357 @@
+// stdlib/loom/main_loom.flow — Main Loom: Autonomous GPU Arm
+//
+// A Main Loom wraps a GPU VM with self-regulation capabilities.
+// It is "unhinged" — runs at full GPU speed, never waits for CPU.
+// It NEVER messages Support Loom — only API polling (metrics SSBO).
+// It CAN mailbox sibling Main Looms under the same engine.
+//
+// Each Main Loom has:
+//   - Precision tier (1-bit, Q4_K, Q5_K, Q6_K, Q8_0, F32)
+//   - OctoPress state (hot/warm/cold weight management)
+//   - Micro-homeostasis (regulator kernel + adaptive pacing)
+//   - JIT kernel dispatch (in-memory SPIR-V via loom_dispatch_jit)
+//
+// State layout (parallel arrays managed by engine.flow):
+//   main_ids[i]     = VM ID (from loom_boot)
+//   precisions[i]   = precision tier string
+//   ocp_hot[i]      = count of hot floats in Globals
+//   ocp_warm[i]     = count of warm floats in Heap
+//   ocp_cold[i]     = count of cold floats on disk
+//
+// Kernel paths:
+//   Q4_K dequant:  stdlib/loom/kernels/ops/vm_dequant_q4k.spv
+//   Q6_K dequant:  stdlib/llm/kernels/dequant_q6k.spv
+//   Maxnorm:       stdlib/loom/kernels/ops/vm_maxnorm.spv
+//   Regulator:     stdlib/loom/kernels/ops/vm_regulator.spv
+
+// ═══════════════════════════════════════════════════════════════════
+//  CORE DISPATCH — Raw GPU, unhinged
+// ═══════════════════════════════════════════════════════════════════
+
+fn main_dispatch(vm_id, kernel, pc, wg)
+  // Stage a dispatch into the command buffer (no GPU work yet)
+  loom_dispatch(vm_id, kernel, pc, wg)
+end
+
+fn main_build(vm_id)
+  // Compile all staged dispatches into one command buffer
+  return loom_build(vm_id)
+end
+
+fn main_run_prog(prog)
+  // Submit to GPU — goes unhinged (one vkQueueSubmit, one fence)
+  loom_run(prog)
+end
+
+fn main_free_prog(prog)
+  // Release command buffer
+  loom_free(prog)
+end
+
+fn main_exec(vm_id)
+  // Convenience: build + run + free in one call
+  let prog = loom_build(vm_id)
+  loom_run(prog)
+  loom_free(prog)
+end
+
+fn main_write(vm_id, offset, data)
+  // CPU → Globals SSBO (binding 2)
+  loom_write(vm_id, offset, data)
+end
+
+fn main_read(vm_id, offset, count)
+  // Globals SSBO → CPU
+  return loom_read_globals(vm_id, offset, count)
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  MAILBOX — Sibling Main Loom communication (optional)
+// ═══════════════════════════════════════════════════════════════════
+
+fn main_send(vm_id, mailbox, offset, count)
+  // Send from this Loom's Globals → mailbox ring buffer
+  return loom_mail_send(mailbox, vm_id, offset, count)
+end
+
+fn main_recv(vm_id, mailbox, offset)
+  // Receive from mailbox ring buffer → this Loom's Globals
+  return loom_mail_recv(mailbox, vm_id, offset)
+end
+
+fn main_poll_mail(mailbox)
+  // Check if mailbox has pending messages (non-blocking)
+  return loom_mail_poll(mailbox)
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  OCTOPRESS — Three-Tier Weight Management
+// ═══════════════════════════════════════════════════════════════════
+//
+//   hot  = fp32 in Globals SSBO   → active compute, highest fidelity
+//   warm = compressed in Heap SSBO → OctoPress fractal, GPU-decompress
+//   cold = on disk (.ocp file)    → streamed via octopress_stream
+//
+// OctoPress keeps evicted weights in VRAM (warm) at reduced footprint.
+// Promoting warm→hot is a single GPU dispatch (no CPU roundtrip).
+// This is faster than cold→hot (disk I/O).
+
+fn main_load_hot(vm_id, offset, data)
+  // Direct load: data → Globals (hot tier)
+  loom_write(vm_id, offset, data)
+  return len(data)
+end
+
+fn main_load_warm(vm_id, data)
+  // Compress data → Heap SSBO (warm tier)
+  // Uses fractal compression (method 2) for best ratio
+  let compressed = octopress_encode(data, 2.0)
+  let n = len(compressed)
+  if n > 0.0
+    vm_set_heap(vm_id, compressed)
+  end
+  return n
+end
+
+fn main_promote_warm(vm_id, dequant_kernel, pc, wg)
+  // warm → hot: dispatch dequant kernel (Heap → Globals)
+  // GPU-autonomous — no CPU roundtrip, part of dispatch chain
+  loom_dispatch(vm_id, dequant_kernel, pc, wg)
+end
+
+fn main_evict_to_cold(data, path)
+  // hot → cold: compress + save to .ocp file on disk
+  let compressed = octopress_encode(data, 2.0)
+  octopress_save(compressed, path)
+  return len(compressed)
+end
+
+fn main_stream_from_cold(vm_id, path, offset)
+  // cold → hot: stream .ocp file block-by-block → Globals
+  let handle = octopress_stream_open(path)
+  if handle < 0.5
+    print("main_stream_from_cold: failed to open {path}")
+    return 0.0
+  end
+  let mut total = 0.0
+  let mut done = 0.0
+  while done < 0.5
+    let block = octopress_stream_next(handle)
+    if block == 0.0
+      done = 1.0
+    else
+      let n = len(block)
+      if n > 0.0
+        loom_write(vm_id, offset + total, block)
+        total = total + n
+      else
+        done = 1.0
+      end
+    end
+  end
+  octopress_stream_close(handle)
+  return total
+end
+
+fn main_octopress_info(path)
+  // Read .ocp header without decompressing (16 bytes only)
+  return octopress_info(path)
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  BITWISE PRECISION — Sieve-Pattern Kernel Selection
+// ═══════════════════════════════════════════════════════════════════
+//
+// Each Main Loom operates at a precision tier assigned by Support Loom.
+// CPU-side branching selects the appropriate dequant kernel — same
+// pattern as prime sieve v7's dual-kernel architecture:
+//   small primes → word-centric kernel | large primes → prime-centric kernel
+//   Q4_K tensor  → vm_dequant_q4k.spv  | Q6_K tensor → dequant_q6k.spv
+//   F32 tensor   → no dequant           | 1-bit       → JIT-emitted kernel
+//
+// All compute happens in fp32 after dequantization.
+
+fn main_select_dequant(precision)
+  // Returns dequant kernel path for the given precision tier
+  // Returns "none" if no dequant needed (F32)
+  // Returns "jit" if precision requires JIT emission (1-bit, custom)
+  if precision == "Q4_K"
+    return "stdlib/loom/kernels/ops/vm_dequant_q4k.spv"
+  end
+  if precision == "Q6_K"
+    return "stdlib/llm/kernels/dequant_q6k.spv"
+  end
+  if precision == "F32"
+    return "none"
+  end
+  if precision == "Q5_K"
+    // Q5_K has CPU-only dequant (gguf_dequant_q5k_block)
+    // For GPU dispatch, use JIT-emitted kernel
+    return "jit"
+  end
+  if precision == "1bit"
+    return "jit"
+  end
+  // Default: no dequant
+  return "none"
+end
+
+fn main_needs_dequant(precision)
+  // Returns 1.0 if precision tier requires a dequant step
+  if precision == "F32"
+    return 0.0
+  end
+  return 1.0
+end
+
+fn main_dispatch_with_dequant(vm_id, precision, compute_kernel, compute_pc, compute_wg, dequant_pc, dequant_wg)
+  // Combined dequant + compute in one dispatch chain
+  // Heap → Globals (dequant) then Globals → Globals (compute)
+  // Both dispatches batched into 1 vkQueueSubmit
+  let dequant = main_select_dequant(precision)
+  if dequant != "none"
+    if dequant != "jit"
+      loom_dispatch(vm_id, dequant, dequant_pc, dequant_wg)
+    end
+    // JIT case: caller must have dispatched JIT kernel before calling this
+  end
+  loom_dispatch(vm_id, compute_kernel, compute_pc, compute_wg)
+end
+
+fn main_dequant_workgroups(precision, n_weights)
+  // Compute workgroup count for dequant kernel based on precision
+  // Q4_K: 256 weights per block, 1 workgroup per block
+  // Q6_K: 256 weights per block, 1 workgroup per block
+  if precision == "Q4_K"
+    return ceil(n_weights / 256.0)
+  end
+  if precision == "Q6_K"
+    return ceil(n_weights / 256.0)
+  end
+  return 1.0
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  MICRO-HOMEOSTASIS — GPU-Autonomous Self-Tuning
+// ═══════════════════════════════════════════════════════════════════
+//
+// Each Main Loom self-regulates using GPU-side kernels:
+//   1. vm_maxnorm.spv  — measures activation magnitude → metrics SSBO
+//   2. vm_regulator.spv — branchless scale correction → control SSBO
+//   3. LOOM_PACE_US    — per-VM dispatch throttle detection (Rust)
+//
+// Micro-homeostasis runs INSIDE the dispatch chain — zero CPU roundtrip.
+// Support Loom tunes regulator thresholds; Main Loom executes autonomously.
+//
+// Philosophy: the arm self-corrects. The brain only adjusts thresholds.
+
+let K_MAXNORM = "stdlib/loom/kernels/ops/vm_maxnorm.spv"
+let K_REGULATOR = "stdlib/loom/kernels/ops/vm_regulator.spv"
+
+fn main_attach_regulator(vm_id, target_norm, lo_bound, hi_bound)
+  // Write regulator thresholds to control SSBO (binding 3)
+  // After this, every dispatch chain can include regulator step
+  // target_norm: ideal activation magnitude
+  // lo_bound:    below this → scale up
+  // hi_bound:    above this → scale down
+  loom_write_control(vm_id, 0.0, [target_norm, lo_bound, hi_bound])
+end
+
+fn main_update_regulator(vm_id, target_norm, lo_bound, hi_bound)
+  // Update regulator thresholds (Support Loom calls this for meso tuning)
+  loom_write_control(vm_id, 0.0, [target_norm, lo_bound, hi_bound])
+end
+
+fn main_dispatch_regulated(vm_id, kernel, pc, wg, metrics_offset, n_elements)
+  // Compute + measure + regulate in one dispatch chain
+  // All three dispatches batched into 1 vkQueueSubmit
+  loom_dispatch(vm_id, kernel, pc, wg)
+  loom_dispatch(vm_id, K_MAXNORM, [metrics_offset, n_elements], 1.0)
+  loom_dispatch(vm_id, K_REGULATOR, [metrics_offset, 0.0], 1.0)
+end
+
+fn main_dispatch_full(vm_id, precision, compute_kernel, compute_pc, compute_wg, dequant_pc, dequant_wg, metrics_offset, n_elements)
+  // Full pipeline: dequant + compute + maxnorm + regulator
+  // One dispatch chain → one vkQueueSubmit → GPU goes unhinged
+  let dequant = main_select_dequant(precision)
+  if dequant != "none"
+    if dequant != "jit"
+      loom_dispatch(vm_id, dequant, dequant_pc, dequant_wg)
+    end
+  end
+  loom_dispatch(vm_id, compute_kernel, compute_pc, compute_wg)
+  loom_dispatch(vm_id, K_MAXNORM, [metrics_offset, n_elements], 1.0)
+  loom_dispatch(vm_id, K_REGULATOR, [metrics_offset, 0.0], 1.0)
+end
+
+fn main_read_stability(vm_id, metrics_offset)
+  // Poll micro-homeostasis state (Support Loom calls this)
+  // Returns: [maxnorm, scale, stability_flag, pace_us]
+  //   maxnorm:        current activation magnitude
+  //   scale:          regulator's correction factor (1.0 = stable)
+  //   stability_flag: 1.0 = stable, 0.0 = correcting
+  //   pace_us:        current pacing delay (microseconds)
+  let metrics = loom_read_metrics(vm_id, metrics_offset, 3.0)
+  let status = loom_status(vm_id)
+  let pace = map_get(status, "pace")
+  let mut result = []
+  if len(metrics) >= 3.0
+    push(result, metrics[0])  // maxnorm
+    push(result, metrics[1])  // scale
+    push(result, metrics[2])  // stability_flag
+  else
+    push(result, 0.0)
+    push(result, 1.0)
+    push(result, 1.0)
+  end
+  push(result, pace)
+  return result
+end
+
+fn main_set_pace(vm_id, pace_us)
+  // Manually set pacing delay (microseconds)
+  // 0 = no throttle (unhinged)
+  loom_pace(vm_id, pace_us)
+end
+
+fn main_is_stable(vm_id, metrics_offset)
+  // Quick check: is this Main Loom stable?
+  let state = main_read_stability(vm_id, metrics_offset)
+  return state[2]
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  JIT KERNEL — Adaptive Runtime Emission
+// ═══════════════════════════════════════════════════════════════════
+//
+// Main Loom can dispatch JIT-emitted kernels (in-memory SPIR-V).
+// Support Loom emits via ir.flow → passes bytearray → Main Loom dispatches.
+// This enables new precision tiers without pre-compiled .spv files.
+//
+// Pattern:
+//   let spirv = emit_custom_dequant_1bit()  // via ir.flow
+//   main_dispatch_jit(vm_id, spirv, pc, wg)
+//   main_exec(vm_id)
+
+fn main_dispatch_jit(vm_id, spirv_bytes, pc, wg)
+  // Stage JIT kernel (in-memory SPIR-V bytearray)
+  loom_dispatch_jit(vm_id, spirv_bytes, pc, wg)
+end
+
+// ═══════════════════════════════════════════════════════════════════
+//  PIPELINE REUSE — Cached Dispatch Chains (v1.5.0)
+// ═══════════════════════════════════════════════════════════════════
+
+fn main_pipe_create(vm_id)
+  // Create reusable pipeline for this Main Loom
+  return loom_pipe(vm_id)
+end
+
+// NOTE: To add dispatches to a pipeline, call loom_pipe_add(pipe_id, kernel, pc, wg)
+// directly — it takes 4 args and the preflight checker doesn't have a 4-arg allowlist.
+// This is a known preflight limitation, not a runtime issue.
+
+fn main_pipe_exec(pipe_id)
+  // Execute cached pipeline (reuses command buffer)
+  loom_pipe_exec(pipe_id)
+end

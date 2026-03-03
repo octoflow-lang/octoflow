@@ -2,8 +2,8 @@
 //
 // Run: octoflow run stdlib/tests/test_gpu_debug.flow --allow-ffi --allow-read
 
-use "../gpu/debug"
-use "../gpu/runtime"
+use "../loom/ops/debug"
+use "../loom/ops/runtime"
 
 rt_init()
 

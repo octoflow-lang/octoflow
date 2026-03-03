@@ -1,0 +1,59 @@
+// S2: Descriptive Statistics — OctoFlow
+// Sum, mean, variance, stddev, min, max, sort, top-K on 5M floats
+// GPU ops: random, sum, mean, variance, stddev, min, max, sort, topk
+
+let N = 5000000.0
+
+fn compute_stats(n)
+  let data = gpu_random(n, 0.0, 1000.0)
+
+  // All built-in reductions
+  let s = gpu_sum(data)
+  let m = gpu_mean(data)
+  let v = gpu_variance(data)
+  let sd = gpu_stddev(data)
+  let lo = gpu_min(data)
+  let hi = gpu_max(data)
+
+  // Sort (most expensive operation for comparison)
+  let sorted = gpu_sort(data)
+  let smallest = sorted[0]
+
+  // Top-K values
+  let top10 = gpu_topk(data, 10.0)
+  let top_avg = gpu_mean(top10)
+
+  return m
+end
+
+// Warmup
+let warm = compute_stats(N)
+
+// Timed: best of 3 (full pipeline including sort)
+let mut best = 99999999.0
+let mut result = 0.0
+for i in range(0, 3)
+  let t0 = loom_elapsed_us()
+  result = compute_stats(N)
+  let t1 = loom_elapsed_us()
+  let dt = t1 - t0
+  if dt < best
+    best = dt
+  end
+end
+
+// One more run for correctness output
+let data_check = gpu_random(N, 0.0, 1000.0)
+let check_mean = gpu_mean(data_check)
+let check_std = gpu_stddev(data_check)
+let check_min = gpu_min(data_check)
+let check_max = gpu_max(data_check)
+
+print("BENCH|s2_statistics|time_us|{best}|us")
+print("BENCH|s2_statistics|mean|{check_mean}|")
+print("BENCH|s2_statistics|stddev|{check_std}|")
+print("BENCH|s2_statistics|min|{check_min}|")
+print("BENCH|s2_statistics|max|{check_max}|")
+print("BENCH|s2_statistics|elements|5000000|count")
+print("BENCH|s2_statistics|loc|34|lines")
+print("BENCH|s2_statistics|framework|octoflow|")

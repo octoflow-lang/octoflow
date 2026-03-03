@@ -10,7 +10,7 @@
 //
 // Run: octoflow run stdlib/tests/test_gpu_db.flow --allow-ffi --allow-read
 
-use "../gpu/runtime"
+use "../loom/ops/runtime"
 
 let N = 256.0
 let BUF_BYTES = N * 4.0
