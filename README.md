@@ -24,10 +24,10 @@ OctoFlow is built from scratch for this reality. The GPU is the primary executio
 
 ```
 $ octoflow --version
-OctoFlow 1.5.5
+OctoFlow 1.5.6
 
 $ octoflow repl
-OctoFlow 1.5.5 — GPU-native language (436 stdlib modules)
+OctoFlow 1.5.6 — GPU-native language (436 stdlib modules)
 GPU: NVIDIA GeForce GTX 1660 SUPER
 >>> let a = gpu_fill(1.0, 10000000)
 >>> let b = gpu_fill(2.0, 10000000)

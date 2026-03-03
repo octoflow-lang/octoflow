@@ -4,6 +4,34 @@ All notable changes to OctoFlow are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.6] - 2026-03-03
+
+Codename: **"GPU-Real II"**
+
+### Fixed
+
+- **`gpu_topk_indices`** — sort now runs on GPU (was entirely CPU `sort_by`); only O(K) index extraction remains on CPU
+- **`gpu_variance` / `gpu_stddev`** — removed CPU fallback paths; now require GPU (error if unavailable)
+- **`gpu_sum` / `gpu_min` / `gpu_max` / `gpu_mean` / `gpu_product`** — added GPU-required guard; `dispatch_reduce_op` no longer silently falls back to CPU
+- **`gpu_variance` / `gpu_stddev`** — mean array now generated on GPU via `dispatch_fill_pc` (was `vec![mean; n]` CPU allocation)
+
+### Added
+
+- **`gpu_count(arr)`** — returns array element count (was dead preflight entry with no implementation)
+- **`gpu_dot(a, b)`** — GPU dot product via element-wise multiply + reduce sum (was dead preflight entry)
+
+### Removed
+
+- CPU fallback path in `dispatch_reduce_op` — all GPU reductions now require Vulkan device
+- `cpu_reduce` function no longer called (kept as dead code for non-GPU `sort()`)
+
+### Changed
+
+- Public mirror streamlined: removed 122 internal docs, non-.flow artifacts, test data
+- `.gitignore` hardened to prevent re-addition of internal files
+
+---
+
 ## [1.5.5] - 2026-03-03
 
 Codename: **"GPU-Real"**
