@@ -214,11 +214,11 @@ The AI writes code. The human decides what to build, why, and whether it ships.
 
 Two principles guide every decision:
 
-**Sustainability** — Can this trajectory continue? Is this adding complexity faster than it can be maintained? Is the test count rising? Is the gotcha list shrinking? If the answer to any of these is "no," we stop and fix before shipping more.
+**Sustainability** — Can this trajectory continue? Is this adding complexity faster than it can be maintained? Is the test count rising? Is the gotcha list shrinking? If the answer to any of these is "no," the developer stops and fixes before shipping more.
 
 **Empowerment** — Does this increase the user's capacity? Can a non-GPU-programmer go from intent to working GPU code? Does the LLM need *less* help generating correct OctoFlow over time? If a feature makes the language harder to learn or harder for AI to generate, it doesn't ship.
 
-These aren't marketing. They're the actual decision framework. Every feature, every refactor, every new builtin gets scored against them. We'd rather ship less and ship right.
+These aren't marketing. They're the actual decision framework. Every feature, every refactor, every new builtin gets scored against them. Better to ship less and ship right.
 
 ---
 
@@ -258,7 +258,7 @@ One developer built it to prove the idea works. The idea works. Now it needs peo
 
 ### What's on the table
 
-- **Full open source.** We're willing to open-source the entire compiler (Rust source, all 3 crates, the full 966-test suite) once there's a team to develop and sustain it. MIT license, same as everything else.
+- **Full open source.** The developer is willing to open-source the entire compiler (Rust source, all 3 crates, the full 966-test suite) once there's a team to develop and sustain it. MIT license, same as everything else.
 - **Compiler access now.** Serious maintainer candidates get private repo access immediately. No hoops.
 - **Architectural input.** The language is small enough (23 concepts) that a new maintainer can genuinely understand the whole system. You won't be lost in a million-line codebase.
 
@@ -299,7 +299,7 @@ If any of that resonates: [open an issue](https://github.com/octoflow-lang/octof
 
 ## Building from Source
 
-The compiler source is currently in a private repository. If you're interested in building from source or contributing to the compiler, [open an issue](https://github.com/octoflow-lang/octoflow/issues) — we'll get you access.
+The compiler source is currently in a private repository. If you're interested in building from source or contributing to the compiler, [open an issue](https://github.com/octoflow-lang/octoflow/issues) — the developer will get you access.
 
 The stdlib and everything in this repo can be explored and modified immediately.
 
