@@ -103,6 +103,7 @@ docs/llm/CONTEXT.md
 *.bat
 *.octo
 !docs/demo.gif
+!assets/logo.png
 examples/test_data/
 
 # Logs
