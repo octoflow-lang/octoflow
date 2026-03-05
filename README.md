@@ -4,17 +4,17 @@ OctoFlow is a general-purpose programming language where the GPU is the primary 
 
 **CPU on demand, not GPU on demand.**
 
-3.7 MB binary. 246 stdlib modules. 1,209 tests.
+4.5 MB binary. 445 stdlib modules. 966 tests.
 Any GPU vendor. One file download. No CUDA. No Python. No pip.
 
 ## Quickstart
 
 ```
 $ octoflow --version
-OctoFlow 1.3.0
+OctoFlow 1.5.8
 
 $ octoflow repl
-OctoFlow 1.3.0 — GPU-native language (246 stdlib modules)
+OctoFlow 1.5.8 — GPU-native language (445 stdlib modules)
 GPU: NVIDIA GeForce GTX 1660 SUPER
 >>> let a = gpu_fill(1.0, 10000000)
 >>> let b = gpu_fill(2.0, 10000000)
@@ -32,7 +32,7 @@ Download the binary. Unzip. Run. GPU detected automatically.
 | gpu_add | 0.40 ms | 0.46 ms (deferred) | Batched command buffer |
 | gpu_mul | 0.53 ms | 3.27 ms (deferred) | Single fence per chain |
 | 5-step pipeline | 2.57 ms | 75 ms | Upload + compute + reduce |
-| Install size | ~4 GB SDK | **3.7 MB** binary | Zero dependencies |
+| Install size | ~4 GB SDK | **4.5 MB** binary | Zero dependencies |
 
 Deferred dispatch batches chained GPU operations into a single Vulkan command buffer submission. Per-operation overhead drops from ~12ms (synchronous) to ~4ms (batched) as chains grow.
 
@@ -44,7 +44,7 @@ Deferred dispatch batches chained GPU operations into a single Vulkan command bu
 | **Built-in LLM** | No | No | **Yes** (local GGUF inference) |
 | **External deps** | NVIDIA SDK / vendor SDK | Graphics API | **None** |
 | **GPU VM** | N/A | N/A | **Built-in** (5 SSBOs, indirect dispatch) |
-| **Install** | Multi-GB SDK | Driver-only | **3.7 MB binary** |
+| **Install** | Multi-GB SDK | Driver-only | **4.5 MB binary** |
 
 ## GPU Virtual Machine
 
@@ -70,7 +70,7 @@ let result = loom_read(vm, 0.0, 0.0, 8.0)
 - **Dormant VMs**: Over-provisioned command buffers with indirect dispatch
 - **I/O streaming**: CPU feeds data batches, GPU processes with reusable command buffers
 - **Homeostasis**: GPU self-regulates via maxnorm + regulator kernels
-- **102 compute kernels**: Scale, affine, matvec, reduce, WHERE, delta encode/decode, dictionary lookup
+- **150 compute kernels**: Scale, affine, matvec, reduce, WHERE, delta encode/decode, dictionary lookup
 
 **Loom State** — GPU-resident state log for undo/redo and snapshots. Vector similarity search (cosine, dot, euclidean) runs entirely in VRAM. Async persistence to OctoDB — your main compute pipeline never touches disk.
 
@@ -109,7 +109,7 @@ emit(warm, "output.png")
 
 Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 
-## Standard Library — 246 Modules
+## Standard Library — 445 Modules
 
 | Domain | Modules | Coverage |
 |---|---|---|
@@ -121,7 +121,7 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 | **db** | core, engine, vector, persist | OctoDB (CRUD, indexing, .odb) + Loom State (GPU-resident, vector search) |
 | **devops** | config, fs, log, process, template | System automation |
 | **formats** | gguf, json | GGUF tensor files, JSON |
-| **gpu** | VM, emitters, runtime, kernels | 102 GPU compute kernels |
+| **gpu** | VM, emitters, runtime, kernels | 150 GPU compute kernels |
 | **gui** | widgets, layout, canvas, plot, themes, buffer_view | 16 widget types, 3 layouts, 5 chart types, canvas drawing (Windows) |
 | **llm** | generate, stream, chat, decompose | LLM inference (Qwen3-1.7B) |
 | **media** | image (PNG/JPEG/GIF/BMP), audio (WAV), video (MP4 stills) | Native codecs |
@@ -149,7 +149,7 @@ Deno-inspired security: `octoflow run server.flow --allow-read --allow-net`
 .flow source -> Parser -> Preflight -> Compiler -> GPU VM / Vulkan Dispatch -> GPU
                                           |
                               SPIR-V emitters (written in .flow)
-                              102 pre-built compute kernels
+                              150 pre-built compute kernels
 ```
 
 Four crates. Zero external Rust dependencies. Only system libraries (vulkan-1, ws2_32).
