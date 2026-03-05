@@ -290,7 +290,7 @@ If any of that resonates: [open an issue](https://github.com/octoflow-lang/octof
 |----------|-------------|
 | [Website](https://octoflow-lang.github.io/octoflow/) | Landing page with live demos |
 | [Language Guide](docs/language-guide.md) | Full language reference |
-| [Loom Engine](loom.html) | GPU VM architecture deep-dive |
+| [Loom Engine](docs/loom-engine.md) | GPU VM architecture deep-dive |
 | [Stdlib Reference](docs/stdlib.md) | All 445 modules |
 | [GPU Guide](docs/gpu-guide.md) | GPU compute patterns and best practices |
 | [Builtins](docs/builtins.md) | 210+ built-in functions |
