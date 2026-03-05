@@ -43,7 +43,7 @@ No SDK. No driver toolkit. No package manager. Download one binary, run it.
 | | |
 |---|---|
 | **Binary size** | 4.5 MB (single file, all platforms) |
-| **Dependencies** | Zero. Hand-rolled Vulkan bindings, no external crates |
+| **Dependencies** | Zero. Hand-rolled Vulkan bindings, nothing external |
 | **GPU support** | NVIDIA, AMD, Intel — anything with Vulkan |
 | **Stdlib** | 445 modules across 28 domains |
 | **GPU kernels** | 150 pre-compiled SPIR-V shaders, embedded in binary |
@@ -258,7 +258,7 @@ One developer built it to prove the idea works. The idea works. Now it needs peo
 
 ### What's on the table
 
-- **Full open source.** The developer is willing to open-source the entire compiler (Rust source, all 3 crates, the full 966-test suite) once there's a team to develop and sustain it. MIT license, same as everything else.
+- **Full open source.** The developer is willing to open-source the entire compiler (Rust source, all 3 modules, the full 966-test suite) once there's a team to develop and sustain it. MIT license, same as everything else.
 - **Compiler access now.** Serious maintainer candidates get private repo access immediately. No hoops.
 - **Architectural input.** The language is small enough (23 concepts) that a new maintainer can genuinely understand the whole system. You won't be lost in a million-line codebase.
 
