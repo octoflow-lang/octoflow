@@ -1,0 +1,55 @@
+name: Update GH Pages Version
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Extract version
+        id: version
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Updating to $TAG ($VERSION)"
+
+      - name: Update version in HTML files
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Replace vX.Y.Z patterns (e.g. v1.5.8 -> v1.6.0)
+          sed -i "s/v[0-9]\+\.[0-9]\+\.[0-9]\+/${TAG}/g" *.html
+
+          # Replace bare X.Y.Z patterns (e.g. OctoFlow 1.5.8 -> OctoFlow 1.6.0)
+          # Only in contexts like "OctoFlow X.Y.Z" or "version X.Y.Z"
+          sed -i "s/OctoFlow [0-9]\+\.[0-9]\+\.[0-9]\+/OctoFlow ${VERSION}/g" *.html
+
+          echo "--- Changes ---"
+          git diff --stat
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No version changes detected, skipping commit."
+            exit 0
+          fi
+
+          git add *.html
+          git commit -m "Update version to ${{ steps.version.outputs.tag }}"
+          git push origin gh-pages
