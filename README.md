@@ -196,9 +196,9 @@ let result = loom_compute("kernel.spv", data, 1024)
 
 ## How This Was Built
 
-OctoFlow is **vibe-coded** — AI-assisted from the beginning. LLMs generated the bulk of the code. This is not a secret and not a caveat. It's the point.
+OctoFlow is **AI-assisted** from the beginning. LLMs generated the bulk of the code. This is not a secret and not a caveat. It's the point.
 
-But "vibe-coded" does not mean "unreviewed." Every architectural decision has a human at the gate:
+But "AI-assisted" does not mean "unreviewed." Every architectural decision has a human at the gate:
 
 - **Rust at the OS boundary, .flow for everything else** — human decision
 - **Pure Vulkan, no vendor SDK** — human decision
