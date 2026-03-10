@@ -32,6 +32,12 @@ sudo mv octoflow /usr/local/bin/
 octoflow --version
 ```
 
+Or use the Linux installer script:
+
+```bash
+curl -fsSL https://octoflow-lang.github.io/octoflow/install.sh | sh
+```
+
 ## macOS (Apple Silicon)
 
 ```bash
@@ -40,6 +46,8 @@ chmod +x octoflow
 mv octoflow /usr/local/bin/
 octoflow --version
 ```
+
+Use direct release download on macOS. The `install.sh` script is Linux-only.
 
 GPU compute uses MoltenVK (Vulkan on Metal). No additional setup needed
 on M1/M2/M3/M4 Macs.
@@ -65,6 +73,20 @@ If no GPU line appears, check:
 - **Vulkan drivers** are installed (NVIDIA: included with driver, AMD: included with Adrenalin, Intel: included with driver)
 - **Integrated GPUs** work if they support Vulkan 1.0+
 - OctoFlow falls back to CPU for all GPU operations — everything still runs
+
+### macOS troubleshooting (MoltenVK portability)
+
+If you see `No GPU detected` and Vulkan loader errors mentioning
+`VK_KHR_portability_enumeration`, this is a runtime initialization issue.
+The Vulkan instance must enable portability enumeration on macOS.
+
+Please open an issue with:
+
+```bash
+VK_LOADER_DEBUG=all octoflow run examples/hello_gpu.flow
+```
+
+Include the output so maintainers can confirm the portability-enumeration path.
 
 ## Updating
 
