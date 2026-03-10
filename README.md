@@ -61,9 +61,19 @@ No SDK. No driver toolkit. No package manager. Download one binary, run it.
 irm https://octoflow-lang.github.io/octoflow/install.ps1 | iex
 ```
 
-**Linux / macOS** (bash):
+**Linux** (bash):
 ```bash
 curl -fsSL https://octoflow-lang.github.io/octoflow/install.sh | sh
+```
+
+**macOS (Apple Silicon)**:
+```bash
+# Download the latest `octoflow-*-aarch64-macos.tar.gz` from Releases,
+# then run:
+tar xzf octoflow-*-aarch64-macos.tar.gz
+chmod +x octoflow
+mv octoflow /usr/local/bin/
+octoflow --version
 ```
 
 Or download directly from [Releases](https://github.com/octoflow-lang/octoflow/releases/latest).
