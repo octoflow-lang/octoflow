@@ -6,9 +6,9 @@ OctoFlow is a single binary. No installer, no dependencies, no SDK.
 
 Get the latest release for your platform:
 
-- **Windows x64:** [octoflow-v1.3.0-windows-x64.zip](https://github.com/octoflow-lang/octoflow/releases/latest)
-- **Linux x64:** [octoflow-v1.3.0-linux-x64.tar.gz](https://github.com/octoflow-lang/octoflow/releases/latest)
-- **macOS aarch64:** [octoflow-v1.3.0-aarch64-macos.tar.gz](https://github.com/octoflow-lang/octoflow/releases/latest) (Apple Silicon)
+- **Windows x64:** [octoflow-v1.5.9-windows-x64.zip](https://github.com/octoflow-lang/octoflow/releases/latest)
+- **Linux x64:** [octoflow-v1.5.9-linux-x64.tar.gz](https://github.com/octoflow-lang/octoflow/releases/latest)
+- **macOS aarch64:** [octoflow-v1.5.9-aarch64-macos.tar.gz](https://github.com/octoflow-lang/octoflow/releases/latest) (Apple Silicon)
 
 ## Windows
 
@@ -26,7 +26,7 @@ Click "More info" then "Run anyway". The binary is unsigned.
 ## Linux
 
 ```bash
-tar xzf octoflow-v1.3.0-linux-x64.tar.gz
+tar xzf octoflow-v1.5.9-linux-x64.tar.gz
 chmod +x octoflow
 sudo mv octoflow /usr/local/bin/
 octoflow --version
@@ -41,7 +41,7 @@ curl -fsSL https://octoflow-lang.github.io/octoflow/install.sh | sh
 ## macOS (Apple Silicon)
 
 ```bash
-tar xzf octoflow-v1.3.0-aarch64-macos.tar.gz
+tar xzf octoflow-v1.5.9-aarch64-macos.tar.gz
 chmod +x octoflow
 mv octoflow /usr/local/bin/
 octoflow --version
@@ -58,9 +58,9 @@ OctoFlow auto-detects Vulkan-capable GPUs. Verify in the REPL:
 
 ```
 $ octoflow repl
-OctoFlow v1.3.0 — GPU-native language
+OctoFlow v1.5.9 — GPU-native language
 GPU: NVIDIA GeForce GTX 1660 SUPER     <-- your GPU here
-246 stdlib modules | :help | :time
+766 stdlib modules | :help | :time
 
 >>> :gpu
 Device: NVIDIA GeForce GTX 1660 SUPER
@@ -76,17 +76,17 @@ If no GPU line appears, check:
 
 ### macOS troubleshooting (MoltenVK portability)
 
-If you see `No GPU detected` and Vulkan loader errors mentioning
-`VK_KHR_portability_enumeration`, this is a runtime initialization issue.
-The Vulkan instance must enable portability enumeration on macOS.
+As of v1.5.9, OctoFlow enables `VK_KHR_portability_enumeration` and
+`VK_KHR_portability_subset` automatically when available. This should
+resolve `No GPU detected` on Apple Silicon with MoltenVK.
 
-Please open an issue with:
+If you still see GPU detection failures, please open an issue with:
 
 ```bash
 VK_LOADER_DEBUG=all octoflow run examples/hello_gpu.flow
 ```
 
-Include the output so maintainers can confirm the portability-enumeration path.
+Include the output so maintainers can diagnose the issue.
 
 ## Updating
 

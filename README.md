@@ -238,7 +238,7 @@ OctoFlow is **real, working software** — not a concept or prototype. The compi
 
 That said, it's honest to say:
 
-- **v1.5.8** — actively developed, not yet battle-tested by a community
+- **v1.5.9** — actively developed, not yet battle-tested by a community
 - **Solo developer** — one person plus AI tools, which is both the strength (fast iteration, coherent vision) and the limitation (bus factor of 1)
 - **Compiler is private** — the stdlib, examples, docs, and everything in this repo are MIT. The compiler Rust source is in a private repo for now. See below.
 
