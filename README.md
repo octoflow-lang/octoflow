@@ -45,9 +45,9 @@ No SDK. No driver toolkit. No package manager. Download one binary, run it.
 | **Binary size** | 4.5 MB (single file, all platforms) |
 | **Dependencies** | Zero. Hand-rolled Vulkan bindings, nothing external |
 | **GPU support** | NVIDIA, AMD, Intel — anything with Vulkan |
-| **Stdlib** | 445 modules across 28 domains |
-| **GPU kernels** | 150 pre-compiled SPIR-V shaders, embedded in binary |
-| **Tests** | 966 passing |
+| **Stdlib** | 766 modules across 28 domains |
+| **GPU kernels** | 221 pre-compiled SPIR-V shaders, embedded in binary |
+| **Tests** | 1014 passing |
 | **License** | MIT (stdlib + everything in this repo) |
 
 ---
@@ -175,7 +175,7 @@ let result = loom_compute("kernel.spv", data, 1024)
 
 ## Standard Library
 
-445 modules. All written in OctoFlow itself. All MIT-licensed and in this repo.
+766 modules. All written in OctoFlow itself. All MIT-licensed and in this repo.
 
 | Domain | What's in it |
 |--------|-------------|
@@ -228,14 +228,14 @@ OctoFlow is **real, working software** — not a concept or prototype. The compi
 
 That said, it's honest to say:
 
-- **v1.5.8** — actively developed, not yet battle-tested by a community
+- **v1.5.9** — actively developed, not yet battle-tested by a community
 - **Solo developer** — one person plus AI tools, which is both the strength (fast iteration, coherent vision) and the limitation (bus factor of 1)
 - **Compiler is private** — the stdlib, examples, docs, and everything in this repo are MIT. The compiler Rust source is in a private repo for now. See below.
 
 ### What works well today
 
 - GPU compute via Tier 1 (one-call ops) and Tier 2 (Loom dispatch chains)
-- 445-module stdlib covering AI, ML, media, science, data, GUI, and more
+- 766-module stdlib covering AI, ML, media, science, data, GUI, and more
 - Interactive REPL with GPU support
 - AI-assisted code generation via `octoflow chat`
 - Sandboxed execution with granular permission flags
@@ -258,7 +258,7 @@ One developer built it to prove the idea works. The idea works. Now it needs peo
 
 ### What's on the table
 
-- **Full open source.** The developer is willing to open-source the entire compiler (Rust source, all 3 modules, the full 966-test suite) once there's a team to develop and sustain it. MIT license, same as everything else.
+- **Full open source.** The developer is willing to open-source the entire compiler (Rust source, all 3 modules, the full 1014-test suite) once there's a team to develop and sustain it. MIT license, same as everything else.
 - **Compiler access now.** Serious maintainer candidates get private repo access immediately. No hoops.
 - **Architectural input.** The language is small enough (23 concepts) that a new maintainer can genuinely understand the whole system. You won't be lost in a million-line codebase.
 
@@ -291,7 +291,7 @@ If any of that resonates: [open an issue](https://github.com/octoflow-lang/octof
 | [Website](https://octoflow-lang.github.io/octoflow/) | Landing page with live demos |
 | [Language Guide](docs/language-guide.md) | Full language reference |
 | [Loom Engine](loom.html) | GPU VM architecture deep-dive |
-| [Stdlib Reference](docs/stdlib.md) | All 445 modules |
+| [Stdlib Reference](docs/stdlib.md) | All 766 modules |
 | [GPU Guide](docs/gpu-guide.md) | GPU compute patterns and best practices |
 | [Builtins](docs/builtins.md) | 210+ built-in functions |
 

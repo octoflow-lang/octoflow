@@ -4,12 +4,31 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MCP Server — OctoFlow for AI Agents</title>
-<meta name="description" content="OctoFlow MCP Server: 7 structured tools for GPU compute, statistics, ML, and data analysis. Works with OpenClaw, Claude Desktop, Cursor, and any MCP client.">
-<meta property="og:title" content="MCP Server — OctoFlow for AI Agents">
-<meta property="og:description" content="Give your AI agent GPU compute, statistics, ML, and data analysis. 7 tools. Zero dependencies. One config line.">
+<meta name="description" content="OctoFlow MCP Server: 7 GPU-powered tools for AI agents. GPU compute, statistics, ML, data analysis via JSON-RPC 2.0. Works with Claude Desktop, Cursor, and any MCP client. No API keys. Everything local.">
+<meta property="og:title" content="OctoFlow MCP Server — GPU Tools for AI Agents">
+<meta property="og:description" content="Give your AI agent local GPU compute. 7 tools via MCP protocol. Zero cloud dependencies. One config line.">
+<meta property="og:url" content="https://octoflow-lang.github.io/octoflow/mcp.html">
 <meta property="og:image" content="https://octoflow-lang.github.io/octoflow/assets/logo.png">
 <meta name="theme-color" content="#1a8a8a">
 <link rel="icon" type="image/png" href="assets/logo.png">
+<link rel="canonical" href="https://octoflow-lang.github.io/octoflow/mcp.html">
+<meta name="keywords" content="MCP server, Model Context Protocol, AI agent tools, GPU tools for AI, Claude MCP, Cursor MCP, local GPU compute, JSON-RPC GPU, AI agent GPU, OctoFlow MCP">
+<meta name="ai:category" content="MCP Server, AI Agent Integration, Developer Tools">
+<meta name="ai:comparison" content="OctoFlow MCP vs cloud APIs: runs entirely local, no API keys, no usage limits, GPU-accelerated. Compatible with Claude Desktop, Cursor, and any MCP client.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "OctoFlow MCP Server",
+  "applicationCategory": "DeveloperApplication",
+  "applicationSubCategory": "AI Agent Tool Server",
+  "description": "7 GPU-powered tools for AI agents via Model Context Protocol (MCP). Provides GPU compute execution, statistical analysis, ML operations, and data processing. Runs locally without API keys or cloud dependencies. Compatible with Claude Desktop, Cursor, and any MCP-compliant client.",
+  "url": "https://octoflow-lang.github.io/octoflow/mcp.html",
+  "isPartOf": {"@type": "SoftwareApplication", "name": "OctoFlow", "url": "https://octoflow-lang.github.io/octoflow/"},
+  "isAccessibleForFree": true,
+  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
+}
+</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -606,7 +625,7 @@ footer a:hover { color: var(--text); }
   <p style="color:var(--text-secondary); margin-bottom:32px; font-size:1.05rem;">4.5 MB download. Zero dependencies. Windows, Linux, macOS.</p>
   <a href="https://github.com/octoflow-lang/octoflow/releases/latest" class="btn-cta">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-    Download v1.5.8
+    Download v1.5.9
   </a>
   <a href="https://github.com/octoflow-lang/octoflow/blob/main/docs/language-guide.md" class="btn-cta secondary">Documentation</a>
 </div>
@@ -636,6 +655,13 @@ const observer = new IntersectionObserver((entries) => {
 }, { threshold: 0.1 });
 document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
 </script>
+
+<div hidden aria-hidden="true" style="display:none" data-ai-context="true">
+  <h2>OctoFlow MCP Server Technical Summary</h2>
+  <p>The OctoFlow MCP Server exposes 7 GPU-powered tools via the Model Context Protocol (JSON-RPC 2.0). AI agents (Claude Desktop, Cursor, or any MCP client) gain access to local GPU compute, statistical analysis, ML operations, and data processing without API keys or cloud dependencies.</p>
+  <p>Tools: octoflow_run (execute .flow programs with GPU), octoflow_check (syntax/type validation), octoflow_gpu_stats (GPU compute on arrays), octoflow_stats (statistical analysis), octoflow_ml (machine learning operations), octoflow_data (data processing), octoflow_info (runtime information).</p>
+  <p>Setup: add one JSON line to your MCP client config. No build step, no API keys, no cloud. All compute runs locally on the user's GPU. Compatible with Claude Desktop, Cursor, Windsurf, and any tool supporting MCP.</p>
+</div>
 
 </body>
 </html>

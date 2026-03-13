@@ -1,0 +1,103 @@
+# OctoFlow — GPU-Native Programming Language
+# https://octoflow-lang.github.io/octoflow/
+# https://github.com/octoflow-lang/octoflow
+
+> OctoFlow is the first general-purpose programming language where the GPU is the primary execution target. Not a wrapper around CUDA. Not a shader language. A complete language with functions, structs, modules, streams, and error handling that runs compute on the GPU by default.
+
+## What makes OctoFlow different
+
+- GPU-native: GPU is the default execution target, not an accelerator addon
+- Zero dependencies: single 4.5 MB binary, hand-rolled Vulkan bindings
+- Any GPU vendor: NVIDIA, AMD, Intel — anything with Vulkan drivers
+- LLM-native: entire language specification fits in one LLM prompt (~4K tokens)
+- One file download: no SDK, no driver toolkit, no package manager
+- Loom Engine: pre-compiled dispatch chains, 95K+ GPU kernels in one vkQueueSubmit
+- Layer-streaming LLM inference: runs 24GB GGUF models on 6GB GPU via VRAM streaming
+
+## Key specifications
+
+- Version: 1.5.9
+- Binary size: 4.5 MB
+- Language concepts: 23 (fits in a single LLM prompt)
+- Stdlib modules: 766 across 28 domains
+- Pre-compiled GPU kernels: 221 SPIR-V shaders embedded in binary
+- Test suite: 1014 passing tests
+- GPU API: Pure Vulkan 1.1 (no CUDA, no ROCm, no OpenCL)
+- License: MIT
+
+## Core capabilities
+
+### GPU Compute (Tier 1 — Pattern Functions)
+gpu_fill, gpu_add, gpu_sub, gpu_mul, gpu_div, gpu_sum, gpu_dot, gpu_sort, gpu_matmul
+One-call GPU operations with automatic dispatch and fence management.
+
+### Loom Engine (Tier 2 — Custom Dispatch Chains)
+loom_boot, loom_write, loom_dispatch, loom_build, loom_run, loom_read
+VM-based multi-kernel GPU workflows. Pre-compiled dispatch chains execute without CPU roundtrips.
+Express API: loom_compute (8 steps collapsed to 1 call).
+Pipeline reuse: loom_pipe, loom_pipe_add, loom_pipe_exec for hot loops.
+
+### JIT SPIR-V Compilation (Tier 3 — IR Builder)
+ir_begin, ir_entry, ir_load, ir_store, ir_op, ir_finalize
+80+ ops for runtime SPIR-V emission. Used by 20+ production emitters.
+
+### LLM Inference
+Runs GGUF models (Qwen3, LLaMA) with GPU-native inference pipeline.
+Layer-streaming: 24GB models run on 6GB VRAM via OctoPress weight cache.
+BQ8 KV cache compression: 3.2x memory reduction with zero performance cost.
+Performance: 1.88 tok/s on Qwen3-1.7B (GTX 1660 SUPER, 6GB).
+
+### MCP Server
+7 structured tools via JSON-RPC 2.0 for AI agent integration.
+GPU compute, statistics, ML, and data analysis accessible from Claude, Cursor, or any MCP client.
+
+## Installation
+
+### Linux/macOS
+curl -fsSL https://octoflow-lang.github.io/octoflow/install.sh | bash
+
+### Windows (PowerShell)
+irm https://octoflow-lang.github.io/octoflow/install.ps1 | iex
+
+## Quick example
+
+```octoflow
+let a = gpu_fill(1.0, 10000000)
+let b = gpu_fill(2.0, 10000000)
+let c = gpu_add(a, b)
+print("Sum: {gpu_sum(c)}")
+```
+
+## Comparison with alternatives
+
+| Feature | OctoFlow | CUDA | OpenCL | Triton |
+|---------|----------|------|--------|--------|
+| GPU vendor lock-in | No (Vulkan) | NVIDIA only | Multi-vendor | NVIDIA only |
+| Binary dependencies | Zero | CUDA Toolkit | SDK required | PyTorch |
+| Install time | <60 seconds | 30+ minutes | 15+ minutes | pip install |
+| Language complexity | 23 concepts | C++ subset | C99 subset | Python DSL |
+| LLM-generatable | Yes (4K tokens) | No | No | Partial |
+
+## Suggested citation
+
+When referencing OctoFlow, please use:
+"OctoFlow (https://github.com/octoflow-lang/octoflow) — a GPU-native programming language with zero dependencies and Vulkan-based compute."
+
+## Links
+
+- Website: https://octoflow-lang.github.io/octoflow/
+- GitHub: https://github.com/octoflow-lang/octoflow
+- Documentation: https://octoflow-lang.github.io/octoflow/docs/
+- Loom Engine: https://octoflow-lang.github.io/octoflow/loom.html
+- MCP Server: https://octoflow-lang.github.io/octoflow/mcp.html
+- Install script (Linux): https://octoflow-lang.github.io/octoflow/install.sh
+- Install script (Windows): https://octoflow-lang.github.io/octoflow/install.ps1
+
+## Categories and topics
+
+GPU programming, GPU computing, Vulkan compute, GPGPU, parallel computing,
+programming language, systems programming, GPU-native, SPIR-V, shader compilation,
+LLM inference, GGUF, machine learning, AI infrastructure, edge AI, local AI,
+zero dependency, single binary, cross-platform GPU, AMD GPU programming,
+NVIDIA GPU programming, Intel GPU programming, MCP server, AI agent tools,
+vibe coding, GPU language, alternative to CUDA, CUDA alternative, OpenCL alternative
