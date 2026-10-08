@@ -80,14 +80,14 @@ push(test_bytes, 191.0)
 write_bytes("_test_f32.bin", test_bytes)
 let rb = read_bytes("_test_f32.bin")
 
-let v1 = read_f32_le(rb, 0.0)
-let _c5 = check_near(counters, "read_f32_le(1.0)", v1, 1.0, 0.0001)
-let v2 = read_f32_le(rb, 4.0)
-let _c6 = check_near(counters, "read_f32_le(2.0)", v2, 2.0, 0.0001)
-let v3 = read_f32_le(rb, 8.0)
-let _c7 = check_near(counters, "read_f32_le(3.0)", v3, 3.0, 0.0001)
-let v4 = read_f32_le(rb, 12.0)
-let _c8 = check_near(counters, "read_f32_le(-1.0)", v4, -1.0, 0.0001)
+let v1 = read_f32_le_bytes(rb, 0.0)
+let _c5 = check_near(counters, "read_f32_le_bytes(1.0)", v1, 1.0, 0.0001)
+let v2 = read_f32_le_bytes(rb, 4.0)
+let _c6 = check_near(counters, "read_f32_le_bytes(2.0)", v2, 2.0, 0.0001)
+let v3 = read_f32_le_bytes(rb, 8.0)
+let _c7 = check_near(counters, "read_f32_le_bytes(3.0)", v3, 3.0, 0.0001)
+let v4 = read_f32_le_bytes(rb, 12.0)
+let _c8 = check_near(counters, "read_f32_le_bytes(-1.0)", v4, -1.0, 0.0001)
 
 // ── Test 3: read_f16_le with known bytes ─────────────────────────
 print("--- Test 3: read_f16_le ---")
@@ -106,14 +106,22 @@ push(f16_bytes, 192.0)
 push(f16_bytes, 0.0)
 push(f16_bytes, 0.0)
 
-let h1 = read_f16_le(f16_bytes, 0.0)
-let _c9 = check_near(counters, "read_f16_le(1.0)", h1, 1.0, 0.001)
-let h2 = read_f16_le(f16_bytes, 2.0)
-let _c10 = check_near(counters, "read_f16_le(0.5)", h2, 0.5, 0.001)
-let h3 = read_f16_le(f16_bytes, 4.0)
-let _c11 = check_near(counters, "read_f16_le(-2.0)", h3, -2.0, 0.001)
-let h4 = read_f16_le(f16_bytes, 6.0)
-let _c12 = check_near(counters, "read_f16_le(0.0)", h4, 0.0, 0.001)
+// The loader reads from a Rust MEM buffer, so the fixture is copied into one.
+let f16_buf = mem_alloc(8.0)
+let mut fi = 0.0
+while fi < 8.0
+  let _ws = mem_set_u8(f16_buf, fi, f16_bytes[int(fi)])
+  fi = fi + 1.0
+end
+
+let h1 = read_f16_le_m(f16_buf, 0.0)
+let _c9 = check_near(counters, "read_f16_le_m(1.0)", h1, 1.0, 0.001)
+let h2 = read_f16_le_m(f16_buf, 2.0)
+let _c10 = check_near(counters, "read_f16_le_m(0.5)", h2, 0.5, 0.001)
+let h3 = read_f16_le_m(f16_buf, 4.0)
+let _c11 = check_near(counters, "read_f16_le_m(-2.0)", h3, -2.0, 0.001)
+let h4 = read_f16_le_m(f16_buf, 6.0)
+let _c12 = check_near(counters, "read_f16_le_m(0.0)", h4, 0.0, 0.001)
 
 // ── Test 4: Q4_K dequant block ───────────────────────────────────
 print("--- Test 4: Q4_K block dequant ---")
@@ -157,9 +165,16 @@ end
 // Dequant: with d=1.0, dmin=0.0, scale=1, min=0:
 //   val = d * scale * q4_val - dmin * min = 1.0 * 1 * q4_val - 0 = q4_val
 // So first 32 weights should be 1.0 (low nibble), next 32 should be 3.0 (high nibble)
-let dq = dequant_q4k_block(q4_block, 0.0)
+let q4_buf = mem_alloc(144.0)
+let mut qi2 = 0.0
+while qi2 < 144.0
+  let _wq = mem_set_u8(q4_buf, qi2, q4_block[int(qi2)])
+  qi2 = qi2 + 1.0
+end
+
+let dq = dequant_q4k_block_m(q4_buf, 0.0)
 let dq_len = len(dq)
-let _c13 = check_eq(counters, "q4k block len=256", dq_len, 256.0)
+let _c13 = check_eq(counters, "q4k block_m len=256", dq_len, 256.0)
 let _c14 = check_near(counters, "q4k[0]=1.0 (low nibble)", dq[0], 1.0, 0.01)
 let _c15 = check_near(counters, "q4k[31]=1.0 (low nibble)", dq[31], 1.0, 0.01)
 let _c16 = check_near(counters, "q4k[32]=3.0 (high nibble)", dq[32], 3.0, 0.01)
@@ -184,26 +199,11 @@ let _c23 = check_eq(counters, "tensor_name(0,attn_norm)", tn0, "blk.0.attn_norm.
 let tn5 = tensor_name(5.0, "ffn_gate.weight")
 let _c24 = check_eq(counters, "tensor_name(5,ffn_gate)", tn5, "blk.5.ffn_gate.weight")
 
-// ── Test 7: Full F32 tensor via load_tensor_named (flat key API) ──
-print("--- Test 7: F32 tensor read ---")
-
-// Build a fake model map with flat tensor keys
-let mut fake_model = map()
-map_set(fake_model, "data_start", 0.0)
-map_set(fake_model, "t.test_tensor.type", 0.0)
-map_set(fake_model, "t.test_tensor.offset", 0.0)
-map_set(fake_model, "t.test_tensor.ndims", 1.0)
-map_set(fake_model, "t.test_tensor.dim0", 4.0)
-map_set(fake_model, "t.test_tensor.count", 4.0)
-
-// Use test_bytes from earlier (4 F32 values written to _test_f32.bin)
-let ft = read_tensor_by_name(rb, fake_model, "test_tensor")
-let ft_len = len(ft)
-let _c25 = check_eq(counters, "f32 tensor len", ft_len, 4.0)
-let _c26 = check_near(counters, "f32 tensor[0]=1.0", ft[0], 1.0, 0.001)
-let _c27 = check_near(counters, "f32 tensor[1]=2.0", ft[1], 2.0, 0.001)
-let _c28 = check_near(counters, "f32 tensor[2]=3.0", ft[2], 3.0, 0.001)
-let _c29 = check_near(counters, "f32 tensor[3]=-1.0", ft[3], -1.0, 0.001)
+// ── Test 7: whole-tensor reads live in test_inference_e2e.flow ───────────
+print("--- Test 7: skipped, see test_inference_e2e ---")
+// This used to read a tensor through a hand-built model map. Every reader in weight_loader.flow
+// now takes a file path and resolves the offset from the parser MEM buffers, so the same call
+// needs a real GGUF; test_inference_e2e.flow does exactly that against a synthetic parsed model.
 
 // ── Cleanup ──────────────────────────────────────────────────────
 let _rm = exec("rm", "_test_f32.bin")

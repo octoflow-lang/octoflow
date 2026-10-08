@@ -16,8 +16,6 @@
 use "../formats/gguf"
 
 // ── Configuration ───────────────────────────────────────────────────
-let max_tokens = 50.0
-let max_seq = 64.0
 let greedy = 1.0
 let temperature = 0.8
 let top_k = 40.0
@@ -146,21 +144,18 @@ let im_end = 151645.0
 let nl_id = 198.0
 
 print("=== OctoFlow Text Generation (KV Cache + BPE) ===")
-print("Loading model into memory...")
+print("Loading model metadata...")
 
-// Cache entire GGUF file in memory — eliminates per-tensor disk I/O
-let t_cache_0 = time()
-let cached_size = gguf_cache_file(model_path)
-let t_cache_1 = time()
-let cache_ms = (t_cache_1 - t_cache_0) * 1000.0
-let cache_mb = cached_size / 1048576.0
-print("  Cached {cache_mb} MB in {cache_ms} ms")
-
+// No whole-file cache here: gguf_load_tensor, gguf_matvec and gguf_infer_layer all take the path
+// and keep their own per-tensor cache, so caching the checkpoint as well only added a second full
+// copy of it. Measured on the all-F32 Qwen2.5-0.5B control (14 prompt + 17 generated tokens,
+// sampling the working set every 0.4 s): peak RSS 7.86 GB -> 6.01 GB and wall 47.4 s -> 43.2 s,
+// with byte-identical output. stdlib/llm/generate.flow never made this call.
 let model = gguf_load_from_file(model_path)
 
 let n_embd = map_get(model, "n_embd")
 let n_head = map_get(model, "n_head")
-let mut n_kv_head = map_get(model, "n_kv_head")
+let mut n_kv_head = gguf_meta_default(model, "n_kv_head", 0.0)
 let n_ff = map_get(model, "n_ff")
 let n_layer = map_get(model, "n_layer")
 let vocab_size = map_get(model, "vocab_size")
@@ -209,6 +204,32 @@ push(prompt_ids, 77091.0)
 push(prompt_ids, nl_id)
 
 let n_prompt = len(prompt_ids)
+
+// The KV cache is allocated from the max_seq argument handed to every gguf_infer_layer call, and
+// the cache index is not range-checked in Rust: reaching one position past it panics the whole
+// process ("index out of bounds: the len is n_layer*max_seq*kv_dim but the index is ..."). The
+// budget therefore has to cover the rendered prompt plus what may still be generated, and it is
+// clamped to the context the model was trained for.
+let n_ctx = gguf_meta(model, "context_length")
+let mut max_seq = 512.0
+let want_seq = n_prompt + 51.0
+if want_seq > max_seq
+  max_seq = want_seq
+end
+if n_ctx > 0.0
+  if n_ctx < max_seq
+    max_seq = n_ctx
+  end
+end
+let mut max_tokens = 50.0
+let room = max_seq - n_prompt - 1.0
+if room < max_tokens
+  max_tokens = room
+end
+print("  Sequence budget: {max_seq} positions, {max_tokens} new tokens")
+if max_tokens < 1.0
+  print("  No room to answer: {n_prompt} prompt tokens against a {max_seq} context")
+end
 print("  Prompt: {prompt}")
 print("  Template tokens: {n_prompt}")
 let mut pi = 0.0
@@ -223,6 +244,16 @@ end
 print("Loading embedding table + output norm...")
 let actual_vocab = map_get(model, "t.token_embd.weight.dim1")
 let out_norm_w = gguf_load_tensor(model_path, model, "output_norm.weight")
+
+// The output projection is the embedding table only for a tied model. When the file carries a
+// separate output.weight, projecting through token_embd.weight multiplies the hidden state by a
+// matrix of the wrong shape and the logits are meaningless.
+let mut lm_head = "token_embd.weight"
+let has_lm_head = gguf_has_tensor(model, "output.weight")
+if has_lm_head == 1.0
+  lm_head = "output.weight"
+end
+print("  output projection: {lm_head}")
 
 // Get EOS token
 let mut eos_id = 2.0
@@ -289,7 +320,7 @@ while seq_pos < total_steps
   else
     // Last prefill position or generation: compute logits + select
     let normed_out = rmsnorm_cpu(hidden, out_norm_w, n_embd, eps)
-    let logits = gguf_matvec(model_path, model, "token_embd.weight", normed_out)
+    let logits = gguf_matvec(model_path, model, lm_head, normed_out)
 
     let mut sampled_idx = 0.0
     let mut sampled_logit = -999999.0

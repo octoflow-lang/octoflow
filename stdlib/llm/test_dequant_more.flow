@@ -1,0 +1,448 @@
+// Verifies the q4_0, q4_1, q5_1, q5_k, q2_k, q3_k, iq4_nl, tq1_0, tq2_0 and q2_0_g128 decoders in stdlib/llm/weight_loader.flow
+// against ggml's own dequantization.
+//
+// Each testdata/<type>.bin is a 16-byte header (u32 block bytes, u32 values per block, u32 record
+// count) followed by records of [raw quantized block || the values ggml produced for it]. The
+// fixtures were generated on this machine from an all-F32 Qwen2.5-0.5B file:
+//
+//   llama-quantize --pure           qwen2.5-0.5b-f32.gguf  fix_q4_0.gguf  q4_0
+//   llama-quantize --pure --allow-requantize fix_q4_0.gguf  fix_q4_0_ora.gguf f32
+//
+// and then the block bytes from the first file and the matching floats from the second. data_start
+// is 5947712 for these files and was taken from OctoFlow's own parser (map_get(model,
+// "data_start")), not from the header walk that produced the tensor offsets -- a hand-rolled walk
+// under-reads the KV section and shifts every read by 16512 bytes, which is how the first version of
+// this fixture produced a q4_0 scale of 15.6875 for a transformer weight.
+//
+// Element order inside a block: ggml's quantize_row_q4_0_ref / dequantize_row_q4_0 put weight j in
+// the low nibble of qs[j] and weight j + 16 in the high nibble of the same byte, so the two halves
+// are two runs, not sixteen pairs. Getting this wrong still yields plausible-looking numbers (the
+// first version of these three decoders matched 13% of values), which is why they are checked
+// against ggml rather than against a reading of the layout.
+//
+// q5_k and q2_k records come from blk.0.ffn_down.weight, not attn_q: llama-quantize --pure q5_k (and
+// q2_k) write attn_q as q5_1/q4_0 and leave the K-quant only in the ffn tensors, so the K-quant bytes
+// have to be taken from a tensor that really holds them.
+//
+// q2_k's fixture came from a different oracle path, which is worth knowing because it needs no second
+// file: a small tool that calls ggml_get_type_traits(type)->to_float on the block range. That tool was
+// checked on q8_0 against an independent hand reproduction of ggml's q8_0 formula and agreed bit for
+// bit, so its output is ggml and not my reading of ggml.
+//
+// Two offset traps, both of which a fixture here nearly fell into:
+//   - A resolved u64 tensor offset printed through a .flow number is ROUNDED, because numbers here are
+//     f32 and lose integers above 2^24: 83567424 came out as 83567420, four bytes into the previous
+//     block, which made ggml report a q2_K super-block scale of -121. Pass offsets as MEM handles.
+//   - Field order is not uniform across formats. block_q2_K is scales[16], qs[64], d, dmin -- the two
+//     halves sit at the END of the 84-byte block, unlike q4_K/q5_K which lead with them. Reading d
+//     from offset 0 gave 26496 and 2048 wrong values that were, once multiplied out, still small
+//     enough to look like weights.
+//
+// What is deliberately not here: Q8_1, and now the reason is known rather than guessed -- ggml has no
+// to_float for it at all (ggml.c's type_traits table leaves the field null for GGML_TYPE_Q8_1, and the
+// quantize_chunk switch has no case for it either), so there is no ggml decode to agree with; it is an
+// intermediate the repack code writes and never a stored weight format. Same for Q8_K, I8/I16/I32/I64
+// and F64: null to_float, nothing to compare against.
+//
+// Since this file was written, two things changed. ggml_quantize_chunk became the fixture source for
+// the types llama-quantize will not write -- no ftype name (mxfp4, nvfp4), or an imatrix it was not
+// handed (iq2_xxs, iq2_xs, iq3_xxs, iq1_s, iq2_s, iq1_m) -- and the seven IQ types that read a code
+// book landed on top of iq4_nl and iq4_xs -- see stdlib/llm/test_row_range.flow, which now covers
+// iq2_xxs, iq2_xs, iq3_xxs, iq1_s, iq3_s, iq2_s, iq1_m, iq4_xs, mxfp4, nvfp4, q1_0 and q2_0 as well as
+// the ten types here, each against ggml's own quantizer-and-decoder pair.
+//
+// Q3_K is the hardest case in this file and it is covered, which is worth calling out: ggml unpacks
+// q3_K's twelve scale bytes into sixteen 6-bit scales through 32-bit words, and that word play cannot
+// be reproduced in a language whose numbers are f32 (anything above the 24th bit would silently
+// vanish). q3k_scale_at in weight_loader.flow does the same unpacking byte-wise, and the reason it can
+// is that the two extension bits for scale (W, k) sit at positions 2W and 2W+1 of scales[8 + k] with
+// 2W <= 6, so the pair never straddles a byte boundary.
+//
+// q2_k and q3_k together also make the field-order point concrete: block_q2_K puts its two f16 halves
+// at the END of the 84 bytes, while block_q3_K ends with scales[12] then a single d at offset 108.
+// Neither matches the q4_K/q5_K habit of leading with the scales.
+//
+// Run from the octoflow root so the relative fixture paths resolve, like every other stdlib test:
+//
+//   octoflow run stdlib/llm/test_dequant_more.flow --allow-read --allow-ffi
+//
+// Written flat with distinct names per type, as test_dequant.flow is: a helper's `let` shares a slot
+// with the caller's variable of the same name, so a loop counter reused across a helper boundary
+// would be corrupted rather than isolated.
+use "gguf"
+use "weight_loader"
+
+let dir = "stdlib/llm/testdata/"
+
+// ── q4_0: 18-byte blocks of 32 weights ─────────────────────────
+let p40 = dir + "q4_0.bin"
+let sz40 = file_size(p40)
+let b40 = mem_alloc(sz40)
+let _rd40 = file_read_into_mem(p40, b40, 0.0, sz40)
+let mut bad40 = 0.0
+let mut worst40 = 0.0
+let mut n40 = 0.0
+let mut o40 = 16.0
+while n40 < 64.0
+  let v40 = dequant_q4_0_block_m(b40, o40)
+  let mut k40 = 0.0
+  while k40 < 32.0
+    let r40 = mem_get_f32(b40, o40 + 18.0 + k40 * 4.0)
+    let g40 = v40[int(k40)]
+    let mut e40 = g40 - r40
+    if e40 < 0.0
+      e40 = e40 * -1.0
+    end
+    let mut a40 = r40
+    if a40 < 0.0
+      a40 = a40 * -1.0
+    end
+    if e40 > worst40
+      worst40 = e40
+    end
+    if e40 > a40 * 0.001 + 0.000000001
+      bad40 = bad40 + 1.0
+    end
+    k40 = k40 + 1.0
+  end
+  o40 = o40 + 146.0
+  n40 = n40 + 1.0
+end
+print("  q4_0: {bad40} of 2048 outside tolerance, worst abs diff {worst40}")
+
+// ── q4_1: 20-byte blocks of 32 weights ─────────────────────────
+let p41 = dir + "q4_1.bin"
+let sz41 = file_size(p41)
+let b41 = mem_alloc(sz41)
+let _rd41 = file_read_into_mem(p41, b41, 0.0, sz41)
+let mut bad41 = 0.0
+let mut worst41 = 0.0
+let mut n41 = 0.0
+let mut o41 = 16.0
+while n41 < 64.0
+  let v41 = dequant_q4_1_block_m(b41, o41)
+  let mut k41 = 0.0
+  while k41 < 32.0
+    let r41 = mem_get_f32(b41, o41 + 20.0 + k41 * 4.0)
+    let g41 = v41[int(k41)]
+    let mut e41 = g41 - r41
+    if e41 < 0.0
+      e41 = e41 * -1.0
+    end
+    let mut a41 = r41
+    if a41 < 0.0
+      a41 = a41 * -1.0
+    end
+    if e41 > worst41
+      worst41 = e41
+    end
+    if e41 > a41 * 0.001 + 0.000000001
+      bad41 = bad41 + 1.0
+    end
+    k41 = k41 + 1.0
+  end
+  o41 = o41 + 148.0
+  n41 = n41 + 1.0
+end
+print("  q4_1: {bad41} of 2048 outside tolerance, worst abs diff {worst41}")
+
+// ── q5_1: 24-byte blocks of 32 weights, 5th bit in h[4] ────────
+let p51 = dir + "q5_1.bin"
+let sz51 = file_size(p51)
+let b51 = mem_alloc(sz51)
+let _rd51 = file_read_into_mem(p51, b51, 0.0, sz51)
+let mut bad51 = 0.0
+let mut worst51 = 0.0
+let mut n51 = 0.0
+let mut o51 = 16.0
+while n51 < 64.0
+  let v51 = dequant_q5_1_block_m(b51, o51)
+  let mut k51 = 0.0
+  while k51 < 32.0
+    let r51 = mem_get_f32(b51, o51 + 24.0 + k51 * 4.0)
+    let g51 = v51[int(k51)]
+    let mut e51 = g51 - r51
+    if e51 < 0.0
+      e51 = e51 * -1.0
+    end
+    let mut a51 = r51
+    if a51 < 0.0
+      a51 = a51 * -1.0
+    end
+    if e51 > worst51
+      worst51 = e51
+    end
+    if e51 > a51 * 0.001 + 0.000000001
+      bad51 = bad51 + 1.0
+    end
+    k51 = k51 + 1.0
+  end
+  o51 = o51 + 152.0
+  n51 = n51 + 1.0
+end
+print("  q5_1: {bad51} of 2048 outside tolerance, worst abs diff {worst51}")
+
+// ── q5_k: 176-byte blocks of 256 weights, scales shared with q4_k ──
+let p5k = dir + "q5_k.bin"
+let sz5k = file_size(p5k)
+let b5k = mem_alloc(sz5k)
+let _rd5k = file_read_into_mem(p5k, b5k, 0.0, sz5k)
+let mut bad5k = 0.0
+let mut worst5k = 0.0
+let mut n5k = 0.0
+let mut o5k = 16.0
+while n5k < 8.0
+  let v5k = dequant_q5_k_block_m(b5k, o5k)
+  let mut k5k = 0.0
+  while k5k < 256.0
+    let r5k = mem_get_f32(b5k, o5k + 176.0 + k5k * 4.0)
+    let g5k = v5k[int(k5k)]
+    let mut e5k = g5k - r5k
+    if e5k < 0.0
+      e5k = e5k * -1.0
+    end
+    let mut a5k = r5k
+    if a5k < 0.0
+      a5k = a5k * -1.0
+    end
+    if e5k > worst5k
+      worst5k = e5k
+    end
+    if e5k > a5k * 0.001 + 0.000000001
+      bad5k = bad5k + 1.0
+    end
+    k5k = k5k + 1.0
+  end
+  o5k = o5k + 1200.0
+  n5k = n5k + 1.0
+end
+print("  q5_k: {bad5k} of 2048 outside tolerance, worst abs diff {worst5k}")
+
+// ── q2_k: 84-byte blocks of 256 weights, 16 sub-blocks of 16 ──
+let p2k = dir + "q2_k.bin"
+let sz2k = file_size(p2k)
+let b2k = mem_alloc(sz2k)
+let _rd2k = file_read_into_mem(p2k, b2k, 0.0, sz2k)
+let mut bad2k = 0.0
+let mut worst2k = 0.0
+let mut n2k = 0.0
+let mut o2k = 16.0
+while n2k < 8.0
+  let v2k = dequant_q2_k_block_m(b2k, o2k)
+  let mut k2k = 0.0
+  while k2k < 256.0
+    let r2k = mem_get_f32(b2k, o2k + 84.0 + k2k * 4.0)
+    let g2k = v2k[int(k2k)]
+    let mut e2k = g2k - r2k
+    if e2k < 0.0
+      e2k = e2k * -1.0
+    end
+    let mut a2k = r2k
+    if a2k < 0.0
+      a2k = a2k * -1.0
+    end
+    if e2k > worst2k
+      worst2k = e2k
+    end
+    if e2k > a2k * 0.001 + 0.000000001
+      bad2k = bad2k + 1.0
+    end
+    k2k = k2k + 1.0
+  end
+  o2k = o2k + 1108.0
+  n2k = n2k + 1.0
+end
+print("  q2_k: {bad2k} of 2048 outside tolerance, worst abs diff {worst2k}")
+
+mem_free(b2k)
+// ── tq1_0: 54-byte blocks of 256 ternary weights ──
+let ptq1_0 = dir + "tq1_0.bin"
+let sztq1_0 = file_size(ptq1_0)
+let btq1_0 = mem_alloc(sztq1_0)
+let _rdtq1_0 = file_read_into_mem(ptq1_0, btq1_0, 0.0, sztq1_0)
+let mut badtq1_0 = 0.0
+let mut worsttq1_0 = 0.0
+let mut ntq1_0 = 0.0
+let mut otq1_0 = 16.0
+while ntq1_0 < 8.0
+  let vtq1_0 = dequant_tq1_0_block_m(btq1_0, otq1_0)
+  let mut ktq1_0 = 0.0
+  while ktq1_0 < 256.0
+    let rtq1_0 = mem_get_f32(btq1_0, otq1_0 + 54.0 + ktq1_0 * 4.0)
+    let gtq1_0 = vtq1_0[int(ktq1_0)]
+    let mut etq1_0 = gtq1_0 - rtq1_0
+    if etq1_0 < 0.0
+      etq1_0 = etq1_0 * -1.0
+    end
+    let mut atq1_0 = rtq1_0
+    if atq1_0 < 0.0
+      atq1_0 = atq1_0 * -1.0
+    end
+    if etq1_0 > worsttq1_0
+      worsttq1_0 = etq1_0
+    end
+    if etq1_0 > atq1_0 * 0.001 + 0.000000001
+      badtq1_0 = badtq1_0 + 1.0
+    end
+    ktq1_0 = ktq1_0 + 1.0
+  end
+  otq1_0 = otq1_0 + 1078.0
+  ntq1_0 = ntq1_0 + 1.0
+end
+print("  tq1_0: {badtq1_0} of 2048 outside tolerance, worst abs diff {worsttq1_0}")
+mem_free(btq1_0)
+// ── tq2_0: 66-byte blocks of 256 ternary weights ──
+let ptq2_0 = dir + "tq2_0.bin"
+let sztq2_0 = file_size(ptq2_0)
+let btq2_0 = mem_alloc(sztq2_0)
+let _rdtq2_0 = file_read_into_mem(ptq2_0, btq2_0, 0.0, sztq2_0)
+let mut badtq2_0 = 0.0
+let mut worsttq2_0 = 0.0
+let mut ntq2_0 = 0.0
+let mut otq2_0 = 16.0
+while ntq2_0 < 8.0
+  let vtq2_0 = dequant_tq2_0_block_m(btq2_0, otq2_0)
+  let mut ktq2_0 = 0.0
+  while ktq2_0 < 256.0
+    let rtq2_0 = mem_get_f32(btq2_0, otq2_0 + 66.0 + ktq2_0 * 4.0)
+    let gtq2_0 = vtq2_0[int(ktq2_0)]
+    let mut etq2_0 = gtq2_0 - rtq2_0
+    if etq2_0 < 0.0
+      etq2_0 = etq2_0 * -1.0
+    end
+    let mut atq2_0 = rtq2_0
+    if atq2_0 < 0.0
+      atq2_0 = atq2_0 * -1.0
+    end
+    if etq2_0 > worsttq2_0
+      worsttq2_0 = etq2_0
+    end
+    if etq2_0 > atq2_0 * 0.001 + 0.000000001
+      badtq2_0 = badtq2_0 + 1.0
+    end
+    ktq2_0 = ktq2_0 + 1.0
+  end
+  otq2_0 = otq2_0 + 1090.0
+  ntq2_0 = ntq2_0 + 1.0
+end
+print("  tq2_0: {badtq2_0} of 2048 outside tolerance, worst abs diff {worsttq2_0}")
+mem_free(btq2_0)
+// ── q2_0_g128: 34-byte blocks of 128 weights (PQ2_0) ──
+let pg1 = dir + "q2_0_g128.bin"
+let szg1 = file_size(pg1)
+let bg1 = mem_alloc(szg1)
+let _rdg1 = file_read_into_mem(pg1, bg1, 0.0, szg1)
+let mut badg1 = 0.0
+let mut worstg1 = 0.0
+let mut ng1 = 0.0
+let mut og1 = 16.0
+while ng1 < 16.0
+  let vg1 = dequant_q2_0_g128_block_m(bg1, og1)
+  let mut kg1 = 0.0
+  while kg1 < 128.0
+    let rg1 = mem_get_f32(bg1, og1 + 34.0 + kg1 * 4.0)
+    let gg1 = vg1[int(kg1)]
+    let mut eg1 = gg1 - rg1
+    if eg1 < 0.0
+      eg1 = eg1 * -1.0
+    end
+    let mut ag1 = rg1
+    if ag1 < 0.0
+      ag1 = ag1 * -1.0
+    end
+    if eg1 > worstg1
+      worstg1 = eg1
+    end
+    if eg1 > ag1 * 0.001 + 0.000000001
+      badg1 = badg1 + 1.0
+    end
+    kg1 = kg1 + 1.0
+  end
+  og1 = og1 + 546.0
+  ng1 = ng1 + 1.0
+end
+print("  q2_0_g128: {badg1} of 2048 outside tolerance, worst abs diff {worstg1}")
+mem_free(bg1)
+// ── q3_k: 110-byte blocks of 256 weights, six-bit scales in 12 bytes ──
+let p3k = dir + "q3_k.bin"
+let sz3k = file_size(p3k)
+let b3k = mem_alloc(sz3k)
+let _rd3k = file_read_into_mem(p3k, b3k, 0.0, sz3k)
+let mut bad3k = 0.0
+let mut worst3k = 0.0
+let mut n3k = 0.0
+let mut o3k = 16.0
+while n3k < 8.0
+  let v3k = dequant_q3_k_block_m(b3k, o3k)
+  let mut k3k = 0.0
+  while k3k < 256.0
+    let r3k = mem_get_f32(b3k, o3k + 110.0 + k3k * 4.0)
+    let g3k = v3k[int(k3k)]
+    let mut e3k = g3k - r3k
+    if e3k < 0.0
+      e3k = e3k * -1.0
+    end
+    let mut a3k = r3k
+    if a3k < 0.0
+      a3k = a3k * -1.0
+    end
+    if e3k > worst3k
+      worst3k = e3k
+    end
+    if e3k > a3k * 0.001 + 0.000000001
+      bad3k = bad3k + 1.0
+    end
+    k3k = k3k + 1.0
+  end
+  o3k = o3k + 1134.0
+  n3k = n3k + 1.0
+end
+print("  q3_k: {bad3k} of 2048 outside tolerance, worst abs diff {worst3k}")
+mem_free(b3k)
+// ── iq4_nl: 18-byte blocks of 32 weights, nonlinear nibble table ──
+let p4n = dir + "iq4_nl.bin"
+let sz4n = file_size(p4n)
+let b4n = mem_alloc(sz4n)
+let _rd4n = file_read_into_mem(p4n, b4n, 0.0, sz4n)
+let mut bad4n = 0.0
+let mut worst4n = 0.0
+let mut n4n = 0.0
+let mut o4n = 16.0
+while n4n < 64.0
+  let v4n = dequant_iq4_nl_block_m(b4n, o4n)
+  let mut k4n = 0.0
+  while k4n < 32.0
+    let r4n = mem_get_f32(b4n, o4n + 18.0 + k4n * 4.0)
+    let g4n = v4n[int(k4n)]
+    let mut e4n = g4n - r4n
+    if e4n < 0.0
+      e4n = e4n * -1.0
+    end
+    let mut a4n = r4n
+    if a4n < 0.0
+      a4n = a4n * -1.0
+    end
+    if e4n > worst4n
+      worst4n = e4n
+    end
+    if e4n > a4n * 0.001 + 0.000000001
+      bad4n = bad4n + 1.0
+    end
+    k4n = k4n + 1.0
+  end
+  o4n = o4n + 146.0
+  n4n = n4n + 1.0
+end
+print("  iq4_nl: {bad4n} of 2048 outside tolerance, worst abs diff {worst4n}")
+mem_free(b4n)
+let moretotal = bad40 + bad41 + bad51 + bad5k + bad2k + bad3k + badtq1_0 + badtq2_0 + bad4n + badg1
+if moretotal == 0.0
+  print("DEQUANT DECODERS MATCH THE GGML ORACLE")
+end
+if moretotal > 0.0
+  print("DEQUANT FAILURES: {moretotal} values outside tolerance")
+end
+mem_free(b40)
+mem_free(b41)
+mem_free(b51)
+mem_free(b5k)

@@ -24,8 +24,6 @@ use "chat"
 
 fn run_generate(model_path, prompt)
   // Configuration
-  let max_tokens = 50.0
-  let max_seq = 64.0
   let strategy = "top_p"
   let temperature = 0.8
   let top_k = 40.0
@@ -38,7 +36,10 @@ fn run_generate(model_path, prompt)
 
   let n_embd = map_get(model, "n_embd")
   let n_head = map_get(model, "n_head")
-  let mut n_kv_head = map_get(model, "n_kv_head")
+  // map_get throws on a missing key, so the "== 0.0" fallback below could never be reached: a model
+  // that genuinely has no key-value head count (plain MHA, or an architecture whose metadata the
+  // parser does not normalize under that name) died here instead of defaulting to n_head.
+  let mut n_kv_head = gguf_meta_default(model, "n_kv_head", 0.0)
   let n_ff = map_get(model, "n_ff")
   let n_layer = map_get(model, "n_layer")
   let vocab_size = map_get(model, "vocab_size")
@@ -64,8 +65,35 @@ fn run_generate(model_path, prompt)
   let stop_tokens = get_stop_tokens(model, chat_tokens)
 
   let n_prompt = len(prompt_ids)
+
+  // The KV cache is allocated from the max_seq argument handed to every gguf_infer_layer call, and
+  // the cache index is not range-checked in Rust: reaching one position past it panics the whole
+  // process ("index out of bounds: the len is n_layer*max_seq*kv_dim but the index is ..."). The
+  // budget therefore has to cover the rendered prompt plus what may still be generated, and it is
+  // clamped to the context the model was trained for.
+  let n_ctx = gguf_meta(model, "context_length")
+  let mut max_seq = 512.0
+  let want_seq = n_prompt + 51.0
+  if want_seq > max_seq
+    max_seq = want_seq
+  end
+  if n_ctx > 0.0
+    if n_ctx < max_seq
+      max_seq = n_ctx
+    end
+  end
+  let mut max_tokens = 50.0
+  let room = max_seq - n_prompt - 1.0
+  if room < max_tokens
+    max_tokens = room
+  end
   print("  Prompt: {prompt}")
   print("  Template tokens: {n_prompt}")
+  print("  Sequence budget: {max_seq} positions, {max_tokens} new tokens")
+  if max_tokens < 1.0
+    print("  No room to answer: {n_prompt} prompt tokens against a {max_seq} context")
+    return 1.0
+  end
   let mut pi = 0.0
   while pi < n_prompt
     let ptid = prompt_ids[int(pi)]
@@ -77,6 +105,16 @@ fn run_generate(model_path, prompt)
   // Load output norm
   print("Loading output norm...")
   let out_norm_w = gguf_load_tensor(model_path, model, "output_norm.weight")
+
+  // The output projection is the embedding table only for a tied model. When the file carries a
+  // separate output.weight, projecting through token_embd.weight multiplies the hidden state by a
+  // matrix of the wrong shape and the logits are meaningless.
+  let mut lm_head = "token_embd.weight"
+  let has_lm_head = gguf_has_tensor(model, "output.weight")
+  if has_lm_head == 1.0
+    lm_head = "output.weight"
+  end
+  print("  output projection: {lm_head}")
 
   // KV cache is managed in Rust (gguf_infer_layer auto-initializes on first call)
   print("KV cache: Rust-managed (auto-initialized)")
@@ -121,10 +159,6 @@ fn run_generate(model_path, prompt)
         hidden[int(hi)] = layer_out[int(hi)]
         hi = hi + 1.0
       end
-      if layer_idx >= 2.0
-        let evict_idx = layer_idx - 2.0
-        let _ev = gguf_evict_layer(model_path, model, evict_idx)
-      end
       layer_idx = layer_idx + 1.0
     end
 
@@ -139,7 +173,7 @@ fn run_generate(model_path, prompt)
     else
       // Last prefill position or generation: compute logits + select
       let normed_out = rmsnorm_cpu(hidden, out_norm_w, n_embd, eps)
-      let logits = gguf_matvec(model_path, model, "token_embd.weight", normed_out)
+      let logits = gguf_matvec(model_path, model, lm_head, normed_out)
 
       let mut sampled_idx = 0.0
       if strategy == "greedy"

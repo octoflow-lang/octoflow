@@ -1,0 +1,164 @@
+// Does the compiled generation path know anything at all?
+//
+// "The capital of France is" -> the answer token has to rank in the top 10 of the next-token
+// distribution. Nothing here is tied to one model: the prompt ids, the answer id and the printed
+// strings all come from the model under test, so pointing model_path at any small qwen2/llama GGUF
+// runs the same check. If the tokenizer splits " Paris" into pieces the check uses the first piece.
+//
+// Reference for the file below, from llama.cpp on the same bytes and the same token ids (one batched
+// llama_decode, logits read at the last prompt position): argmax 12095 " Paris" at logit 18.26, so the
+// correct rank is 1.
+//
+// What 1.5.8 actually produces on it, 2026-10-08, on Qwen2.5-0.5B F32:
+//
+//   24 layers, 896 dim, 5 prompt tokens, answer 'ĠParis'
+//   argmax 'Ġ' at 17.479017; answer rank 93, answer logit 10.747284
+//   COHERENCE FAILURES: the answer is ranked 93, past the top 10
+//
+// So the model does not know the capital of France: the answer sits 92 tokens deep instead of first,
+// and the argmax is a space. The cause is in gguf_infer_layer, which rotates RoPE on (2i, 2i+1) where
+// neoX models use (i, i + n_dims/2); everything else in the path (row loading, biases, the GQA head
+// map, residuals, SwiGLU, the norm epsilon, freq_base) has been checked against an independent
+// forward pass over the same bytes and matches. Until RoPE is fixed this file's job is to report the
+// failure with numbers, so a fix is verifiable rather than hoped for.
+//
+// It is a standalone script, not part of `octoflow test`: the runner only collects annotated test
+// functions, and this needs a real multi-hundred-MB GGUF plus a forward pass per position, which no
+// unit suite should require. On the model above it costs 15 s.
+//
+// Run: octoflow run stdlib/llm/test_generate_coherence.flow --allow-read --allow-ffi
+use "gguf"
+use "ops"
+
+// Both helpers return what they compute instead of writing into caller variables: a function's `let`
+// shares a slot with the caller's variable of the same name, so an out-parameter gets clobbered.
+fn count_greater(logits, value)
+  let n = len(logits)
+  let mut c = 0.0
+  let mut i = 0.0
+  while i < n
+    if logits[int(i)] > value
+      c = c + 1.0
+    end
+    i = i + 1.0
+  end
+  return c
+end
+
+fn find_argmax(logits)
+  let n = len(logits)
+  let mut best = 0.0
+  let mut bestv = -1000000000000.0
+  let mut i = 0.0
+  while i < n
+    let lv = logits[int(i)]
+    if lv > bestv
+      bestv = lv
+      best = i
+    end
+    i = i + 1.0
+  end
+  return best
+end
+
+fn coherence_check(model_path)
+  let model = gguf_load_from_file(model_path)
+  let n_embd = map_get(model, "n_embd")
+  let n_layer = map_get(model, "n_layer")
+  let eps = gguf_meta_default(model, "attention.layer_norm_rms_epsilon", 0.00001)
+  let vocab = gguf_load_vocab(model_path)
+  let out_norm_w = gguf_load_tensor(model_path, model, "output_norm.weight")
+
+  let ids = gguf_tokenize(model_path, "The capital of France is")
+  let n_ids = len(ids)
+  let answer = gguf_tokenize(model_path, " Paris")
+  let answer_id = answer[0.0]
+  let answer_text = vocab[int(answer_id)]
+  print("  {n_layer} layers, {n_embd} dim, {n_ids} prompt tokens, answer '{answer_text}'")
+
+  let mut hidden = []
+  let mut pre = 0.0
+  while pre < n_embd
+    push(hidden, 0.0)
+    pre = pre + 1.0
+  end
+
+  // Feed the prompt in one position at a time, the way run_generate prefills. The final argument is
+  // the KV capacity in positions and must cover the prompt; the position index into it is unchecked.
+  let mut pos = 0.0
+  while pos < n_ids
+    let tid = ids[int(pos)]
+    let tok_emb = gguf_load_tensor(model_path, model, "token_embd.weight", tid)
+    let mut ei = 0.0
+    while ei < n_embd
+      hidden[int(ei)] = tok_emb[int(ei)]
+      ei = ei + 1.0
+    end
+    let mut li = 0.0
+    while li < n_layer
+      let layer_out = gguf_infer_layer(model_path, model, hidden, li, pos, 128.0)
+      let mut hi = 0.0
+      while hi < n_embd
+        hidden[int(hi)] = layer_out[int(hi)]
+        hi = hi + 1.0
+      end
+      li = li + 1.0
+    end
+    pos = pos + 1.0
+  end
+
+  let normed = rmsnorm_cpu(hidden, out_norm_w, n_embd, eps)
+  let mut lm_head = "token_embd.weight"
+  let has_lm_head = gguf_has_tensor(model, "output.weight")
+  if has_lm_head == 1.0
+    lm_head = "output.weight"
+  end
+  let logits = gguf_matvec(model_path, model, lm_head, normed)
+
+  let answer_logit = logits[int(answer_id)]
+  let above = count_greater(logits, answer_logit)
+  let rank = above + 1.0
+  let best = find_argmax(logits)
+  let best_logit = logits[int(best)]
+  let best_text = vocab[int(best)]
+  print("  argmax '{best_text}' at {best_logit}; answer rank {rank}, answer logit {answer_logit}")
+  return rank
+end
+
+// The rank and the argmax are computed in .flow, so they are checked on a fixed array before the
+// model is consulted: a rank of 93 must never be an artefact of the counting. On [1, 5, 3, 5.5] the
+// argmax is index 3, and exactly one element exceeds 5.0, so 5.0 ranks 2nd -- the helper counts the
+// elements above the value, and the rank is one more than that count.
+let probe = [1.0, 5.0, 3.0, 5.5]
+let help_best = find_argmax(probe)
+let help_above = count_greater(probe, 5.0)
+let help_rank = help_above + 1.0
+if help_best == 3.0
+  print("  helpers OK: argmax index {help_best}, rank of 5.0 = {help_rank}")
+end
+if help_best != 3.0
+  print("  FAILURES: the argmax helper returned index {help_best} instead of 3")
+end
+if help_rank != 2.0
+  print("  FAILURES: the rank helper put 5.0 at {help_rank} instead of 2")
+end
+
+let model_path = "D:/git/python/ninfer/.octoflow_probe/qwen25-f32.gguf"
+
+// A while loop is not permitted inside an if block, so the absent-model case is handled by not
+// calling the test rather than by wrapping its body.
+let present = file_exists(model_path)
+if present == 0.0
+  print("SKIP: nothing at {model_path}")
+  print("  point model_path at any small qwen2/llama GGUF to run this check")
+end
+
+if present == 1.0
+  let rank = coherence_check(model_path)
+  if rank <= 10.0
+    print("COHERENCE OK")
+  end
+  if rank > 10.0
+    print("COHERENCE FAILURES: the answer is ranked {rank}, past the top 10")
+  end
+end

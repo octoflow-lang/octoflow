@@ -208,7 +208,7 @@ print("  Written _test_model.gguf")
 // ── Load the GGUF file ──────────────────────────────────────────
 print(" ")
 print("--- Loading GGUF model ---")
-let model = gguf_load("_test_model.gguf")
+let model = gguf_load_from_file("_test_model.gguf")
 
 // ── Test 1: Legacy shorthand metadata ────────────────────────────
 print("--- Test 1: Legacy shorthand metadata ---")
@@ -284,7 +284,7 @@ end
 // ── Test 6: Load F32 tensor via read_tensor_by_name ──────────────
 print("--- Test 6: Load attn_norm weights ---")
 let file_bytes = read_bytes("_test_model.gguf")
-let norm_data = read_tensor_by_name(file_bytes, model, "blk.0.attn_norm.weight")
+let norm_data = read_tensor_by_name("_test_model.gguf", model, "blk.0.attn_norm.weight")
 let norm_len = len(norm_data)
 let _c20 = check_eq(counters, "norm_data len=8", norm_len, 8.0)
 let _c21 = check_near(counters, "norm[0]=1.0", norm_data[0], 1.0, 0.001)
@@ -292,14 +292,14 @@ let _c22 = check_near(counters, "norm[7]=1.0", norm_data[7], 1.0, 0.001)
 
 // ── Test 7: Load ffn_norm weights ────────────────────────────────
 print("--- Test 7: Load ffn_norm weights ---")
-let fn_data = read_tensor_by_name(file_bytes, model, "blk.0.ffn_norm.weight")
+let fn_data = read_tensor_by_name("_test_model.gguf", model, "blk.0.ffn_norm.weight")
 let fn_len = len(fn_data)
 let _c23 = check_eq(counters, "ffn_norm len=8", fn_len, 8.0)
 let _c24 = check_near(counters, "ffn_norm[0]=2.0", fn_data[0], 2.0, 0.001)
 
 // ── Test 8: Load Q weight matrix ─────────────────────────────────
 print("--- Test 8: Load attn_q weights (identity) ---")
-let q_data = read_tensor_by_name(file_bytes, model, "blk.0.attn_q.weight")
+let q_data = read_tensor_by_name("_test_model.gguf", model, "blk.0.attn_q.weight")
 let q_len = len(q_data)
 let _c25 = check_eq(counters, "q_weight len=64", q_len, 64.0)
 // Identity matrix: [0,0]=1, [0,1]=0, [1,1]=1

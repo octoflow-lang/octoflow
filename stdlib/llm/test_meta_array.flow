@@ -1,0 +1,283 @@
+// Array-valued GGUF metadata: counts, element types, single elements, bulk reads, and the scalars
+// that follow an array in the KV table.
+//
+// Every expected value was dumped from this file by an independent reader (node, walking the KV
+// section itself), not by this parser:
+//
+//   qwen35.rope.dimension_sections      i32[4]       11, 11, 10, 0
+//   prism.hadamard.weight_names         string[401]  0 "output.weight", 200 "blk.37.ffn_up.weight",
+//                                                    400 "blk.9.ffn_up.weight"
+//   prism.hadamard.sign_widths          i32[3]       5120, 6144, 17408
+//   prism.hadamard.sign_values          i32[28672]   14504 negative, 14168 positive, none zero,
+//                                                    sum -336, [100]=1 [1000]=-1 [14336]=1 [28671]=1
+//   prism.hadamard.inverse_weight_names string[1]    "token_embd.weight"
+//   tokenizer.ggml.tokens               string[248320] 1 is a double quote, 248319 "[PAD248319]"
+//   tokenizer.ggml.merges               string[247587] 2 "i n"
+//   tokenizer.ggml.token_type           i32[248320]  0 -> 1, 248319 -> 5
+//
+// Scalars that come after the arrays in the KV table are asserted too: they only decode correctly
+// if each array skip advanced pos by exactly the elements' extent.
+//
+// The sign_values histogram is the check that catches a u32-versus-i32 mistake: read as an unsigned
+// word and corrected by subtracting 2^32, -1 becomes 0, because 4294967295 is not an f32.
+use "gguf"
+
+let path = "D:/OllamaModels/BoldingBuilds/Ternary-Bonsai-2-27B-Abliterated-PQ2_0-MTP-GGUF/Ternary-Bonsai-2-27B-Abliterated-PQ2_0.gguf"
+
+let mut counters = [0.0, 0.0]
+
+fn want(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL {label}: got {got} expected {expected}")
+  return 0.0
+end
+
+fn want_str(counters, label, got, expected)
+  if got == expected
+    counters[0] = counters[0] + 1.0
+    return 1.0
+  end
+  counters[1] = counters[1] + 1.0
+  print("  FAIL {label}: got '{got}' expected '{expected}'")
+  return 0.0
+end
+
+let model = gguf_load_from_file(path)
+
+// ── element size table ───────────────────────────────────────────
+let _a = want(counters, "elem size u8", gguf_array_elem_size(0.0), 1.0)
+let _b = want(counters, "elem size i8", gguf_array_elem_size(1.0), 1.0)
+let _c = want(counters, "elem size i16", gguf_array_elem_size(3.0), 2.0)
+let _d = want(counters, "elem size i32", gguf_array_elem_size(5.0), 4.0)
+let _e = want(counters, "elem size f32", gguf_array_elem_size(6.0), 4.0)
+let _f = want(counters, "elem size string", gguf_array_elem_size(8.0), -1.0)
+let _g = want(counters, "elem size i64", gguf_array_elem_size(11.0), 8.0)
+let _h = want(counters, "elem size of a nested array is rejected", gguf_array_elem_size(9.0), -2.0)
+
+// ── counts and element types ─────────────────────────────────────
+let secs = "qwen35.rope.dimension_sections"
+let wn = "prism.hadamard.weight_names"
+let sw = "prism.hadamard.sign_widths"
+let sv = "prism.hadamard.sign_values"
+let iwn = "prism.hadamard.inverse_weight_names"
+let tk = "tokenizer.ggml.tokens"
+let tt = "tokenizer.ggml.token_type"
+let mg = "tokenizer.ggml.merges"
+
+let _i = want(counters, "dimension_sections count", gguf_meta_array_count(model, secs), 4.0)
+let _j = want(counters, "dimension_sections element type", gguf_meta_array_etype(model, secs), 5.0)
+let _k = want(counters, "weight_names count", gguf_meta_array_count(model, wn), 401.0)
+let _l = want(counters, "weight_names element type", gguf_meta_array_etype(model, wn), 8.0)
+let _m = want(counters, "sign_widths count", gguf_meta_array_count(model, sw), 3.0)
+let _n = want(counters, "sign_values count", gguf_meta_array_count(model, sv), 28672.0)
+let _o = want(counters, "inverse_weight_names count", gguf_meta_array_count(model, iwn), 1.0)
+let _p = want(counters, "tokens count", gguf_meta_array_count(model, tk), 248320.0)
+let _q = want(counters, "merges count", gguf_meta_array_count(model, mg), 247587.0)
+let _r = want(counters, "token_type count", gguf_meta_array_count(model, tt), 248320.0)
+// An absent array reads as absent, not as a zero-length one.
+let _s = want(counters, "absent array count", gguf_meta_array_count(model, "no.such.array"), 0.0)
+let _t = want(counters, "absent array element type", gguf_meta_array_etype(model, "no.such.array"), -1.0)
+
+// ── numeric elements, random access ──────────────────────────────
+let _u = want(counters, "dimension_sections[0]", gguf_meta_array_num(model, secs, 0.0), 11.0)
+let _v = want(counters, "dimension_sections[2]", gguf_meta_array_num(model, secs, 2.0), 10.0)
+let _w = want(counters, "dimension_sections[3]", gguf_meta_array_num(model, secs, 3.0), 0.0)
+let _x = want(counters, "sign_widths[0]", gguf_meta_array_num(model, sw, 0.0), 5120.0)
+let _y = want(counters, "sign_widths[2]", gguf_meta_array_num(model, sw, 2.0), 17408.0)
+let _z = want(counters, "sign_values[100]", gguf_meta_array_num(model, sv, 100.0), 1.0)
+let _a2 = want(counters, "sign_values[1000]", gguf_meta_array_num(model, sv, 1000.0), -1.0)
+let _b2 = want(counters, "sign_values[14336]", gguf_meta_array_num(model, sv, 14336.0), 1.0)
+let _c2 = want(counters, "sign_values[28671]", gguf_meta_array_num(model, sv, 28671.0), 1.0)
+let _d2 = want(counters, "token_type[0]", gguf_meta_array_num(model, tt, 0.0), 1.0)
+let _e2 = want(counters, "token_type[248319]", gguf_meta_array_num(model, tt, 248319.0), 5.0)
+
+// ── bulk read of a whole array, then a histogram over it ─────────
+let packed = gguf_meta_array_pack_num(model, sv)
+let mut neg = 0.0
+let mut pos = 0.0
+let mut zero = 0.0
+let mut sum = 0.0
+let mut i2 = 0.0
+while i2 < 28672.0
+  let v = mem_get_f32(packed, i2 * 4.0)
+  if v < 0.0
+    neg = neg + 1.0
+  end
+  if v > 0.0
+    pos = pos + 1.0
+  end
+  if v == 0.0
+    zero = zero + 1.0
+  end
+  sum = sum + v
+  i2 = i2 + 1.0
+end
+mem_free(packed)
+let _f2 = want(counters, "sign_values negatives", neg, 14504.0)
+let _g2 = want(counters, "sign_values positives", pos, 14168.0)
+let _h2 = want(counters, "sign_values zeros", zero, 0.0)
+let _i2 = want(counters, "sign_values sum", sum, -336.0)
+
+// ── string elements ──────────────────────────────────────────────
+let n0 = gguf_meta_array_str(model, wn, 0.0)
+let _j2 = want_str(counters, "weight_names[0]", n0, "output.weight")
+let n1 = gguf_meta_array_str(model, wn, 1.0)
+let _k2 = want_str(counters, "weight_names[1], sequential", n1, "blk.0.attn_qkv.weight")
+let n2 = gguf_meta_array_str(model, wn, 2.0)
+let _l2 = want_str(counters, "weight_names[2], sequential", n2, "blk.0.attn_gate.weight")
+let n3 = gguf_meta_array_str(model, wn, 3.0)
+let _m2 = want_str(counters, "weight_names[3], sequential", n3, "blk.0.ssm_out.weight")
+let n200 = gguf_meta_array_str(model, wn, 200.0)
+let _n2 = want_str(counters, "weight_names[200], after a jump", n200, "blk.37.ffn_up.weight")
+// Full sequential scan: if any step drifted, the last element would not be the last name.
+let mut last_name = ""
+let mut i3 = 0.0
+while i3 < 401.0
+  last_name = gguf_meta_array_str(model, wn, i3)
+  i3 = i3 + 1.0
+end
+let _o2 = want_str(counters, "weight_names[400] after scanning all 401", last_name, "blk.9.ffn_up.weight")
+let iw = gguf_meta_array_str(model, iwn, 0.0)
+let _p2 = want_str(counters, "inverse_weight_names[0]", iw, "token_embd.weight")
+let m2 = gguf_meta_array_str(model, mg, 2.0)
+let _q2 = want_str(counters, "merges[2]", m2, "i n")
+let t1 = gguf_meta_array_str(model, tk, 1.0)
+let _r2 = want_str(counters, "tokens[1] is a double quote", t1, "\"")
+let tlast = gguf_meta_array_str(model, tk, 248319.0)
+let _s2 = want_str(counters, "tokens[248319], walked from the start", tlast, "[PAD248319]")
+
+// ── scalars that follow arrays in the KV table ───────────────────
+// These only decode if every array skip advanced pos by exactly the elements' extent.
+let _t2 = want(counters, "hadamard.version", map_get(model, "kv.prism.hadamard.version"), 1.0)
+let _u2 = want(counters, "hadamard.block_size", map_get(model, "kv.prism.hadamard.block_size"), 1024.0)
+let _v2 = want_str(counters, "hadamard.transform", map_get(model, "kv.prism.hadamard.transform"), "normalized-sylvester-walsh-hadamard")
+let _w2 = want_str(counters, "hadamard.axis", map_get(model, "kv.prism.hadamard.axis"), "input-last-dimension")
+let _x2 = want_str(counters, "hadamard.sign_mode", map_get(model, "kv.prism.hadamard.sign_mode"), "explicit")
+let _y2 = want(counters, "gdn_v_grouped", map_get(model, "kv.prism.hadamard.gdn_v_grouped"), 1.0)
+let _z2 = want_str(counters, "tokenizer model", map_get(model, "kv.tokenizer.ggml.model"), "gpt2")
+let _a3 = want_str(counters, "tokenizer pre", map_get(model, "kv.tokenizer.ggml.pre"), "qwen35")
+let _b3 = want(counters, "eos_token_id", map_get(model, "kv.tokenizer.ggml.eos_token_id"), 248046.0)
+let _c3 = want(counters, "padding_token_id", map_get(model, "kv.tokenizer.ggml.padding_token_id"), 248044.0)
+let _d3 = want(counters, "bos_token_id", map_get(model, "kv.tokenizer.ggml.bos_token_id"), 248044.0)
+let _e3 = want(counters, "add_bos_token", map_get(model, "kv.tokenizer.ggml.add_bos_token"), 0.0)
+let _f3 = want(counters, "quantization_version", map_get(model, "kv.general.quantization_version"), 2.0)
+let _g3 = want(counters, "file_type", map_get(model, "kv.general.file_type"), 141.0)
+let tpl = map_get(model, "kv.tokenizer.chat_template")
+let tpl_len = len(tpl)
+let _h3 = want(counters, "chat_template is long", tpl_len > 100.0, 1.0)
+let _i3 = want(counters, "tensor count survives", map_get(model, "tensor_count"), 851.0)
+
+let passed = counters[0]
+let failed = counters[1]
+print("fixture checks {passed} passed, {failed} failed")
+
+// ── the byte-array parser, on a synthetic model ──────────────────
+// The same KV shapes through gguf_load_from_bytes, which has no persistent buffer to point at.
+// Counts and element types are still reported, and the two scalars that follow the arrays only
+// decode if each skip advanced by exactly the elements' extent. Reading an element of such an array
+// stops with a message instead of returning a wrong number (exercised by hand, not asserted here).
+
+fn w_u32(arr, val)
+  let b0 = val - floor(val / 256.0) * 256.0
+  let r1 = floor(val / 256.0)
+  let b1 = r1 - floor(r1 / 256.0) * 256.0
+  let r2 = floor(r1 / 256.0)
+  let b2 = r2 - floor(r2 / 256.0) * 256.0
+  let b3 = floor(r2 / 256.0)
+  push(arr, b0)
+  push(arr, b1)
+  push(arr, b2)
+  push(arr, b3)
+  return 0.0
+end
+
+fn w_u64(arr, val)
+  let low = val - floor(val / 4294967296.0) * 4294967296.0
+  let high = floor(val / 4294967296.0)
+  let y_x1 = w_u32(arr, low)
+  let y_x2 = w_u32(arr, high)
+  return 0.0
+end
+
+fn w_str(arr, s)
+  let slen = len(s)
+  let y_x = w_u64(arr, slen)
+  let mut i = 0.0
+  while i < slen
+    push(arr, ord(char_at(s, i)))
+    i = i + 1.0
+  end
+  return 0.0
+end
+
+fn w_i32(arr, val)
+  // Four LE bytes taken straight from the signed value: floor-division yields the two's-complement
+  // byte for negatives and no intermediate leaves the small-integer range. Writing 0xFFFFFFFF as a
+  // number is not possible here, because 4294967295 is not an f32.
+  let mut rest = val
+  let mut b = 0.0
+  while b < 4.0
+    push(arr, rest - 256.0 * floor(rest / 256.0))
+    rest = floor(rest / 256.0)
+    b = b + 1.0
+  end
+  return 0.0
+end
+
+let mut raw = []
+let y_h1 = w_u32(raw, 1179993927.0)
+let y_h2 = w_u32(raw, 3.0)
+let y_h3 = w_u64(raw, 0.0)
+let y_h4 = w_u64(raw, 5.0)
+
+let y_a1 = w_str(raw, "general.architecture")
+let y_a2b = w_u32(raw, 8.0)
+let y_a3 = w_str(raw, "qwen2")
+
+// array of i32: [-1, 2, -3, 1000]
+let y_b1 = w_str(raw, "test.i32s")
+let y_b2 = w_u32(raw, 9.0)
+let y_b3 = w_u32(raw, 5.0)
+let y_b4 = w_u64(raw, 4.0)
+let y_b5 = w_i32(raw, -1.0)
+let y_b6 = w_i32(raw, 2.0)
+let y_b7 = w_i32(raw, -3.0)
+let y_b8 = w_i32(raw, 1000.0)
+
+// array of strings: ["alpha", "b"]
+let y_c1 = w_str(raw, "test.strs")
+let y_c2 = w_u32(raw, 9.0)
+let y_c3 = w_u32(raw, 8.0)
+let y_c4 = w_u64(raw, 2.0)
+let y_c5 = w_str(raw, "alpha")
+let y_c6 = w_str(raw, "b")
+
+let y_d1 = w_str(raw, "test.after_u32")
+let y_d2 = w_u32(raw, 4.0)
+let y_d3 = w_u32(raw, 777.0)
+
+let y_e1 = w_str(raw, "test.after_str")
+let y_e2 = w_u32(raw, 8.0)
+let y_e3 = w_str(raw, "tail")
+
+let mbytes = gguf_load_from_bytes(raw)
+let y_g1 = want(counters, "bytes parser i32 count", gguf_meta_array_count(mbytes, "test.i32s"), 4.0)
+let y_g2 = want(counters, "bytes parser i32 element type", gguf_meta_array_etype(mbytes, "test.i32s"), 5.0)
+let y_g3 = want(counters, "bytes parser string count", gguf_meta_array_count(mbytes, "test.strs"), 2.0)
+let y_g4 = want(counters, "bytes parser string element type", gguf_meta_array_etype(mbytes, "test.strs"), 8.0)
+let y_g5 = want(counters, "scalar after two arrays", map_get(mbytes, "kv.test.after_u32"), 777.0)
+let y_g6 = want_str(counters, "string after two arrays", map_get(mbytes, "kv.test.after_str"), "tail")
+let y_g7 = want(counters, "bytes parser architecture survives", map_get(mbytes, "kv.general.architecture") == "qwen2", 1.0)
+
+let passed2 = counters[0]
+let failed2 = counters[1]
+print("checks passed {passed2}, failed {failed2}")
+if failed2 == 0.0
+  print("ARRAY METADATA OK")
+else
+  print("ARRAY METADATA FAILURES")
+end

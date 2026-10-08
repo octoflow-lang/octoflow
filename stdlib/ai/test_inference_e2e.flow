@@ -292,7 +292,7 @@ print(" ")
 
 // ── Test 1: Load model metadata ──────────────────────────────────
 print("--- Test 1: Load model ---")
-let model = gguf_load("_test_e2e.gguf")
+let model = gguf_load_from_file("_test_e2e.gguf")
 
 let n_embd = gguf_meta(model, "embedding_length")
 let n_head = gguf_meta(model, "attention.head_count")
@@ -331,7 +331,7 @@ let _c19 = check_eq(counters, "has output.weight", gguf_has_tensor(model, "outpu
 
 // ── Test 3: Load embedding ───────────────────────────────────────
 print("--- Test 3: Load embedding ---")
-let bos_emb = load_embedding_row(file_bytes, model, 1.0, n_embd)
+let bos_emb = load_embedding_row_from_file("_test_e2e.gguf", model, 1.0, n_embd)
 let _c20 = check_eq(counters, "emb len=32", len(bos_emb), 32.0)
 // Row 1 should be 0.1*(1+1) = 0.2 in all positions
 let _c21 = check_near(counters, "emb[0]=0.2", bos_emb[0], 0.2, 0.01)
@@ -339,7 +339,7 @@ let _c22 = check_near(counters, "emb[31]=0.2", bos_emb[31], 0.2, 0.01)
 
 // ── Test 4: RMSNorm CPU with adaptive eps ────────────────────────
 print("--- Test 4: RMSNorm CPU ---")
-let norm_w = read_tensor_by_name(file_bytes, model, "blk.0.attn_norm.weight")
+let norm_w = read_tensor_by_name("_test_e2e.gguf", model, "blk.0.attn_norm.weight")
 let normed = rmsnorm_cpu(bos_emb, norm_w, eps)
 let _c23 = check_eq(counters, "normed len=32", len(normed), 32.0)
 // All-same input with weight=1 → output should be all 1.0 (or close)
@@ -349,15 +349,15 @@ let _c24 = check_near(counters, "normed[0]~1.0", normed[0], 1.0, 0.01)
 // ── Test 5: Weight loading for all layer tensors ─────────────────
 print("--- Test 5: Weight loading ---")
 let prefix = "blk.0."
-let an = read_tensor_by_name(file_bytes, model, prefix + "attn_norm.weight")
-let wq = read_tensor_by_name(file_bytes, model, prefix + "attn_q.weight")
-let wk = read_tensor_by_name(file_bytes, model, prefix + "attn_k.weight")
-let wv = read_tensor_by_name(file_bytes, model, prefix + "attn_v.weight")
-let wo = read_tensor_by_name(file_bytes, model, prefix + "attn_output.weight")
-let fn_w = read_tensor_by_name(file_bytes, model, prefix + "ffn_norm.weight")
-let wg = read_tensor_by_name(file_bytes, model, prefix + "ffn_gate.weight")
-let wu = read_tensor_by_name(file_bytes, model, prefix + "ffn_up.weight")
-let wd = read_tensor_by_name(file_bytes, model, prefix + "ffn_down.weight")
+let an = read_tensor_by_name("_test_e2e.gguf", model, prefix + "attn_norm.weight")
+let wq = read_tensor_by_name("_test_e2e.gguf", model, prefix + "attn_q.weight")
+let wk = read_tensor_by_name("_test_e2e.gguf", model, prefix + "attn_k.weight")
+let wv = read_tensor_by_name("_test_e2e.gguf", model, prefix + "attn_v.weight")
+let wo = read_tensor_by_name("_test_e2e.gguf", model, prefix + "attn_output.weight")
+let fn_w = read_tensor_by_name("_test_e2e.gguf", model, prefix + "ffn_norm.weight")
+let wg = read_tensor_by_name("_test_e2e.gguf", model, prefix + "ffn_gate.weight")
+let wu = read_tensor_by_name("_test_e2e.gguf", model, prefix + "ffn_up.weight")
+let wd = read_tensor_by_name("_test_e2e.gguf", model, prefix + "ffn_down.weight")
 
 let _c25 = check_eq(counters, "norm len=32", len(an), 32.0)
 let _c26 = check_eq(counters, "wq len=1024", len(wq), 1024.0)
@@ -369,14 +369,14 @@ let _c29 = check_eq(counters, "down len=2048", len(wd), 2048.0)
 print("--- Test 6: Output logits ---")
 // With output.weight = identity matrix and normed hidden = all-same,
 // logits = normed_hidden dot each row of output.weight
-let out_norm = read_tensor_by_name(file_bytes, model, "output_norm.weight")
+let out_norm = read_tensor_by_name("_test_e2e.gguf", model, "output_norm.weight")
 let normed_out = rmsnorm_cpu(bos_emb, out_norm, eps)
 
 // Output projection: dot product of normed_out with each output row
 let mut logits = []
 let mut vi = 0.0
 while vi < vocab_size
-  let row = load_embedding_row(file_bytes, model, vi, n_embd)
+  let row = load_embedding_row_from_file("_test_e2e.gguf", model, vi, n_embd)
   let mut dot = 0.0
   let mut di = 0.0
   while di < n_embd
@@ -405,6 +405,43 @@ print("  Logit[31]={last_logit}")
 
 // Token with highest logit should be 31 (highest embedding values)
 let _c31 = check_eq(counters, "greedy token=31", next_token, 31.0)
+
+// ── Test 6b: the untied head is a different table, and using it is observable ──
+// Test 6 above projects through load_embedding_row_from_file, i.e. through token_embd.weight, so it
+// says nothing about which table a model with its own output.weight should use. This file's synthetic
+// model carries output.weight as a 32x32 identity precisely so the two choices can be told apart:
+//   through output.weight:  logit[i] = sum_j I[i,j] * normed[j] = normed[i] = 1.0 for every i
+//   through token_embd:    logit[i] = 32 * 1.0 * 0.1 * (i + 1) = 3.2 * (i + 1)   (rises with i)
+// Those give different argmaxes (0 and 31), so a loader that ignores output.weight cannot pass this.
+// The selection rule itself lives in generate.flow; what is pinned here is that the untied tensor
+// exists, decodes, and is not interchangeable with the embedding table.
+print("--- Test 6b: untied output.weight vs token_embd ---")
+let head_w = read_tensor_by_name("_test_e2e.gguf", model, "output.weight")
+let _c32 = check_eq(counters, "output.weight len=1024", len(head_w), 1024.0)
+let _c33 = check_near(counters, "head row0 col0=1", head_w[0], 1.0, 0.0001)
+let _c34 = check_near(counters, "head row0 col1=0", head_w[1], 0.0, 0.0001)
+
+let mut head_logits = []
+let mut hi = 0.0
+while hi < vocab_size
+  let mut hdot = 0.0
+  let mut hj = 0.0
+  while hj < n_embd
+    hdot = hdot + head_w[int(hi * n_embd + hj)] * normed_out[int(hj)]
+    hj = hj + 1.0
+  end
+  push(head_logits, hdot)
+  hi = hi + 1.0
+end
+
+let _c35 = check_near(counters, "untied logit[0]=1", head_logits[0], 1.0, 0.001)
+let _c36 = check_near(counters, "untied logit[31]=1", head_logits[31], 1.0, 0.001)
+let head_pick = sample_greedy(head_logits)
+let emb_pick = sample_greedy(logits)
+let _c37 = check_eq(counters, "untied argmax=0", head_pick, 0.0)
+// and the argmax through the wrong table is 31, so the two are not interchangeable
+let _c38 = check_eq(counters, "embedding argmax=31", emb_pick, 31.0)
+print("  through output.weight: token {head_pick}; through token_embd: token {emb_pick}")
 
 // ── Cleanup ──────────────────────────────────────────────────────
 let _rm = exec("rm", "_test_e2e.gguf")

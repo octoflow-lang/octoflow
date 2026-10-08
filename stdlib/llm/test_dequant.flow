@@ -1,0 +1,161 @@
+// Verifies the .flow block decoders against ggml's own dequantization.
+//
+// Reference side: an F32 re-quant of the same file, which is what ggml's to_q*() kernels produce:
+//   llama-quantize --allow-requantize <model>.gguf <model>-f32.gguf F32
+//
+// The quantized side is read through each tensor's u64 file offset from the parsed header. The F32
+// side uses absolute byte offsets as constants, because parsing the second file costs a lot more
+// than the first: on this machine one gguf_load_from_file() takes 4-5 s and a second one in the
+// same process takes another 50-90 s, so only one model map is loaded here. Regenerate the three
+// constants for a new fixture by scanning that file's tensor table (data_start + tensor offset,
+// 4 bytes per element).
+//
+// Statement-level bare blocks and ternaries are not part of this language, so the three checks are
+// written flat with distinct names rather than wrapped in a helper.
+use "gguf"
+use "weight_loader"
+
+let quant = "D:/OllamaModels/ermiaazarkhalili/Qwen2.5-0.5B-Instruct_Function_Calling_xLAM-GGUF/model-Q4_K_M.gguf"
+let oracle = "D:/git/python/ninfer/.octoflow_probe/qwen25-f32.gguf"
+let f5_abs = 554167616.0
+let f8_abs = 5951296.0
+let f6_abs = 557838144.0
+
+fn read_window(model, path, name, bytes)
+  let off = gguf_tensor_file_offset(model, name)
+  let buf = mem_alloc(bytes)
+  let _r = file_read_into_mem_u64(path, buf, off, 0.0, bytes)
+  mem_free(off)
+  return buf
+end
+
+let mq = gguf_load_from_file(quant)
+
+let mut failures = 0.0
+let nblk = 64.0
+
+// ---- q5_0: blk.0.attn_q.weight, 22-byte blocks of 32 weights ----
+let q5 = read_window(mq, quant, "blk.0.attn_q.weight", 22.0 * nblk)
+let o5 = mem_alloc(128.0 * nblk)
+let _r5 = file_read_into_mem(oracle, o5, f5_abs, 128.0 * nblk)
+let mut q5bad = 0.0
+let mut q5worst = 0.0
+let mut b5 = 0.0
+while b5 < nblk
+  let v5 = dequant_q5_0_block_m(q5, b5 * 22.0)
+  let mut i5 = 0.0
+  while i5 < 32.0
+    let got5 = v5[int(i5)]
+    let ref5 = bits_to_float(mem_get_u32(o5, (b5 * 32.0 + i5) * 4.0))
+    let mut d5 = got5 - ref5
+    if d5 < 0.0
+      d5 = d5 * -1.0
+    end
+    let mut m5 = ref5
+    if m5 < 0.0
+      m5 = m5 * -1.0
+    end
+    if d5 > m5 * 0.001 + 0.000000001
+      q5bad = q5bad + 1.0
+    end
+    if d5 > q5worst
+      q5worst = d5
+    end
+    i5 = i5 + 1.0
+  end
+  b5 = b5 + 1.0
+end
+mem_free(q5)
+mem_free(o5)
+let q5checked = 32.0 * nblk
+print("q5_0 attn_q: {q5bad} of {q5checked} outside tolerance, worst abs diff {q5worst}")
+if q5bad != 0.0
+  failures = failures + 1.0
+end
+
+// ---- q8_0: token_embd.weight, 34-byte blocks of 32 weights ----
+let q8 = read_window(mq, quant, "token_embd.weight", 34.0 * nblk)
+let o8 = mem_alloc(128.0 * nblk)
+let _r8 = file_read_into_mem(oracle, o8, f8_abs, 128.0 * nblk)
+let mut q8bad = 0.0
+let mut q8worst = 0.0
+let mut b8 = 0.0
+while b8 < nblk
+  let v8 = dequant_q8_0_block_m(q8, b8 * 34.0)
+  let mut i8 = 0.0
+  while i8 < 32.0
+    let got8 = v8[int(i8)]
+    let ref8 = bits_to_float(mem_get_u32(o8, (b8 * 32.0 + i8) * 4.0))
+    let mut d8 = got8 - ref8
+    if d8 < 0.0
+      d8 = d8 * -1.0
+    end
+    let mut m8 = ref8
+    if m8 < 0.0
+      m8 = m8 * -1.0
+    end
+    if d8 > m8 * 0.001 + 0.000000001
+      q8bad = q8bad + 1.0
+    end
+    if d8 > q8worst
+      q8worst = d8
+    end
+    i8 = i8 + 1.0
+  end
+  b8 = b8 + 1.0
+end
+mem_free(q8)
+mem_free(o8)
+let q8checked = 32.0 * nblk
+print("q8_0 token_embd: {q8bad} of {q8checked} outside tolerance, worst abs diff {q8worst}")
+if q8bad != 0.0
+  failures = failures + 1.0
+end
+
+// ---- q6_K: blk.0.ffn_down.weight, 210-byte blocks of 256 weights ----
+let q6 = read_window(mq, quant, "blk.0.ffn_down.weight", 210.0 * nblk)
+let o6 = mem_alloc(1024.0 * nblk)
+let _r6 = file_read_into_mem(oracle, o6, f6_abs, 1024.0 * nblk)
+let mut q6bad = 0.0
+let mut q6worst = 0.0
+let mut b6 = 0.0
+while b6 < nblk
+  let v6 = dequant_q6_k_block_m(q6, b6 * 210.0)
+  let mut i6 = 0.0
+  while i6 < 256.0
+    let got6 = v6[int(i6)]
+    let ref6 = bits_to_float(mem_get_u32(o6, (b6 * 256.0 + i6) * 4.0))
+    let mut d6 = got6 - ref6
+    if d6 < 0.0
+      d6 = d6 * -1.0
+    end
+    let mut m6 = ref6
+    if m6 < 0.0
+      m6 = m6 * -1.0
+    end
+    if d6 > m6 * 0.001 + 0.000000001
+      q6bad = q6bad + 1.0
+      if q6bad < 6.0
+        print("  q6_K mismatch block {b6} element {i6}: got {got6} want {ref6}")
+      end
+    end
+    if d6 > q6worst
+      q6worst = d6
+    end
+    i6 = i6 + 1.0
+  end
+  b6 = b6 + 1.0
+end
+mem_free(q6)
+mem_free(o6)
+let q6checked = 256.0 * nblk
+print("q6_K ffn_down: {q6bad} of {q6checked} outside tolerance, worst abs diff {q6worst}")
+if q6bad != 0.0
+  failures = failures + 1.0
+end
+
+if failures == 0.0
+  print("DEQUANT DECODERS MATCH THE GGML ORACLE")
+else
+  print("DECODER FAILURES: {failures}")
+end

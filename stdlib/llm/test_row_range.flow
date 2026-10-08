@@ -1,0 +1,269 @@
+// stdlib/llm/test_row_range.flow — multi-type test for the two file readers
+// (load_element_range_from_file and load_tensor_from_file) over every ggml type that has a fixture.
+//
+// What is under test is the readers, not the block decoders. test_dequant_more.flow already
+// proved, against ggml's own to_float, that each block decoder reproduces ggml's values for one
+// block handed to it directly. The reader is the path every row-shaped load actually takes
+// (load_embedding_row_from_file, load_tensor_row_from_file) and it adds four things on top: it has
+// to round an arbitrary element range out to whole blocks, read them from an arbitrary byte offset
+// in a real file through a u64 offset handle, decode N blocks of the right type, and then drop the
+// leading elements the range did not ask for. A slip in the lead bookkeeping returns values that
+// are all correctly dequantized and all off by a few positions, which is exactly the class of bug
+// that produces fluent nonsense rather than an error.
+//
+// Data: stdlib/llm/testdata/row_pack.bin is the quantized block bytes of the block fixtures in
+// stdlib/llm/testdata, concatenated in the order of the table below, with no gaps -- the same
+// contiguous storage a tensor has. It carries no new data: for each fixture it is bytes
+// [16 + i*rec .. 16 + i*rec + bb) for i in [0, n), where rec = bb + blck*4, read from that fixture's
+// own header. The expected values are still read from the per-type fixtures, where each block is
+// followed by the 4*blck floats ggml produced for it, so the packed file and the oracle come from
+// the same ggml run.
+//
+// The fixtures split by provenance, and it is worth knowing which is which:
+//   q4_0 q4_1 q5_1 q5_k q2_k q3_k iq4_nl tq1_0 tq2_0 q2_0_g128
+//     block bytes lifted out of a GGUF that llama-quantize wrote from a real all-F32 checkpoint.
+//   iq4_xs mxfp4 nvfp4 q1_0 q2_0 iq2_xxs iq2_xs iq3_xxs iq1_s iq3_s iq2_s iq1_m
+//     ggml's own quantizer applied to a deterministic pseudo-random input (ggml_quantize_chunk, via
+//     ggml_dequant_dump --synth). That is the only route covering all of them: llama-quantize has no
+//     ftype name for mxfp4 and nvfp4, six of the code-book types (iq2_xxs, iq2_xs, iq3_xxs, iq1_s,
+//     iq2_s, iq1_m) refuse to quantize without an importance matrix file, and the remaining ones would
+//     each need a full requant of a real checkpoint. ggml_quantize_chunk switches on every one of them
+//     and accepts a synthetic imatrix. The property under test is unaffected: ggml wrote the block and
+//     ggml read it back, and this file checks that the .flow decoder reads it back the same way.
+//     Synthetic input also reaches codes a trained model never emits -- q2_0's 11 (= +2*d) appears here
+//     and does not appear in a checkpoint.
+//
+// Three windows per type, which take different paths through the reader:
+//   aligned        start 0, count 2*blck        -- exact whole blocks, lead 0
+//   mid-block      start 5, count blck          -- lead 5, so the first block is read and partly
+//                                                 discarded and the range ends inside the last one
+//   second block   start blck, count blck       -- non-zero block index, still aligned
+// The mid-block window is the one that was previously untested: before the reader was unified, the
+// embedding path could only express whole-block-aligned starts.
+//
+// The type table also cross-checks gguf_type_geometry() against what the oracle recorded in each
+// fixture header, so a geometry entry that disagrees with ggml's block size fails here even if all
+// the decoders pass.
+//
+// Run from the octoflow root so the relative paths resolve, like every other stdlib test:
+//
+//   octoflow run stdlib/llm/test_row_range.flow --allow-read --allow-ffi
+//
+// Names are prefixed rr_ at file scope and rw_ inside the checker. A callee's `let` aliases the
+// caller's variable of the same name, and the loader it calls uses lge_-prefixed locals, so this
+// file keeps its own distinct prefixes rather than reusing bare i/offset/count.
+use "gguf"
+use "weight_loader"
+
+// ── one windowed read, checked element by element against ggml ────────────────
+// fix_buf holds [block || that block's ggml floats] records; the reference for element e of this
+// type's storage is in record floor(e/blck) at float slot e mod blck.
+fn rw_window(label, type_name, pack_path, base_off, fix_buf, bb, blck, elem_start, count, ttype)
+    let mut rw_bad = 0.0
+    let mut rw_worst = 0.0
+    let rw_off = mem_alloc(8)
+    mem_set_u64(rw_off, 0.0, base_off)
+    let rw_got = load_element_range_from_file(pack_path, rw_off, elem_start, count, ttype)
+    mem_free(rw_off)
+    let rw_len = len(rw_got)
+    if rw_len != count
+        print("    {type_name} {label}: WRONG LENGTH {rw_len} for {count} elements requested")
+        rw_bad = rw_bad + 1.0
+    end
+    let rw_rec = bb + blck * 4.0
+    let mut rw_i = 0.0
+    while rw_i < count
+        if rw_i < rw_len
+            // this element's absolute index in the type's storage decides which fixture record it is
+            let rw_e = elem_start + rw_i
+            let rw_blk = floor(rw_e / blck)
+            let rw_within = rw_e - rw_blk * blck
+            let rw_ref = mem_get_f32(fix_buf, 16.0 + rw_blk * rw_rec + bb + rw_within * 4.0)
+            let rw_g = rw_got[int(rw_i)]
+            let mut rw_d = rw_g - rw_ref
+            if rw_d < 0.0
+                rw_d = rw_d * -1.0
+            end
+            let mut rw_a = rw_ref
+            if rw_a < 0.0
+                rw_a = rw_a * -1.0
+            end
+            if rw_d > rw_worst
+                rw_worst = rw_d
+            end
+            if rw_d > rw_a * 0.001 + 0.000000001
+                rw_bad = rw_bad + 1.0
+                if rw_bad < 3.0
+                    let rw_where = elem_start + rw_i
+                    print("    {type_name} {label}: element {rw_where} got {rw_g} want {rw_ref}")
+                end
+            end
+        end
+        rw_i = rw_i + 1.0
+    end
+    print("  {type_name} {label} start {elem_start} count {count}: {rw_bad} bad of {count}, worst abs diff {rw_worst}")
+    return rw_bad
+end
+
+// ── whole tensor through load_tensor_from_file(), the other reader over the same bytes ──
+// The whole-tensor path walks blocks with a byte stride literal in each branch of its own dispatch
+// chain, so it has a way to be wrong that neither a block decoder nor the range reader can see.
+// Adding this phase found one: Q4_0, Q4_1, Q5_1 and Q5_K initialised that stride to one block
+// instead of zero, so loading any tensor of those four types through this route read one block past
+// its own buffer and stopped with "mem_get_u8: offset >= size". Verified by putting 18.0 back.
+// types.gguf.bin is a real GGUF v3 container whose 15 tensors carry exactly these block bytes, which
+// is what lets that chain be checked without a multi-GB quantized model; the name ends .gguf.bin
+// because the repository ignores *.gguf.
+fn rt_check(type_name, got, fix_buf, bb, blck, nrec)
+    let mut rt_bad = 0.0
+    let rt_want_n = nrec * blck
+    let rt_len = len(got)
+    if rt_len != rt_want_n
+        print("    {type_name}: whole tensor returned {rt_len} values, expected {rt_want_n}")
+        rt_bad = rt_bad + 1.0
+    end
+    let rt_rec = bb + blck * 4.0
+    let mut rt_i = 0.0
+    while rt_i < rt_want_n
+        if rt_i < rt_len
+            let rt_blk = floor(rt_i / blck)
+            let rt_ref = mem_get_f32(fix_buf, 16.0 + rt_blk * rt_rec + bb + (rt_i - rt_blk * blck) * 4.0)
+            let rt_g = got[int(rt_i)]
+            let mut rt_d = rt_g - rt_ref
+            if rt_d < 0.0
+                rt_d = rt_d * -1.0
+            end
+            let mut rt_a = rt_ref
+            if rt_a < 0.0
+                rt_a = rt_a * -1.0
+            end
+            if rt_d > rt_a * 0.001 + 0.000000001
+                rt_bad = rt_bad + 1.0
+                if rt_bad < 3.0
+                    print("    {type_name} tensor: element {rt_i} got {rt_g} want {rt_ref}")
+                end
+            end
+        end
+        rt_i = rt_i + 1.0
+    end
+    print("  {type_name} whole tensor: {rt_bad} bad of {rt_want_n}")
+    return rt_bad
+end
+
+// ── the table, in row_pack.bin order ─────────────────────────────────────────
+let mut rr_names = []
+let mut rr_types = []
+push(rr_names, "q4_0")
+push(rr_types, 2.0)
+push(rr_names, "q4_1")
+push(rr_types, 3.0)
+push(rr_names, "q5_1")
+push(rr_types, 7.0)
+push(rr_names, "q5_k")
+push(rr_types, 13.0)
+push(rr_names, "q2_k")
+push(rr_types, 10.0)
+push(rr_names, "q3_k")
+push(rr_types, 11.0)
+push(rr_names, "iq4_nl")
+push(rr_types, 20.0)
+push(rr_names, "iq4_xs")
+push(rr_types, 23.0)
+push(rr_names, "tq1_0")
+push(rr_types, 34.0)
+push(rr_names, "tq2_0")
+push(rr_types, 35.0)
+push(rr_names, "q2_0_g128")
+push(rr_types, 142.0)
+push(rr_names, "mxfp4")
+push(rr_types, 39.0)
+push(rr_names, "nvfp4")
+push(rr_types, 40.0)
+push(rr_names, "q1_0")
+push(rr_types, 41.0)
+push(rr_names, "q2_0")
+push(rr_types, 42.0)
+push(rr_names, "iq2_xxs")
+push(rr_types, 16.0)
+push(rr_names, "iq3_xxs")
+push(rr_types, 18.0)
+push(rr_names, "iq2_xs")
+push(rr_types, 17.0)
+push(rr_names, "iq3_s")
+push(rr_types, 21.0)
+push(rr_names, "iq2_s")
+push(rr_types, 22.0)
+push(rr_names, "iq1_s")
+push(rr_types, 19.0)
+push(rr_names, "iq1_m")
+push(rr_types, 29.0)
+
+let rr_dir = "stdlib/llm/testdata/"
+let rr_pack = rr_dir + "row_pack.bin"
+let rr_nt = len(rr_types)
+let rr_gguf = rr_dir + "types.gguf.bin"  // the repo ignores *.gguf; this 14 KB container is test data, not a model
+let rr_model = gguf_load_from_file(rr_gguf)
+let mut rr_bad = 0.0
+let mut rr_checked = 0.0
+
+// Each type's storage starts where the previous one ended; the reader is handed that byte offset in
+// a u64 handle, which is how gguf_tensor_file_offset() delivers a tensor's position.
+let mut rr_base = 0.0
+let mut rr_t = 0.0
+while rr_t < len(rr_types)
+    let rr_name = rr_names[int(rr_t)]
+    let rr_tt = rr_types[int(rr_t)]
+    let rr_fix = rr_dir + rr_name + ".bin"
+    let rr_fix_sz = file_size(rr_fix)
+    let rr_buf = mem_alloc(rr_fix_sz)
+    let _rr_rd = file_read_into_mem(rr_fix, rr_buf, 0.0, rr_fix_sz)
+    let rr_bb = mem_get_u32(rr_buf, 0.0)
+    let rr_blck = mem_get_u32(rr_buf, 4.0)
+    let rr_nrec = mem_get_u32(rr_buf, 8.0)
+
+    // the geometry the loader will use must be the geometry ggml used to write this fixture
+    let rr_geo = gguf_type_geometry(rr_tt)
+    let rr_gn = len(rr_geo)
+    if rr_gn != 2.0
+        print("  {rr_name}: gguf_type_geometry({rr_tt}) returned {rr_gn} entries, expected 2")
+        rr_bad = rr_bad + 1.0
+    end
+    if rr_gn == 2.0
+        let rr_gb = rr_geo[1.0]
+        let rr_gb2 = rr_geo[0.0]
+        if rr_gb != rr_bb
+            print("  {rr_name}: geometry says {rr_gb} bytes per block, ggml fixture says {rr_bb}")
+            rr_bad = rr_bad + 1.0
+        end
+        if rr_gb2 != rr_blck
+            print("  {rr_name}: geometry says {rr_gb2} weights per block, ggml fixture says {rr_blck}")
+            rr_bad = rr_bad + 1.0
+        end
+        // every window here spans two blocks; a shorter fixture would silently read past its own data
+        if rr_nrec < 2.0
+            print("  {rr_name}: fixture has {rr_nrec} blocks, these windows need 2")
+            rr_bad = rr_bad + 1.0
+        end
+    end
+
+    rr_bad = rr_bad + rw_window("aligned", rr_name, rr_pack, rr_base, rr_buf, rr_bb, rr_blck, 0.0, rr_blck * 2.0, rr_tt)
+    rr_bad = rr_bad + rw_window("mid-block", rr_name, rr_pack, rr_base, rr_buf, rr_bb, rr_blck, 5.0, rr_blck, rr_tt)
+    rr_bad = rr_bad + rw_window("second-block", rr_name, rr_pack, rr_base, rr_buf, rr_bb, rr_blck, rr_blck, rr_blck, rr_tt)
+    rr_checked = rr_checked + rr_blck * 4.0
+    let rr_tname = "w_" + rr_name
+    let rr_tv = load_tensor_from_file(rr_gguf, rr_model, rr_tname)
+    rr_bad = rr_bad + rt_check(rr_name, rr_tv, rr_buf, rr_bb, rr_blck, rr_nrec)
+    rr_checked = rr_checked + rr_nrec * rr_blck
+
+    rr_base = rr_base + rr_nrec * rr_bb
+    mem_free(rr_buf)
+    rr_t = rr_t + 1.0
+end
+
+print("row/range windows checked: {rr_checked} element reads over {rr_nt} types (3 windows + 1 whole tensor each)")
+if rr_bad == 0.0
+    print("RANGE READER MATCHES THE GGML ORACLE FOR EVERY TYPE TABLED HERE")
+end
+if rr_bad > 0.0
+    print("RANGE READER FAILURE: {rr_bad} problems")
+end

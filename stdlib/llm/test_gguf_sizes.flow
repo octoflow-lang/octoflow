@@ -1,0 +1,100 @@
+// Verifies gguf_type_geometry against the numbers printed by ggml's own ggml_row_size()
+// (blck_size / sizeof(block_*)), and that a type outside ggml's enum is reported rather than sized.
+use "gguf"
+
+let mut failures = 0.0
+
+// The geometry is read into a local here: passing an array return value straight into a helper
+// parameter and then len() is rejected by the pre-flight analyzer.
+fn expect_geometry(t, elems, bytes, label)
+  let geo = gguf_type_geometry(t)
+  if len(geo) != 2.0
+    print("  FAIL {label}: no geometry entry")
+    return 0.0
+  end
+  let got_elems = geo[0.0]
+  let got_bytes = geo[1.0]
+  if got_elems != elems
+    print("  FAIL {label} elems: got {got_elems} expected {elems}")
+    return 0.0
+  end
+  if got_bytes != bytes
+    print("  FAIL {label} bytes: got {got_bytes} expected {bytes}")
+    return 0.0
+  end
+  return 1.0
+end
+
+fn count_failure(ok)
+  if ok == 0.0
+    return 1.0
+  end
+  return 0.0
+end
+
+// ── unblocked types ────────────────────────────────────────────
+failures = failures + count_failure(expect_geometry(0.0, 1.0, 4.0, "f32"))
+failures = failures + count_failure(expect_geometry(1.0, 1.0, 2.0, "f16"))
+failures = failures + count_failure(expect_geometry(30.0, 1.0, 2.0, "bf16"))
+failures = failures + count_failure(expect_geometry(24.0, 1.0, 1.0, "i8"))
+failures = failures + count_failure(expect_geometry(26.0, 1.0, 4.0, "i32"))
+failures = failures + count_failure(expect_geometry(28.0, 1.0, 8.0, "f64"))
+
+// ── 32-element blocks ─────────────────────────────────────────
+failures = failures + count_failure(expect_geometry(2.0, 32.0, 18.0, "q4_0"))
+failures = failures + count_failure(expect_geometry(3.0, 32.0, 20.0, "q4_1"))
+failures = failures + count_failure(expect_geometry(6.0, 32.0, 22.0, "q5_0"))
+failures = failures + count_failure(expect_geometry(7.0, 32.0, 24.0, "q5_1"))
+failures = failures + count_failure(expect_geometry(8.0, 32.0, 34.0, "q8_0"))
+failures = failures + count_failure(expect_geometry(9.0, 32.0, 36.0, "q8_1"))
+failures = failures + count_failure(expect_geometry(20.0, 32.0, 18.0, "iq4_nl"))
+failures = failures + count_failure(expect_geometry(39.0, 32.0, 17.0, "mxfp4"))
+
+// ── 64 / 128 element blocks ───────────────────────────────────
+failures = failures + count_failure(expect_geometry(42.0, 64.0, 18.0, "q2_0"))
+failures = failures + count_failure(expect_geometry(40.0, 64.0, 36.0, "nvfp4"))
+failures = failures + count_failure(expect_geometry(41.0, 128.0, 18.0, "q1_0"))
+
+// ── 256 element blocks ────────────────────────────────────────
+failures = failures + count_failure(expect_geometry(10.0, 256.0, 84.0, "q2_k"))
+failures = failures + count_failure(expect_geometry(11.0, 256.0, 110.0, "q3_k"))
+failures = failures + count_failure(expect_geometry(12.0, 256.0, 144.0, "q4_k"))
+failures = failures + count_failure(expect_geometry(13.0, 256.0, 176.0, "q5_k"))
+failures = failures + count_failure(expect_geometry(14.0, 256.0, 210.0, "q6_k"))
+failures = failures + count_failure(expect_geometry(15.0, 256.0, 292.0, "q8_k"))
+failures = failures + count_failure(expect_geometry(16.0, 256.0, 66.0, "iq2_xxs"))
+failures = failures + count_failure(expect_geometry(17.0, 256.0, 74.0, "iq2_xs"))
+failures = failures + count_failure(expect_geometry(18.0, 256.0, 98.0, "iq3_xxs"))
+failures = failures + count_failure(expect_geometry(19.0, 256.0, 50.0, "iq1_s"))
+failures = failures + count_failure(expect_geometry(21.0, 256.0, 110.0, "iq3_s"))
+failures = failures + count_failure(expect_geometry(22.0, 256.0, 82.0, "iq2_s"))
+failures = failures + count_failure(expect_geometry(23.0, 256.0, 136.0, "iq4_xs"))
+failures = failures + count_failure(expect_geometry(29.0, 256.0, 56.0, "iq1_m"))
+failures = failures + count_failure(expect_geometry(34.0, 256.0, 54.0, "tq1_0"))
+failures = failures + count_failure(expect_geometry(35.0, 256.0, 66.0, "tq2_0"))
+
+// ── Prism's group-128 Q2_0 is a real type with a real block ───
+failures = failures + count_failure(expect_geometry(142.0, 128.0, 34.0, "q2_0_g128"))
+
+// ── a type outside ggml's enum must have no geometry ──────────
+// 43..141 are unassigned in this ggml build and 143 is past GGML_TYPE_COUNT, so neither may size to
+// anything: an unknown type has to stay unknown rather than fall through to a guessed F32 row.
+let unknown = gguf_type_geometry(143.0)
+let unknown_len = len(unknown)
+print("type 143 (past ggml's enum) geometry entries: {unknown_len}")
+failures = failures + count_failure(unknown_len == 0.0)
+
+// ── regression on the sizes that were already correct ─────────
+let q8_0_row = 1024.0 / 32.0 * 34.0
+print("q8_0 row of 1024 elements = {q8_0_row} bytes (expect 1088)")
+failures = failures + count_failure(q8_0_row == 1088.0)
+
+let bf16_row = 245760.0 * 2.0
+print("bf16 row of 245760 elements = {bf16_row} bytes (expect 491520)")
+failures = failures + count_failure(bf16_row == 491520.0)
+
+if failures == 0.0
+  print("GEOMETRY TABLE OK")
+else
+  print("GEOMETRY TABLE FAILURES: {failures}")
+end

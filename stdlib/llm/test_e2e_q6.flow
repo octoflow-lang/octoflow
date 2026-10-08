@@ -1,0 +1,99 @@
+// End-to-end through the streaming row path: load_tensor_row_from_file() on a Q6_K tensor,
+// element-by-element against the same element range of an F32 re-quant of that file:
+//   llama-quantize --allow-requantize <model>.gguf <model>-f32.gguf F32
+//
+// This is the call site whose inline Q6_K decoder read d from bytes 0-1 (q4_K's layout, not
+// q6_K's) and indexed the sub-block scales without the sub-block term, so it could not have
+// produced correct numbers.
+//
+// Only one model map is parsed: a second gguf_load_from_file() in the same process measured
+// 50-90 s here against 4-5 s for the first, so the oracle window is a documented absolute offset
+// (4864 f32 values = 19456 bytes past the tensor's own start of 557838144). The row loader itself
+// resolves its offsets as u64.
+use "gguf"
+use "weight_loader"
+
+let quant = "D:/OllamaModels/ermiaazarkhalili/Qwen2.5-0.5B-Instruct_Function_Calling_xLAM-GGUF/model-Q4_K_M.gguf"
+let oracle = "D:/git/python/ninfer/.octoflow_probe/qwen25-f32.gguf"
+let name = "blk.0.ffn_down.weight"
+let row_size = 4864.0
+let row_idx = 1.0
+let oracle_row1 = 557857600.0
+
+let m = gguf_load_from_file(quant)
+let ttype = gguf_tensor_type(m, name)
+let count = gguf_tensor_count(m, name)
+print("tensor {name} type {ttype} count {count}")
+
+let row = load_tensor_row_from_file(quant, m, name, row_idx, row_size)
+let got_len = len(row)
+
+let obuf = mem_alloc(row_size * 4.0)
+let _orr = file_read_into_mem(oracle, obuf, oracle_row1, row_size * 4.0)
+
+let mut bad = 0.0
+let mut worst = 0.0
+let mut i = 0.0
+while i < got_len
+  let got = row[int(i)]
+  let want = bits_to_float(mem_get_u32(obuf, i * 4.0))
+  let mut d = got - want
+  if d < 0.0
+    d = d * -1.0
+  end
+  let mut mag = want
+  if mag < 0.0
+    mag = mag * -1.0
+  end
+  if d > mag * 0.001 + 0.0000001
+    bad = bad + 1.0
+    if bad < 6.0
+      print("  row mismatch element {i}: got {got} want {want}")
+    end
+  end
+  if d > worst
+    worst = d
+  end
+  i = i + 1.0
+end
+mem_free(obuf)
+
+print("row {row_idx} of {got_len} elements")
+print("q6_K row: {bad} of {row_size} outside tolerance, worst abs diff {worst}")
+// ── the same window starting mid-block ───────────────────────────────────
+// The ggml comparison above begins on a block boundary (4864 = 19 * 256), so it cannot see the
+// leading partial block the row reader has to discard. This does not re-check ggml: it checks the
+// one property the aligned case leaves untested, that a window starting 100 elements into a block
+// equals the block-aligned window with exactly those 100 leading values removed. Both shapes were
+// compared against ggml to_float separately when this reader replaced the per-type row copies --
+// a q5_0 range with a 16-element lead and a q6_K range with a 240-element lead, sums and absolutes
+// equal to the printed digits.
+let u_lead = 100.0
+let u_count = 1024.0
+let uoff = gguf_tensor_file_offset(m, name)
+let urow = load_element_range_from_file(quant, uoff, 4864.0 + u_lead, u_count, ttype)
+mem_free(uoff)
+let u_len = len(urow)
+let mut ubad = 0.0
+let mut ui = 0.0
+while ui < u_len
+  let ug = urow[int(ui)]
+  let uw = row[int(u_lead + ui)]
+  let mut ud = ug - uw
+  if ud < 0.0
+    ud = ud * -1.0
+  end
+  if ud > 0.0000001
+    ubad = ubad + 1.0
+  end
+  ui = ui + 1.0
+end
+print("mid-block window: {ubad} of {u_len} disagree with the aligned window shifted by its lead")
+
+let utotal = bad + ubad
+if utotal == 0.0
+  print("ROW PATH MATCHES THE GGML ORACLE")
+else
+  print("ROW PATH FAILURE")
+end
+

@@ -46,18 +46,45 @@ let GGUF_TYPE_UINT64  = 10.0
 let GGUF_TYPE_INT64   = 11.0
 let GGUF_TYPE_FLOAT64 = 12.0
 
-// GGUF tensor types (quantization formats)
-let GGUF_TENSOR_F32  = 0.0
-let GGUF_TENSOR_F16  = 1.0
-let GGUF_TENSOR_Q4_0 = 2.0
-let GGUF_TENSOR_Q4_1 = 3.0
-let GGUF_TENSOR_Q5_0 = 6.0
-let GGUF_TENSOR_Q5_1 = 7.0
-let GGUF_TENSOR_Q8_0 = 8.0
-let GGUF_TENSOR_Q8_1 = 9.0
-let GGUF_TENSOR_Q4_K = 12.0          // Q4_K_M (most common for small models)
-let GGUF_TENSOR_Q5_K = 13.0
-let GGUF_TENSOR_Q6_K = 14.0
+// GGUF tensor types (quantization formats), numbered as ggml's own enum.
+let GGUF_TENSOR_F32     = 0.0
+let GGUF_TENSOR_F16     = 1.0
+let GGUF_TENSOR_Q4_0    = 2.0
+let GGUF_TENSOR_Q4_1    = 3.0
+let GGUF_TENSOR_Q5_0    = 6.0
+let GGUF_TENSOR_Q5_1    = 7.0
+let GGUF_TENSOR_Q8_0    = 8.0
+let GGUF_TENSOR_Q8_1    = 9.0
+let GGUF_TENSOR_Q2_K    = 10.0
+let GGUF_TENSOR_Q3_K    = 11.0
+let GGUF_TENSOR_Q4_K    = 12.0         // Q4_K_M (most common for small models)
+let GGUF_TENSOR_Q5_K    = 13.0
+let GGUF_TENSOR_Q6_K    = 14.0
+let GGUF_TENSOR_Q8_K    = 15.0
+let GGUF_TENSOR_IQ2_XXS = 16.0
+let GGUF_TENSOR_IQ2_XS  = 17.0
+let GGUF_TENSOR_IQ3_XXS = 18.0
+let GGUF_TENSOR_IQ1_S   = 19.0
+let GGUF_TENSOR_IQ4_NL  = 20.0
+let GGUF_TENSOR_IQ3_S   = 21.0
+let GGUF_TENSOR_IQ2_S   = 22.0
+let GGUF_TENSOR_IQ4_XS  = 23.0
+let GGUF_TENSOR_I8      = 24.0
+let GGUF_TENSOR_I16     = 25.0
+let GGUF_TENSOR_I32     = 26.0
+let GGUF_TENSOR_I64     = 27.0
+let GGUF_TENSOR_F64     = 28.0
+let GGUF_TENSOR_IQ1_M   = 29.0
+let GGUF_TENSOR_BF16    = 30.0
+let GGUF_TENSOR_TQ1_0   = 34.0
+let GGUF_TENSOR_TQ2_0   = 35.0
+let GGUF_TENSOR_MXFP4   = 39.0
+let GGUF_TENSOR_NVFP4   = 40.0
+let GGUF_TENSOR_Q1_0    = 41.0
+let GGUF_TENSOR_Q2_0    = 42.0
+// Prism-private group-128 Q2_0, aka PQ2_0: same 2-bit codec as Q2_0 but one fp16 scale per 128
+// weights, and a type number above the upstream enum (ggml 142, QK_K-independent block of 34 B).
+let GGUF_TENSOR_Q2_0_G128 = 142.0
 
 // ── Helper: Read bytes as little-endian values ──────────────────────
 
@@ -81,7 +108,7 @@ fn read_u64_le(bytes, offset)
   return low
 end
 
-fn read_f32_le(bytes, offset)
+fn read_f32_le_bytes(bytes, offset)
   // IEEE 754 float32 from 4 bytes via bits_to_float builtin
   let u = read_u32_le(bytes, offset)
   return bits_to_float(u)
@@ -121,27 +148,33 @@ fn read_f16_le(bytes, offset)
 end
 
 fn read_string(bytes, offset)
-  // GGUF string: u64 length + UTF-8 bytes
-  let len = read_u64_le(bytes, offset)
-  let start = offset + 8.0
+  // GGUF string: u64 length + UTF-8 bytes.
+  //
+  // Every local here is prefixed on purpose. A function's local shares a slot with the caller's
+  // variable of the same name, so the plain `i` this used to declare was written through into the
+  // loop counter of gguf_parse_kv and gguf_parse_tensors: parsing one entry set the caller's `i` to
+  // the string's character count, the loop condition then failed, and a model loaded this way kept
+  // only its first metadata entry and its first tensor.
+  let rs_len = read_u64_le(bytes, offset)
+  let rs_start = offset + 8.0
 
   // Read UTF-8 bytes and convert to string
-  let mut s = ""
-  let mut i = 0.0
-  while i < len
-    let byte = bytes[int(start + i)]
+  let mut rs = ""
+  let mut ri = 0.0
+  while ri < rs_len
+    let rb = bytes[int(rs_start + ri)]
     // Simple ASCII conversion (proper UTF-8 decode needed for full support)
-    s = s + chr(byte)
-    i = i + 1.0
+    rs = rs + chr(rb)
+    ri = ri + 1.0
   end
 
-  return s
+  return rs
 end
 
 fn read_string_len(bytes, offset)
   // Return string length in bytes (u64 + string data)
-  let len = read_u64_le(bytes, offset)
-  return 8.0 + len
+  let sl_len = read_u64_le(bytes, offset)
+  return 8.0 + sl_len
 end
 
 // ── GGUF Header Parser ──────────────────────────────────────────────
@@ -231,7 +264,7 @@ fn gguf_parse_kv(bytes, start_pos, kv_count, model)
       value = read_u64_le(bytes, pos)
       pos = pos + 8.0
     elif val_type == GGUF_TYPE_FLOAT32
-      value = read_f32_le(bytes, pos)
+      value = read_f32_le_bytes(bytes, pos)
       pos = pos + 4.0
     elif val_type == GGUF_TYPE_FLOAT64
       // Read as 8 bytes, skip (f64 not supported in OctoFlow f32 runtime)
@@ -248,21 +281,25 @@ fn gguf_parse_kv(bytes, start_pos, kv_count, model)
       value = bytes[int(pos)]
       pos = pos + 1.0
     elif val_type == GGUF_TYPE_ARRAY
-      // Skip array: element_type (u32) + count (u64) + elements
+      // Skip array: element_type (u32) + count (u64) + elements. The elements live in the caller's
+      // byte array, which a flat scalar map cannot point at, so the buffer id is recorded as -1:
+      // the array is visible through gguf_meta_array_count / _etype, and reading an element stops
+      // with a message instead of returning a wrong number.
       let elem_type = read_u32_le(bytes, pos)
       pos = pos + 4.0
       let arr_count = read_u64_le(bytes, pos)
       pos = pos + 8.0
+      let akey = "arr." + key
+      map_set(model, akey + ".etype", elem_type)
+      map_set(model, akey + ".count", arr_count)
+      map_set(model, akey + ".at", pos)
+      map_set(model, akey + ".buf", -1.0)
+      let esz = gguf_array_elem_size(elem_type)
+      assert(esz != -2.0, "gguf_parse_kv: array " + key + " has element type " + str(elem_type) + ", which this parser can neither skip nor read")
       // Skip elements based on element type
-      if elem_type == GGUF_TYPE_UINT8 || elem_type == GGUF_TYPE_INT8 || elem_type == GGUF_TYPE_BOOL
-        pos = pos + arr_count
-      elif elem_type == GGUF_TYPE_UINT16 || elem_type == GGUF_TYPE_INT16
-        pos = pos + arr_count * 2.0
-      elif elem_type == GGUF_TYPE_UINT32 || elem_type == GGUF_TYPE_INT32 || elem_type == GGUF_TYPE_FLOAT32
-        pos = pos + arr_count * 4.0
-      elif elem_type == GGUF_TYPE_UINT64 || elem_type == GGUF_TYPE_INT64 || elem_type == GGUF_TYPE_FLOAT64
-        pos = pos + arr_count * 8.0
-      elif elem_type == GGUF_TYPE_STRING
+      if esz > 0.0
+        pos = pos + arr_count * esz
+      else
         // Walk strings one by one to find correct total length
         let mut si = 0.0
         while si < arr_count
@@ -426,6 +463,221 @@ fn gguf_meta_default(model, suffix, default_val)
     return default_val
   end
   return v
+end
+
+// ── Array-valued KV metadata ─────────────────────────────────────
+// A GGUF array is an element type, a count and the elements. The model map is flat and holds
+// scalars, so the parser records where the elements are and these helpers read one element at a
+// time from that buffer. Positions are f32 like every other position here, which is exact only
+// while the parsed region stays under 2^24 bytes.
+
+fn gguf_array_elem_size(elem_type)
+  // Bytes per element for the fixed-size ggml types, -1 for strings, -2 for anything else.
+  if elem_type == 0.0 || elem_type == 1.0 || elem_type == 7.0
+    return 1.0
+  end
+  if elem_type == 2.0 || elem_type == 3.0
+    return 2.0
+  end
+  if elem_type == 4.0 || elem_type == 5.0 || elem_type == 6.0
+    return 4.0
+  end
+  if elem_type == 8.0
+    return -1.0
+  end
+  if elem_type == 10.0 || elem_type == 11.0 || elem_type == 12.0
+    return 8.0
+  end
+  return -2.0
+end
+
+fn gguf_meta_array_count(model, key)
+  let ck = "arr." + key + ".count"
+  if map_has(model, ck) == 0.0
+    return 0.0
+  end
+  return map_get(model, ck)
+end
+
+fn gguf_meta_array_etype(model, key)
+  let ek = "arr." + key + ".etype"
+  if map_has(model, ek) == 0.0
+    return -1.0
+  end
+  return map_get(model, ek)
+end
+
+fn gguf_array_source(model, key)
+  let bk = "arr." + key + ".buf"
+  let mut usable = 0.0
+  if map_has(model, bk) == 1.0
+    if map_get(model, bk) >= 0.0
+      usable = 1.0
+    end
+  end
+  assert(usable == 1.0, "gguf_meta_array: no readable elements for " + key + " (absent, or skipped because the model came from the byte-array parser; array elements need gguf_load_from_file)")
+  return map_get(model, bk)
+end
+
+fn gguf_array_num_at(buf, et, esz, p)
+  // One element of a fixed-size array, sign-corrected per ggml element type.
+  if esz == 1.0
+    let raw = mem_get_u8(buf, p)
+    if et == 1.0
+      return raw - 256.0 * floor(raw / 128.0)
+    end
+    return raw
+  end
+  if esz == 2.0
+    let v = mem_get_u8(buf, p) + mem_get_u8(buf, p + 1.0) * 256.0
+    if et == 3.0
+      if v >= 32768.0
+        return v - 65536.0
+      end
+    end
+    return v
+  end
+  if et == 6.0
+    return read_f32_le_m(buf, p)
+  end
+  // Two 16-bit halves rather than one 32-bit word: -1 occupies four bytes, and read as a whole word
+  // it becomes 4294967296, the nearest f32, so correcting the sign by subtracting 2^32 yields 0.
+  let lo = mem_get_u8(buf, p) + mem_get_u8(buf, p + 1.0) * 256.0
+  let hi = mem_get_u8(buf, p + 2.0) + mem_get_u8(buf, p + 3.0) * 256.0
+  if et == 5.0
+    if hi >= 32768.0
+      return (hi - 65536.0) * 65536.0 + lo
+    end
+  end
+  return hi * 65536.0 + lo
+end
+
+fn gguf_meta_array_num(model, key, idx)
+  let buf = gguf_array_source(model, key)
+  let et = gguf_meta_array_etype(model, key)
+  let esz = gguf_array_elem_size(et)
+  assert(esz > 0.0, "gguf_meta_array_num: " + key + " elements are ggml type " + str(et) + ", not a fixed-size number")
+  assert(esz != 8.0, "gguf_meta_array_num: " + key + " elements are 8 bytes, which an f32 number cannot carry")
+  let at = map_get(model, "arr." + key + ".at")
+  return gguf_array_num_at(buf, et, esz, at + idx * esz)
+end
+
+fn gguf_meta_array_pack_num(model, key)
+  // Copies a whole numeric array into a fresh buffer of f32s, one slot per element, and returns it.
+  // Reading an element through gguf_meta_array_num costs about 9 ms, because a call is where this
+  // runtime's cost actually lives, which makes a loop over a large array hopeless; the loops here
+  // dispatch on the element type once and then use builtins per element. The caller owns the buffer
+  // and should mem_free it.
+  let buf = gguf_array_source(model, key)
+  let et = gguf_meta_array_etype(model, key)
+  let esz = gguf_array_elem_size(et)
+  assert(esz > 0.0, "gguf_meta_array_pack_num: " + key + " elements are ggml type " + str(et) + ", not a fixed-size number")
+  assert(esz != 8.0, "gguf_meta_array_pack_num: " + key + " elements are 8 bytes, which an f32 number cannot carry")
+  let count = map_get(model, "arr." + key + ".count")
+  let at = map_get(model, "arr." + key + ".at")
+  let out = mem_alloc(count * 4.0)
+  let mut i = 0.0
+  if et == 0.0 || et == 7.0
+    while i < count
+      mem_set_f32(out, i * 4.0, mem_get_u8(buf, at + i))
+      i = i + 1.0
+    end
+    return out
+  end
+  if et == 1.0
+    while i < count
+      let raw = mem_get_u8(buf, at + i)
+      mem_set_f32(out, i * 4.0, raw - 256.0 * floor(raw / 128.0))
+      i = i + 1.0
+    end
+    return out
+  end
+  if et == 2.0
+    while i < count
+      let p2 = at + i * 2.0
+      mem_set_f32(out, i * 4.0, mem_get_u8(buf, p2) + mem_get_u8(buf, p2 + 1.0) * 256.0)
+      i = i + 1.0
+    end
+    return out
+  end
+  if et == 3.0
+    while i < count
+      let p2 = at + i * 2.0
+      let v16 = mem_get_u8(buf, p2) + mem_get_u8(buf, p2 + 1.0) * 256.0
+      let mut s16 = v16
+      if v16 >= 32768.0
+        s16 = v16 - 65536.0
+      end
+      mem_set_f32(out, i * 4.0, s16)
+      i = i + 1.0
+    end
+    return out
+  end
+  if et == 6.0
+    while i < count
+      mem_set_f32(out, i * 4.0, bits_to_float(mem_get_u32(buf, at + i * 4.0)))
+      i = i + 1.0
+    end
+    return out
+  end
+  // i32 and u32: read as two 16-bit halves, because the whole word is not an f32 and a negative
+  // value repaired by subtracting 2^32 comes out as 0.
+  let mut sgn = 0.0
+  if et == 5.0
+    sgn = 1.0
+  end
+  while i < count
+    let p4 = at + i * 4.0
+    let lo = mem_get_u8(buf, p4) + mem_get_u8(buf, p4 + 1.0) * 256.0
+    let hi = mem_get_u8(buf, p4 + 2.0) + mem_get_u8(buf, p4 + 3.0) * 256.0
+    let mut v32 = hi * 65536.0 + lo
+    if sgn == 1.0
+      if hi >= 32768.0
+        v32 = (hi - 65536.0) * 65536.0 + lo
+      end
+    end
+    mem_set_f32(out, i * 4.0, v32)
+    i = i + 1.0
+  end
+  return out
+end
+
+fn gguf_meta_array_str(model, key, idx)
+  let buf = gguf_array_source(model, key)
+  let et = gguf_meta_array_etype(model, key)
+  assert(et == 8.0, "gguf_meta_array_str: " + key + " elements are ggml type " + str(et) + ", not strings")
+  let count = map_get(model, "arr." + key + ".count")
+  assert(idx < count, "gguf_meta_array_str: index " + str(idx) + " is past the " + str(count) + " elements of " + key)
+  // String elements have no stride, so reaching idx means walking from the start. The parser gave
+  // this array a small scratch buffer holding the last index it returned and the position just
+  // past it, which turns a sequential scan into one step per element. It is a MEM buffer, not map
+  // state, so reading an element still does not modify the model. Random access simply walks.
+  let mut p = map_get(model, "arr." + key + ".at")
+  let mut walk = 0.0
+  let mik = "arr." + key + ".mi"
+  if map_has(model, mik) == 1.0
+    let mi = map_get(model, mik)
+    let last = mem_get_f32(mi, 0.0)
+    if last == idx - 1.0
+      p = mem_get_f32(mi, 4.0)
+      walk = last + 1.0
+    end
+    while walk < idx
+      // Inlined as builtins on purpose: a GGUF string is u64 length + bytes, and routing this
+      // through the module's own read_string_len_m costs about a millisecond per element, because
+      // a call to an imported function is ~30x the cost of a builtin call.
+      p = p + 8.0 + mem_get_u32(buf, p)
+      walk = walk + 1.0
+    end
+    mem_set_f32(mi, 0.0, idx)
+    mem_set_f32(mi, 4.0, p + 8.0 + mem_get_u32(buf, p))
+    return read_string_m(buf, p)
+  end
+  while walk < idx
+    p = p + 8.0 + mem_get_u32(buf, p)
+    walk = walk + 1.0
+  end
+  return read_string_m(buf, p)
 end
 
 // ── Main GGUF Loader ────────────────────────────────────────────────
@@ -626,19 +878,29 @@ fn gguf_parse_kv_m(buf, start_pos, kv_count, model)
       value = mem_get_u8(buf, pos)
       pos = pos + 1.0
     elif val_type == GGUF_TYPE_ARRAY
+      // Record where the elements are, then skip them: gguf_meta_array_num / _str read them one at
+      // a time from this same header buffer later on.
       let elem_type = read_u32_le_m(buf, pos)
       pos = pos + 4.0
       let arr_count = read_u64_le_m(buf, pos)
       pos = pos + 8.0
-      if elem_type == GGUF_TYPE_UINT8 || elem_type == GGUF_TYPE_INT8 || elem_type == GGUF_TYPE_BOOL
-        pos = pos + arr_count
-      elif elem_type == GGUF_TYPE_UINT16 || elem_type == GGUF_TYPE_INT16
-        pos = pos + arr_count * 2.0
-      elif elem_type == GGUF_TYPE_UINT32 || elem_type == GGUF_TYPE_INT32 || elem_type == GGUF_TYPE_FLOAT32
-        pos = pos + arr_count * 4.0
-      elif elem_type == GGUF_TYPE_UINT64 || elem_type == GGUF_TYPE_INT64 || elem_type == GGUF_TYPE_FLOAT64
-        pos = pos + arr_count * 8.0
-      elif elem_type == GGUF_TYPE_STRING
+      let akey = "arr." + key
+      map_set(model, akey + ".etype", elem_type)
+      map_set(model, akey + ".count", arr_count)
+      map_set(model, akey + ".at", pos)
+      map_set(model, akey + ".buf", buf)
+      let esz = gguf_array_elem_size(elem_type)
+      assert(esz != -2.0, "gguf_parse_kv_m: array " + key + " has element type " + str(elem_type) + ", which this parser can neither skip nor read")
+      if esz > 0.0
+        pos = pos + arr_count * esz
+      else
+        // Strings: variable length, walk to find the extent. Give the array a scratch buffer so
+        // gguf_meta_array_str can remember where a sequential scan stopped; -1 means "nothing
+        // returned yet".
+        let mi = mem_alloc(8.0)
+        mem_set_f32(mi, 0.0, -1.0)
+        mem_set_f32(mi, 4.0, pos)
+        map_set(model, akey + ".mi", mi)
         let mut si = 0.0
         while si < arr_count
           pos = pos + read_string_len_m(buf, pos)
@@ -726,32 +988,84 @@ end
 
 // ── Tensor byte size helper ──────────────────────────────────────
 
+// Elements per block and bytes per block for one ggml tensor type, taken from ggml's own
+// blck_size / type_size table. An empty result means the type is unknown to this parser, and the
+// caller reports it rather than guessing a size.
+fn gguf_type_geometry(ttype)
+  if ttype == GGUF_TENSOR_F32 || ttype == GGUF_TENSOR_I32
+    return [1.0, 4.0]
+  elif ttype == GGUF_TENSOR_F16 || ttype == GGUF_TENSOR_BF16 || ttype == GGUF_TENSOR_I16
+    return [1.0, 2.0]
+  elif ttype == GGUF_TENSOR_I8
+    return [1.0, 1.0]
+  elif ttype == GGUF_TENSOR_I64 || ttype == GGUF_TENSOR_F64
+    return [1.0, 8.0]
+  elif ttype == GGUF_TENSOR_Q4_0 || ttype == GGUF_TENSOR_IQ4_NL
+    return [32.0, 18.0]
+  elif ttype == GGUF_TENSOR_Q4_1
+    return [32.0, 20.0]
+  elif ttype == GGUF_TENSOR_Q5_0
+    return [32.0, 22.0]
+  elif ttype == GGUF_TENSOR_Q5_1
+    return [32.0, 24.0]
+  elif ttype == GGUF_TENSOR_Q8_0
+    return [32.0, 34.0]
+  elif ttype == GGUF_TENSOR_Q8_1
+    return [32.0, 36.0]
+  elif ttype == GGUF_TENSOR_MXFP4
+    return [32.0, 17.0]
+  elif ttype == GGUF_TENSOR_Q2_0
+    return [64.0, 18.0]
+  elif ttype == GGUF_TENSOR_NVFP4
+    return [64.0, 36.0]
+  elif ttype == GGUF_TENSOR_Q1_0
+    return [128.0, 18.0]
+  elif ttype == GGUF_TENSOR_Q2_K
+    return [256.0, 84.0]
+  elif ttype == GGUF_TENSOR_Q3_K || ttype == GGUF_TENSOR_IQ3_S
+    return [256.0, 110.0]
+  elif ttype == GGUF_TENSOR_Q4_K
+    return [256.0, 144.0]
+  elif ttype == GGUF_TENSOR_Q5_K
+    return [256.0, 176.0]
+  elif ttype == GGUF_TENSOR_Q6_K
+    return [256.0, 210.0]
+  elif ttype == GGUF_TENSOR_Q8_K
+    return [256.0, 292.0]
+  elif ttype == GGUF_TENSOR_IQ2_XXS || ttype == GGUF_TENSOR_TQ2_0
+    return [256.0, 66.0]
+  elif ttype == GGUF_TENSOR_IQ2_XS
+    return [256.0, 74.0]
+  elif ttype == GGUF_TENSOR_IQ3_XXS
+    return [256.0, 98.0]
+  elif ttype == GGUF_TENSOR_IQ1_S
+    return [256.0, 50.0]
+  elif ttype == GGUF_TENSOR_IQ2_S
+    return [256.0, 82.0]
+  elif ttype == GGUF_TENSOR_IQ4_XS
+    return [256.0, 136.0]
+  elif ttype == GGUF_TENSOR_IQ1_M
+    return [256.0, 56.0]
+  elif ttype == GGUF_TENSOR_TQ1_0
+    return [256.0, 54.0]
+  elif ttype == GGUF_TENSOR_Q2_0_G128
+    return [128.0, 34.0]
+  end
+  return []
+end
+
 fn gguf_tensor_byte_size(model, tname)
   let ttype = gguf_tensor_type(model, tname)
   let count = gguf_tensor_count(model, tname)
-  if ttype == GGUF_TENSOR_F32
-    return count * 4.0
-  elif ttype == GGUF_TENSOR_F16
-    return count * 2.0
-  elif ttype == GGUF_TENSOR_Q4_K
-    // Q4_K: 256 elements per block, 144 bytes per block
-    let n_blocks = count / 256.0
-    return n_blocks * 144.0
-  elif ttype == GGUF_TENSOR_Q5_K
-    let n_blocks = count / 256.0
-    return n_blocks * 176.0
-  elif ttype == GGUF_TENSOR_Q6_K
-    let n_blocks = count / 256.0
-    return n_blocks * 210.0
-  elif ttype == GGUF_TENSOR_Q8_0
-    let n_blocks = count / 32.0
-    return n_blocks * 34.0
-  elif ttype == GGUF_TENSOR_Q4_0
-    let n_blocks = count / 32.0
-    return n_blocks * 18.0
-  end
-  // Default: assume F32
-  return count * 4.0
+  let geometry = gguf_type_geometry(ttype)
+  let type_text = str(ttype)
+  assert(len(geometry) == 2.0, "gguf_tensor_byte_size: " + tname + " has ggml type " + type_text + ", which this parser cannot size")
+  let block_elems = geometry[0.0]
+  let block_bytes = geometry[1.0]
+  let remainder = count % block_elems
+  // ggml requires a whole number of blocks in a row; a remainder would silently truncate the size.
+  assert(remainder == 0.0, "gguf_tensor_byte_size: " + tname + " holds " + str(count) + " elements, not a multiple of the " + str(block_elems) + "-element block of ggml type " + type_text)
+  return count / block_elems * block_bytes
 end
 
 // ── Get precise u64 file offset for a tensor ─────────────────────
